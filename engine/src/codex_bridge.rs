@@ -45,6 +45,8 @@ const QUIET_ACTIVE_TURN_STALL_MS: u64 = 120_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
+const TUI_OWNED_RESUME_TIMEOUT_SECS: u64 = 30;
+const TUI_OWNED_RESUME_PROBE_TIMEOUT_SECS: u64 = 2;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 const LONGHOUSE_COORDINATION_TOOLS: &[&str] =
     &["search_sessions", "peers", "tail", "send", "inbox", "reply"];
@@ -432,6 +434,12 @@ struct BridgeContext {
     live_transcript_text: String,
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
+    /// The stock TUI is performing the first resume so it can hydrate visible
+    /// history. The bridge waits until app-server reports that thread loaded,
+    /// then performs its own cheap running-thread resume to subscribe this
+    /// connection and recover the runtime snapshot.
+    tui_owned_resume_pending: bool,
+    tui_owned_resume_deadline: Option<Instant>,
     rejected_thread_ids: BTreeSet<String>,
     pending_pause_requests: PendingPauseRequests,
 }
@@ -1131,7 +1139,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
 
     let mut startup_subscribed_thread_id: Option<String> = None;
     let mut startup_resume_response: Option<Value> = None;
-    if let Some(thread_id) = resume_thread_id.clone() {
+    // A stock TUI invoked as `codex resume <thread> --remote <bridge>` must own
+    // the single startup `thread/resume` request so it can hydrate its history.
+    // Detached launches have no TUI, so the bridge keeps owning resume there.
+    if let Some(thread_id) = resume_thread_id
+        .clone()
+        .filter(|_| !tui_owns_startup_resume(config.launch_mode, resume_thread_id.as_deref()))
+    {
         match resume_startup_primary_thread_with_redirect(
             &mut client,
             &config,
@@ -1317,6 +1331,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         live_transcript_text: String::new(),
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: startup_subscribed_thread_id,
+        tui_owned_resume_pending: tui_owns_startup_resume(
+            config.launch_mode,
+            resume_thread_id.as_deref(),
+        ),
+        tui_owned_resume_deadline: tui_owns_startup_resume(
+            config.launch_mode,
+            resume_thread_id.as_deref(),
+        )
+        .then(|| Instant::now() + Duration::from_secs(TUI_OWNED_RESUME_TIMEOUT_SECS)),
         rejected_thread_ids: BTreeSet::new(),
         pending_pause_requests: Arc::new(Mutex::new(BTreeMap::new())),
     };
@@ -1442,7 +1465,58 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 }
             }
             _ = thread_subscribe_retry.tick() => {
-                if let Some(followup) = pending_thread_subscription(&mut context)? {
+                let followup = if context.tui_owned_resume_pending {
+                    if expire_tui_owned_resume_if_needed(&mut context, Instant::now())? {
+                        continue;
+                    }
+                    if context.tui_owned_resume_deadline.is_none() {
+                        continue;
+                    }
+                    let thread_id = context
+                        .state
+                        .thread_id
+                        .clone()
+                        .context("TUI-owned resume is waiting without a pinned thread id")?;
+                    match tokio::time::timeout(
+                        Duration::from_secs(TUI_OWNED_RESUME_PROBE_TIMEOUT_SECS),
+                        send_request_with_runtime(
+                            &mut client,
+                            "thread/loaded/list",
+                            json!({}),
+                            &config,
+                            &mut context,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(response)) => complete_tui_owned_resume_if_loaded(
+                            &response,
+                            &thread_id,
+                            &mut context,
+                        )?,
+                        Ok(Err(err)) => {
+                            update_thread_subscription_tracking(
+                                &mut context,
+                                ThreadSubscriptionStatus::Retrying,
+                                Some(format!("waiting for TUI-owned resume: {err}")),
+                            )?;
+                            None
+                        }
+                        Err(_) => {
+                            update_thread_subscription_tracking(
+                                &mut context,
+                                ThreadSubscriptionStatus::Retrying,
+                                Some(format!(
+                                    "thread/loaded/list did not answer within {TUI_OWNED_RESUME_PROBE_TIMEOUT_SECS}s"
+                                )),
+                            )?;
+                            None
+                        }
+                    }
+                } else {
+                    pending_thread_subscription(&mut context)?
+                };
+                if let Some(followup) = followup {
                     if let Err(err) =
                         handle_bridge_followup(&config, &mut client, &mut context, followup).await
                     {
@@ -4008,7 +4082,19 @@ fn update_thread_subscription_tracking(
     write_state_file(&context.state_file, &context.state)
 }
 
+fn tui_owns_startup_resume(
+    launch_mode: BridgeLaunchMode,
+    resume_thread_id: Option<&str>,
+) -> bool {
+    launch_mode == BridgeLaunchMode::Tui && resume_thread_id.is_some()
+}
+
 fn pending_thread_subscription(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
+    // Do not race the TUI's cold resume. The background loaded-thread probe
+    // clears this latch before requesting the bridge connection's subscription.
+    if context.tui_owned_resume_pending {
+        return Ok(None);
+    }
     if context.state.thread_subscription_status.as_deref()
         == Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
     {
@@ -4137,14 +4223,68 @@ fn mark_bridge_ready_after_thread_switch(context: &mut BridgeContext) -> Result<
 fn subscribe_current_thread_without_path(
     context: &mut BridgeContext,
 ) -> Result<Option<BridgeFollowup>> {
+    let followup = subscribe_current_thread(context)?;
+    Ok(followup.map(|followup| match followup {
+        BridgeFollowup::SubscribeThread { thread_id, .. } => BridgeFollowup::SubscribeThread {
+            thread_id,
+            thread_path: None,
+        },
+    }))
+}
+
+fn subscribe_current_thread(
+    context: &mut BridgeContext,
+) -> Result<Option<BridgeFollowup>> {
     let Some(thread_id) = context.state.thread_id.clone() else {
         return Ok(None);
     };
     update_thread_subscription_tracking(context, ThreadSubscriptionStatus::ReadyToSubscribe, None)?;
     Ok(Some(BridgeFollowup::SubscribeThread {
         thread_id,
-        thread_path: None,
+        thread_path: context.state.thread_path.clone(),
     }))
+}
+
+fn loaded_thread_list_contains(response: &Value, thread_id: &str) -> bool {
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .is_some_and(|threads| threads.iter().any(|value| value.as_str() == Some(thread_id)))
+}
+
+fn complete_tui_owned_resume_if_loaded(
+    response: &Value,
+    thread_id: &str,
+    context: &mut BridgeContext,
+) -> Result<Option<BridgeFollowup>> {
+    if !context.tui_owned_resume_pending || !loaded_thread_list_contains(response, thread_id) {
+        return Ok(None);
+    }
+    context.tui_owned_resume_pending = false;
+    context.tui_owned_resume_deadline = None;
+    subscribe_current_thread(context)
+}
+
+fn expire_tui_owned_resume_if_needed(
+    context: &mut BridgeContext,
+    now: Instant,
+) -> Result<bool> {
+    if !context.tui_owned_resume_pending
+        || !context
+            .tui_owned_resume_deadline
+            .is_some_and(|deadline| now >= deadline)
+    {
+        return Ok(false);
+    }
+    context.tui_owned_resume_deadline = None;
+    update_thread_subscription_tracking(
+        context,
+        ThreadSubscriptionStatus::Failed,
+        Some(format!(
+            "stock Codex TUI did not load the pinned thread within {TUI_OWNED_RESUME_TIMEOUT_SECS}s"
+        )),
+    )?;
+    Ok(true)
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -4254,6 +4394,8 @@ fn mark_provider_thread_switched(
             .to_string(),
     );
     context.state.thread_subscription_last_error = Some(message);
+    context.tui_owned_resume_pending = false;
+    context.tui_owned_resume_deadline = None;
     context.runtime_tracker.clear_active_turn();
     reset_live_transcript_turn(context);
     if let Some(path) = next_path.as_deref() {
@@ -5971,6 +6113,8 @@ mod tests {
             live_transcript_text: String::new(),
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
+            tui_owned_resume_pending: false,
+            tui_owned_resume_deadline: None,
             rejected_thread_ids: BTreeSet::new(),
             pending_pause_requests: Arc::new(Mutex::new(BTreeMap::new())),
         }
@@ -8427,6 +8571,174 @@ mod tests {
             &context,
         ));
         assert!(!unused_prestarted_tui_thread_can_yield(&config, &context,));
+    }
+
+    #[test]
+    fn stock_tui_owns_resume_only_for_interactive_launches() {
+        assert!(tui_owns_startup_resume(
+            BridgeLaunchMode::Tui,
+            Some("thr-resumed"),
+        ));
+        assert!(!tui_owns_startup_resume(BridgeLaunchMode::Tui, None));
+        assert!(!tui_owns_startup_resume(
+            BridgeLaunchMode::DetachedUi,
+            Some("thr-resumed"),
+        ));
+    }
+
+    #[tokio::test]
+    async fn matching_tui_resume_notification_waits_for_loaded_thread_before_subscribing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = make_test_run_config(&temp);
+        let rollout_path = temp.path().join("resumed.jsonl");
+        fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
+        config.resume_thread_id = Some("thr-resumed".to_string());
+        config.resume_thread_path = Some(rollout_path.display().to_string());
+        let mut context = make_test_context(&temp);
+        context.state.launch_mode = Some(LAUNCH_MODE_TUI.to_string());
+        context.state.thread_id = Some("thr-resumed".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
+        context.runtime.thread_id = Some("thr-resumed".to_string());
+        context.tui_owned_resume_pending = true;
+        context.tui_owned_resume_deadline = Some(Instant::now() + Duration::from_secs(30));
+        context.state.thread_subscription_status = Some(
+            ThreadSubscriptionStatus::WaitingForTurn
+                .as_str()
+                .to_string(),
+        );
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-resumed",
+                        "path": rollout_path.display().to_string()
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.subscribed_thread_id, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::WaitingForTurn.as_str())
+        );
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
+    }
+
+    #[test]
+    fn loaded_tui_thread_releases_bridge_subscription_without_racing_cold_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-resumed".to_string());
+        context.state.thread_path = Some("/tmp/resumed.jsonl".to_string());
+        context.tui_owned_resume_pending = true;
+        context.tui_owned_resume_deadline = Some(Instant::now() + Duration::from_secs(30));
+
+        assert!(loaded_thread_list_contains(
+            &json!({"data": ["thr-other", "thr-resumed"], "nextCursor": null}),
+            "thr-resumed",
+        ));
+        assert!(!loaded_thread_list_contains(
+            &json!({"data": ["thr-other"], "nextCursor": null}),
+            "thr-resumed",
+        ));
+        assert_eq!(pending_thread_subscription(&mut context).unwrap(), None);
+
+        assert_eq!(
+            complete_tui_owned_resume_if_loaded(
+                &json!({"data": ["thr-resumed"], "nextCursor": null}),
+                "thr-resumed",
+                &mut context,
+            )
+            .unwrap(),
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-resumed".to_string(),
+                thread_path: Some("/tmp/resumed.jsonl".to_string()),
+            })
+        );
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
+        );
+        assert!(!context.tui_owned_resume_pending);
+        assert_eq!(context.tui_owned_resume_deadline, None);
+    }
+
+    #[test]
+    fn stalled_tui_owned_resume_becomes_visible_failure_without_bridge_fallback_race() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-resumed".to_string());
+        context.tui_owned_resume_pending = true;
+        context.tui_owned_resume_deadline = Some(Instant::now());
+
+        assert!(expire_tui_owned_resume_if_needed(&mut context, Instant::now()).unwrap());
+        assert!(context.tui_owned_resume_pending);
+        assert_eq!(context.tui_owned_resume_deadline, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::Failed.as_str())
+        );
+        assert!(context
+            .state
+            .thread_subscription_last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("did not load the pinned thread")));
+        assert_eq!(pending_thread_subscription(&mut context).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn mismatched_tui_resume_notification_detaches_from_unpinned_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = make_test_run_config(&temp);
+        config.resume_thread_id = Some("thr-resumed".to_string());
+        config.resume_thread_path = Some("/tmp/resumed.jsonl".to_string());
+        let mut context = make_test_context(&temp);
+        context.state.launch_mode = Some(LAUNCH_MODE_TUI.to_string());
+        context.state.thread_id = Some("thr-resumed".to_string());
+        context.state.thread_path = Some("/tmp/resumed.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-resumed".to_string());
+        context.tui_owned_resume_pending = true;
+        context.tui_owned_resume_deadline = Some(Instant::now() + Duration::from_secs(30));
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-unexpected",
+                        "path": "/tmp/unexpected.jsonl"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.status, "detached");
+        assert!(!context.tui_owned_resume_pending);
+        assert_eq!(context.tui_owned_resume_deadline, None);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-resumed"));
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+        );
+        assert!(context
+            .state
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("observed_thread=thr-unexpected")));
     }
 
     #[tokio::test]
