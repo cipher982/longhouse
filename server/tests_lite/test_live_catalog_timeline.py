@@ -150,6 +150,69 @@ def test_live_catalog_timeline_does_not_rescan_on_pubsub_timeout(monkeypatch):
     assert calls == 1
 
 
+def test_live_catalog_timeline_coalesces_queued_pubsub_wakes(monkeypatch):
+    class Request:
+        def __init__(self):
+            self.disconnect_checks = 0
+
+        async def is_disconnected(self):
+            self.disconnect_checks += 1
+            return self.disconnect_checks > 1
+
+    class Subscription:
+        def __init__(self):
+            self.drained = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        async def next_message(self, *, timeout):
+            assert timeout == 5.0
+            return SimpleNamespace(payload={"wake": "first"})
+
+        def drain_nowait(self):
+            self.drained += 2
+            return 2
+
+    subscription = Subscription()
+
+    class Bus:
+        def peek_latest_seq(self, _topic):
+            return 0
+
+        def subscribe(self, _topic, *, since_seq):
+            assert since_seq == 0
+            return subscription
+
+    calls = 0
+
+    def list_snapshot(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(sessions=[], total=0, has_real_sessions=False)
+
+    monkeypatch.setattr(live_catalog_timeline, "get_pubsub", lambda: Bus())
+    monkeypatch.setattr(live_catalog_timeline, "list_live_catalog_timeline", list_snapshot)
+
+    async def collect():
+        stream = live_catalog_timeline.stream_live_catalog_timeline(
+            Request(),
+            params=_params(),
+            skip_initial_replay=True,
+            owner_id=1,
+        )
+        return [event async for event in stream]
+
+    events = asyncio.run(collect())
+
+    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected"}'}]
+    assert calls == 2
+    assert subscription.drained == 2
+
+
 def _snapshot(db, params: TimelineSessionListParams):
     return CatalogStore(db.get_bind()).list_session_timeline(
         project=params.project,
