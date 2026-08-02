@@ -139,13 +139,13 @@ def test_promotion_delta_rejects_out_of_order_observation() -> None:
         {
             "case_id": "B1",
             "session_id": "session-1",
-            "event": "browser_timeline_card_painted",
+            "event": "browser_transcript_preview_nonce_painted",
             "observed_at_monotonic_ms": 850,
             "payload": {},
         },
     ]
     assert instance.event_delta_any_order_ms(
-        "B1", "session-1", "content_durable_published", "browser_timeline_card_painted"
+        "B1", "session-1", "content_durable_published", "browser_transcript_preview_nonce_painted"
     ) == 450
     assert instance.event_payload_int(
         "B1", "session-1", "content_durable_published", "observation_interval_ms"
@@ -153,11 +153,21 @@ def test_promotion_delta_rejects_out_of_order_observation() -> None:
 
     instance.observations[-1]["observed_at_monotonic_ms"] = 300
     raw = instance.event_delta_any_order_ms(
-        "B1", "session-1", "content_durable_published", "browser_timeline_card_painted"
+        "B1", "session-1", "content_durable_published", "browser_transcript_preview_nonce_painted"
     )
     assert raw == -100
     assert profiler.valid_monotonic_delta_ms(raw) is None
     assert profiler.valid_monotonic_delta_ms(0) == 0
+
+
+def test_promotion_uses_nonce_paint_and_requested_managed_ownership() -> None:
+    observer = profiler.BROWSER_UI_OBSERVER_SCRIPT.read_text()
+    assert 'waitForCard("preview_nonce_painted", 95000)' in observer
+    assert profiler.qualification_ownership({}, "managed") == "managed"
+    assert (
+        profiler.qualification_ownership({"execution_home": "remote_runner"}, "managed")
+        == "remote_runner"
+    )
 
 
 def test_manifest_moves_legacy_metric_out_of_hard_targeting() -> None:

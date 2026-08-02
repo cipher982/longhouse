@@ -46,8 +46,8 @@ CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-code
 BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_OBSERVATION_LIMIT = 200
-METRICS_SCHEMA_VERSION = 5
-BATCH_METRICS_SCHEMA_VERSION = 4
+METRICS_SCHEMA_VERSION = 6
+BATCH_METRICS_SCHEMA_VERSION = 5
 PENDING_BROWSER_SESSION_ID = "__pending_browser_session__"
 BATCH_METRIC_KEYS = (
     "cold_timeline_navigation_to_card_paint_ms",
@@ -3449,7 +3449,7 @@ except Exception as exc:
             case_id,
             session_id,
             "content_durable_published",
-            "browser_timeline_card_painted",
+            "browser_transcript_preview_nonce_painted",
         )
         content_promotion_latency = valid_monotonic_delta_ms(content_promotion_raw_latency)
         content_promotion_order_valid = (
@@ -3723,7 +3723,7 @@ except Exception as exc:
         latest_health = self.latest_local_health_summary(case_id, session_id)
         latest_health_state = latest_health.get("health_state")
         transport_failure = self.transport_failure_classification(case_id, session_id, latest_health_state)
-        ownership = session.get("execution_home") or "-"
+        ownership = qualification_ownership(session, self.args.ownership)
         transport = session.get("managed_transport") or "-"
         metrics: dict[str, Any] = {
             "case_id": case_id,
@@ -4530,6 +4530,10 @@ except Exception as exc:
         if hosted_degraded:
             return "hosted_transport_degraded"
         return None
+
+
+def qualification_ownership(session: dict[str, Any], requested: str | None) -> str:
+    return str(session.get("execution_home") or requested or "-")
 
 
 def redact_cmd(cmd: list[str]) -> list[str]:
