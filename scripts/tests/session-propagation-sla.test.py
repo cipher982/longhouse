@@ -155,12 +155,48 @@ def test_manifest_moves_legacy_metric_out_of_hard_targeting() -> None:
     assert case["metrics"] == ["content_durable_to_timeline_card_paint_ms"]
 
 
+def test_batch_clean_metrics_exclude_classified_failures() -> None:
+    cases = [
+        {
+            "verdict": "pass",
+            "failure_classification": None,
+            "provider_timeout": False,
+            "content_durable_to_timeline_card_paint_ms": 100,
+        },
+        {
+            "verdict": "slow",
+            "failure_classification": None,
+            "provider_timeout": False,
+            "content_durable_to_timeline_card_paint_ms": 300,
+        },
+        {
+            "verdict": "pass",
+            "failure_classification": "hosted_transport_degraded",
+            "provider_timeout": False,
+            "content_durable_to_timeline_card_paint_ms": 12_000,
+        },
+        {
+            "verdict": "provider_timeout",
+            "failure_classification": None,
+            "provider_timeout": True,
+            "content_durable_to_timeline_card_paint_ms": 200,
+        },
+    ]
+    aggregate = profiler.aggregate_batch_cases(cases)
+    assert aggregate["clean_observation_count"] == 2
+    clean = aggregate["clean_metrics"]["content_durable_to_timeline_card_paint_ms"]
+    assert clean["count"] == 2
+    assert clean["p50"] == 100
+    assert clean["p95"] == 300
+
+
 if __name__ == "__main__":
     for test in (
         test_empty_shell_and_promotion_boundary,
         test_empty_projection_proof_and_failed_empty_launch,
         test_promotion_delta_rejects_out_of_order_observation,
         test_manifest_moves_legacy_metric_out_of_hard_targeting,
+        test_batch_clean_metrics_exclude_classified_failures,
     ):
         test()
     print("session propagation SLA tests passed")
