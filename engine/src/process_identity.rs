@@ -1,13 +1,17 @@
 //! Shared process identity helpers for PID-reuse-safe liveness checks.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::Utc;
 
 pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
+const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessFact {
@@ -62,10 +66,9 @@ pub fn try_collect_process_fact(pid: u32) -> Option<ProcessFact> {
 /// from a failed `ps` invocation. Callers reconciling durable state must retain
 /// their last observation when this returns `None`.
 pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
-    let output = Command::new("ps")
-        .args(["-axo", "pid=,tty=,stat=,lstart=,command="])
-        .output()
-        .ok()?;
+    let mut command = Command::new("ps");
+    command.args(["-axo", "pid=,tty=,stat=,lstart=,command="]);
+    let output = output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
@@ -79,6 +82,38 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
         return None;
     }
     Some(facts)
+}
+
+fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes).ok()
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return None;
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    let stdout = reader.join().ok()??;
+    Some(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }
 
 /// Parse one `ps -axo pid=,tty=,stat=,lstart=,command=` line.
@@ -207,6 +242,24 @@ pub fn lstart_matches_recorded(fact: &ProcessFact, recorded_lstart: &str) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_command_output_returns_successful_output() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf ready"]);
+        let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"ready");
+    }
+
+    #[test]
+    fn bounded_command_output_terminates_a_stalled_process() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 1"]);
+        let started = Instant::now();
+        assert!(output_with_timeout(command, Duration::from_millis(10)).is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
 
     #[test]
     fn parse_process_fact_extracts_pid_tty_stat_lstart_command() {
