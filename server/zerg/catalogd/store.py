@@ -7134,11 +7134,26 @@ class CatalogStore:
             ]
             if projector != "search-v2":
                 eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
-            claim_order = (
-                (table.c.desired_revision.desc(), table.c.session_id.asc())
-                if projector == "search-v2"
-                else (table.c.updated_at.asc(), table.c.session_id.asc())
-            )
+            if projector == "search-v2":
+                claim_order = (table.c.desired_revision.desc(), table.c.session_id.asc())
+            elif projector == EMBEDDING_PROJECTOR_ID:
+                search_state = table.alias("search_state")
+                search_published = (
+                    select(search_state.c.session_id)
+                    .where(
+                        search_state.c.projector == "search-v2",
+                        search_state.c.session_id == table.c.session_id,
+                        search_state.c.completed_revision >= search_state.c.desired_revision,
+                    )
+                    .exists()
+                )
+                claim_order = (
+                    case((search_published, 0), else_=1),
+                    table.c.updated_at.asc(),
+                    table.c.session_id.asc(),
+                )
+            else:
+                claim_order = (table.c.updated_at.asc(), table.c.session_id.asc())
             eligible = connection.execute(select(table).where(*eligible_predicates).order_by(*claim_order).limit(limit)).mappings().all()
             if not eligible:
                 return {

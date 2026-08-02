@@ -15,6 +15,7 @@ from zerg.catalogd.models import SessionTombstone
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 
 
 @pytest.fixture
@@ -341,6 +342,91 @@ async def test_search_projector_claims_newest_revision_first_without_changing_ot
         assert search_claim["claimed"][0]["claimed_revision"] == "20"
         assert render_claim["claimed"][0]["session_id"] == session_ids[2]
         assert render_claim["claimed"][0]["claimed_revision"] == "10"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_embedding_projector_claims_search_published_sessions_first(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    inactive_session = str(uuid4())
+    published_session = str(uuid4())
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for offset, session_id in enumerate((inactive_session, published_session)):
+            observed_at = (now + timedelta(seconds=offset)).isoformat()
+            for projector in (EMBEDDING_PROJECTOR_ID, "render-v2"):
+                await client.call(
+                    "projector.state.advance.v2",
+                    {
+                        "projector": projector,
+                        "session_id": session_id,
+                        "desired_revision": 1,
+                        "observed_at": observed_at,
+                    },
+                )
+
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": "search-v2",
+                "session_id": published_session,
+                "desired_revision": 1,
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        search_token = str(uuid4())
+        await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": search_token,
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": "search-v2",
+                "session_id": published_session,
+                "claim_token": search_token,
+                "completed_revision": 1,
+                "completed_at": (now + timedelta(seconds=3)).isoformat(),
+            },
+        )
+
+        embedding_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": EMBEDDING_PROJECTOR_ID,
+                "worker_id": "embedding-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=4)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        render_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "render-v2",
+                "worker_id": "render-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=4)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+
+        assert embedding_claim["claimed"][0]["session_id"] == published_session
+        assert render_claim["claimed"][0]["session_id"] == inactive_session
     finally:
         await client.close()
         await daemon.close()
