@@ -1692,7 +1692,10 @@ class CatalogDaemon:
             if params["include_state_heads"] is not True:
                 return self._error(request, "invalid_request", "include_state_heads must be true")
         assert self._store is not None
-        result = await self._run_store(self._store.list_session_timeline, **params)
+        # Timeline is a read-only snapshot. Keep it on the read executor so a
+        # projector claim/commit cannot queue the launch visibility path behind
+        # the catalog writer.
+        result = await self._run_read_store(self._store.list_session_timeline, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

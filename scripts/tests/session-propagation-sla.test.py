@@ -205,6 +205,20 @@ def test_batch_clean_metrics_exclude_classified_failures() -> None:
     assert clean["p95"] == 300
 
 
+def test_http_protocol_browser_error_is_transport_contamination() -> None:
+    instance = profiler.Profiler.__new__(profiler.Profiler)
+    instance.observations = [
+        {
+            "case_id": "D1",
+            "session_id": "session-1",
+            "event": "browser_ui_console",
+            "source": "browser_ui",
+            "payload": {"text": "Failed to load resource: net::ERR_HTTP2_PROTOCOL_ERROR"},
+        }
+    ]
+    assert instance.transport_failure_classification("D1", "session-1", None) == "hosted_transport_degraded"
+
+
 if __name__ == "__main__":
     for test in (
         test_empty_shell_and_promotion_boundary,
@@ -212,6 +226,7 @@ if __name__ == "__main__":
         test_promotion_delta_rejects_out_of_order_observation,
         test_manifest_moves_legacy_metric_out_of_hard_targeting,
         test_batch_clean_metrics_exclude_classified_failures,
+        test_http_protocol_browser_error_is_transport_contamination,
     ):
         test()
     print("session propagation SLA tests passed")
