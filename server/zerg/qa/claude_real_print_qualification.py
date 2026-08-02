@@ -146,8 +146,21 @@ def _execute(binary: Path, evidence_root: Path):
         overall = "fail"
     elif AssertionOutcome.BLOCKED in {no_token_outcome, live_outcome}:
         overall = "blocked"
+    live_model_evidence = None
+    if isinstance(live, dict):
+        live_model_evidence = {
+            "source_canary": "real_print_canary",
+            "operation_evidence": live.get("operation_evidence"),
+            "model": live.get("model"),
+            "result_event": live.get("result_event"),
+        }
     return (
-        {"status": overall, "no_token_canary": no_token, "real_print_canary": live},
+        {
+            "status": overall,
+            "no_token_canary": no_token,
+            "real_print_canary": live,
+            "live_model_evidence": live_model_evidence,
+        },
         assertions,
         tuple(credentials[key] for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY") if key in credentials),
     )

@@ -792,6 +792,19 @@ def _provider_real_run_env(*, extra_keys: tuple[str, ...] = ()) -> dict[str, str
     return env
 
 
+def _flatten_numeric_usage(value: Any, *, prefix: str = "") -> dict[str, int | float]:
+    if not isinstance(value, dict):
+        return {}
+    usage: dict[str, int | float] = {}
+    for key, item in value.items():
+        name = f"{prefix}{key}"
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            usage[name] = item
+        elif isinstance(item, dict):
+            usage.update(_flatten_numeric_usage(item, prefix=f"{name}."))
+    return usage
+
+
 def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -> dict[str, Any] | None:
     if event is None:
         return None
@@ -812,15 +825,11 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
         compact["model"] = model.strip()
     for usage_key in ("usage", "modelUsage"):
         usage = event.get(usage_key)
-        if isinstance(usage, dict):
-            numeric_usage = {
-                str(key): value
-                for key, value in usage.items()
-                if isinstance(value, (int, float)) and not isinstance(value, bool)
-            }
-            if numeric_usage:
-                compact["usage"] = numeric_usage
-                break
+        flattened_usage = _flatten_numeric_usage(usage)
+        if flattened_usage:
+            compact["usage"] = flattened_usage
+            compact["usage_source"] = usage_key
+            break
     total_cost = event.get("total_cost_usd")
     if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
         compact["total_cost_usd"] = total_cost

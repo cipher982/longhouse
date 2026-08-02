@@ -55,6 +55,11 @@ def _write_exe(path: Path, text: str) -> Path:
 
 
 def _fake_claude_print(path: Path, *, mode: str = "success") -> Path:
+    usage_line = (
+        '"modelUsage": {"claude-haiku-fake": {"input_tokens": 3, "output_tokens": 2}}'
+        if mode == "nested_usage"
+        else '"usage": {"input_tokens": 3, "output_tokens": 2}'
+    )
     return _write_exe(
         path,
         f"""#!/usr/bin/env python3
@@ -122,7 +127,7 @@ print(json.dumps({{
     "is_error": False,
     "result": marker,
     "stop_reason": "end_turn",
-    "usage": {{"input_tokens": 3, "output_tokens": 2}},
+    {usage_line},
     "total_cost_usd": 0.0001,
     "session_id": session_id,
 }}))
@@ -284,6 +289,36 @@ def test_claude_real_print_canary_requires_exact_marker_result() -> None:
         assert claude["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
         assert "stdout_tail" not in claude
         assert "stderr_tail" not in claude
+
+
+def test_claude_real_print_canary_flattens_nested_model_usage() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_home = root / "home"
+        fake_bin = _fake_claude_print(root / "bin" / "claude", mode="nested_usage")
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "claude",
+                "--claude-run-real-print",
+                "--claude-print-timeout-secs",
+                "5",
+            ],
+            env={
+                "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
+                "HOME": str(fake_home),
+                "LONGHOUSE_CLAUDE_BIN": str(fake_bin),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        result_event = payload["canaries"]["claude"]["result_event"]
+        assert result_event["usage"] == {
+            "claude-haiku-fake.input_tokens": 3,
+            "claude-haiku-fake.output_tokens": 2,
+        }
+        assert result_event["usage_source"] == "modelUsage"
 
 
 def test_claude_real_print_canary_fails_on_api_error_result() -> None:
@@ -531,6 +566,7 @@ def test_opencode_real_tool_canary_fails_without_done_text() -> None:
 def main() -> int:
     tests = [
         test_claude_real_print_canary_requires_exact_marker_result,
+        test_claude_real_print_canary_flattens_nested_model_usage,
         test_claude_real_print_canary_fails_on_api_error_result,
         test_claude_real_print_canary_preserves_non_secret_launch_env,
         test_claude_channel_canary_uses_native_channel_module,
