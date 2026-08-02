@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any
 
 SESSION_ID_RE = re.compile(r"Session ID:\s*([0-9a-fA-F-]{36})")
+PROVIDER_SESSION_START_RE = re.compile(
+    r'"event"\s*:\s*"session_start".*?"session_id"\s*:\s*"([0-9a-fA-F-]{36})"',
+    re.DOTALL,
+)
 ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
@@ -121,6 +125,25 @@ def wait_for_channel_ready(session_id: str, *, timeout_secs: float) -> bool:
             return True
         time.sleep(0.1)
     return False
+
+
+def find_channel_session_id(cwd: Path, *, provider_session_id: str | None = None) -> str | None:
+    """Resolve the Longhouse session id from the current Claude channel state."""
+    expected_cwd = str(cwd.resolve())
+    sessions_dir = Path.home() / ".claude" / "channels" / "longhouse" / "sessions"
+    for state_path in sorted(sessions_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True):
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(state, dict):
+            continue
+        if state.get("cwd") != expected_cwd and (not provider_session_id or state.get("provider_session_id") != provider_session_id):
+            continue
+        session_id = state.get("session_id")
+        if isinstance(session_id, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", session_id):
+            return session_id
+    return None
 
 
 def transcript_paths(session_id: str) -> list[Path]:
@@ -340,7 +363,9 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
     recorder.write("launch_started", command=command, model=config.model, output_dir=str(output_dir))
     clean_buffer = ""
     compact_buffer = ""
+    raw_buffer = ""
     session_id: str | None = None
+    provider_session_id: str | None = None
     confirmed_workspace_trust = False
     confirmed_warning = False
     channel_ready = False
@@ -374,6 +399,12 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                 if not data:
                     continue
                 text = append_terminal_log(terminal_log, data)
+                raw_buffer = (raw_buffer + text)[-12000:]
+                if not provider_session_id:
+                    provider_match = PROVIDER_SESSION_START_RE.search(raw_buffer)
+                    if provider_match:
+                        provider_session_id = provider_match.group(1)
+                        recorder.write("provider_session_id_observed", provider_session_id=provider_session_id)
                 stripped = strip_terminal_controls(text)
                 clean_buffer = (clean_buffer + stripped)[-12000:]
                 compact_buffer = (compact_buffer + compact_terminal_text(stripped))[-12000:]
@@ -390,6 +421,23 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                         if config.session_id_file:
                             config.session_id_file.parent.mkdir(parents=True, exist_ok=True)
                             config.session_id_file.write_text(session_id + "\n", encoding="utf-8")
+
+            if not session_id:
+                discovered_session_id = find_channel_session_id(
+                    config.cwd,
+                    provider_session_id=provider_session_id,
+                )
+                if discovered_session_id:
+                    session_id = discovered_session_id
+                    recorder.write(
+                        "session_id_observed",
+                        session_id=session_id,
+                        provider_session_id=provider_session_id,
+                        source="claude_channel_state",
+                    )
+                    if config.session_id_file:
+                        config.session_id_file.parent.mkdir(parents=True, exist_ok=True)
+                        config.session_id_file.write_text(session_id + "\n", encoding="utf-8")
 
                 if not confirmed_workspace_trust and "Yes,Itrustthisfolder" in compact_buffer:
                     os.write(master_fd, b"\r")
@@ -590,10 +638,12 @@ __all__ = [
     "append_terminal_log",
     "assistant_transcript_contains",
     "build_channel_send_command",
+    "build_managed_claude_command",
     "channel_send",
     "compact_terminal_text",
     "default_output_root",
     "default_repo_root",
+    "find_channel_session_id",
     "monotonic_ms",
     "read_json_file",
     "run_id_now",
