@@ -118,7 +118,13 @@ class DenseIndex:
                    e.start_order_time_us, e.event_index_start, e.event_index_end,
                    e.owner_id, s.project, s.provider, s.environment, s.started_at
             FROM episode_embeddings e
-            JOIN session_index s ON s.session_id = e.session_id
+            JOIN session_index s
+              ON s.session_id = e.session_id
+             -- Fenced on the published generation. Joining by session alone
+             -- lets a vector from a superseded generation occupy top-k and then
+             -- fail to hydrate, which hides the current generation's vector
+             -- behind a hit that cannot produce evidence.
+             AND s.generation_id = e.generation_id
             WHERE e.model = ? AND e.dims = ?
             ORDER BY e.session_id ASC, e.episode_ordinal ASC
             """,

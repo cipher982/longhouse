@@ -218,6 +218,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     session_id = str(uuid4())
+    published_generation = str(uuid4())
     owner_id = "owner-1"
     try:
         # query_episode_embeddings scopes via a SQL join against session_index
@@ -233,12 +234,12 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                 started_at, published_at
             ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
             """,
-            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            (session_id, published_generation, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
         )
         first = store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -266,7 +267,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
         replay = store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -281,6 +282,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                 }
             ],
         )
+        # A true replay -- same generation, same text -- still costs nothing.
         assert replay == {"written": 0, "skipped": 1}
         results = store.query_episode_embeddings(
             model="test-model",
