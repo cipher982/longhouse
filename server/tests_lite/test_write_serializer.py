@@ -602,12 +602,12 @@ def test_full_app_requires_storage_v2_in_subprocess_without_testing_flag(tmp_pat
     payload_script = dedent(
         """
         import json
+        from pathlib import Path
         from datetime import datetime, timezone
+        from unittest.mock import patch
         from uuid import uuid4
 
         from fastapi.testclient import TestClient
-
-        from zerg.main import app
 
         session_id = str(uuid4())
         payload = {
@@ -628,16 +628,28 @@ def test_full_app_requires_storage_v2_in_subprocess_without_testing_flag(tmp_pat
             "source_lines": [],
         }
 
-        with TestClient(app) as client:
-            ingest = client.post("/api/agents/ingest", content=json.dumps(payload))
-            print("ingest", ingest.status_code, ingest.text)
-            if ingest.status_code != 426 or ingest.json().get("detail", {}).get("code") != "storage_v2_required":
-                raise SystemExit(1)
+        # This subprocess owns the production storage-v2 contract. Embedding
+        # artifact and ONNX startup have separate production-mode tests; doing
+        # either here adds a 638 MB external prerequisite to an unrelated test.
+        with (
+            patch(
+                "zerg.services.embedding_artifact.provision_embedding_artifact",
+                return_value=Path("/tmp/test-embedding-model"),
+            ),
+            patch("zerg.services.local_embedder.initialize_local_embedder"),
+        ):
+            from zerg.main import app
 
-            capabilities = client.get("/api/agents/storage/v2/capabilities?machine_id=test-machine")
-            print("capabilities", capabilities.status_code, capabilities.text)
-            if capabilities.status_code != 200 or capabilities.json().get("cutover") is not True:
-                raise SystemExit(2)
+            with TestClient(app) as client:
+                ingest = client.post("/api/agents/ingest", content=json.dumps(payload))
+                print("ingest", ingest.status_code, ingest.text)
+                if ingest.status_code != 426 or ingest.json().get("detail", {}).get("code") != "storage_v2_required":
+                    raise SystemExit(1)
+
+                capabilities = client.get("/api/agents/storage/v2/capabilities?machine_id=test-machine")
+                print("capabilities", capabilities.status_code, capabilities.text)
+                if capabilities.status_code != 200 or capabilities.json().get("cutover") is not True:
+                    raise SystemExit(2)
         """
     )
 
