@@ -7707,9 +7707,11 @@ export interface components {
             evidence?: string | null;
             /** Structured Hits */
             structured_hits?: string[];
-            /** Diagnostics */
-            diagnostics?: {
-                [key: string]: unknown;
+            /** Retrieval Lanes */
+            retrieval_lanes?: ("lexical" | "dense")[];
+            /** Lane Ranks */
+            lane_ranks?: {
+                [key: string]: number;
             };
             /** Event Index Start */
             event_index_start?: number | null;
@@ -7735,8 +7737,9 @@ export interface components {
             /**
              * Evidence Status
              * @default unavailable
+             * @enum {string}
              */
-            evidence_status: string;
+            evidence_status: "complete" | "partial" | "unavailable" | "not_requested";
             /** Evidence Reason */
             evidence_reason?: string | null;
         };
@@ -7753,7 +7756,13 @@ export interface components {
              * Lanes
              * @description Retrieval lanes that actually ran for this request. A dead lane went unnoticed for days because a response could not say which lanes produced it; this makes that visible to the caller.
              */
-            lanes?: string[];
+            lanes?: ("lexical" | "dense")[];
+            /** Embedding Model */
+            embedding_model?: string | null;
+            /** Embedding Dims */
+            embedding_dims?: number | null;
+            /** Embedding Revision */
+            embedding_revision?: string | null;
         };
         /**
          * ResetType
@@ -17101,10 +17110,10 @@ export interface operations {
                 /** @description Context turns before/after match */
                 context_turns?: number;
                 /** @description Context projection mode: forensic|active_context */
-                context_mode?: string;
+                context_mode?: "forensic" | "active_context";
                 /** @description Include Hatch automation sessions in recall results */
                 include_automation?: boolean;
-                mode?: string;
+                mode?: "auto" | "lexical" | "semantic";
             };
             header?: never;
             path?: never;
