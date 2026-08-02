@@ -20,24 +20,43 @@ interface RecallPanelProps {
   provider?: string;
 }
 
-function ContextTurn({ turn }: { turn: RecallContextTurn }) {
+function ContextTurn({ turn, isMatch }: { turn: RecallContextTurn; isMatch: boolean }) {
   // Neutral assistant label: recall spans Claude, Codex, Antigravity, OpenCode,
   // Provider-specific launch hints live in sessionWorkspace/interaction.ts,
   // so don't hardcode a single provider name.
   const roleLabel = turn.role === "user" ? "User" : turn.tool_name ? turn.tool_name : "Assistant";
   const roleClass = turn.role === "user" ? "recall-turn--user" : "recall-turn--assistant";
-  const matchClass = turn.is_match ? "recall-turn--match" : "";
+  const matchClass = isMatch ? "recall-turn--match" : "";
 
   return (
     <div className={`recall-turn ${roleClass} ${matchClass}`.trim()}>
       <span className="recall-turn-role">{roleLabel}</span>
-      <span className="recall-turn-content">{turn.content}</span>
+      <span className="recall-turn-content">{turn.content_text}</span>
     </div>
   );
 }
 
+function retrievalProvenance(match: RecallMatch): string {
+  if (!match.retrieval_lanes?.length) return "Source unavailable";
+  return [...match.retrieval_lanes]
+    .sort((left, right) => (match.lane_ranks?.[left] ?? Number.MAX_SAFE_INTEGER) - (match.lane_ranks?.[right] ?? Number.MAX_SAFE_INTEGER))
+    .map((lane) => {
+      const label = lane === "dense" ? "Semantic" : "Lexical";
+      const rank = match.lane_ranks?.[lane];
+      return rank ? `${label} #${rank}` : label;
+    })
+    .join(" + ");
+}
+
 function RecallCard({ match }: { match: RecallMatch }) {
-  const scorePercent = Math.round(match.score * 100);
+  const eventLink = match.match_event_id != null
+    ? `/timeline/${match.session_id}?event_id=${match.match_event_id}`
+    : `/timeline/${match.session_id}`;
+  const evidenceLabel = match.evidence_status === "partial"
+    ? "Partial evidence"
+    : match.evidence_status === "unavailable"
+      ? "Evidence unavailable"
+      : null;
 
   return (
     <div
@@ -46,28 +65,46 @@ function RecallCard({ match }: { match: RecallMatch }) {
     >
       <div className="recall-card-header">
         <Link
-          to={match.match_event_id ? `/timeline/${match.session_id}?event_id=${match.match_event_id}` : `/timeline/${match.session_id}`}
+          to={eventLink}
           className="recall-card-session-link"
           title="Open session"
           {...{ elementtiming: "longhouse-recall-card" }}
         >
           Session {match.session_id.slice(0, 8)}…
         </Link>
-        <Badge variant="neutral">
-          {scorePercent}%
-        </Badge>
+        <Badge variant="neutral">{retrievalProvenance(match)}</Badge>
+        {evidenceLabel && (
+          <Badge variant={match.evidence_status === "unavailable" ? "error" : "warning"}>
+            {evidenceLabel}
+          </Badge>
+        )}
         <span className="recall-card-meta">
           {match.total_events} events
         </span>
       </div>
       <div className="recall-card-context">
-        {match.context.map((turn) => (
-          <ContextTurn key={turn.index} turn={turn} />
-        ))}
+        {match.context.length > 0 ? (
+          match.context.map((turn) => (
+            <ContextTurn
+              key={turn.search_event_id}
+              turn={turn}
+              isMatch={
+                turn.search_event_id === match.match_event_id
+                || (!!match.evidence && turn.content_text === match.evidence)
+              }
+            />
+          ))
+        ) : match.evidence ? (
+          <div className="recall-card-evidence">{match.evidence}</div>
+        ) : (
+          <div className="recall-card-evidence recall-card-evidence--unavailable">
+            {match.evidence_reason || "No evidence was returned for this match."}
+          </div>
+        )}
       </div>
       <div className="recall-card-actions">
         <Link
-          to={match.match_event_id ? `/timeline/${match.session_id}?event_id=${match.match_event_id}` : `/timeline/${match.session_id}`}
+          to={eventLink}
           className="recall-card-open"
         >
           Open session →
@@ -127,7 +164,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
           <EmptyState
             variant="error"
             title="Recall unavailable"
-            description="Embeddings may not be configured for this instance."
+            description="The recall index is not ready. Try again after indexing finishes."
           />
         )}
 

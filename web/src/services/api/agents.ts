@@ -1188,24 +1188,36 @@ export interface RecallMatch {
   session_id: string;
   chunk_index: number;
   score: number;
+  evidence: string | null;
+  retrieval_lanes: Array<"lexical" | "dense">;
+  lane_ranks: Partial<Record<"lexical" | "dense", number>>;
   event_index_start: number | null;
   event_index_end: number | null;
   total_events: number;
   context: RecallContextTurn[];
   match_event_id: number | null;
+  evidence_status: "complete" | "partial" | "unavailable" | "not_requested";
+  evidence_reason: string | null;
 }
 
 export interface RecallContextTurn {
-  index: number;
+  search_event_id: number;
+  event_id: string;
+  source_object_id: string;
+  record_ordinal: number;
+  order_time_us: number;
   role: string;
-  content: string;
+  content_text: string;
   tool_name: string | null;
-  is_match: boolean;
 }
 
 export interface RecallResponse {
   matches: RecallMatch[];
   total: number;
+  lanes: Array<"lexical" | "dense">;
+  embedding_model: string | null;
+  embedding_dims: number | null;
+  embedding_revision: string | null;
 }
 
 export interface RecallFilters {

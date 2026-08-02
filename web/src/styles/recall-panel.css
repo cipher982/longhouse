@@ -132,6 +132,17 @@
   -webkit-box-orient: vertical;
 }
 
+.recall-card-evidence {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.recall-card-evidence--unavailable {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 .recall-card-actions {
   display: flex;
   justify-content: flex-end;
