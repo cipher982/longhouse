@@ -97,6 +97,22 @@ async def test_publish_wakes_live_subscriber():
         await task
 
 
+def test_subscription_drain_nowait_coalesces_queued_wakes():
+    bus = SessionPubsub()
+    topic = TOPIC_TIMELINE
+    with bus.subscribe(topic) as sub:
+        bus.publish(topic, {"wake": 1})
+        bus.publish(topic, {"wake": 2})
+        bus.publish(topic, {"wake": 3})
+
+        assert sub.drain_nowait() == 3
+
+        async def no_message():
+            return await sub.next_message(timeout=0.0)
+
+        assert asyncio.run(no_message()) is None
+
+
 @pytest.mark.asyncio
 async def test_publish_session_title_update_wakes_session_and_timeline_topics():
     reset_pubsub_for_test()

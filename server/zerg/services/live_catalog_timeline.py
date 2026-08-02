@@ -967,6 +967,12 @@ async def stream_live_catalog_timeline(
                     last_heartbeat = now
                 continue
 
+            # A timeline message is an invalidation, not a per-row delta. A
+            # burst of unrelated writes therefore needs one authoritative
+            # snapshot, not one catalog read per queued wake.
+            drain_nowait = getattr(subscription, "drain_nowait", None)
+            if drain_nowait is not None:
+                drain_nowait()
             response = await asyncio.to_thread(
                 list_live_catalog_timeline,
                 params=params,

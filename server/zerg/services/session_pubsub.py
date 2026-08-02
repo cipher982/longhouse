@@ -198,6 +198,23 @@ class _Subscription:
         except asyncio.TimeoutError:
             return None
 
+    def drain_nowait(self) -> int:
+        """Discard queued wake messages and return how many were removed.
+
+        Topic messages are invalidations, not a delta log. Consumers that
+        rebuild a durable snapshot can coalesce a burst of wakes into one
+        read, avoiding one full rescan per queued message.
+        """
+        if self._closed:
+            return 0
+        drained = 0
+        while True:
+            try:
+                self._sub.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return drained
+            drained += 1
+
     def close(self) -> None:
         if self._closed:
             return
