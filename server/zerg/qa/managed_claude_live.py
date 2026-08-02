@@ -248,7 +248,8 @@ def run_probe(
 
 
 def build_channel_send_command(session_id: str, text: str, *, meta: dict[str, str] | None = None) -> list[str]:
-    command = ["longhouse", "claude-channel", "send", "--session-id", session_id, "--text", text]
+    engine = os.environ.get("LONGHOUSE_ENGINE_BIN") or "longhouse-engine"
+    command = [engine, "claude-channel", "send", "--session-id", session_id, "--text", text]
     for key, value in (meta or {}).items():
         command.extend(["--meta", f"{key}={value}"])
     return command

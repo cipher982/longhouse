@@ -182,7 +182,7 @@ def test_build_channel_send_command_adds_steer_metadata():
     )
 
     assert command == [
-        "longhouse",
+        "longhouse-engine",
         "claude-channel",
         "send",
         "--session-id",
@@ -204,7 +204,7 @@ def test_build_channel_send_command_omits_empty_metadata():
     )
 
     assert command == [
-        "longhouse",
+        "longhouse-engine",
         "claude-channel",
         "send",
         "--session-id",
