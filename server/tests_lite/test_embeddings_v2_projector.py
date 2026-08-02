@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
+from zerg.services.embeddings_v2_projector import _run_forever
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 
@@ -39,6 +40,26 @@ def _local_embedder(monkeypatch, function):
         "zerg.services.embeddings_v2_projector.get_local_embedder",
         lambda: SimpleNamespace(embed_documents=function),
     )
+
+
+@pytest.mark.asyncio
+async def test_embedding_projector_workers_refill_independently():
+    both_started = asyncio.Event()
+    active = 0
+
+    class Projector:
+        async def run_once(self, *, limit):
+            nonlocal active
+            assert limit == 1
+            active += 1
+            if active == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=0.1)
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_forever(Projector(), worker_count=2)
+    assert active == 2
 
 
 @pytest.mark.asyncio

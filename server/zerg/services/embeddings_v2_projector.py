@@ -31,6 +31,7 @@ from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 logger = logging.getLogger(__name__)
 PROJECTOR = EMBEDDING_PROJECTOR_ID
 PAGE_SIZE = 100
+PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "4")))
 
 
 class EmbeddingsV2Projector:
@@ -389,15 +390,19 @@ def _hash(value: object) -> str:
 _task: asyncio.Task[None] | None = None
 
 
-async def _run_forever(projector: EmbeddingsV2Projector) -> None:
+async def _run_worker(projector: EmbeddingsV2Projector) -> None:
     while True:
         try:
-            await asyncio.sleep(0 if await projector.run_once() else 0.5)
+            await asyncio.sleep(0 if await projector.run_once(limit=1) else 0.5)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Embedding projector tick failed")
             await asyncio.sleep(1)
+
+
+async def _run_forever(projector: EmbeddingsV2Projector, *, worker_count: int = PROJECTOR_WORKERS) -> None:
+    await asyncio.gather(*(_run_worker(projector) for _ in range(max(1, worker_count))))
 
 
 def start_embeddings_v2_projector() -> bool:

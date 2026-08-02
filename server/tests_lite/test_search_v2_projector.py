@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from zerg.services.search_v2_projector import SearchV2Projector
+from zerg.services.search_v2_projector import _run_forever
 
 
 class FakeClient:
@@ -43,6 +44,26 @@ class FakeRawWorkers:
     async def read(self, object_path, object_hash, tenant_id):
         self.calls.append((object_path, object_hash, tenant_id))
         return self.decoded
+
+
+@pytest.mark.asyncio
+async def test_search_projector_workers_refill_independently():
+    both_started = asyncio.Event()
+    active = 0
+
+    class Projector:
+        async def run_once(self, *, limit):
+            nonlocal active
+            assert limit == 1
+            active += 1
+            if active == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=0.1)
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_forever(Projector(), worker_count=2)
+    assert active == 2
 
 
 @pytest.mark.asyncio
