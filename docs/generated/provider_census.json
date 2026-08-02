@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 232,
+  "file_count": 233,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -417,6 +417,7 @@
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
@@ -424,7 +425,8 @@
       "path": "scripts/ops/profile-managed-session-propagation.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -740,6 +742,13 @@
         "claude",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_session_reads.py",
+      "providers": [
+        "codex",
+        "cursor"
       ]
     },
     {

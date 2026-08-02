@@ -3812,21 +3812,32 @@ class CatalogStore:
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
+            # Storage-v2 providers do not always repeat launch identity in
+            # their native transcript metadata. The live catalog is the
+            # authoritative identity for a managed session, so a durable
+            # storage row with a NULL project/machine/provenance must still
+            # survive the same filtered timeline request as its live shell.
+            storage_project = func.coalesce(storage.c.project, catalog.c.project)
+            storage_provider = func.coalesce(storage.c.provider, catalog.c.provider)
+            storage_environment = func.coalesce(storage.c.environment, catalog.c.environment)
+            storage_device = func.coalesce(storage.c.machine_id, catalog.c.device_id)
+            storage_launch_actor = func.coalesce(storage.c.launch_actor, catalog.c.launch_actor)
+            storage_launch_surface = func.coalesce(storage.c.launch_surface, catalog.c.launch_surface)
             if project is not None:
                 legacy_where.append(card.c.project == project)
-                storage_where.append(storage.c.project == project)
+                storage_where.append(storage_project == project)
             if provider is not None:
                 legacy_where.append(card.c.provider == provider)
-                storage_where.append(storage.c.provider == provider)
+                storage_where.append(storage_provider == provider)
             if environment is not None:
                 legacy_where.append(card.c.environment == environment)
-                storage_where.append(storage.c.environment == environment)
+                storage_where.append(storage_environment == environment)
             elif not include_test:
                 legacy_where.append(card.c.environment.notin_(("test", "e2e")))
-                storage_where.append(storage.c.environment.notin_(("test", "e2e")))
+                storage_where.append(storage_environment.notin_(("test", "e2e")))
             if device_id is not None:
                 legacy_where.append(card.c.device_id == device_id)
-                storage_where.append(storage.c.machine_id == device_id)
+                storage_where.append(storage_device == device_id)
             if hide_autonomous:
                 legacy_where.append(
                     or_(
@@ -3839,13 +3850,14 @@ class CatalogStore:
                 storage_where.append(
                     or_(
                         storage.c.user_messages > 0,
-                        storage.c.launch_actor == "human_ui",
-                        storage.c.launch_surface.in_(("web", "ios", "api")),
+                        storage_launch_actor == "human_ui",
+                        storage_launch_surface.in_(("web", "ios", "api")),
                     )
                 )
             if not include_automation:
                 legacy_where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind != "hatch_automation"))
-                storage_where.append(or_(storage.c.origin_kind.is_(None), storage.c.origin_kind != "hatch_automation"))
+                storage_origin_kind = func.coalesce(storage.c.origin_kind, catalog.c.origin_kind)
+                storage_where.append(or_(storage_origin_kind.is_(None), storage_origin_kind != "hatch_automation"))
             if include_state_heads:
                 if owner_id is None:
                     raise ValueError("canonical timeline projection requires owner_id")
@@ -3861,6 +3873,7 @@ class CatalogStore:
                 storage_where.append(storage.c.owner_id == owner_text)
 
             joined = card.join(catalog, catalog.c.session_id == card.c.session_id)
+            storage_joined = storage.outerjoin(catalog, catalog.c.session_id == storage.c.session_id)
             candidates = union_all(
                 select(
                     card.c.session_id.label("session_id"),
@@ -3873,7 +3886,9 @@ class CatalogStore:
                     storage.c.session_id.label("session_id"),
                     storage.c.last_activity_at.label("order_at"),
                     case((storage_unread, 1), else_=0).label("unread"),
-                ).where(*storage_where),
+                )
+                .select_from(storage_joined)
+                .where(*storage_where),
             ).subquery()
             total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
             # Unread first so acknowledgement-pending sessions can never be

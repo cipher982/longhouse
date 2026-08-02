@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Profile Codex session propagation from local process truth to timeline truth.
+"""Profile managed-provider session propagation from local process truth to timeline truth.
 
 This is the first implementation slice for
-docs/specs/managed-session-propagation-profiler.md. It intentionally starts
-with Codex because managed Codex has a bridge/control path that can be driven
-without solving Claude's native-channel PTY lifecycle first.
+docs/specs/managed-session-propagation-profiler.md. Codex is the reference
+driver; provider-specific drivers are added only when their native control and
+transcript evidence is already proven.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import os
 import re
 import select
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -161,6 +162,7 @@ DEFAULT_SLA_CASE_BY_PROFILE_PROVIDER = {
     ("cold-timeline", "codex"): "managed_codex_cold_timeline_closed",
     ("warm-live", "codex"): "managed_codex_warm_live_graceful_close",
     ("warm-live", "claude"): "managed_claude_warm_live_graceful_close",
+    ("warm-live", "cursor"): "managed_cursor_helm_content_promotion",
 }
 
 
@@ -516,6 +518,83 @@ print(json.dumps(payload, default=str))
         )
         data = safe_json_loads(proc.stdout)
         return data if isinstance(data, dict) else None
+
+    def hosted_recent_cursor_sessions(self, since_epoch: float) -> list[dict[str, Any]]:
+        """Find Cursor sessions created during this launch before local state exists.
+
+        Cursor's first turn is supplied on the native Helm launch command. The
+        provider can therefore create and archive content before the local Helm
+        state file exposes Longhouse's session UUID. The live catalog is the
+        earliest durable hosted signal and lets the profiler establish the
+        empty-shell boundary without guessing from a late state-file read.
+        """
+
+        script = r"""
+import json, os, sqlite3, sys
+from datetime import datetime, timezone
+
+subdomain, cutoff_epoch = sys.argv[1], float(sys.argv[2])
+path = f"/var/app-data/longhouse/{subdomain}/longhouse-live.db"
+if not os.path.exists(path):
+    path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
+conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+conn.row_factory = sqlite3.Row
+
+def epoch(value):
+    if not value:
+        return None
+    text = str(value).strip().replace(" ", "T")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+rows = []
+table = conn.execute(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_session_catalog'"
+).fetchone()
+if table:
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            '''SELECT session_id, provider, project, cwd, started_at, ended_at,
+                      user_messages, assistant_messages, tool_calls,
+                      hidden_from_default_timeline, updated_at
+               FROM live_session_catalog
+               WHERE provider=? AND project=?
+               ORDER BY started_at DESC LIMIT 20''',
+            ("cursor", "managed-local"),
+        ).fetchall()
+    ]
+result = []
+for row in rows:
+    started_epoch = epoch(row.get("started_at"))
+    if started_epoch is None or started_epoch < cutoff_epoch:
+        continue
+    row["started_at_epoch"] = started_epoch
+    result.append(row)
+print(json.dumps(result, default=str))
+"""
+        proc = subprocess.run(
+            [
+                "ssh",
+                self.args.ssh_target,
+                "python3",
+                "-",
+                self.subdomain,
+                str(since_epoch),
+            ],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        data = safe_json_loads(proc.stdout)
+        return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
 
     def measure_remote_clock_skew_ms(self) -> int | None:
         cmd = [
@@ -1554,8 +1633,10 @@ except Exception as exc:
         *,
         case_id: str,
         ownership: str,
+        hosted: dict[str, Any] | None = None,
+        observation_interval_ms: int = 0,
     ) -> bool:
-        data = self.hosted_db_direct(session_id)
+        data = hosted if hosted is not None else self.hosted_db_direct(session_id)
         if data is not None and hosted_empty_shell(data):
             self.observe(
                 case_id=case_id,
@@ -1564,7 +1645,7 @@ except Exception as exc:
                 source="hosted_db",
                 event="empty_shell_observed",
                 session_id=session_id,
-                payload={"observation_interval_ms": 0, **compact_hosted(data)},
+                payload={"observation_interval_ms": observation_interval_ms, **compact_hosted(data)},
             )
             return True
         self.observe(
@@ -1574,7 +1655,7 @@ except Exception as exc:
             source="hosted_db",
             event="empty_shell_observation_missing",
             session_id=session_id,
-            payload={"observation_interval_ms": 0, **compact_hosted(data or {})},
+            payload={"observation_interval_ms": observation_interval_ms, **compact_hosted(data or {})},
         )
         return False
 
@@ -2162,6 +2243,456 @@ except Exception as exc:
             "thread_path": str(thread_path) if thread_path else None,
         }
 
+    def run_managed_cursor(self) -> dict[str, Any]:
+        """Run the native Cursor Helm path through durable content promotion."""
+
+        from zerg.qa.cursor_helm_product_e2e import _PtyProcess
+        from zerg.qa.cursor_helm_product_e2e import _state_ids
+        from zerg.services.longhouse_paths import get_managed_local_dir
+
+        case_id = "D1"
+        ownership = "managed"
+        nonce = f"LH_PROBE_CURSOR_MANAGED_{self.run_id}"
+        workspace = Path(
+            self.args.cursor_workspace
+            or Path.home() / ".longhouse" / "canaries" / "provider-live" / "cursor" / "product-e2e" / "workspace"
+        ).resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        state_root = get_managed_local_dir("cursor-helm")
+        before_ids = _state_ids(state_root)
+        session: Any | None = None
+        session_id: str | None = None
+        browser_ui: threading.Thread | None = None
+        content_promotion_poll: threading.Thread | None = None
+        content_promotion_case = bool(
+            self.sla_case
+            and "content_durable_to_timeline_card_paint_ms" in set(self.sla_case.get("metrics") or [])
+        )
+        hosted_discovered_session_id: str | None = None
+        launch_started_epoch: float | None = None
+        timeline_live_poll: threading.Thread | None = None
+        timeline_live_sse: threading.Thread | None = None
+        timeline_close_sse: threading.Thread | None = None
+        session_id_file = self.output_dir / "browser-session-id.txt"
+        session_id_file.unlink(missing_ok=True)
+        terminal_path = self.output_dir / "cursor-terminal.raw"
+
+        try:
+            self.browser_session_cookie()
+            if self.args.profile == "warm-live" and not self.args.skip_browser_ui:
+                browser_ui = self.start_browser_ui_observer(
+                    "-",
+                    nonce,
+                    case_id=case_id,
+                    ownership=ownership,
+                    session_id_file=session_id_file,
+                )
+                browser_ready = self.wait_for_observation(
+                    case_id,
+                    PENDING_BROWSER_SESSION_ID,
+                    "browser_ui_loaded",
+                    timeout=30,
+                )
+                stream_ready = self.wait_for_observation(
+                    case_id,
+                    PENDING_BROWSER_SESSION_ID,
+                    "browser_timeline_stream_connected",
+                    timeout=10,
+                )
+                if not browser_ready or not stream_ready:
+                    raise RuntimeError(
+                        "warm Cursor browser observer did not reach ready state before managed launch: "
+                        f"browser_ready={browser_ready} stream_ready={stream_ready}"
+                    )
+
+            longhouse = shutil.which("longhouse")
+            if not longhouse:
+                raise RuntimeError("installed longhouse binary is required")
+            launch_cmd = [
+                longhouse,
+                "cursor",
+                "--cwd",
+                str(workspace),
+                "--permission-mode",
+                "remote_approve",
+                "--project",
+                self.project,
+                "--url",
+                self.browser_ui_base_url,
+                "--",
+                "--model",
+                self.args.cursor_model,
+                f"Reply with exactly {nonce}",
+            ]
+            launch_started_epoch = time.time() + ((self.remote_clock_skew_ms or 0) / 1000.0) - 2.0
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="launch_requested",
+                payload={"nonce": nonce, "cmd": redact_cmd(launch_cmd), "workspace": str(workspace)},
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="prompt_sent_started",
+                payload={"transport": "cursor_helm_launch_prompt", "nonce": nonce},
+            )
+            session = _PtyProcess.start(launch_cmd, cwd=workspace, terminal_path=terminal_path)
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="managed_launch_completed",
+                payload={"pid": session.process.pid, "terminal": str(terminal_path)},
+            )
+
+            last_hosted_discovery = 0.0
+
+            def discover_hosted_cursor_session() -> None:
+                nonlocal hosted_discovered_session_id, session_id, content_promotion_poll
+                nonlocal last_hosted_discovery
+                if launch_started_epoch is None or hosted_discovered_session_id:
+                    return
+                now = time.monotonic()
+                if now - last_hosted_discovery < 0.25:
+                    return
+                last_hosted_discovery = now
+                candidates = self.hosted_recent_cursor_sessions(launch_started_epoch)
+                workspace_candidates = [
+                    row for row in candidates if str(row.get("cwd") or "") == str(workspace)
+                ]
+                candidates = workspace_candidates or candidates
+                if not candidates:
+                    return
+                candidate = candidates[0]
+                candidate_id = str(candidate.get("session_id") or "")
+                if not candidate_id:
+                    return
+                hosted = self.hosted_db_direct(candidate_id)
+                if hosted is None:
+                    return
+                hosted_discovered_session_id = candidate_id
+                session_id = candidate_id
+                session_id_file.write_text(candidate_id + "\n")
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="hosted_db",
+                    event="hosted_session_discovered",
+                    session_id=candidate_id,
+                    payload={
+                        "discovery_latency_ms": monotonic_ms() - self.started_monotonic_ms,
+                        "catalog_row": candidate,
+                    },
+                )
+                if self.args.profile == "warm-live" and content_promotion_case:
+                    baseline = self.observe_content_promotion_baseline(
+                        candidate_id,
+                        case_id=case_id,
+                        ownership=ownership,
+                        hosted=hosted,
+                        observation_interval_ms=monotonic_ms() - self.started_monotonic_ms,
+                    )
+                    content_promotion_poll = self.start_content_promotion_poll(
+                        candidate_id,
+                        case_id=case_id,
+                        ownership=ownership,
+                    )
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="harness",
+                        event="content_promotion_observer_started",
+                        session_id=candidate_id,
+                        payload={"baseline_proven": baseline},
+                    )
+
+            trust_prompt_sent = False
+            trust_deadline = time.monotonic() + 15
+            while time.monotonic() < trust_deadline and not trust_prompt_sent:
+                discover_hosted_cursor_session()
+                try:
+                    terminal = terminal_path.read_text(errors="ignore")
+                except OSError:
+                    terminal = ""
+                if "Trust this workspace" in terminal and "Use arrow keys to navigate" in terminal:
+                    os.write(session.master_fd, b"a")
+                    time.sleep(0.15)
+                    os.write(session.master_fd, b"\r")
+                    trust_prompt_sent = True
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="cursor_native_hooks",
+                        event="cursor_workspace_trust_accepted",
+                        payload={"workspace": str(workspace)},
+                    )
+                    break
+                if _state_ids(state_root) - before_ids:
+                    break
+                time.sleep(0.1)
+
+            deadline = time.monotonic() + 60
+            state: dict[str, Any] | None = None
+            while time.monotonic() < deadline:
+                discover_hosted_cursor_session()
+                for candidate in _state_ids(state_root) - before_ids:
+                    row = read_json(state_root / f"{candidate}.json")
+                    if row and row.get("ready") is True:
+                        state = row
+                        break
+                if state is not None:
+                    break
+                time.sleep(0.1)
+            if state is None:
+                raise RuntimeError(f"timed out waiting for Cursor Helm state under {state_root}")
+            local_session_id = str(state.get("session_id") or "")
+            if not local_session_id:
+                raise RuntimeError(f"Cursor Helm state has no session id: {state}")
+            if hosted_discovered_session_id and hosted_discovered_session_id != local_session_id:
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="harness",
+                    event="hosted_local_session_id_mismatch",
+                    session_id=hosted_discovered_session_id,
+                    payload={"hosted_session_id": hosted_discovered_session_id, "local_session_id": local_session_id},
+                )
+                raise RuntimeError(
+                    "Cursor hosted discovery did not bind to local Helm state: "
+                    f"hosted={hosted_discovered_session_id} local={local_session_id}"
+                )
+            session_id = local_session_id
+            claim_path = state_root / "binding-probes" / f"{session_id}.json"
+            claim: dict[str, Any] | None = None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                claim = read_json(claim_path)
+                if claim:
+                    break
+                time.sleep(0.1)
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="cursor_native_hooks",
+                event="managed_state_observed",
+                session_id=session_id,
+                provider_session_id=str((claim or {}).get("conversation_uuid") or "") or None,
+                payload={"state": state, "binding_claim": claim, "state_root": str(state_root)},
+            )
+            session_id_file.write_text(session_id + "\n")
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="session_id_observed",
+                session_id=session_id,
+                provider_session_id=str((claim or {}).get("conversation_uuid") or "") or None,
+                payload={"state_root": str(state_root), "binding_claim_path": str(claim_path)},
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="prompt_sent_started",
+                session_id=session_id,
+                provider_session_id=str((claim or {}).get("conversation_uuid") or "") or None,
+                payload={"transport": "cursor_helm_launch_prompt", "nonce": nonce, "already_in_flight": True},
+            )
+
+            if self.args.profile not in {"cold-timeline", "warm-live"} and not self.args.skip_browser_ui:
+                browser_ui = self.start_browser_ui_observer(
+                    session_id,
+                    nonce,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+
+            if self.args.profile == "warm-live" and content_promotion_poll is None:
+                self.observe_content_promotion_baseline(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+                content_promotion_poll = self.start_content_promotion_poll(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+            self.write_snapshot(case_id, ownership, session_id, "post_launch")
+
+            if self.args.profile != "cold-timeline":
+                timeline_live_poll = self.start_timeline_live_poll(
+                    session_id,
+                    nonce,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+                timeline_live_sse = self.start_timeline_live_sse(
+                    session_id,
+                    nonce,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+
+            if self.args.profile == "warm-live":
+                browser_session_ready = self.wait_for_observation(
+                    case_id,
+                    session_id,
+                    "browser_session_id_received",
+                    timeout=15,
+                )
+                browser_workspace_ready = (
+                    self.event_observed_at_ms(case_id, session_id, "browser_detail_workspace_stream_ready") is not None
+                    if content_promotion_case
+                    else self.wait_for_observation(
+                        case_id,
+                        session_id,
+                        "browser_detail_workspace_stream_ready",
+                        timeout=45,
+                    )
+                )
+                sse_ready = self.wait_for_observation(
+                    case_id,
+                    session_id,
+                    "timeline_transcript_preview_sse_ready",
+                    timeout=10,
+                )
+                if not browser_session_ready or not sse_ready:
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="harness",
+                        event="provider_precondition_blocked",
+                        session_id=session_id,
+                        payload={
+                            "reason": "warm_live_precondition_timeout",
+                            "browser_session_ready": browser_session_ready,
+                            "browser_workspace_stream_ready": browser_workspace_ready,
+                            "timeline_sse_ready": sse_ready,
+                        },
+                    )
+                else:
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="harness",
+                        event="warm_ready_at",
+                        session_id=session_id,
+                        payload={
+                            "browser_session_ready": True,
+                            "browser_workspace_stream_ready": browser_workspace_ready,
+                            "browser_workspace_stream_required": not content_promotion_case,
+                            "timeline_sse_ready": True,
+                        },
+                    )
+
+            self.poll_local_cursor_assistant_response(
+                state_root,
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                timeout=180,
+            )
+            if self.event_observed_at_ms(case_id, session_id, "assistant_response_local") is not None:
+                self.poll_hosted_session(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                    predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+                    event="assistant_response_hosted",
+                    timeout=180,
+                    interval=0.5,
+                )
+            if content_promotion_poll is not None:
+                content_promotion_poll.join(timeout=95)
+            if timeline_live_poll is not None:
+                timeline_live_poll.join(timeout=95)
+            if timeline_live_sse is not None:
+                timeline_live_sse.join(timeout=95)
+            if browser_ui is not None:
+                browser_ui.join(timeout=150)
+            self.write_snapshot(case_id, ownership, session_id, "post_response")
+
+            timeline_close_sse = self.start_timeline_close_sse(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+            )
+            self.wait_for_observation(
+                case_id,
+                session_id,
+                "timeline_close_sse_ready",
+                timeout=10,
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="shutdown_requested",
+                session_id=session_id,
+            )
+            stop = self.run_observed(
+                ["longhouse-engine", "cursor-helm", "stop", "--session-id", session_id],
+                case_id=case_id,
+                ownership=ownership,
+                event_prefix="shutdown",
+                timeout=60,
+                session_id=session_id,
+            )
+            if stop.returncode != 0:
+                raise RuntimeError(f"Cursor Helm stop failed: {stop.short()}")
+            if session is not None:
+                session.close()
+                session = None
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: lifecycle_closed(data),
+                event="hosted_runtime_closed",
+                timeout=30,
+                interval=0.25,
+            )
+            if timeline_close_sse is not None:
+                timeline_close_sse.join(timeout=12)
+            self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
+            return {
+                "case_id": case_id,
+                "session_id": session_id,
+                "nonce": nonce,
+                "provider_session_id": str((claim or {}).get("conversation_uuid") or "") or None,
+                "state_root": str(state_root),
+                "workspace": str(workspace),
+            }
+        finally:
+            if session_id:
+                try:
+                    run_cmd(
+                        ["longhouse-engine", "cursor-helm", "stop", "--session-id", session_id],
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+            if session is not None:
+                session.close()
+
     def run_managed_claude(self) -> dict[str, Any]:
         case_id = "C1"
         ownership = "managed"
@@ -2605,6 +3136,58 @@ except Exception as exc:
         )
         return None
 
+    def poll_local_cursor_assistant_response(
+        self,
+        hook_root: Path,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+        timeout: float = 180,
+        interval: float = 0.1,
+    ) -> dict[str, Any] | None:
+        """Observe the native Cursor afterAgentResponse hook for one marker."""
+
+        from zerg.qa.cursor_helm_product_e2e import _hook_rows
+
+        deadline = time.monotonic() + timeout
+        last_count = 0
+        while time.monotonic() < deadline:
+            rows = _hook_rows(hook_root, session_id)
+            last_count = len(rows)
+            match = next(
+                (
+                    row
+                    for row in reversed(rows)
+                    if row.get("event") == "afterAgentResponse"
+                    and nonce in str(row.get("text") or "")
+                ),
+                None,
+            )
+            if match is not None:
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="cursor_native_hooks",
+                    event="assistant_response_local",
+                    session_id=session_id,
+                    payload={"hook_root": str(hook_root), "hook_event": match},
+                )
+                return match
+            time.sleep(interval)
+        self.observe(
+            case_id=case_id,
+            provider=self.args.provider,
+            ownership=ownership,
+            source="cursor_native_hooks",
+            event="assistant_response_local_timeout",
+            session_id=session_id,
+            payload={"hook_root": str(hook_root), "last_event_count": last_count},
+        )
+        return None
+
     def run_unmanaged_codex(self) -> dict[str, Any]:
         case_id = "A1"
         ownership = "unmanaged"
@@ -2704,7 +3287,7 @@ except Exception as exc:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="harness",
             event=f"snapshot_{label}",
@@ -3572,7 +4155,7 @@ except Exception as exc:
             metrics["verdict"] = verdict
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return verdict, metrics["notes"], metrics
-        is_managed_case = case_id == "B1" or ownership == "managed_local"
+        is_managed_case = case_id == "B1" or ownership in {"managed", "managed_local"}
         if requires_promotion and is_managed_case and metrics["content_durable_to_timeline_card_paint_pass"] is not True:
             verdict = "missing" if content_promotion_latency is None else "slow"
             metrics["verdict"] = verdict
@@ -4763,7 +5346,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="baseline",
         help="Profiler scenario to run. warm-live measures an already-open timeline; cold-timeline opens the browser after session truth exists.",
     )
-    parser.add_argument("--provider", choices=["claude", "codex"], default="codex")
+    parser.add_argument("--provider", choices=["claude", "codex", "cursor"], default="codex")
     parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
     parser.add_argument("--subdomain", default=os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo"))
     parser.add_argument("--container")
@@ -4826,6 +5409,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Useful for measuring Longhouse propagation separately from provider thinking latency."
         ),
     )
+    parser.add_argument(
+        "--cursor-model",
+        default="gpt-5.3-codex-low",
+        help="Model passed to the native Cursor Helm canary without changing the user's normal Cursor configuration.",
+    )
+    parser.add_argument(
+        "--cursor-workspace",
+        help="Isolated workspace for the native Cursor Helm canary. Defaults under ~/.longhouse/canaries/provider-live.",
+    )
     return parser.parse_args(argv)
 
 
@@ -4868,10 +5460,12 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             results.append(profiler.run_managed_codex())
         elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "claude":
             results.append(profiler.run_managed_claude())
+        elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "cursor":
+            results.append(profiler.run_managed_cursor())
     except Exception as exc:
         errors.append(f"managed {args.provider} failed: {exc}")
         profiler.observe(
-            case_id="B1" if args.provider == "codex" else "C1",
+            case_id={"codex": "B1", "claude": "C1", "cursor": "D1"}.get(args.provider, "run"),
             provider=args.provider,
             ownership="managed",
             source="harness",

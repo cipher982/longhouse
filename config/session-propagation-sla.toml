@@ -284,6 +284,27 @@ metrics = ["content_durable_to_timeline_card_paint_ms", "warm_close_local_to_pai
 notes = "Terminal-originated OpenCode Helm send/interrupt/terminate exists; this SLA case stays blocked until profiler coverage can measure lifecycle propagation honestly."
 
 [[cases]]
+id = "managed_cursor_helm_content_promotion"
+status = "experimental"
+provider = "cursor"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "warm-live"
+profile_class = "warm_realtime"
+profiler_driver = "managed_cursor_helm_warm_live"
+ci_mode = "report"
+launch = "longhouse cursor --permission-mode remote_approve"
+shutdown = "longhouse-engine cursor-helm stop"
+truth_source = "cursor_native_hooks"
+required_observers = ["managed_sessions_snapshot", "cursor_native_hooks", "timeline_sse", "browser_card", "hosted_db"]
+metrics = [
+  "content_durable_to_timeline_card_paint_ms",
+  "durable_archive_local_to_hosted_ms",
+  "warm_close_local_to_db_ms",
+]
+notes = "Native Cursor Helm content-promotion proof. Provider execution and Cursor archive lag remain separate diagnostics; this case gates only the served content-to-card, durable archive, and close observations."
+
+[[cases]]
 id = "unmanaged_codex_direct_graceful_close"
 status = "experimental"
 provider = "codex"

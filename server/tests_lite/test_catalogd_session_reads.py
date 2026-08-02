@@ -448,6 +448,67 @@ async def test_storage_archive_progress_cannot_close_or_overwrite_live_session_i
         await daemon.close()
 
 
+def test_storage_timeline_filters_fall_back_to_live_identity_for_null_project(daemon_paths):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    session_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="cursor",
+                environment="development",
+                project="longhouse",
+                device_id="cinder",
+                device_name="Cinder",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+            )
+        )
+        connection.execute(
+            StorageSession.__table__.insert().values(
+                session_id=session_id,
+                tenant_id="default",
+                provider="cursor",
+                environment="development",
+                machine_id="cinder",
+                project=None,
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                assistant_messages=1,
+                first_user_message_preview="Reply with exactly marker",
+                render_state="ready",
+                raw_state="durable",
+                media_state="complete",
+                commit_seq=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    result = CatalogStore(engine).list_session_timeline(
+        project="longhouse",
+        provider="cursor",
+        environment=None,
+        include_test=False,
+        hide_autonomous=True,
+        include_automation=False,
+        device_id=None,
+        days_back=7,
+        limit=20,
+        offset=0,
+    )
+
+    assert result["total"] == 1
+    assert result["rows"][0]["facts"]["catalog"]["project"] == "longhouse"
+    assert result["rows"][0]["facts"]["catalog"]["provider"] == "cursor"
+    engine.dispose()
+
+
 def test_catalog_gateway_normalizes_missing_file_backing(monkeypatch):
     monkeypatch.setattr(
         catalog_read_gateway,

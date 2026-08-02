@@ -11,10 +11,11 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST_PATH = ROOT / "config" / "session-propagation-sla.toml"
 ALLOWED_STATUSES = {"required", "experimental", "undefined"}
 ALLOWED_CI_MODES = {"blocked", "gate", "report"}
-ALLOWED_PROVIDERS = {"all", "claude", "codex", "opencode"}
+ALLOWED_PROVIDERS = {"all", "claude", "codex", "cursor", "opencode"}
 IMPLEMENTED_PROFILER_DRIVERS = {
     "managed_codex_cold_timeline",
     "managed_codex_warm_live",
+    "managed_cursor_helm_warm_live",
     "unmanaged_codex_baseline",
 }
 ALLOWED_PROFILE_CLASSES = {
@@ -39,6 +40,7 @@ ALLOWED_OBSERVERS = {
     "browser_card",
     "client_render_beacon",
     "claude_channel_state",
+    "cursor_native_hooks",
     "hosted_db",
     "machine_heartbeat",
     "managed_sessions_snapshot",
