@@ -22,6 +22,7 @@ from zerg.services.searchd_supervisor import get_searchd_projector_client
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,8 @@ class SearchV2Projector:
             retry_seconds = min(300, 5 * (2 ** min(failure_count, 6)))
             if isinstance(exc, StorageV2SemanticRecoveryPermanentError):
                 code = "semantic_recovery_permanent"
+            elif isinstance(exc, RenderObjectCorruptError):
+                code = "render_object_permanent"
             elif isinstance(exc, StorageV2SemanticRecoveryError):
                 # A legacy render object cannot be safely projected without
                 # its immutable raw companion. Keep it explicitly retryable;
@@ -142,7 +145,7 @@ class SearchV2Projector:
                         "failed_at": failed_at.isoformat(),
                         "retry_at": (
                             failed_at.isoformat()
-                            if code == "semantic_recovery_permanent"
+                            if code.endswith("_permanent")
                             else (failed_at + timedelta(seconds=retry_seconds)).isoformat()
                         ),
                     },

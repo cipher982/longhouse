@@ -27,6 +27,7 @@ from zerg.services.session_processing.embeddings import iter_turn_chunks
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)
 PROJECTOR = EMBEDDING_PROJECTOR_ID
@@ -131,6 +132,7 @@ class EmbeddingsV2Projector:
             # genuinely transient and should keep retrying quickly, so this
             # must check the specific subclass, not ValueError broadly.
             is_permanent = isinstance(exc, LocalEmbedderUnavailable)
+            is_render_permanent = isinstance(exc, RenderObjectCorruptError)
             is_semantic_recovery_permanent = isinstance(exc, StorageV2SemanticRecoveryPermanentError)
             is_semantic_recovery_pending = isinstance(exc, StorageV2SemanticRecoveryError) and not is_semantic_recovery_permanent
             if isinstance(session_id, str):
@@ -140,12 +142,14 @@ class EmbeddingsV2Projector:
                     timedelta(seconds=max(60, min(300, 5 * 2 ** min(failures, 6))))
                     if is_semantic_recovery_pending
                     else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
-                    if not (is_permanent or is_semantic_recovery_permanent)
+                    if not (is_permanent or is_render_permanent or is_semantic_recovery_permanent)
                     else timedelta(0)
                 )
                 error_code = (
                     "embedding_config_permanent"
                     if is_permanent
+                    else "render_object_permanent"
+                    if is_render_permanent
                     else "semantic_recovery_permanent"
                     if is_semantic_recovery_permanent
                     else "semantic_recovery_pending"
@@ -163,7 +167,7 @@ class EmbeddingsV2Projector:
                         "failed_at": failed_at.isoformat(),
                         "retry_at": (
                             failed_at.isoformat()
-                            if is_permanent or is_semantic_recovery_permanent
+                            if is_permanent or is_render_permanent or is_semantic_recovery_permanent
                             else (failed_at + retry_delay).isoformat()
                         ),
                     },

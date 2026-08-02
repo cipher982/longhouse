@@ -12,6 +12,7 @@ import pytest
 
 from zerg.services.search_v2_projector import SearchV2Projector
 from zerg.services.search_v2_projector import _run_forever
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 
 class FakeClient:
@@ -64,6 +65,26 @@ async def test_search_projector_workers_refill_independently():
     with pytest.raises(asyncio.CancelledError):
         await _run_forever(Projector(), worker_count=2)
     assert active == 2
+
+
+@pytest.mark.asyncio
+async def test_search_projector_quarantines_corrupt_render_object(monkeypatch):
+    session_id = str(uuid4())
+    catalog = FakeClient({"projector.state.fail.v2": {"changed": True}})
+    projector = SearchV2Projector(catalog=catalog, search=SimpleNamespace(), render_workers=SimpleNamespace())
+
+    async def project(**_kwargs):
+        raise RenderObjectCorruptError("unsupported render shape")
+
+    monkeypatch.setattr(projector, "_project", project)
+    await projector._run_claim(
+        {"session_id": session_id, "claimed_revision": "1", "failure_count": 0},
+        claim_token=str(uuid4()),
+    )
+
+    failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
+    assert failed["error_code"] == "render_object_permanent"
+    assert failed["retry_at"] == failed["failed_at"]
 
 
 @pytest.mark.asyncio
