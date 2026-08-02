@@ -46,6 +46,39 @@ async def _live_machine_control_operation_reaper_loop() -> None:
             logger.exception("Live machine control operation reaper tick failed")
 
 
+async def _initialize_local_embedding_projector(app: FastAPI) -> None:
+    """Provision dense recall without delaying the Runtime Host launch loop."""
+
+    try:
+        with _timed_startup_step("local_embedding_model"):
+            from zerg.models_config import get_embedding_space_config
+            from zerg.services.embedding_artifact import provision_embedding_artifact
+            from zerg.services.local_embedder import initialize_local_embedder
+
+            model_dir = await asyncio.to_thread(provision_embedding_artifact)
+            await asyncio.to_thread(initialize_local_embedder, get_embedding_space_config(), model_dir)
+            app.state.embedding_model_dir = str(model_dir)
+        from zerg.services.embeddings_v2_projector import start_embeddings_v2_projector
+
+        app.state.embeddings_v2_projector_started = start_embeddings_v2_projector()
+        if not app.state.embeddings_v2_projector_started:
+            logger.warning("Embeddings-v2 projector is degraded; hot Runtime Host readiness is unaffected")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        app.state.embeddings_v2_projector_started = False
+        logger.exception("Failed to initialize local embeddings (non-fatal)")
+
+
+async def _stop_local_embedding_initializer(app: FastAPI) -> None:
+    task = getattr(app.state, "embedding_initializer_task", None)
+    if task is None:
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    app.state.embedding_initializer_task = None
+
+
 @contextmanager
 def _timed_startup_step(name: str):
     started = time.monotonic()
@@ -205,14 +238,6 @@ async def lifespan(app: FastAPI):
                     get_render_object_worker_pool().start(),
                 )
             logger.info("Storage-v2 live and repair worker lanes are ready")
-            with _timed_startup_step("local_embedding_model"):
-                from zerg.models_config import get_embedding_space_config
-                from zerg.services.embedding_artifact import provision_embedding_artifact
-                from zerg.services.local_embedder import initialize_local_embedder
-
-                model_dir = await asyncio.to_thread(provision_embedding_artifact)
-                await asyncio.to_thread(initialize_local_embedder, get_embedding_space_config(), model_dir)
-                app.state.embedding_model_dir = str(model_dir)
             try:
                 from zerg.services.search_v2_projector import start_search_v2_projector
 
@@ -222,15 +247,10 @@ async def lifespan(app: FastAPI):
             except Exception:
                 app.state.search_v2_projector_started = False
                 logger.exception("Failed to start search-v2 projector (non-fatal)")
-            try:
-                from zerg.services.embeddings_v2_projector import start_embeddings_v2_projector
-
-                app.state.embeddings_v2_projector_started = start_embeddings_v2_projector()
-                if not app.state.embeddings_v2_projector_started:
-                    logger.warning("Embeddings-v2 projector is degraded; hot Runtime Host readiness is unaffected")
-            except Exception:
-                app.state.embeddings_v2_projector_started = False
-                logger.exception("Failed to start embeddings-v2 projector (non-fatal)")
+            app.state.embedding_initializer_task = asyncio.create_task(
+                _initialize_local_embedding_projector(app),
+                name="local-embedding-initializer",
+            )
             try:
                 from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
 
@@ -403,6 +423,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         if catalog_mode and not _settings.testing:
+            await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
@@ -478,6 +499,7 @@ async def lifespan(app: FastAPI):
         await topic_manager.shutdown()
 
         if catalog_mode and not _settings.testing:
+            await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()

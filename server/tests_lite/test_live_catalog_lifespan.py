@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from fastapi import FastAPI
@@ -48,6 +49,8 @@ async def test_live_catalog_maintenance_never_opens_legacy_notification_database
 @pytest.mark.asyncio
 async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(monkeypatch):
     calls: list[str] = []
+    embedding_release = threading.Event()
+    embedding_started = threading.Event()
     monkeypatch.setenv("TESTING", "0")
 
     def forbidden_direct_schema_init(*_args, **_kwargs):
@@ -71,8 +74,14 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         calls.append("search_projector_start")
         return True
 
+    def start_embedding_projector():
+        calls.append("embedding_projector_start")
+        return True
+
     def provision_embedding_model():
         calls.append("embedding_provision")
+        embedding_started.set()
+        assert embedding_release.wait(timeout=5)
         return "/verified/model"
 
     def initialize_embedding_model(_config, _model_dir):
@@ -135,6 +144,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr("zerg.services.searchd_supervisor.stop_searchd_supervisor", stop_searchd)
     monkeypatch.setattr("zerg.services.search_v2_projector.start_search_v2_projector", start_search_projector)
     monkeypatch.setattr("zerg.services.search_v2_projector.stop_search_v2_projector", stop_search_projector)
+    monkeypatch.setattr("zerg.services.embeddings_v2_projector.start_embeddings_v2_projector", start_embedding_projector)
     monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: StorageWorkers("raw"))
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
     monkeypatch.setattr("zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render"))
@@ -154,17 +164,21 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        await asyncio.sleep(0)
-        assert calls[:8] == [
+        assert await asyncio.to_thread(embedding_started.wait, 1)
+        assert app.state.embedding_initializer_task.done() is False
+        assert "search_projector_start" in calls
+        embedding_release.set()
+        await app.state.embedding_initializer_task
+        assert calls[:5] == [
             "catalogd_start",
             "searchd_start",
             "raw_workers_start",
             "render_workers_start",
-            "embedding_provision",
-            "embedding_initialize",
             "search_projector_start",
-            "runner_start",
         ]
+        assert calls.index("embedding_provision") < calls.index("embedding_initialize")
+        assert calls.index("embedding_initialize") < calls.index("embedding_projector_start")
+        assert "runner_start" in calls
         assert "title_reconciler_start" in calls
         assert app.state.catalogd_ping["ready"] is True
         assert app.state.searchd_ping is None
