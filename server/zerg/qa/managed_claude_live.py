@@ -248,6 +248,20 @@ def channel_send(
     )
 
 
+def build_managed_claude_command(config: ManagedClaudeLiveConfig) -> list[str]:
+    """Build the current native Longhouse Claude Helm command."""
+    return [
+        "longhouse",
+        "claude",
+        "--cwd",
+        str(config.cwd.resolve()),
+        "--project",
+        config.project,
+        "--name",
+        config.name,
+    ]
+
+
 def _terminate_process(process: subprocess.Popen[Any], recorder: Recorder, session_id: str | None) -> None:
     if process.poll() is not None:
         return
@@ -303,17 +317,7 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
     recorder = Recorder(output_dir / "events.jsonl", run_id)
     terminal_log = output_dir / "terminal.log"
 
-    command = [
-        "longhouse",
-        "claude",
-        "--cwd",
-        str(config.cwd.resolve()),
-        "--project",
-        config.project,
-        "--name",
-        config.name,
-        "--no-open",
-    ]
+    command = build_managed_claude_command(config)
     env = os.environ.copy()
     if config.model:
         env["ANTHROPIC_MODEL"] = config.model

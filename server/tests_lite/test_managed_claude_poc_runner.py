@@ -192,6 +192,26 @@ def test_build_channel_send_command_omits_empty_metadata():
     ]
 
 
+def test_build_managed_claude_command_matches_current_cli(tmp_path):
+    runner = _load_runner()
+    config = runner.ManagedClaudeLiveConfig(
+        cwd=tmp_path / "workspace",
+        project="longhouse",
+        name="qualification",
+    )
+
+    assert runner.build_managed_claude_command(config) == [
+        "longhouse",
+        "claude",
+        "--cwd",
+        str((tmp_path / "workspace").resolve()),
+        "--project",
+        "longhouse",
+        "--name",
+        "qualification",
+    ]
+
+
 def test_terminal_provider_auth_prompt_detection_is_specific():
     runner = _load_runner()
 

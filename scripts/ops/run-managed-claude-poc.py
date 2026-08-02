@@ -16,6 +16,7 @@ from zerg.qa.managed_claude_live import ManagedClaudeLiveConfig  # noqa: E402
 from zerg.qa.managed_claude_live import append_terminal_log  # noqa: E402,F401
 from zerg.qa.managed_claude_live import assistant_transcript_contains  # noqa: E402,F401
 from zerg.qa.managed_claude_live import build_channel_send_command  # noqa: E402,F401
+from zerg.qa.managed_claude_live import build_managed_claude_command  # noqa: E402,F401
 from zerg.qa.managed_claude_live import channel_send  # noqa: E402,F401
 from zerg.qa.managed_claude_live import compact_terminal_text  # noqa: E402,F401
 from zerg.qa.managed_claude_live import default_output_root  # noqa: E402
