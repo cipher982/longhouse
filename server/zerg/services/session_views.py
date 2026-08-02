@@ -1837,6 +1837,14 @@ class RecallResponse(BaseModel):
 
     matches: List[RecallMatch]
     total: int
+    lanes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Retrieval lanes that actually ran for this request. A dead lane went "
+            "unnoticed for days because a response could not say which lanes "
+            "produced it; this makes that visible to the caller."
+        ),
+    )
 
 
 class CleanupRequest(BaseModel):

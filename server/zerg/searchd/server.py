@@ -24,6 +24,9 @@ from zerg.catalogd.protocol import CatalogRpcResponse
 from zerg.catalogd.protocol import ProtocolError
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
+from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
+from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
+from zerg.searchd.dense_index import DenseIndex
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import WorklogPageTooLarge
 from zerg.searchd.store import WorklogSnapshotError
@@ -38,6 +41,15 @@ logger = logging.getLogger(__name__)
 
 class _ReadDeadlineExceeded(RuntimeError):
     pass
+
+
+class _DenseIndexUnavailable(RuntimeError):
+    """The resident vector index is not loaded.
+
+    Raised rather than returning no results, because an empty list is
+    indistinguishable from an honest miss and that ambiguity is what let the
+    dense lane stay dead without anyone noticing.
+    """
 
 
 @dataclass(slots=True)
@@ -55,6 +67,7 @@ class SearchDaemon:
         self._lock_handle = None
         self._connection = None
         self._store: SearchStore | None = None
+        self._dense_index: DenseIndex | None = None
         self._executor: ThreadPoolExecutor | None = None
         self._read_workers: asyncio.Queue[_ReadWorker] | None = None
         self._all_read_workers: list[_ReadWorker] = []
@@ -87,6 +100,13 @@ class SearchDaemon:
             self._connection = open_search_database(self.database_path)
             self._store = SearchStore(self._connection)
             self._store.startup_maintenance()
+            # Load the resident vectors before the socket is published. A
+            # searchd that answers `ping.ready` with an unloaded index lets a
+            # semantic query return an empty success, which reads exactly like
+            # an honest miss.
+            self._dense_index = DenseIndex(model=ACTIVE_EMBEDDING_MODEL, dims=ACTIVE_EMBEDDING_DIMS)
+            self._dense_index.load(self._connection)
+            logger.info("searchd resident index loaded vectors=%d", self._dense_index.size)
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-sqlite")
             worker_count = min(2, max(1, (os.cpu_count() or 1) // 2))
             self._read_workers = asyncio.Queue(maxsize=worker_count)
@@ -225,12 +245,19 @@ class SearchDaemon:
                 )
             if request.method == "search.embedding.query.v2":
                 params = _embedding_query_params(request.params)
+                # Served from the resident matrix, not by rebuilding 85MB of
+                # vectors out of SQLite blobs on every request. An unloaded
+                # index is an error, never an empty result: the two are
+                # indistinguishable to a caller and that is how a dead lane
+                # stayed dead.
+                if self._dense_index is None or not self._dense_index.ready:
+                    raise _DenseIndexUnavailable
+                query = np.frombuffer(params.pop("query_embedding"), dtype="float32")
+                params.pop("model", None)
+                params.pop("dims", None)
                 return self._result(
                     request,
-                    await self._run_interactive_read(
-                        lambda store: store.query_episode_embeddings(**params),
-                        deadline_mono_ns=int(request.deadline_mono_ns),
-                    ),
+                    {"results": self._dense_index.search(query, **params)},
                 )
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
@@ -295,7 +322,13 @@ class SearchDaemon:
             return self._error(request, exc.code, str(exc), retryable=exc.code in {"snapshot_capacity", "stale_snapshot"})
         except _ReadDeadlineExceeded:
             return self._error(request, "deadline_exceeded", "search read deadline exceeded", retryable=True)
+        except _DenseIndexUnavailable:
+            return self._error(request, "dense_index_unavailable", "the resident vector index is not loaded")
         except Exception:
+            # Log the method and traceback. Returning a bare "internal" with no
+            # record meant every searchd fault looked identical from the outside
+            # and left nothing to diagnose from.
+            logger.exception("searchd operation failed method=%s", request.method)
             return self._error(request, "internal", "searchd operation failed")
 
     async def _run(self, function, **kwargs):
