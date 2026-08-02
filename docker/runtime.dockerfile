@@ -124,7 +124,8 @@ conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat + progress handler
 # Fetch the exact checksum-pinned retrieval model during the image build. The
 # runtime provisioner revalidates these files at startup, while self-hosted
 # wheel installs use the same code to populate their persistent data directory.
-RUN LONGHOUSE_EMBED_MODEL_DIR=/opt/longhouse/embedding-model \
+RUN MODELS_CONFIG_PATH=/config/models.json \
+    LONGHOUSE_EMBED_MODEL_DIR=/opt/longhouse/embedding-model \
     PYTHONPATH=/repo/server \
     ./.venv/bin/python -c "from zerg.services.embedding_artifact import provision_embedding_artifact; provision_embedding_artifact()"
 
