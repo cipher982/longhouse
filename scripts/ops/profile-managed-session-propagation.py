@@ -100,6 +100,8 @@ TRANSPORT_FAILURE_PATTERNS = (
     "status=524",
     "ReadTimeout",
     "ERR_QUIC_PROTOCOL_ERROR",
+    "ERR_HTTP2_PROTOCOL_ERROR",
+    "ERR_HTTP_PROTOCOL_ERROR",
     "IPC stop timed out",
     "server responded with a status of 524",
 )
