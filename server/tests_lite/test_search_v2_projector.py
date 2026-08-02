@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from zerg.services.search_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.search_v2_projector import SearchV2Projector
 from zerg.services.search_v2_projector import _run_forever
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
@@ -112,6 +113,8 @@ async def test_search_projector_overlaps_claimed_sessions(monkeypatch):
 
     assert await projector.run_once(limit=2) == 2
     assert started == {"one", "two"}
+    claim_call = next(params for method, params in catalog.calls if method == "projector.state.claim.v2")
+    assert claim_call["lease_seconds"] == PROJECTOR_LEASE_SECONDS == 900
 
 
 @pytest.mark.asyncio
@@ -121,9 +124,7 @@ async def test_search_projector_deletes_retired_session():
     catalog = FakeClient(
         {
             "projector.store.bind.v2": {},
-            "projector.state.claim.v2": {
-                "claimed": [{"session_id": session_id, "claimed_revision": "9", "failure_count": 0}]
-            },
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "9", "failure_count": 0}]},
             "storage.session.render_objects.list.v2": {"found": True, "deleted": False, "retired": True},
             "projector.state.complete.v2": {},
         }
@@ -290,16 +291,18 @@ async def test_search_projector_recovers_semantics_for_legacy_render_object():
     raw_decoded = SimpleNamespace(
         envelope_id=envelope_id,
         spec=SimpleNamespace(
-            records=(SimpleNamespace(data=b'{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'),),
+            records=(
+                SimpleNamespace(
+                    data=b'{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
+                ),
+            ),
         ),
     )
     now = datetime.now(UTC).replace(microsecond=0)
     catalog = FakeClient(
         {
             "projector.store.bind.v2": {"changed": True, "invalidated_states": 0},
-            "projector.state.claim.v2": {
-                "claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]
-            },
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]},
             "storage.session.render_objects.list.v2": {
                 "found": True,
                 "snapshot_revision": "1",
