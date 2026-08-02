@@ -109,3 +109,4 @@ def test_catalog_pause_maps_to_typed_503(monkeypatch):
     }
     assert len(attempts) == 2
     assert attempts[0][1]["params"] == attempts[1][1]["params"]
+    assert all(0 < attempt[1]["timeout_seconds"] <= catalog_gateway.AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS for attempt in attempts)

@@ -16,6 +16,9 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.client import call_catalogd_sync
 from zerg.services.catalogd_supervisor import catalogd_paths
 
+AUTH_CATALOG_CALL_DEADLINE_SECONDS = 1.0
+AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS = 0.5
+
 _AUTH_UNAVAILABLE_DETAIL = {
     "code": "catalog_unavailable",
     "message": "Catalog authentication is temporarily unavailable.",
@@ -183,14 +186,22 @@ def update_user(
 
 def _call(method: str, params: dict) -> dict:
     _database_path, socket_path = catalogd_paths()
-    deadline = time.monotonic() + 0.5
+    # Authentication sits in front of every browser stream. Give catalogd the
+    # same one-second hard-failure budget as ordinary RPCs so brief projector
+    # write pressure becomes latency instead of a 503/reconnect storm.
+    deadline = time.monotonic() + AUTH_CATALOG_CALL_DEADLINE_SECONDS
     last_unavailable: CatalogUnavailable | None = None
     for _attempt in range(2):
         try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            return call_catalogd_sync(socket_path, method, params=params, timeout_seconds=min(0.25, remaining))
+            return call_catalogd_sync(
+                socket_path,
+                method,
+                params=params,
+                timeout_seconds=min(AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS, remaining),
+            )
         except CatalogRemoteError as exc:
             if exc.code != "conflict":
                 raise _unavailable() from exc
