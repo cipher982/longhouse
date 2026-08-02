@@ -54,6 +54,15 @@ class _DenseEpisodeHit(BaseModel):
     start_order_time_us: int
 
 
+class _SearchReadTiming(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    admit_ms: float
+    sql_ms: float
+    active_readers: int
+    queued_readers: int
+
+
 class _RecallContextPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +70,7 @@ class _RecallContextPayload(BaseModel):
     evidence_reason: str | None
     context: list[dict[str, object]]
     total_events: int
+    timing: _SearchReadTiming
 
 
 def _catalog_owner_id(auth: object) -> int:

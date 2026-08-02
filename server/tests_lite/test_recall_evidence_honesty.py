@@ -25,6 +25,10 @@ from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch
 
 
+def _timing() -> dict[str, float | int]:
+    return {"admit_ms": 0.0, "sql_ms": 0.1, "active_readers": 1, "queued_readers": 0}
+
+
 def test_a_bare_match_is_unavailable_not_complete():
     """The default is the whole bug. An unhydrated match must not claim completeness."""
     match = RecallMatch(session_id=str(uuid4()), chunk_index=0, score=0.62)
@@ -58,6 +62,7 @@ async def test_semantic_match_with_a_locator_hydrates(monkeypatch):
             "evidence_reason": None,
             "context": [{"role": "assistant", "content_text": "the migration applied cleanly"}],
             "total_events": 590,
+            "timing": _timing(),
         }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
@@ -90,7 +95,13 @@ async def test_lexical_match_still_locates_by_event_id(monkeypatch):
 
     async def fake_context(**kwargs):
         seen.update(kwargs)
-        return {"evidence_status": "complete", "evidence_reason": None, "context": [], "total_events": 12}
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": [],
+            "total_events": 12,
+            "timing": _timing(),
+        }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
 
@@ -164,6 +175,7 @@ async def test_semantic_match_carries_evidence_beside_its_context(monkeypatch):
                 {"order_time_us": 300, "role": "user", "content_text": "later turn"},
             ],
             "total_events": 42,
+            "timing": _timing(),
         }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
@@ -189,6 +201,7 @@ async def test_lexical_snippet_is_not_overwritten_by_the_anchor(monkeypatch):
             "evidence_reason": None,
             "context": [{"order_time_us": 200, "role": "assistant", "content_text": "neighbour text"}],
             "total_events": 42,
+            "timing": _timing(),
         }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)

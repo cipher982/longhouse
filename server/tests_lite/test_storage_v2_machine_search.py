@@ -102,6 +102,7 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             "evidence_reason": None,
             "total_events": 12,
             "context": [{"role": "user", "content_text": "please migrate"}],
+            "timing": {"admit_ms": 0.0, "sql_ms": 0.1, "active_readers": 1, "queued_readers": 0},
         }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", context_v2)
