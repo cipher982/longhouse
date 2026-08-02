@@ -42,6 +42,7 @@ ERROR_CODES = frozenset(
         "forbidden",
         "resource_exhausted",
         "dense_index_unavailable",
+        "embedding_coverage_incomplete",
         "embedding_space_mismatch",
     }
 )

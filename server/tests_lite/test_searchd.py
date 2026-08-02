@@ -697,6 +697,8 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
             (session_id, generation_id, owner_id, "2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"),
         )
         daemon._connection.commit()
+        assert daemon._dense_index is not None
+        daemon._dense_index.load(daemon._connection)
 
     query_params = {
         "model": ACTIVE_EMBEDDING_MODEL,
@@ -711,7 +713,9 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
     }
     try:
         await daemon._run(publish_stub)
-        assert (await client.call("search.embedding.query.v2", query_params))["results"] == []
+        with pytest.raises(CatalogRemoteError) as incomplete:
+            await client.call("search.embedding.query.v2", query_params)
+        assert incomplete.value.code == "embedding_coverage_incomplete"
 
         with pytest.raises(CatalogRemoteError) as mismatch:
             await client.call("search.embedding.query.v2", {**query_params, "model": "wrong-space"})
