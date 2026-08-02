@@ -16,6 +16,9 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
+from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
+from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
+
 
 class ModelProvider(str, Enum):
     """Enum for different model providers."""
@@ -369,84 +372,25 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
 
 
 # =============================================================================
-# EMBEDDING CONFIG
+# EMBEDDING SPACE
 # =============================================================================
 
 
-@dataclass
-class EmbeddingConfig:
-    """Configuration for embedding generation."""
+@dataclass(frozen=True, slots=True)
+class EmbeddingSpaceConfig:
+    """The local retrieval space selected by the validated shared config."""
 
-    provider: str  # "openai"
-    model: str  # e.g. "text-embedding-3-small"
-    dims: int  # e.g. 256
-    api_key_env_var: str  # e.g. "OPENAI_API_KEY"
-    api_key: str  # actual key value
-    base_url: str | None = None  # custom endpoint (e.g. DB-configured)
+    provider: str
+    model: str
+    dims: int
 
 
-# Embedding constants from config/models.json — use these instead of hardcoding model strings
-_EMBEDDING_DEFAULT = _CONFIG.get("embedding", {}).get("default", {})
-EMBEDDING_MODEL: str = _EMBEDDING_DEFAULT.get("model", "text-embedding-3-small")
-EMBEDDING_DIMS: int = _EMBEDDING_DEFAULT.get("dims", 256)
+EMBEDDING_MODEL: str = ACTIVE_EMBEDDING_MODEL
+EMBEDDING_DIMS: int = ACTIVE_EMBEDDING_DIMS
 
 
-def get_embedding_config() -> EmbeddingConfig | None:
-    """Load embedding config from models.json.
-
-    Returns None if embeddings are not configured (no `embedding` section)
-    OR if the configured provider's API key env var is not set. Startup
-    validation (validate_startup_config) is responsible for failing loud
-    when embeddings ARE declared in config but their key is missing —
-    runtime callers can rely on None meaning "embeddings unavailable".
-    """
-    embedding_cfg = _CONFIG.get("embedding")
-    if not embedding_cfg:
-        return None
-
-    default = embedding_cfg.get("default")
-    if not default:
-        return None
-
-    api_key_env = default.get("apiKeyEnvVar", "")
-    api_key = os.getenv(api_key_env, "") if api_key_env else ""
-
-    if not api_key:
-        return None
-
-    return EmbeddingConfig(
-        provider=default["provider"],
-        model=default["model"],
-        dims=default["dims"],
-        api_key_env_var=api_key_env,
-        api_key=api_key,
-        base_url=default.get("baseUrl"),
-    )
-
-
-def embedding_unavailable_detail() -> str:
-    """Return an operator-facing reason embeddings cannot run."""
-    embedding_cfg = _CONFIG.get("embedding")
-    if not embedding_cfg:
-        return "No embedding provider is declared in config/models.json."
-
-    default = embedding_cfg.get("default")
-    if not default:
-        return "config/models.json has an embedding section but no embedding.default entry."
-
-    api_key_env = default.get("apiKeyEnvVar", "")
-    provider = default.get("provider", "")
-    model = default.get("model", "")
-    if not api_key_env:
-        return f"config/models.json declares an embedding provider ({provider}/{model}) without apiKeyEnvVar."
-    if not os.getenv(api_key_env):
-        return (
-            "config/models.json declares an embedding provider "
-            f"({provider}/{model}), but {api_key_env} is not set. "
-            "Set the env var, or set LLM_DISABLED=1/remove embedding.default "
-            "for an explicit no-embedding runtime."
-        )
-    return "Embedding provider is configured, but runtime setup failed before an embedding config could be built."
+def get_embedding_space_config() -> EmbeddingSpaceConfig:
+    return EmbeddingSpaceConfig(provider="local-onnx", model=EMBEDDING_MODEL, dims=EMBEDDING_DIMS)
 
 
 # =============================================================================
@@ -465,11 +409,11 @@ def is_capability_available(capability: str) -> bool:
     guessing — derives provider/key entirely from the config.
     """
     if capability == "embedding":
-        embedding_cfg = _CONFIG.get("embedding", {}).get("default")
-        if not embedding_cfg:
-            return False
-        api_key_env = embedding_cfg.get("apiKeyEnvVar", "")
-        return bool(api_key_env and os.getenv(api_key_env))
+        # Artifact provisioning and model loading fail startup loudly. If this
+        # module imported, the strict local embedding-space contract exists and
+        # no third-party API key is involved.
+        embedding_default = _CONFIG.get("embedding", {}).get("default")
+        return bool(isinstance(embedding_default, dict) and embedding_default.get("provider") == "local-onnx")
 
     if capability == "text":
         # Text capability is "available" when at least one configured text
@@ -510,19 +454,6 @@ def iter_required_provider_keys() -> list[tuple[str, str, str, str]]:
                 model_config.provider.value,
             )
         )
-
-    embedding_default = _CONFIG.get("embedding", {}).get("default")
-    if embedding_default:
-        api_key_env = embedding_default.get("apiKeyEnvVar", "")
-        if api_key_env:
-            required.append(
-                (
-                    api_key_env,
-                    "embedding",
-                    embedding_default.get("model", ""),
-                    embedding_default.get("provider", ""),
-                )
-            )
 
     return required
 

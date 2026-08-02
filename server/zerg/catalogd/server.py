@@ -81,6 +81,7 @@ class CatalogDaemon:
             self._read_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalogd-read")
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
+            self._store.ensure_known_projector_states()
             self._meta = read_catalog_meta(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)

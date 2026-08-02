@@ -58,6 +58,7 @@ from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
 from zerg.catalogd.schema import storage_telemetry_counters
+from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
@@ -442,7 +443,7 @@ def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
     }
 
 
-KNOWN_PROJECTORS = ("search-v2", "embeddings-v1")
+KNOWN_PROJECTORS = ("search-v2", EMBEDDING_PROJECTOR_ID)
 
 
 def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, Any]:
@@ -455,6 +456,54 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
 
 
 class CatalogStore:
+    def ensure_known_projector_states(self) -> dict[str, int]:
+        """Backfill newly introduced projector identities for current sessions."""
+
+        sessions = StorageSession.__table__
+        states = ProjectorState.__table__
+        with _write_transaction(self.engine) as connection:
+            eligible = connection.execute(
+                select(sessions.c.session_id, sessions.c.commit_seq).where(
+                    sessions.c.user_state != "deleted",
+                    sessions.c.current_render_generation.is_not(None),
+                    sessions.c.render_state == "ready",
+                )
+            ).all()
+            existing = {
+                (str(row.projector), str(row.session_id))
+                for row in connection.execute(
+                    select(states.c.projector, states.c.session_id).where(states.c.projector.in_(KNOWN_PROJECTORS))
+                )
+            }
+            missing = [
+                (projector, str(session_id), int(revision))
+                for session_id, revision in eligible
+                for projector in KNOWN_PROJECTORS
+                if (projector, str(session_id)) not in existing
+            ]
+            if not missing:
+                return {"inserted": 0, "eligible_sessions": len(eligible)}
+            now = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, now)
+            connection.execute(
+                insert(states),
+                [
+                    {
+                        "projector": projector,
+                        "session_id": session_id,
+                        "desired_revision": revision,
+                        "completed_revision": 0,
+                        "status": "idle",
+                        "failure_count": 0,
+                        "commit_seq": commit_seq,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                    for projector, session_id, revision in missing
+                ],
+            )
+            return {"inserted": len(missing), "eligible_sessions": len(eligible)}
+
     def retire_archive_outbox(self) -> dict[str, int | str]:
         """Remove dead monolith projections and retain launch rows only as completed receipts."""
 

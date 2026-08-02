@@ -76,12 +76,42 @@
   },
 
   "embedding": {
+    "$comment": "Pinned local retrieval space. Query and document vectors are comparable only when every field below matches.",
     "default": {
-      "provider": "openrouter",
-      "model": "qwen/qwen3-embedding-8b",
+      "provider": "local-onnx",
+      "model": "google/embeddinggemma-300m",
       "dims": 256,
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKeyEnvVar": "OPENROUTER_API_KEY"
+      "dtype": "float32",
+      "normalization": "l2",
+      "truncation": "prefix",
+      "outputName": "sentence_embedding",
+      "queryPrefix": "task: search result | query: ",
+      "documentPrefix": "title: none | text: ",
+      "legacyModels": [
+        "qwen/qwen3-embedding-8b"
+      ],
+      "artifact": {
+        "repository": "onnx-community/embeddinggemma-300m-ONNX",
+        "revision": "5090578d9565bb06545b4552f76e6bc2c93e4a66",
+        "directory": "embeddinggemma-300m-onnx-5090578d-fp16",
+        "files": [
+          {
+            "path": "onnx/model_fp16.onnx",
+            "bytes": 655263,
+            "sha256": "dcfaf21ff7cae91af9295366ac0d7352efcadeaf7deefb98f82d5056502d0bf2"
+          },
+          {
+            "path": "onnx/model_fp16.onnx_data",
+            "bytes": 617434112,
+            "sha256": "1cd839755aa8e24d5af7f16ef275b12d717a4401bb009099b8c17e4156d3d5d5"
+          },
+          {
+            "path": "tokenizer.json",
+            "bytes": 20323312,
+            "sha256": "4dda02faaf32bc91031dc8c88457ac272b00c1016cc679757d1c441b248b9c47"
+          }
+        ]
+      }
     }
   }
 }

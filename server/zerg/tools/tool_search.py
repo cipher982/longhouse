@@ -1,8 +1,8 @@
 """Semantic search over tool catalog using embeddings.
 
 This module provides semantic search for finding relevant tools based on
-natural language queries. It uses OpenAI embeddings (model configured in
-config/models.json) and caches embeddings to disk for performance.
+natural language queries. It uses the same pinned local embedding space as
+session recall and caches document vectors to disk for performance.
 
 Usage:
     # Get or build the search index
@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import defaultdict
@@ -26,9 +27,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from openai import AsyncOpenAI
 
+from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.models_config import EMBEDDING_MODEL
+from zerg.services.local_embedder import embed_query
+from zerg.services.local_embedder import get_local_embedder
 
 if TYPE_CHECKING:
     from zerg.types.tools import Tool as BaseTool
@@ -257,7 +260,7 @@ def _is_tool_allowed(name: str) -> bool:
 # Configuration
 # ---------------------------------------------------------------------------
 
-EMBEDDING_DIMENSIONS = 1536
+EMBEDDING_DIMENSIONS = ACTIVE_EMBEDDING_DIMS
 
 EMBEDDING_CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data"
 EMBEDDING_CACHE_FILE = EMBEDDING_CACHE_DIR / "tool_embeddings.npz"
@@ -276,14 +279,7 @@ class ToolSearchIndex:
     def __init__(self, catalog: tuple[ToolCatalogEntry, ...]):
         self.catalog = catalog
         self.embeddings: np.ndarray | None = None
-        self._client: AsyncOpenAI | None = None
         self._name_to_idx: dict[str, int] = {e.name: i for i, e in enumerate(catalog)}
-
-    @property
-    def client(self) -> AsyncOpenAI:
-        if self._client is None:
-            self._client = AsyncOpenAI()
-        return self._client
 
     async def build_index(self) -> None:
         """Generate embeddings for all tools."""
@@ -294,16 +290,8 @@ class ToolSearchIndex:
             text = f"{entry.name}: {entry.summary} (category: {entry.category})"
             texts.append(text)
 
-        try:
-            response = await self.client.embeddings.create(
-                model=EMBEDDING_MODEL,
-                input=texts,
-            )
-            self.embeddings = np.array([r.embedding for r in response.data], dtype=np.float32)
-            logger.info(f"Generated embeddings with shape {self.embeddings.shape}")
-        except Exception as e:
-            logger.error(f"Failed to generate embeddings: {e}")
-            raise
+        self.embeddings = await asyncio.to_thread(get_local_embedder().embed_documents, texts)
+        logger.info("Generated local embeddings with shape %s", self.embeddings.shape)
 
     async def search(
         self,
@@ -316,15 +304,7 @@ class ToolSearchIndex:
         if self.embeddings is None:
             raise RuntimeError("Index not built. Call build_index() first.")
 
-        try:
-            response = await self.client.embeddings.create(
-                model=EMBEDDING_MODEL,
-                input=[query],
-            )
-            query_vec = np.array(response.data[0].embedding, dtype=np.float32)
-        except Exception as e:
-            logger.error(f"Failed to embed query: {e}")
-            raise
+        query_vec = await embed_query(query)
 
         similarities = self.embeddings @ query_vec
 
@@ -365,7 +345,7 @@ def _get_catalog_hash(catalog: tuple[ToolCatalogEntry, ...]) -> str:
     """Generate a hash of the catalog for cache validation."""
     import hashlib
 
-    content = "|".join(f"{e.name}:{e.summary}" for e in catalog)
+    content = EMBEDDING_MODEL + "|" + str(EMBEDDING_DIMENSIONS) + "|" + "|".join(f"{e.name}:{e.summary}" for e in catalog)
     return hashlib.md5(content.encode()).hexdigest()[:16]
 
 

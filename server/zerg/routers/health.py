@@ -471,22 +471,29 @@ def health_check(request: Request):
         import os as _os
 
         from zerg.models_config import _PROVIDER_DEFAULT_API_KEY_ENVS
-        from zerg.models_config import get_embedding_config
+        from zerg.models_config import get_embedding_space_config
+        from zerg.services.local_embedder import LocalEmbedderUnavailable
+        from zerg.services.local_embedder import get_local_embedder
 
         text_provider = next(
             (provider.value for provider, env_var in _PROVIDER_DEFAULT_API_KEY_ENVS.items() if _os.getenv(env_var)),
             None,
         )
         text_avail = text_provider is not None
-        embedding_cfg = get_embedding_config()
-        emb_avail = embedding_cfg is not None
+        embedding_cfg = get_embedding_space_config()
+        try:
+            emb_avail = get_local_embedder().ready
+        except LocalEmbedderUnavailable:
+            emb_avail = False
 
         checks["llm"] = {
             "status": "pass" if text_avail else "warn",
             "text_available": text_avail,
             "text_source": "environment" if text_avail else None,
             "embeddings_available": emb_avail,
-            "embeddings_source": "environment" if emb_avail else None,
+            "embeddings_source": "local-onnx" if emb_avail else None,
+            "embedding_model": embedding_cfg.model,
+            "embedding_dims": embedding_cfg.dims,
         }
     except Exception as e:
         checks["llm"] = {"status": "warn", "error": str(e)}

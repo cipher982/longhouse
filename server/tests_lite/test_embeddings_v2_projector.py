@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
-from zerg.services.session_processing.embeddings import PermanentEmbeddingConfigError
+from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 
 
@@ -31,6 +31,13 @@ class FakeWorkers:
 
     async def read(self, *_args, **_kwargs):
         return self.decoded
+
+
+def _local_embedder(monkeypatch, function):
+    monkeypatch.setattr(
+        "zerg.services.embeddings_v2_projector.get_local_embedder",
+        lambda: SimpleNamespace(embed_documents=function),
+    )
 
 
 @pytest.mark.asyncio
@@ -106,15 +113,15 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
         }
     )
     config = SimpleNamespace(model="test-model", dims=2)
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
     seen_texts = []
 
-    async def vectors(texts, _config):
+    def vectors(texts):
         seen_texts.extend(texts)
-        return [np.array([1, 0], dtype=np.float32) for _ in texts]
+        return np.array([[1, 0] for _ in texts], dtype=np.float32)
 
-    monkeypatch.setattr("zerg.services.embeddings_v2_projector.generate_embeddings", vectors)
+    _local_embedder(monkeypatch, vectors)
     projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
     assert await projector.run_once(now=datetime.now(UTC)) == 1
     write = next(params for method, params in search.calls if method == "search.embedding.write.v2")
@@ -206,13 +213,13 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
         }
     )
     config = SimpleNamespace(model="test-model", dims=2)
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
     monkeypatch.setattr("zerg.services.embeddings_v2_projector.EMBEDDING_BATCH_SIZE", 1)
 
-    async def vectors(texts, _config):
-        return [np.array([1, 0], dtype=np.float32) for _ in texts]
+    def vectors(texts):
+        return np.array([[1, 0] for _ in texts], dtype=np.float32)
 
-    monkeypatch.setattr("zerg.services.embeddings_v2_projector.generate_embeddings", vectors)
+    _local_embedder(monkeypatch, vectors)
     projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
     assert await projector.run_once(now=datetime.now(UTC)) == 1
 
@@ -278,12 +285,12 @@ async def test_permanent_config_error_is_marked_for_quarantine_and_error_log(mon
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
     catalog, search, decoded = _minimal_claim_setup(session_id, generation_id, store_id)
     config = SimpleNamespace(model="test-model", dims=2)
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
-    async def broken(_texts, _config):
-        raise PermanentEmbeddingConfigError("dims mismatch")
+    def broken(_texts):
+        raise LocalEmbedderUnavailable("dims mismatch")
 
-    monkeypatch.setattr("zerg.services.embeddings_v2_projector.generate_embeddings", broken)
+    _local_embedder(monkeypatch, broken)
     projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
     import logging
 
@@ -300,16 +307,19 @@ async def test_permanent_config_error_is_marked_for_quarantine_and_error_log(mon
 
 @pytest.mark.asyncio
 async def test_transient_error_keeps_fast_backoff(monkeypatch):
-    """A generic/transient failure keeps the existing fast exponential backoff."""
+    """A generic/transient failure (network blip, catalog drift) must keep the
+    existing fast exponential backoff, not get parked behind the 24h permanent-error
+    delay -- only a local model contract error should ever get the long retry.
+    """
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
     catalog, search, decoded = _minimal_claim_setup(session_id, generation_id, store_id)
     config = SimpleNamespace(model="test-model", dims=2)
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
-    async def flaky(_texts, _config):
-        raise TimeoutError("upstream timed out")
+    def flaky(_texts):
+        raise TimeoutError("worker timed out")
 
-    monkeypatch.setattr("zerg.services.embeddings_v2_projector.generate_embeddings", flaky)
+    _local_embedder(monkeypatch, flaky)
     projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
     await projector.run_once(now=datetime.now(UTC))
 
@@ -350,7 +360,7 @@ async def test_embeddings_projector_completes_cleanly_for_never_rendered_session
     )
     search = FakeClient({"search.ping.v2": {"store_id": store_id, "schema_generation": "test"}})
     config = SimpleNamespace(model="test-model", dims=2)
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
     projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(None), worker_id="test")
     assert await projector.run_once(now=datetime.now(UTC)) == 1

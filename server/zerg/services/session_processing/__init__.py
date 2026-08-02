@@ -19,7 +19,6 @@ from zerg.services.transcript_content import strip_noise
 
 from .embeddings import bytes_to_embedding
 from .embeddings import embedding_to_bytes
-from .embeddings import generate_embedding
 from .embeddings import prepare_turn_chunks
 from .embeddings import sanitize_for_embedding
 from .summarize import DEFAULT_CONTEXT_BUDGET
@@ -59,7 +58,6 @@ __all__ = [
     "safe_parse_json",
     # embeddings
     "sanitize_for_embedding",
-    "generate_embedding",
     "embedding_to_bytes",
     "bytes_to_embedding",
     "prepare_turn_chunks",

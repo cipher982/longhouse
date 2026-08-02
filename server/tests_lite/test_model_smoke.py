@@ -17,7 +17,9 @@ import pytest
 # Add scripts dir so we can import the smoke runner
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "qa"))
 
-from smoke_models import load_config, get_api_key, run_all  # noqa: E402
+from smoke_models import get_api_key  # noqa: E402
+from smoke_models import load_config  # noqa: E402
+from smoke_models import run_all  # noqa: E402
 
 _HAS_ANY_KEY = bool(
     os.getenv("OPENAI_API_KEY", "").strip()
@@ -35,9 +37,6 @@ def test_model_smoke_active_profile_models_respond():
     results = asyncio.run(run_all(scope="active"))
 
     failures = [r for r in results if r["status"] == "fail"]
-    skipped = [r for r in results if r["status"] == "skipped"]
-    passed = [r for r in results if r["status"] == "pass"]
-
     # Print summary for test output
     for r in results:
         icon = {"pass": "OK", "fail": "FAIL", "skipped": "SKIP"}[r["status"]]
@@ -49,8 +48,8 @@ def test_model_smoke_active_profile_models_respond():
     )
 
 
-def test_models_json_is_valid_and_all_models_have_api_key_config():
-    """Structural check: every model in models.json has a resolvable API key env var."""
+def test_models_json_is_valid_and_remote_models_have_api_key_config():
+    """Remote text models need keys; the pinned local embedding model does not."""
     config = load_config()
 
     for model_id, model_info in config.get("text", {}).get("models", {}).items():
@@ -59,5 +58,5 @@ def test_models_json_is_valid_and_all_models_have_api_key_config():
 
     emb = config.get("embedding", {}).get("default")
     if emb:
-        env_var, _ = get_api_key(emb)
-        assert env_var, "Embedding model has no API key env var configured"
+        assert emb["provider"] == "local-onnx"
+        assert "apiKeyEnvVar" not in emb

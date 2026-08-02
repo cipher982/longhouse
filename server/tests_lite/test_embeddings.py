@@ -3,14 +3,11 @@
 import json
 from datetime import datetime
 from datetime import timezone
-from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 from zerg.services.session_processing.embeddings import bytes_to_embedding
 from zerg.services.session_processing.embeddings import embedding_to_bytes
-from zerg.services.session_processing.embeddings import generate_embeddings
 from zerg.services.session_processing.embeddings import prepare_turn_chunks
 from zerg.services.session_processing.embeddings import sanitize_for_embedding
 
@@ -77,41 +74,6 @@ def test_claude_local_control_does_not_start_an_embedding_episode() -> None:
     assert chunks[0].event_index_start == 0
     assert command not in chunks[0].text
     assert "Build the feature" in chunks[0].text
-
-
-@pytest.mark.asyncio
-async def test_generate_embeddings_preserves_provider_index_order(monkeypatch):
-    """Batched provider responses are returned in input order."""
-
-    class _FakeEmbedding:
-        def __init__(self, index, embedding):
-            self.index = index
-            self.embedding = embedding
-
-    class _FakeEmbeddings:
-        async def create(self, **_kwargs):
-            return SimpleNamespace(
-                data=[
-                    _FakeEmbedding(1, [0.0, 1.0, 0.0, 0.0]),
-                    _FakeEmbedding(0, [1.0, 0.0, 0.0, 0.0]),
-                ]
-            )
-
-    class _FakeClient:
-        def __init__(self, **_kwargs):
-            self.embeddings = _FakeEmbeddings()
-
-        async def close(self):
-            return None
-
-    monkeypatch.setattr("openai.AsyncOpenAI", _FakeClient)
-
-    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key", base_url=None)
-    vectors = await generate_embeddings(["first", "second"], config)
-
-    assert len(vectors) == 2
-    np.testing.assert_array_equal(vectors[0], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
-    np.testing.assert_array_equal(vectors[1], np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32))
 
 
 def test_sanitize_for_embedding():

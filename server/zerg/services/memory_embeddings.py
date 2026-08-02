@@ -3,30 +3,17 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Iterable
 
 import numpy as np
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from zerg.models.models import MemoryEmbedding
 from zerg.models_config import EMBEDDING_MODEL
+from zerg.services.local_embedder import LocalEmbedderUnavailable
+from zerg.services.local_embedder import get_local_embedder
 
 logger = logging.getLogger(__name__)
-
-_client: OpenAI | None = None
-
-
-def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        client_kwargs = {}
-        base_url = os.getenv("OPENAI_BASE_URL")
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        _client = OpenAI(**client_kwargs)
-    return _client
 
 
 def serialize_embedding(vec: np.ndarray) -> bytes:
@@ -51,33 +38,23 @@ def _normalize(vec: np.ndarray) -> np.ndarray:
 
 def embed_query(query: str) -> np.ndarray:
     """Generate embedding for a query string."""
-    client = _get_client()
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=[query],
-    )
-    vec = np.array(response.data[0].embedding, dtype=np.float32)
-    return _normalize(vec)
+    return get_local_embedder().embed_queries([query])[0]
 
 
 def embed_texts(texts: Iterable[str]) -> np.ndarray:
     """Generate embeddings for a list of strings."""
-    client = _get_client()
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=list(texts),
-    )
-    vectors = np.array([item.embedding for item in response.data], dtype=np.float32)
-    return np.vstack([_normalize(v) for v in vectors])
+    return get_local_embedder().embed_documents(list(texts))
 
 
 def embeddings_enabled(settings) -> bool:
     """Return True if embeddings can be generated in current environment."""
     if getattr(settings, "testing", False):
         return False
-    if getattr(settings, "llm_disabled", False):
+    try:
+        get_local_embedder()
+    except LocalEmbedderUnavailable:
         return False
-    return bool(getattr(settings, "openai_api_key", None))
+    return True
 
 
 def upsert_memory_embedding(

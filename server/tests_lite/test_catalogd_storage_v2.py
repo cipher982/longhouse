@@ -24,6 +24,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
+from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -1805,8 +1806,8 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
 
 
 @pytest.mark.asyncio
-async def test_embeddings_v1_projector_state_becomes_claimable_on_render_completion(daemon_paths):
-    """Regression guard for a real bug: embeddings-v1 previously never got a
+async def test_active_embedding_projector_state_becomes_claimable_on_render_completion(daemon_paths):
+    """Regression guard for a real bug: the embedding projector never got a
     projector_state row at all, because every site that creates/advances one
     was hardcoded to the literal string "search-v2". claim.v2 itself is
     generic across projector names, so a test that only mocks a claim
@@ -1823,7 +1824,7 @@ async def test_embeddings_v1_projector_state_becomes_claimable_on_render_complet
     client = CatalogClient(socket_path)
     try:
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2", "embeddings-v1"])
+        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2", EMBEDDING_PROJECTOR_ID])
         committed = await client.call("storage.raw_object.commit.v2", raw)
         revision = committed["receipt"]["commit_seq"]
 
@@ -1844,7 +1845,7 @@ async def test_embeddings_v1_projector_state_becomes_claimable_on_render_complet
         embeddings_claim = await client.call(
             "projector.state.claim.v2",
             {
-                "projector": "embeddings-v1",
+                "projector": EMBEDDING_PROJECTOR_ID,
                 "worker_id": "embeddings-worker",
                 "claim_token": str(uuid4()),
                 "now": (now + timedelta(seconds=1)).isoformat(),
@@ -1852,9 +1853,28 @@ async def test_embeddings_v1_projector_state_becomes_claimable_on_render_complet
                 "limit": 10,
             },
         )
-        assert embeddings_claim["claimed"], "embeddings-v1 must get its own claimable projector_state row"
+        assert embeddings_claim["claimed"], "the active embedding space must get its own claimable projector_state row"
         assert embeddings_claim["claimed"][0]["session_id"] == str(session_id)
         assert embeddings_claim["claimed"][0]["claimed_revision"] == revision
+
+        # Model an existing catalog created before this projector identity was
+        # introduced. Startup must synthesize the missing state or the bumped
+        # projector will never see the historical corpus.
+        engine = create_catalog_engine(database_path)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "DELETE FROM projector_state WHERE projector = ? AND session_id = ?",
+                (EMBEDDING_PROJECTOR_ID, str(session_id)),
+            )
+        assert CatalogStore(engine).ensure_known_projector_states()["inserted"] == 1
+        with engine.connect() as connection:
+            restored = connection.exec_driver_sql(
+                "SELECT desired_revision, completed_revision, status FROM projector_state "
+                "WHERE projector = ? AND session_id = ?",
+                (EMBEDDING_PROJECTOR_ID, str(session_id)),
+            ).one()
+        engine.dispose()
+        assert tuple(restored) == (int(revision), 0, "idle")
     finally:
         await client.close()
         await daemon.close()

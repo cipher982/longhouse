@@ -28,15 +28,17 @@ import asyncio
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from zerg.embedding_space import DOCUMENT_PREFIX
+from zerg.embedding_space import EMBEDDING_OUTPUT_NAME
 from zerg.embedding_space import QUERY_PREFIX
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from zerg.models_config import EmbeddingConfig
+    from zerg.models_config import EmbeddingSpaceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ logger = logging.getLogger(__name__)
 # the rest of the process.
 EMBED_INTRA_OP_THREADS = int(os.getenv("LONGHOUSE_EMBED_THREADS", "4"))
 EMBED_MAX_TOKENS = int(os.getenv("LONGHOUSE_EMBED_MAX_TOKENS", "1024"))
+EMBED_DOCUMENT_MICROBATCH = int(os.getenv("LONGHOUSE_EMBED_DOCUMENT_MICROBATCH", "8"))
 
 
 class LocalEmbedderUnavailable(RuntimeError):
@@ -65,10 +68,12 @@ class LocalEmbedder:
     measurement above already rules out.
     """
 
-    def __init__(self, model_dir: str, *, dims: int) -> None:
-        self._model_dir = model_dir
+    def __init__(self, model_dir: str | Path, *, dims: int) -> None:
+        self._model_dir = Path(model_dir)
         self._dims = dims
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
+        self._active = False
+        self._waiting_queries = 0
         self._session = None
         self._tokenizer = None
         self._embedding_output = 0
@@ -80,20 +85,23 @@ class LocalEmbedder:
         options = ort.SessionOptions()
         options.intra_op_num_threads = EMBED_INTRA_OP_THREADS
         options.inter_op_num_threads = 1
-        model_path = os.path.join(self._model_dir, "model_fp16.onnx")
-        if not os.path.exists(model_path):
+        model_path = self._model_dir / "model_fp16.onnx"
+        tokenizer_path = self._model_dir / "tokenizer.json"
+        if not model_path.is_file() or model_path.is_symlink():
             raise LocalEmbedderUnavailable(f"embedding model missing at {model_path}")
-        session = ort.InferenceSession(model_path, options, providers=["CPUExecutionProvider"])
-        tokenizer = Tokenizer.from_file(os.path.join(self._model_dir, "tokenizer.json"))
+        if not tokenizer_path.is_file() or tokenizer_path.is_symlink():
+            raise LocalEmbedderUnavailable(f"embedding tokenizer missing at {tokenizer_path}")
+        session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
+        tokenizer = Tokenizer.from_file(str(tokenizer_path))
         tokenizer.enable_padding()
         tokenizer.enable_truncation(max_length=EMBED_MAX_TOKENS)
         names = [o.name for o in session.get_outputs()]
-        if "sentence_embedding" not in names:
+        if EMBEDDING_OUTPUT_NAME not in names:
             # Falling back to output 0 would silently embed with whatever tensor
             # happened to come first — plausible-looking numbers from the wrong
             # head, which no test downstream could distinguish from correct ones.
-            raise LocalEmbedderUnavailable(f"model exposes no sentence_embedding output, found {names}")
-        self._embedding_output = names.index("sentence_embedding")
+            raise LocalEmbedderUnavailable(f"model exposes no {EMBEDDING_OUTPUT_NAME} output, found {names}")
+        self._embedding_output = names.index(EMBEDDING_OUTPUT_NAME)
         self._session = session
         self._tokenizer = tokenizer
         logger.info("Local embedder loaded model=%s threads=%d", model_path, EMBED_INTRA_OP_THREADS)
@@ -101,6 +109,27 @@ class LocalEmbedder:
     @property
     def ready(self) -> bool:
         return self._session is not None
+
+    def _acquire_query(self) -> None:
+        with self._condition:
+            self._waiting_queries += 1
+            try:
+                while self._active:
+                    self._condition.wait()
+                self._active = True
+            finally:
+                self._waiting_queries -= 1
+
+    def _acquire_document_batch(self) -> None:
+        with self._condition:
+            while self._active or self._waiting_queries:
+                self._condition.wait()
+            self._active = True
+
+    def _release(self) -> None:
+        with self._condition:
+            self._active = False
+            self._condition.notify_all()
 
     def _encode(self, texts: list[str]) -> np.ndarray:
         if self._session is None or self._tokenizer is None:
@@ -110,9 +139,8 @@ class LocalEmbedder:
         mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
         out = self._session.run(None, {"input_ids": ids, "attention_mask": mask})[self._embedding_output]
         vectors = np.asarray(out, dtype="float32")
-        if vectors.ndim == 3:
-            weights = mask[..., None].astype("float32")
-            vectors = (vectors * weights).sum(1) / np.clip(weights.sum(1), 1e-9, None)
+        if vectors.ndim != 2 or vectors.shape[0] != len(texts):
+            raise LocalEmbedderUnavailable(f"model returned invalid embedding shape {vectors.shape}")
         # Truncate then renormalize: Matryoshka dimensions are only valid as a
         # prefix of the full vector, and cosine over an unnormalized prefix is
         # not the similarity the model was trained for.
@@ -128,26 +156,36 @@ class LocalEmbedder:
         return vectors / norms
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
-        with self._lock:
+        self._acquire_query()
+        try:
             return self._encode([QUERY_PREFIX + t for t in texts])
+        finally:
+            self._release()
 
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         """Embed corpus text, returning vectors in the caller's order.
 
-        Batches pad to their longest member, so a 20-token episode batched with
-        a 1000-token one costs as much as the long one. Sorting by length here
-        and restoring the caller's order afterwards is most of the corpus
-        throughput, and it stays an implementation detail rather than an
-        ordering the caller has to know about.
+        Batches pad to their longest member, so inputs are length-sorted into
+        small microbatches and then restored to caller order. The lock is
+        released between microbatches so interactive queries can interleave
+        with corpus projection.
         """
 
         if not texts:
             return np.zeros((0, self._dims), dtype="float32")
-        order = sorted(range(len(texts)), key=lambda i: len(texts[i]), reverse=True)
-        with self._lock:
-            packed = self._encode([DOCUMENT_PREFIX + texts[i] for i in order])
-        restored = np.empty_like(packed)
-        restored[order] = packed
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+        restored = np.empty((len(texts), self._dims), dtype="float32")
+        microbatch = max(1, EMBED_DOCUMENT_MICROBATCH)
+        for start in range(0, len(order), microbatch):
+            indices = order[start : start + microbatch]
+            # Release between microbatches so an interactive query never waits
+            # behind the projector's entire maximum batch.
+            self._acquire_document_batch()
+            try:
+                packed = self._encode([DOCUMENT_PREFIX + texts[index] for index in indices])
+            finally:
+                self._release()
+            restored[indices] = packed
         return restored
 
 
@@ -160,7 +198,7 @@ def get_local_embedder() -> LocalEmbedder:
     return _embedder
 
 
-def initialize_local_embedder(config: "EmbeddingConfig", model_dir: str) -> LocalEmbedder:
+def initialize_local_embedder(config: "EmbeddingSpaceConfig", model_dir: str | Path) -> LocalEmbedder:
     global _embedder
     embedder = LocalEmbedder(model_dir, dims=config.dims)
     embedder.load()

@@ -13,22 +13,23 @@ from uuid import UUID
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+from zerg.services.local_embedder import LocalEmbedderUnavailable
+from zerg.services.local_embedder import get_local_embedder
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
 from zerg.services.session_processing.embeddings import EMBEDDING_MAX_CHUNKS_PER_PASS
-from zerg.services.session_processing.embeddings import PermanentEmbeddingConfigError
 from zerg.services.session_processing.embeddings import embedding_to_bytes
-from zerg.services.session_processing.embeddings import generate_embeddings
 from zerg.services.session_processing.embeddings import iter_turn_chunks
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 
 logger = logging.getLogger(__name__)
-PROJECTOR = "embeddings-v1"
+PROJECTOR = EMBEDDING_PROJECTOR_ID
 PAGE_SIZE = 100
 
 
@@ -123,15 +124,13 @@ class EmbeddingsV2Projector:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            # PermanentEmbeddingConfigError (bad provider/model config, a
-            # persistent dims mismatch) will produce the identical failure on
-            # every retry -- fast exponential backoff just burns API calls on
-            # something a human has to fix. Every other exception here
+            # A local model/output contract failure will produce the identical
+            # result on every retry. Every other exception here
             # (including this file's own ValueErrors for catalog-side
             # conditions like revision drift or a corrupt render page) is
             # genuinely transient and should keep retrying quickly, so this
             # must check the specific subclass, not ValueError broadly.
-            is_permanent = isinstance(exc, PermanentEmbeddingConfigError)
+            is_permanent = isinstance(exc, LocalEmbedderUnavailable)
             is_semantic_recovery_permanent = isinstance(exc, StorageV2SemanticRecoveryPermanentError)
             is_semantic_recovery_pending = isinstance(exc, StorageV2SemanticRecoveryError) and not is_semantic_recovery_permanent
             if isinstance(session_id, str):
@@ -172,11 +171,9 @@ class EmbeddingsV2Projector:
             (logger.error if is_permanent else logger.warning)("Embedding projection failed session=%s error=%s", session_id, exc)
 
     async def _project(self, *, session_id: str, claimed_revision: int) -> bool:
-        from zerg.models_config import get_embedding_config
+        from zerg.models_config import get_embedding_space_config
 
-        config = get_embedding_config()
-        if config is None:
-            return True
+        config = get_embedding_space_config()
         self._raw_manifest_cache.pop(session_id, None)
         self._sequence_context_cache = {key: value for key, value in self._sequence_context_cache.items() if key[0] != session_id}
         generation_id: str | None = None
@@ -312,7 +309,7 @@ class EmbeddingsV2Projector:
         batches = [missing[start : start + max(1, EMBEDDING_BATCH_SIZE)] for start in range(0, len(missing), max(1, EMBEDDING_BATCH_SIZE))]
         for index, batch in enumerate(batches):
             is_last_batch = complete and index == len(batches) - 1
-            vectors = await generate_embeddings([chunk.text for chunk in batch], config)
+            vectors = await asyncio.to_thread(get_local_embedder().embed_documents, [chunk.text for chunk in batch])
             await self.search.call(
                 "search.embedding.write.v2",
                 {

@@ -205,6 +205,14 @@ async def lifespan(app: FastAPI):
                     get_render_object_worker_pool().start(),
                 )
             logger.info("Storage-v2 live and repair worker lanes are ready")
+            with _timed_startup_step("local_embedding_model"):
+                from zerg.models_config import get_embedding_space_config
+                from zerg.services.embedding_artifact import provision_embedding_artifact
+                from zerg.services.local_embedder import initialize_local_embedder
+
+                model_dir = await asyncio.to_thread(provision_embedding_artifact)
+                await asyncio.to_thread(initialize_local_embedder, get_embedding_space_config(), model_dir)
+                app.state.embedding_model_dir = str(model_dir)
             try:
                 from zerg.services.search_v2_projector import start_search_v2_projector
 

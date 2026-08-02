@@ -1,21 +1,13 @@
-"""Episode chunking and embedding generation.
-
-Shared by the storage-v2 embeddings-v1 projector (server/zerg/services/embeddings_v2_projector.py):
-episode-boundary chunking (one user event through everything up to the next),
-sanitization, and the OpenAI-compatible embedding API call. Embedding model
-configured in config/models.json.
-"""
+"""Canonical cleaning and episode chunking for local retrieval projection."""
 
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -26,30 +18,9 @@ from zerg.services.transcript_content import strip_noise
 
 from .tokens import truncate
 
-if TYPE_CHECKING:
-    from zerg.models_config import EmbeddingConfig
-
-logger = logging.getLogger(__name__)
-
-# Max tokens for embedding input (OpenAI limit is 8191, keep conservative)
-MAX_EMBEDDING_TOKENS = 1800
-EMBEDDING_REQUEST_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "10"))
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 EMBEDDING_MAX_CHUNKS_PER_PASS = int(os.getenv("EMBEDDING_MAX_CHUNKS_PER_PASS", "128"))
-
-
-class PermanentEmbeddingConfigError(ValueError):
-    """A misconfiguration that retrying will never fix on its own.
-
-    Distinct from other ValueErrors this module raises (a batch returning the
-    wrong item count, a missing embedding in one response) which are more
-    likely transient API flakiness worth retrying soon. Callers with a
-    retry/backoff loop should treat this specifically as "stop hammering the
-    API and surface it," not fold it into the same fast-retry bucket as every
-    other ValueError -- including callers elsewhere in this codebase (e.g. the
-    catalog-side ValueErrors in embeddings_v2_projector.py) that are genuinely
-    transient and should keep retrying quickly.
-    """
+MAX_EMBEDDING_TOKENS = 1800
 
 
 @dataclass
@@ -94,67 +65,6 @@ def embedding_to_bytes(arr: np.ndarray) -> bytes:
 def bytes_to_embedding(data: bytes, dims: int) -> np.ndarray:
     """Deserialize bytes back to numpy float32 array."""
     return np.frombuffer(data, dtype=np.float32).copy().reshape(dims)
-
-
-async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray:
-    """Generate one embedding vector via an OpenAI-compatible API."""
-    embeddings = await generate_embeddings([text], config)
-    return embeddings[0]
-
-
-async def generate_embeddings(texts: Sequence[str], config: "EmbeddingConfig") -> list[np.ndarray]:
-    """Generate embedding vectors via an OpenAI-compatible API (OpenAI, OpenRouter)."""
-    from openai import AsyncOpenAI
-
-    from zerg.models_config import build_openai_compatible_client_kwargs
-
-    inputs = list(texts)
-    if not inputs:
-        return []
-
-    if config.provider not in ("openai", "openrouter"):
-        raise PermanentEmbeddingConfigError(f"Unsupported embedding provider: {config.provider}. Use 'openai' or 'openrouter'.")
-
-    kwargs = build_openai_compatible_client_kwargs(
-        provider=config.provider, api_key=config.api_key, base_url=getattr(config, "base_url", None)
-    )
-    client = AsyncOpenAI(**kwargs, max_retries=0, timeout=EMBEDDING_REQUEST_TIMEOUT_SECONDS)
-    try:
-        response = await client.embeddings.create(
-            model=config.model,
-            input=inputs,
-            dimensions=config.dims,
-        )
-        data = list(response.data or [])
-        if len(data) != len(inputs):
-            raise ValueError(f"Expected {len(inputs)} embeddings, received {len(data)}")
-
-        def _order_key(pair) -> int:
-            fallback, item = pair
-            index = getattr(item, "index", None)
-            return index if index is not None else fallback
-
-        ordered = sorted(enumerate(data), key=_order_key)
-        vectors: list[np.ndarray] = []
-        for _pos, item in ordered:
-            embedding = getattr(item, "embedding", None)
-            if not embedding:
-                raise ValueError("No embedding data received")
-            vector = np.array(embedding, dtype=np.float32)
-            if vector.shape[0] != config.dims:
-                # A provider that ignores `dimensions` returns its native size
-                # instead of truncating. Stored under the configured dims it
-                # would later be silently skipped by the cache loader's shape
-                # check -- fail loudly here instead, at the one point that
-                # knows both the expected and actual size. Permanent: retrying
-                # the same model/config will produce the same mismatch forever.
-                raise PermanentEmbeddingConfigError(
-                    f"Embedding dims mismatch: expected {config.dims}, got {vector.shape[0]} from model {config.model}"
-                )
-            vectors.append(vector)
-        return vectors
-    finally:
-        await client.close()
 
 
 def _chunk_batches(chunks: Sequence[EmbeddingChunk]) -> list[list[EmbeddingChunk]]:

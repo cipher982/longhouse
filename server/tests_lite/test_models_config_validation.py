@@ -7,7 +7,7 @@ import json
 import pytest
 
 
-def _write_test_config(tmp_path, *, with_embedding=True, with_summary_update=True):
+def _write_test_config(tmp_path, *, with_summary_update=True):
     config = {
         "text": {
             "tiers": {"TIER_1": "fake/pro", "TIER_2": "fake/flash", "TIER_3": "fake/flash"},
@@ -37,15 +37,32 @@ def _write_test_config(tmp_path, *, with_embedding=True, with_summary_update=Tru
     }
     if with_summary_update:
         config["useCases"]["text"]["summary_update"] = "TIER_2"
-    if with_embedding:
-        config["embedding"] = {
-            "default": {
-                "provider": "openrouter",
-                "model": "fake/embed",
-                "dims": 64,
-                "apiKeyEnvVar": "OPENROUTER_API_KEY",
-            }
-        }
+    config["embedding"] = {
+        "default": {
+            "provider": "local-onnx",
+            "model": "fake/embed",
+            "dims": 64,
+            "dtype": "float32",
+            "normalization": "l2",
+            "truncation": "prefix",
+            "outputName": "sentence_embedding",
+            "queryPrefix": "query: ",
+            "documentPrefix": "document: ",
+            "legacyModels": ["fake/legacy"],
+            "artifact": {
+                "repository": "fake/embed",
+                "revision": "0" * 40,
+                "directory": "fake-embed",
+                "files": [
+                    {
+                        "path": "model.onnx",
+                        "bytes": 1,
+                        "sha256": "0" * 64,
+                    }
+                ],
+            },
+        },
+    }
     path = tmp_path / "models.json"
     path.write_text(json.dumps(config))
     return path
@@ -80,12 +97,11 @@ def test_validate_startup_config_raises_with_actionable_message(tmp_path, monkey
     msg = str(exc_info.value)
     assert "OPENROUTER_API_KEY" in msg
     assert "use case 'summarization'" in msg
-    assert "embedding" in msg
     assert "config/models.json" in msg
 
 
 def test_is_capability_available_text_requires_active_provider_key(tmp_path, monkeypatch):
-    cfg = _write_test_config(tmp_path, with_embedding=False)
+    cfg = _write_test_config(tmp_path)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     mc = _reload_models_config(monkeypatch, cfg)
 
@@ -95,22 +111,11 @@ def test_is_capability_available_text_requires_active_provider_key(tmp_path, mon
     assert mc.is_capability_available("text") is True
 
 
-def test_is_capability_available_embedding_returns_false_when_unconfigured(tmp_path, monkeypatch):
-    cfg = _write_test_config(tmp_path, with_embedding=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    mc = _reload_models_config(monkeypatch, cfg)
-
-    assert mc.is_capability_available("embedding") is False
-
-
-def test_is_capability_available_embedding_requires_key(tmp_path, monkeypatch):
+def test_is_capability_available_embedding_requires_local_contract_not_key(tmp_path, monkeypatch):
     cfg = _write_test_config(tmp_path)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     mc = _reload_models_config(monkeypatch, cfg)
 
-    assert mc.is_capability_available("embedding") is False
-
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     assert mc.is_capability_available("embedding") is True
 
 
