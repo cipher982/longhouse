@@ -168,6 +168,19 @@ def test_promotion_uses_requested_managed_ownership_when_archive_omits_it() -> N
     )
 
 
+def test_cursor_stop_accepts_already_detached_session() -> None:
+    result = profiler.CommandResult(
+        cmd=["longhouse-engine", "cursor-helm", "stop"],
+        returncode=1,
+        stdout="",
+        stderr="Error: session_not_attached: cursor helm state file not found",
+    )
+    assert profiler.cursor_helm_stop_already_complete(result)
+
+    result.stderr = "Error: command_failed: coordination channel rejected stop"
+    assert not profiler.cursor_helm_stop_already_complete(result)
+
+
 def test_manifest_moves_legacy_metric_out_of_hard_targeting() -> None:
     manifest = profiler.sla_manifest()
     assert profiler.metric_is_diagnostic(manifest, "warm_session_created_to_card_paint_ms")

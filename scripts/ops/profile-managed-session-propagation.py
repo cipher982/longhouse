@@ -238,6 +238,12 @@ class CommandResult:
         }
 
 
+def cursor_helm_stop_already_complete(result: CommandResult) -> bool:
+    """Return true when Cursor has already detached before an idempotent stop."""
+
+    return result.returncode != 0 and "session_not_attached" in result.stderr
+
+
 class Profiler:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -2662,8 +2668,18 @@ except Exception as exc:
                 timeout=60,
                 session_id=session_id,
             )
-            if stop.returncode != 0:
+            if stop.returncode != 0 and not cursor_helm_stop_already_complete(stop):
                 raise RuntimeError(f"Cursor Helm stop failed: {stop.short()}")
+            if cursor_helm_stop_already_complete(stop):
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="harness",
+                    event="shutdown_already_detached",
+                    session_id=session_id,
+                    payload=stop.short(),
+                )
             if session is not None:
                 session.close()
                 session = None
