@@ -178,7 +178,11 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     search = FakeClient(
         {
             "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
-            "search.embedding.hashes.v2": {"hashes": {}},
+            "search.embedding.hashes.v2": {
+                "hashes": {},
+                "published_generation_id": generation_id,
+                "published_revision": "7",
+            },
             "search.embedding.write.v2": {"written": 1, "skipped": 0},
         }
     )
@@ -198,6 +202,7 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     assert write["episodes"][0]["episode_ordinal"] == 0
     assert write["complete"] is True
     assert write["desired_episode_ordinals"] == [0]
+    assert write["revision"] == "7"
     assert len(seen_texts) == 1
     assert "<command-name>/effort</command-name>" not in seen_texts[0]
     assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
@@ -278,7 +283,11 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
     search = FakeClient(
         {
             "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
-            "search.embedding.hashes.v2": {"hashes": {}},
+            "search.embedding.hashes.v2": {
+                "hashes": {},
+                "published_generation_id": generation_id,
+                "published_revision": "7",
+            },
             "search.embedding.write.v2": {"written": 1, "skipped": 0},
         }
     )
@@ -298,6 +307,7 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
     assert [w["complete"] for w in writes] == [False, True]
     assert writes[0]["desired_episode_ordinals"] is None
     assert writes[1]["desired_episode_ordinals"] == [0, 1]
+    assert {write["revision"] for write in writes} == {"7"}
 
 
 def _minimal_claim_setup(session_id, generation_id, store_id):
@@ -344,7 +354,14 @@ def _minimal_claim_setup(session_id, generation_id, store_id):
         }
     )
     search = FakeClient(
-        {"search.ping.v2": {"store_id": store_id, "schema_generation": "test"}, "search.embedding.hashes.v2": {"hashes": {}}}
+        {
+            "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.hashes.v2": {
+                "hashes": {},
+                "published_generation_id": generation_id,
+                "published_revision": "1",
+            },
+        }
     )
     return catalog, search, decoded
 

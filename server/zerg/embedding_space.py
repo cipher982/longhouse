@@ -141,4 +141,7 @@ EMBEDDING_ARTIFACT_REPOSITORY: Final = _text(_ARTIFACT["repository"], field="emb
 EMBEDDING_ARTIFACT_REVISION: Final = _revision
 EMBEDDING_ARTIFACT_DIRECTORY: Final = _directory
 EMBEDDING_ARTIFACT_FILES: Final = tuple(_parsed_files)
-EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d"
+# The projector identity is a projection-schema version, not only a model-space
+# name. Bump it when provenance semantics change so catalogd reclaims every
+# session instead of treating rows written under the old contract as complete.
+EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p2"

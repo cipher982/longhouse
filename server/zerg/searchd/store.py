@@ -763,6 +763,18 @@ class SearchStore:
         now = datetime.now(UTC).isoformat()
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            published = self.connection.execute(
+                "SELECT generation_id, desired_revision, owner_id FROM session_index WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if published is None:
+                raise ValueError("embedding session is not published")
+            if (
+                str(published["generation_id"]) != generation_id
+                or int(published["desired_revision"]) != revision
+                or str(published["owner_id"]) != owner_id
+            ):
+                raise ValueError("embedding write does not match the published session identity")
             for episode in episodes:
                 existing = self.connection.execute(
                     "SELECT content_hash, dims, revision, generation_id, owner_id, start_order_time_us"
@@ -884,8 +896,16 @@ class SearchStore:
             sql += " AND dims = ?"
             params += (dims,)
         rows = self.connection.execute(sql, params).fetchall()
+        published = self.connection.execute(
+            "SELECT generation_id, desired_revision FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
         # JSON object keys are strings; the projector converts them back to ordinals.
-        return {"hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows}}
+        return {
+            "hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows},
+            "published_generation_id": str(published["generation_id"]) if published is not None else None,
+            "published_revision": str(published["desired_revision"]) if published is not None else None,
+        }
 
     def _update_existing_object_semantics(
         self,

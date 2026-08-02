@@ -263,7 +263,22 @@ def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
             ],
         )
         assert first == {"written": 2, "skipped": 0}
-        assert store.read_episode_embedding_hashes(session_id=session_id, model="test-model")["hashes"] == {"0": "a" * 64, "1": "b" * 64}
+        identity = store.read_episode_embedding_hashes(session_id=session_id, model="test-model")
+        assert identity == {
+            "hashes": {"0": "a" * 64, "1": "b" * 64},
+            "published_generation_id": published_generation,
+            "published_revision": "1",
+        }
+        with pytest.raises(ValueError, match="published session identity"):
+            store.write_episode_embeddings(
+                session_id=session_id,
+                owner_id=owner_id,
+                generation_id=published_generation,
+                revision=2,
+                model="test-model",
+                dims=2,
+                episodes=[],
+            )
         replay = store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
@@ -324,6 +339,7 @@ def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_pa
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     session_id = str(uuid4())
+    published_generation = str(uuid4())
     owner_id = "owner-1"
     try:
         connection.execute(
@@ -335,13 +351,13 @@ def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_pa
                 started_at, published_at
             ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
             """,
-            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            (session_id, published_generation, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
         )
         # Seed two already-current episodes, as if a prior pass embedded them.
         store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -370,7 +386,7 @@ def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_pa
         store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -402,6 +418,7 @@ def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_pat
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     session_id = str(uuid4())
+    published_generation = str(uuid4())
     owner_id = "owner-1"
     try:
         connection.execute(
@@ -413,12 +430,12 @@ def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_pat
                 started_at, published_at
             ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
             """,
-            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            (session_id, published_generation, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
         )
         store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -445,7 +462,7 @@ def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_pat
         store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,

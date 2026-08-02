@@ -35,6 +35,10 @@ PAGE_SIZE = 100
 PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "4")))
 
 
+class EmbeddingPublicationPending(RuntimeError):
+    """The catalog snapshot is newer than the generation published by searchd."""
+
+
 class EmbeddingsV2Projector:
     def __init__(
         self,
@@ -135,6 +139,7 @@ class EmbeddingsV2Projector:
             is_render_permanent = isinstance(exc, RenderObjectCorruptError)
             is_semantic_recovery_permanent = isinstance(exc, StorageV2SemanticRecoveryPermanentError)
             is_semantic_recovery_pending = isinstance(exc, StorageV2SemanticRecoveryError) and not is_semantic_recovery_permanent
+            is_publication_pending = isinstance(exc, EmbeddingPublicationPending)
             if isinstance(session_id, str):
                 failures = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
                 failed_at = datetime.now(UTC)
@@ -154,6 +159,8 @@ class EmbeddingsV2Projector:
                     if is_semantic_recovery_permanent
                     else "semantic_recovery_pending"
                     if is_semantic_recovery_pending
+                    else "search_publication_pending"
+                    if is_publication_pending
                     else "embedding_projection_failed"
                 )
                 await self.catalog.call(
@@ -298,6 +305,16 @@ class EmbeddingsV2Projector:
         hashes_result = await self.search.call(
             "search.embedding.hashes.v2", {"session_id": session_id, "model": config.model, "dims": config.dims}
         )
+        published_generation = hashes_result.get("published_generation_id")
+        published_revision_value = hashes_result.get("published_revision")
+        if published_generation != generation_id or not isinstance(published_revision_value, str):
+            raise EmbeddingPublicationPending("searchd has not published this render generation")
+        try:
+            published_revision = int(published_revision_value)
+        except ValueError as exc:
+            raise ValueError("searchd returned an invalid published revision") from exc
+        if published_revision < 0:
+            raise ValueError("searchd returned an invalid published revision")
         hashes = {int(key): value for key, value in (hashes_result.get("hashes") or {}).items() if isinstance(value, str)}
         all_missing = [chunk for chunk in chunks if hashes.get(chunk.chunk_index) != chunk.content_hash]
         missing = all_missing[: max(1, EMBEDDING_MAX_CHUNKS_PER_PASS)]
@@ -320,7 +337,7 @@ class EmbeddingsV2Projector:
                     "session_id": session_id,
                     "owner_id": owner_id,
                     "generation_id": generation_id,
-                    "revision": str(claimed_revision),
+                    "revision": str(published_revision),
                     "model": config.model,
                     "dims": config.dims,
                     "complete": is_last_batch,
@@ -351,7 +368,7 @@ class EmbeddingsV2Projector:
                     "session_id": session_id,
                     "owner_id": owner_id,
                     "generation_id": generation_id,
-                    "revision": str(claimed_revision),
+                    "revision": str(published_revision),
                     "model": config.model,
                     "dims": config.dims,
                     "complete": True,
