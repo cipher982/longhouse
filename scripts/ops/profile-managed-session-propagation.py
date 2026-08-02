@@ -1468,6 +1468,8 @@ except Exception as exc:
             env["LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE"] = str(session_id_file)
         if self.args.profile == "warm-live" and observer_kind == "warm":
             env["LONGHOUSE_BROWSER_OBSERVER_EXIT_AFTER_DETAIL_TRANSCRIPT"] = "1"
+        if self.args.browser_transport == "disable-quic":
+            env["LONGHOUSE_PROFILER_DISABLE_QUIC"] = "1"
 
         proc = subprocess.Popen(
             [
@@ -1490,6 +1492,7 @@ except Exception as exc:
         assert proc.stderr is not None
 
         event_map = {
+            "transport_mode": "browser_transport_mode",
             "navigation_started": "browser_ui_navigation_started",
             "ui_loaded": "browser_ui_loaded",
             "card_painted": "browser_timeline_card_painted",
@@ -5381,6 +5384,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Hosted browser UI origin to profile. Defaults to https://<subdomain>.longhouse.ai.",
     )
     parser.add_argument(
+        "--browser-transport",
+        choices=["default", "disable-quic"],
+        default="default",
+        help="Browser transport lane. disable-quic isolates app settlement from Chromium HTTP/3 transport failures.",
+    )
+    parser.add_argument(
         "--skip-browser-ui",
         action="store_true",
         help="Skip the Playwright browser layer and keep the profiler to HTTP/SSE/DB observers.",
@@ -5447,6 +5456,7 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             "profile": args.profile,
             "browser_ui_base_url": profiler.browser_ui_base_url,
             "browser_ui_enabled": not args.skip_browser_ui,
+            "browser_transport": args.browser_transport,
             "profile_class": profiler.profile_class,
             "sla_case_id": profiler.sla_case.get("id") if profiler.sla_case else None,
             "sla_status": profiler.sla_case.get("status") if profiler.sla_case else None,

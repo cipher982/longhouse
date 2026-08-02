@@ -12,6 +12,7 @@ if (!baseUrlArg || !token || !sid || !project || !nonce) {
 
 const baseUrl = new URL(baseUrlArg);
 const provider = providerArg || "codex";
+const disableQuic = process.env.LONGHOUSE_PROFILER_DISABLE_QUIC === "1";
 let sessionId = sid;
 const sessionIdFile = process.env.LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE || "";
 const started = performance.now();
@@ -440,7 +441,13 @@ async function waitForSessionIdFile(timeoutMs) {
 }
 
 try {
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    ...(disableQuic ? { args: ["--disable-quic"] } : {}),
+  });
+  emit("transport_mode", {
+    mode: disableQuic ? "http_without_quic" : "default",
+  });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   context.on("request", (request) => {
     if (request.url().includes("/telemetry/client-render")) {
