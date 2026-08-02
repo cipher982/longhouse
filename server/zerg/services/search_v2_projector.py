@@ -72,8 +72,7 @@ class SearchV2Projector:
         states = claim.get("claimed")
         if not isinstance(states, list):
             raise SearchProjectionError("invalid_catalog_response", "catalog returned an invalid projector claim")
-        for state in states:
-            await self._run_claim(state, claim_token=claim_token)
+        await asyncio.gather(*(self._run_claim(state, claim_token=claim_token) for state in states))
         return len(states)
 
     async def _ensure_store_binding(self, *, observed_at: datetime) -> None:
