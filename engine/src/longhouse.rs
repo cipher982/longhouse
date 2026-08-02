@@ -888,7 +888,8 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         "--claude-bin",
     )?;
     ensure_claude_channel_prerequisite(&binary)?;
-    let (launch_actor, launch_surface) = interactive_human_shell_provenance();
+    let (launch_actor, launch_surface) =
+        managed_launch_payload::interactive_human_shell_provenance();
     let runtime = tokio::runtime::Runtime::new()?;
     let resuming = args.resume.is_some();
     let response: ManagedLaunchResponse = if let Some(session_id) = &args.resume {
@@ -1013,7 +1014,8 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "OpenCode",
         "--opencode-bin",
     )?;
-    let (launch_actor, launch_surface) = interactive_human_shell_provenance();
+    let (launch_actor, launch_surface) =
+        managed_launch_payload::interactive_human_shell_provenance();
     let mut payload = ManagedLaunchRegistration {
         provider: "opencode",
         cwd: &cwd,
@@ -1415,25 +1417,6 @@ fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
         anyhow::bail!("Claude native channels unavailable: Claude is not logged in");
     }
     Ok(())
-}
-
-fn interactive_human_shell_provenance() -> (Option<&'static str>, Option<&'static str>) {
-    let hidden = std::env::var("LONGHOUSE_ORIGIN_KIND")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    let sidechain = matches!(
-        std::env::var("LONGHOUSE_IS_SIDECHAIN")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    );
-    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() && !hidden && !sidechain {
-        (Some("human_shell"), Some("terminal"))
-    } else {
-        (None, None)
-    }
 }
 
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
