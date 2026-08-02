@@ -57,6 +57,17 @@ def test_no_token_environment_rejects_ambient_provider_credentials(monkeypatch, 
         provider_interaction_probe._no_token_environment()  # noqa: SLF001
 
 
+@pytest.mark.parametrize("name", ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"))
+def test_no_token_environment_allows_explicitly_disabled_provider_flags(monkeypatch, name: str) -> None:
+    for auth_name in provider_interaction_probe._NO_TOKEN_AUTH_ENV_NAMES:  # noqa: SLF001
+        monkeypatch.delenv(auth_name, raising=False)
+    monkeypatch.setenv(name, "0")
+
+    environment = provider_interaction_probe._no_token_environment()  # noqa: SLF001
+
+    assert name not in environment
+
+
 def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeypatch) -> None:
     for name in provider_interaction_probe._NO_TOKEN_AUTH_ENV_NAMES:  # noqa: SLF001
         monkeypatch.delenv(name, raising=False)
