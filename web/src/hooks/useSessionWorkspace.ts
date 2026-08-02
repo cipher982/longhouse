@@ -7,7 +7,7 @@ import {
 } from "./useAgentSessions";
 import { useDocumentVisible } from "./useDocumentVisible";
 import { useOnlineEpoch } from "./useOnlineEpoch";
-import { emitRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
+import { emitRenderBeacon, emitStateRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
   buildTimelineModel,
@@ -67,6 +67,14 @@ interface PendingRenderBeacon {
   sessionId: string;
   latestEventId: AgentEventId;
   latestEventEmittedAtMs: number | null;
+  serverFanoutAtMs: number | null;
+  clientReceivedAtMs: number | null;
+  pubsubSeq: number | null;
+}
+
+interface PendingStateRenderBeacon {
+  sessionId: string;
+  catalogCommitSeq: number;
   serverFanoutAtMs: number | null;
   clientReceivedAtMs: number | null;
   pubsubSeq: number | null;
@@ -140,10 +148,14 @@ export function useSessionWorkspace(
   const [streamTranscriptPreview, setStreamTranscriptPreview] =
     useState<SessionTranscriptPreview | null | undefined>(undefined);
   const pendingRenderBeaconRef = useRef<PendingRenderBeacon | null>(null);
+  const pendingStateRenderBeaconRef = useRef<PendingStateRenderBeacon | null>(null);
   const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] = useState(0);
+  const [pendingStateRenderBeaconVersion, setPendingStateRenderBeaconVersion] = useState(0);
 
   useEffect(() => {
     setStreamTranscriptPreview(undefined);
+    pendingRenderBeaconRef.current = null;
+    pendingStateRenderBeaconRef.current = null;
   }, [sessionId]);
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
@@ -190,6 +202,8 @@ export function useSessionWorkspace(
     },
   });
   const knownWorkspaceFingerprint = workspaceData?.workspace_revision?.fingerprint ?? null;
+  const knownWorkspaceFingerprintRef = useRef(knownWorkspaceFingerprint);
+  knownWorkspaceFingerprintRef.current = knownWorkspaceFingerprint;
   const workspaceReady = workspaceData !== undefined;
 
   // SSE stream subscription — invalidates queries on server-side change detection
@@ -203,25 +217,30 @@ export function useSessionWorkspace(
       return;
     }
 
-    const refreshQueryKeys = [
+    const baseRefreshQueryKeys = [
       ["agent-session-workspace", sessionId],
       ["agent-session", sessionId],
       ["agent-session-thread", sessionId],
+      ["agent-sessions"],
+    ] as const;
+    const transcriptRefreshQueryKeys = [
       ["agent-session-turns", sessionId],
       ["agent-session-projection-infinite", sessionId],
       ["agent-session-events", sessionId],
       ["agent-session-events-infinite", sessionId],
-      ["agent-sessions"],
     ] as const;
     let refreshInFlight: Promise<void> | null = null;
-    let refreshQueued = false;
+    let queuedIncludeTranscript = false;
     let disposed = false;
 
-    const refreshWorkspaceQueries = () => {
+    const refreshWorkspaceQueries = (includeTranscript: boolean) => {
       if (refreshInFlight) {
-        refreshQueued = true;
+        queuedIncludeTranscript = queuedIncludeTranscript || includeTranscript;
         return;
       }
+      const refreshQueryKeys = includeTranscript
+        ? [...baseRefreshQueryKeys, ...transcriptRefreshQueryKeys]
+        : baseRefreshQueryKeys;
       refreshInFlight = Promise.all(
         refreshQueryKeys.map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
@@ -230,9 +249,12 @@ export function useSessionWorkspace(
         .then(() => undefined)
         .finally(() => {
           refreshInFlight = null;
-          if (refreshQueued && !disposed) {
-            refreshQueued = false;
-            refreshWorkspaceQueries();
+          if (queuedIncludeTranscript && !disposed) {
+            const nextIncludeTranscript = queuedIncludeTranscript;
+            queuedIncludeTranscript = false;
+            refreshWorkspaceQueries(nextIncludeTranscript);
+          } else {
+            queuedIncludeTranscript = false;
           }
         });
     };
@@ -246,10 +268,25 @@ export function useSessionWorkspace(
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
-          let shouldDeferRefetchForPreview = false;
-          if (Object.prototype.hasOwnProperty.call(data, "transcript_preview")) {
-            const transcriptPreview = data.transcript_preview ?? null;
-            shouldDeferRefetchForPreview = shouldRenderTranscriptPreview(transcriptPreview);
+          if (data.catalog_commit_seq != null && data.catalog_commit_seq > 0) {
+            pendingStateRenderBeaconRef.current = {
+              sessionId,
+              catalogCommitSeq: data.catalog_commit_seq,
+              serverFanoutAtMs: data.server_fanout_at_ms ?? null,
+              clientReceivedAtMs: Date.now(),
+              pubsubSeq: data.pubsub_seq ?? null,
+            };
+            setPendingStateRenderBeaconVersion((value) => value + 1);
+          }
+          const hasTranscriptPreview = Object.prototype.hasOwnProperty.call(data, "transcript_preview");
+          const transcriptPreview = data.transcript_preview ?? null;
+          const isFreshTranscriptPreview =
+            transcriptPreview !== null && shouldRenderTranscriptPreview(transcriptPreview);
+          const isTranscriptMutation =
+            data.change_kind === "ingest" ||
+            (data.change_kind === "transcript_preview" && !isFreshTranscriptPreview) ||
+            (!data.change_kind && (data.latest_event_id > 0 || hasTranscriptPreview));
+          if (hasTranscriptPreview && (isTranscriptMutation || isFreshTranscriptPreview)) {
             setStreamTranscriptPreview(transcriptPreview);
             queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
               { queryKey: ["agent-session-workspace", sessionId] },
@@ -279,24 +316,27 @@ export function useSessionWorkspace(
           };
           setPendingRenderBeaconVersion((version) => version + 1);
 
-          if (shouldDeferRefetchForPreview && typeof window !== "undefined" && window.requestAnimationFrame) {
-            window.requestAnimationFrame(() => {
-              window.setTimeout(refreshWorkspaceQueries, 0);
-            });
-          } else {
-            refreshWorkspaceQueries();
+          if (isFreshTranscriptPreview) {
+            // The preview is already applied to the workspace cache and local
+            // projection. Wait for the durable ingest wake before refetching
+            // transcript queries; runtime wakes must not evict it.
+            return;
           }
+          refreshWorkspaceQueries(isTranscriptMutation);
         },
         onError: () => setStreamConnected(false),
       },
-      { skipInitial: true, knownWorkspaceFingerprint },
+      {
+        skipInitial: true,
+        knownWorkspaceFingerprint: knownWorkspaceFingerprintRef.current,
+      },
     );
 
     return () => {
       disposed = true;
       cleanup();
     };
-  }, [sessionId, documentVisible, workspaceReady, knownWorkspaceFingerprint, queryClient, onlineEpoch]);
+  }, [sessionId, documentVisible, workspaceReady, queryClient, onlineEpoch]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>
@@ -470,6 +510,30 @@ export function useSessionWorkspace(
     });
     pendingRenderBeaconRef.current = null;
   }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession]);
+
+  useEffect(() => {
+    const pending = pendingStateRenderBeaconRef.current;
+    if (!pending || pending.sessionId !== sessionId) return;
+    const currentSession = workspaceData?.session;
+    if (!currentSession) return;
+    const renderedCommitSeq = currentSession?.session_state.commit_seq;
+    if (renderedCommitSeq == null || renderedCommitSeq < pending.catalogCommitSeq) return;
+
+    const caps = currentSession?.capabilities;
+    const managed = Boolean(caps && (caps.live_control_available || caps.host_reattach_available));
+    const observedAt = currentSession.session_state.activity.observed_at;
+    emitStateRenderBeacon({
+      sessionId: pending.sessionId,
+      catalogCommitSeq: pending.catalogCommitSeq,
+      statePhase: currentSession.session_state.activity.state,
+      stateObservedAtMs: observedAt ? Date.parse(observedAt) : null,
+      managed,
+      serverFanoutAtMs: pending.serverFanoutAtMs,
+      clientReceivedAtMs: pending.clientReceivedAtMs,
+      pubsubSeq: pending.pubsubSeq,
+    });
+    pendingStateRenderBeaconRef.current = null;
+  }, [pendingStateRenderBeaconVersion, sessionId, workspaceData?.session]);
 
   const isViewingHead =
     !!currentThreadSession &&

@@ -50,6 +50,8 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let primary: SessionStateLabel?
     let access: SessionStateLabel?
     let transcript: SessionStateLabel?
+    /// Monotonic catalog commit coordinate for state-render settlement.
+    let commitSeq: Int?
 
     static let unknown = SessionStateFacts(
         contractVersion: 1,
@@ -80,7 +82,8 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         transcriptConvergence: "unknown",
         primary: nil,
         access: nil,
-        transcript: nil
+        transcript: nil,
+        commitSeq: nil
     )
 }
 

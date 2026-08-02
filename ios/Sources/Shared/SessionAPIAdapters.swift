@@ -116,7 +116,8 @@ private extension APISessionStateFacts {
             transcriptConvergence: transcript.convergence,
             primary: presentation.primary?.sessionStateLabel,
             access: presentation.access?.sessionStateLabel,
-            transcript: presentation.transcript?.sessionStateLabel
+            transcript: presentation.transcript?.sessionStateLabel,
+            commitSeq: commitSeq
         )
     }
 }

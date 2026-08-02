@@ -1043,6 +1043,31 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func stateRenderBeaconCarriesCatalogCommitCoordinates() async {
+        let payload = await RenderBeaconReporter.shared.payload(
+            sessionId: "state-proof-\(UUID().uuidString)",
+            latestEventId: "state:42",
+            emittedAt: Date(timeIntervalSince1970: 1_779_220_000.15),
+            managed: false,
+            serverFanoutAtMs: 1_779_220_000_150,
+            clientReceivedAtMs: 1_779_220_000_180,
+            pubsubSeq: 8,
+            renderKind: "state",
+            stateCommitSeq: 42,
+            statePhase: "thinking",
+            stateObservedAtMs: 1_779_220_000_120
+        )
+
+        #expect(payload?.render_kind == "state")
+        #expect(payload?.event_id == "state:42")
+        #expect(payload?.state_commit_seq == 42)
+        #expect(payload?.state_phase == "thinking")
+        #expect(payload?.state_observed_at_ms == 1_779_220_000_120)
+        #expect(payload?.server_fanout_at_ms == 1_779_220_000_150)
+        #expect(payload?.pubsub_seq == 8)
+    }
+
+    @Test
     func transcriptDiagnosticsIgnoresNonRenderStagesForBeacons() async throws {
         let workspace = try makeWorkspace(eventId: 10, content: "Rendered in WebKit")
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])

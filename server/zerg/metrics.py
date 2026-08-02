@@ -134,6 +134,13 @@ try:
         buckets=(0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2, 5, 15),
     )
 
+    state_end_to_end_latency_seconds = Histogram(
+        "state_end_to_end_latency_seconds",
+        "Catalog fanout to client-rendered runtime-state latency (seconds)",
+        labelnames=("surface", "managed"),
+        buckets=(0.01, 0.025, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1, 2, 5, 15),
+    )
+
     event_render_beacons_total = Counter(
         "event_render_beacons_total",
         "Client render beacons received (for end-to-end latency tracking)",
@@ -585,6 +592,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     session_input_attachment_bytes = _NoopHistogram()  # type: ignore[assignment]
     event_age_at_ingest_seconds = _NoopHistogram()  # type: ignore[assignment]
     event_end_to_end_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
+    state_end_to_end_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     event_render_beacons_total = _NoopCounter()  # type: ignore[assignment]
     canary_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     canary_observations_total = _NoopCounter()  # type: ignore[assignment]

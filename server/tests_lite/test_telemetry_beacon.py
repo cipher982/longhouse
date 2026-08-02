@@ -84,6 +84,26 @@ def test_beacon_accepts_single_and_batch():
     assert resp.json()["accepted"] == 2
 
 
+def test_state_beacon_uses_catalog_fanout_as_emission_coordinate():
+    c, _factory = _client()
+    now = int(time.time() * 1000)
+    resp = c.post(
+        "/telemetry/client-render",
+        json=_beacon(
+            event_id="state:41",
+            render_kind="state",
+            emitted_at_ms=now - 80,
+            rendered_at_ms=now,
+            server_fanout_at_ms=now - 80,
+            state_commit_seq=41,
+            state_phase="executing",
+            state_observed_at_ms=now - 100,
+        ),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] == 1
+
+
 def test_beacon_remains_available_when_live_catalog_owns_sqlite(monkeypatch):
     telemetry_mod._samples.clear()
     telemetry_mod._buckets.clear()
@@ -353,6 +373,10 @@ def test_beacon_persists_queryable_render_observation():
             "server_fanout_at_ms": None,
             "client_received_at_ms": None,
             "pubsub_seq": None,
+            "render_kind": "event",
+            "state_commit_seq": None,
+            "state_phase": None,
+            "state_observed_at_ms": None,
             "webkit": None,
             "observed_at": recent["items"][0]["observed_at"],
             "received_at": recent["items"][0]["received_at"],

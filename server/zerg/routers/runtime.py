@@ -182,7 +182,11 @@ async def ingest_runtime_observation_batch(
             ]
             return push_contexts
 
-        def _publish_runtime_updates(result: RuntimeEventBatchResult) -> None:
+        def _publish_runtime_updates(
+            result: RuntimeEventBatchResult,
+            *,
+            catalog_commit_seq: str | int | None = None,
+        ) -> None:
             updated_runtime_keys = set(result.updated_runtime_keys)
             if not updated_runtime_keys:
                 return
@@ -201,6 +205,7 @@ async def ingest_runtime_observation_batch(
                     session_id=sid,
                     provider=ev.provider,
                     source=ev.source,
+                    catalog_commit_seq=catalog_commit_seq,
                 )
 
         async def _run_runtime_followups(
@@ -538,7 +543,7 @@ async def ingest_runtime_observation_batch(
                 ) from exc
             response.headers["X-Catalog-Commit-Seq"] = commit_seq
             response.headers["X-Runtime-Label"] = "catalogd-runtime-state"
-            _publish_runtime_updates(result)
+            _publish_runtime_updates(result, catalog_commit_seq=commit_seq)
             return result
 
         if live_store_configured():

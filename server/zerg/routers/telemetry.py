@@ -43,6 +43,7 @@ from zerg.metrics import canary_observations_total
 from zerg.metrics import canary_seq_last_seen
 from zerg.metrics import event_end_to_end_latency_seconds
 from zerg.metrics import event_render_beacons_total
+from zerg.metrics import state_end_to_end_latency_seconds
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
@@ -120,11 +121,12 @@ class WebKitRenderDiagnostics(BaseModel):
 
 
 class RenderBeacon(BaseModel):
-    """Single event-render beacon from a client."""
+    """Single event or runtime-state render beacon from a client."""
 
     event_id: str = Field(..., max_length=128)
     session_id: str | None = Field(None, max_length=128)
     surface: Literal["web", "ios"]
+    render_kind: Literal["event", "state"] = "event"
     managed: bool = False
     emitted_at_ms: int = Field(..., description="Server-stamped emitted_at for the event, in ms epoch")
     rendered_at_ms: int = Field(..., description="Client wall-clock render time, in ms epoch")
@@ -135,6 +137,9 @@ class RenderBeacon(BaseModel):
         description="Client wall-clock time when the SSE frame was received",
     )
     pubsub_seq: int | None = Field(None, description="Per-session pubsub sequence that woke the client")
+    state_commit_seq: int | None = Field(None, ge=0, description="Canonical catalog commit rendered by the client")
+    state_phase: str | None = Field(None, max_length=64, description="Canonical activity state rendered by the client")
+    state_observed_at_ms: int | None = Field(None, description="Canonical activity observed_at rendered by the client")
     webkit: WebKitRenderDiagnostics | None = None
 
 
@@ -178,6 +183,10 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         "server_fanout_at_ms": beacon.server_fanout_at_ms,
         "client_received_at_ms": beacon.client_received_at_ms,
         "pubsub_seq": beacon.pubsub_seq,
+        "render_kind": beacon.render_kind,
+        "state_commit_seq": beacon.state_commit_seq,
+        "state_phase": beacon.state_phase,
+        "state_observed_at_ms": beacon.state_observed_at_ms,
         "latency_ms": latency_ms,
     }
     if beacon.webkit is not None:
@@ -270,9 +279,13 @@ async def client_render_beacon(
             event_render_beacons_total.labels(surface=b.surface, outcome="render_failed").inc()
         else:
             managed_label = "true" if b.managed else "false"
-            event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
+            if b.render_kind == "state":
+                state_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
+            else:
+                event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
             event_render_beacons_total.labels(surface=b.surface, outcome="ok").inc()
-            _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
+            if b.render_kind == "event":
+                _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
         rounded_latency_ms = int(round(latency_ms))
         persistable.append((b, rounded_latency_ms))
         logger.info(
@@ -340,6 +353,10 @@ async def recent_client_render_beacons(
                 "server_fanout_at_ms": payload.get("server_fanout_at_ms"),
                 "client_received_at_ms": payload.get("client_received_at_ms"),
                 "pubsub_seq": payload.get("pubsub_seq"),
+                "render_kind": payload.get("render_kind", "event"),
+                "state_commit_seq": payload.get("state_commit_seq"),
+                "state_phase": payload.get("state_phase"),
+                "state_observed_at_ms": payload.get("state_observed_at_ms"),
                 "webkit": payload.get("webkit"),
                 "observed_at": row.observed_at.isoformat() if row.observed_at else None,
                 "received_at": row.received_at.isoformat() if row.received_at else None,

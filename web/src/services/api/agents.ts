@@ -831,12 +831,14 @@ export interface SessionWorkspaceStreamConnected {
 
 export interface SessionWorkspaceStreamChange {
   session_id: string;
+  change_kind?: string | null;
   latest_event_id: number;
   thread_session_count: number;
   detect_ms?: number;
   latest_event_emitted_at_ms?: number | null;
   server_fanout_at_ms?: number | null;
   server_now_ms?: number;
+  catalog_commit_seq?: number | null;
   pubsub_seq?: number;
   transcript_preview?: SessionTranscriptPreview | null;
 }
@@ -886,10 +888,12 @@ export function connectSessionWorkspaceStream(
     if (data) {
       dispatchTimelineStreamEvent("workspace_changed", {
         session_id: data.session_id,
+        change_kind: data.change_kind ?? null,
         latest_event_id: data.latest_event_id,
         latest_event_emitted_at_ms: data.latest_event_emitted_at_ms ?? null,
         server_fanout_at_ms: data.server_fanout_at_ms ?? null,
         server_now_ms: data.server_now_ms,
+        catalog_commit_seq: data.catalog_commit_seq ?? null,
         pubsub_seq: data.pubsub_seq,
         client_received_at_ms: Date.now(),
         has_transcript_preview: Object.prototype.hasOwnProperty.call(data, "transcript_preview"),

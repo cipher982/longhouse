@@ -37,6 +37,7 @@ ALLOWED_LAYERS = {
 }
 ALLOWED_OBSERVERS = {
     "browser_card",
+    "client_render_beacon",
     "claude_channel_state",
     "hosted_db",
     "machine_heartbeat",

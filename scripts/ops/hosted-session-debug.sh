@@ -204,6 +204,29 @@ def runtime_observation_rows(limit: int) -> list[dict]:
     return normalized
 
 
+def client_render_observation_rows(limit: int) -> list[dict]:
+    if not table_exists("session_observations"):
+        return []
+    records = rows(
+        """
+        SELECT id, source, observed_at, received_at, payload_json
+        FROM session_observations
+        WHERE session_id=? AND source_domain='client' AND kind='client_render'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (session_id, limit),
+    )
+    normalized = []
+    for record in records:
+        raw_payload = json.loads(record.pop("payload_json") or "{}")
+        client_payload = raw_payload.get("payload") if isinstance(raw_payload, dict) else {}
+        if not isinstance(client_payload, dict) or "render_kind" not in client_payload:
+            client_payload = raw_payload if isinstance(raw_payload, dict) else {}
+        normalized.append({**record, "payload": client_payload})
+    return normalized
+
+
 payload: dict[str, object] = {
     "db_path": db_path,
     "session_id": session_id,
@@ -234,6 +257,17 @@ if table_exists("live_sessions"):
     payload["recent_events"] = []
     payload["runtime_observation_stats"] = None
     payload["recent_runtime_observations"] = []
+    payload["client_render_observation_stats"] = one(
+        """
+        SELECT count(*) AS count, min(observed_at) AS first_observed_at,
+               max(observed_at) AS last_observed_at, min(received_at) AS first_received_at,
+               max(received_at) AS last_received_at
+        FROM session_observations
+        WHERE session_id=? AND source_domain='client' AND kind='client_render'
+        """,
+        (session_id,),
+    ) if table_exists("session_observations") else None
+    payload["recent_client_render_observations"] = client_render_observation_rows(limit)
     payload["recent_turns"] = []
     json.dump(payload, sys.stdout, default=str)
     raise SystemExit(0)
@@ -326,6 +360,25 @@ if table_exists("session_observations"):
 else:
     payload["runtime_observation_stats"] = None
     payload["recent_runtime_observations"] = []
+
+if table_exists("session_observations"):
+    payload["client_render_observation_stats"] = one(
+        """
+        SELECT
+            count(*) AS count,
+            min(observed_at) AS first_observed_at,
+            max(observed_at) AS last_observed_at,
+            min(received_at) AS first_received_at,
+            max(received_at) AS last_received_at
+        FROM session_observations
+        WHERE session_id=? AND source_domain='client' AND kind='client_render'
+        """,
+        (session_id,),
+    )
+    payload["recent_client_render_observations"] = client_render_observation_rows(limit)
+else:
+    payload["client_render_observation_stats"] = None
+    payload["recent_client_render_observations"] = []
 
 if table_exists("session_turns"):
     payload["recent_turns"] = rows(
@@ -530,6 +583,21 @@ for row in sqlite_payload.get("recent_runtime_observations", []):
         f"tool={row.get('tool_name') or ''} "
         f"terminal={row.get('terminal_state') or ''}/{row.get('terminal_reason') or ''}/{row.get('terminal_source') or ''} "
         f"received={row.get('received_at')} freshness_ms={row.get('freshness_ms') or ''}"
+    )
+
+header("Client Render Observation Stats")
+compact(
+    sqlite_payload.get("client_render_observation_stats"),
+    ["count", "first_observed_at", "last_observed_at", "first_received_at", "last_received_at"],
+)
+
+header("Recent Client Render Observations")
+for row in sqlite_payload.get("recent_client_render_observations", []):
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    print(
+        f"{row.get('observed_at')} surface={payload.get('surface') or ''} "
+        f"kind={payload.get('render_kind') or 'event'} commit={payload.get('state_commit_seq') or ''} "
+        f"latency_ms={payload.get('latency_ms') or ''} received={row.get('received_at')}"
     )
 
 header("Recent Events")

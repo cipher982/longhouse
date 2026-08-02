@@ -21,6 +21,7 @@ const queryClientMocks = vi.hoisted(() => ({
 }));
 const renderBeaconMocks = vi.hoisted(() => ({
   emitRenderBeacon: vi.fn(),
+  emitStateRenderBeacon: vi.fn(),
   recordServerClockSkew: vi.fn(),
 }));
 
@@ -343,6 +344,26 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+  it("does not reconnect the workspace stream when a refetch advances the fingerprint", () => {
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const firstResponse = agentSessionMocks.useAgentSessionWorkspace.mock.results.at(-1)?.value;
+
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      ...firstResponse,
+      data: {
+        ...firstResponse.data,
+        workspace_revision: {
+          ...firstResponse.data.workspace_revision,
+          fingerprint: "sha256:advanced",
+        },
+      },
+    });
+
+    rerender();
+
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps Console control state polling after the workspace stream connects", () => {
     let handlers: { onConnected?: () => void } | undefined;
     const consoleSession = {
@@ -372,6 +393,7 @@ describe("useSessionWorkspace", () => {
           onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
           onWorkspaceChanged?: (data: {
             session_id: string;
+            change_kind?: string | null;
             latest_event_id: number;
             thread_session_count: number;
             latest_event_emitted_at_ms?: number | null;
@@ -404,6 +426,44 @@ describe("useSessionWorkspace", () => {
     );
     expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
       { queryKey: ["agent-session-turns", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
+  it("keeps runtime wakes off transcript query families", () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
+      { queryKey: ["agent-session-turns", baseSession.id] },
+      { cancelRefetch: false },
+    );
+    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
       { cancelRefetch: false },
     );
   });
@@ -526,7 +586,6 @@ describe("useSessionWorkspace", () => {
   });
 
   it("lets streamed transcript previews render before query refetch work starts", () => {
-    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     let handlers:
       | {
           onWorkspaceChanged?: (data: {
@@ -575,8 +634,6 @@ describe("useSessionWorkspace", () => {
 
     expect(queryClientMocks.setQueriesData).toHaveBeenCalled();
     expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalled();
-    expect(rafSpy).toHaveBeenCalled();
-    rafSpy.mockRestore();
   });
 
   it("does not defer refetch for backend-stale streamed transcript previews", () => {
@@ -738,6 +795,62 @@ describe("useSessionWorkspace", () => {
         serverFanoutAtMs: 1_779_220_000_150,
         clientReceivedAtMs: expect.any(Number),
         pubsubSeq: 7,
+      });
+    });
+  });
+
+  it("emits state telemetry only after the canonical catalog commit is rendered", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            server_fanout_at_ms?: number | null;
+            catalog_commit_seq?: number | null;
+            pubsub_seq?: number;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    seedHookMocks(80);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        server_fanout_at_ms: 1_779_220_000_150,
+        catalog_commit_seq: 42,
+        pubsub_seq: 8,
+      });
+    });
+
+    expect(renderBeaconMocks.emitStateRenderBeacon).not.toHaveBeenCalled();
+
+    seedHookMocks(80, {
+      session_state: {
+        ...makeSessionStateFacts({ activity: "thinking", observedAt: "2026-03-14T12:01:22.000Z" }),
+        commit_seq: 42,
+      },
+    });
+    rerender();
+
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitStateRenderBeacon).toHaveBeenCalledWith({
+        sessionId: baseSession.id,
+        catalogCommitSeq: 42,
+        statePhase: "thinking",
+        stateObservedAtMs: Date.parse("2026-03-14T12:01:22.000Z"),
+        managed: false,
+        serverFanoutAtMs: 1_779_220_000_150,
+        clientReceivedAtMs: expect.any(Number),
+        pubsubSeq: 8,
       });
     });
   });
