@@ -113,9 +113,7 @@ def test_embedding_write_contract_accepts_full_desired_episode_set():
                     "event_index_end": 5,
                     "start_order_time_us": 123,
                     "content_hash": "c" * 64,
-                    "embedding": base64.b64encode(
-                        np.array([1, 0], dtype=np.float32).tobytes()
-                    ).decode("ascii"),
+                    "embedding": base64.b64encode(np.array([1, 0], dtype=np.float32).tobytes()).decode("ascii"),
                 }
             ],
         }
@@ -299,6 +297,83 @@ def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
         )
         # A true replay -- same generation, same text -- still costs nothing.
         assert replay == {"written": 0, "skipped": 1}
+    finally:
+        connection.close()
+
+
+def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    source_epoch = str(uuid4())
+    object_id = hashlib.sha256(b"embedding-source").hexdigest()
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=7,
+            provider="codex",
+            machine_id="machine",
+            project="longhouse",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            opaque_source_id="source.jsonl",
+            source_epoch=source_epoch,
+            records=_records("published semantic source"),
+        )
+        assert (
+            store.publish_generation(
+                session_id=session_id,
+                generation_id=generation_id,
+                owner_id="owner-1",
+                desired_revision=7,
+                object_count=1,
+                object_set_hash=object_set_hash([object_id]),
+                event_count=2,
+                project="longhouse",
+                provider="codex",
+                environment="local",
+                cwd=None,
+                git_repo=None,
+                started_at="2026-01-01T00:00:00+00:00",
+            )["published"]
+            is True
+        )
+
+        first = store.read_embedding_source(
+            session_id=session_id,
+            expected_generation_id=None,
+            expected_revision=None,
+            offset=0,
+            limit=1,
+        )
+        assert first["generation_id"] == generation_id
+        assert first["revision"] == "7"
+        assert first["owner_id"] == "owner-1"
+        assert first["event_count"] == 2
+        assert first["has_more"] is True
+        assert first["records"][0]["content_text"] == "published semantic source"
+
+        second = store.read_embedding_source(
+            session_id=session_id,
+            expected_generation_id=generation_id,
+            expected_revision=7,
+            offset=1,
+            limit=1,
+        )
+        assert second["has_more"] is False
+        assert second["records"][0]["content_text"] == "indexed answer"
+        with pytest.raises(ValueError, match="revision changed"):
+            store.read_embedding_source(
+                session_id=session_id,
+                expected_generation_id=generation_id,
+                expected_revision=8,
+                offset=0,
+                limit=1,
+            )
     finally:
         connection.close()
 
@@ -1233,18 +1308,12 @@ def test_searchd_replays_late_semantic_correction_without_identity_conflict(tmp_
     try:
         index_and_publish(initial_records, 1)
         assert store.search(**_search_params("effort"))["results"]
-        assert connection.execute(
-            "SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)
-        ).fetchone()[0] == 1
+        assert connection.execute("SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)).fetchone()[0] == 1
 
         index_and_publish(corrected_records, 2)
         assert store.search(**_search_params("effort"))["results"] == []
-        assert connection.execute(
-            "SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM events WHERE source_object_id = ?", (object_id,)
-        ).fetchone()[0] == 1
+        assert connection.execute("SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)).fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE source_object_id = ?", (object_id,)).fetchone()[0] == 1
     finally:
         connection.close()
 

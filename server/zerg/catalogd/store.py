@@ -7249,15 +7249,11 @@ class CatalogStore:
                         updated_at=commit_time,
                     )
                 )
-            claimed = (
-                connection.execute(
-                    select(table)
-                    .where(table.c.projector == projector, table.c.claim_token == claim_token)
-                    .order_by(table.c.session_id.asc())
-                )
-                .mappings()
-                .all()
+            claimed_rows = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.claim_token == claim_token)).mappings().all()
             )
+            claimed_by_session = {str(row["session_id"]): row for row in claimed_rows}
+            claimed = [claimed_by_session[str(row["session_id"])] for row in eligible]
             return {
                 "claimed": [_projector_state_dto(row) for row in claimed],
                 "exact_replay": False,

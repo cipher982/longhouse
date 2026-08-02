@@ -81,6 +81,8 @@ class SearchDaemon:
         self._all_read_workers: list[_ReadWorker] = []
         self._worklog_worker: _ReadWorker | None = None
         self._worklog_lock = asyncio.Lock()
+        self._embedding_source_worker: _ReadWorker | None = None
+        self._embedding_source_lock = asyncio.Lock()
         self._server: asyncio.AbstractServer | None = None
         self._published_inode: tuple[int, int] | None = None
 
@@ -126,6 +128,7 @@ class SearchDaemon:
                 self._all_read_workers.append(worker)
                 self._read_workers.put_nowait(worker)
             self._worklog_worker = self._new_read_worker("searchd-worklog")
+            self._embedding_source_worker = self._new_read_worker("searchd-embedding-source")
             self._prepare_socket()
             temporary = self.socket_path.with_name(f".{self.socket_path.name}.tmp.{os.getpid()}")
             if len(os.fsencode(temporary)) >= 104:
@@ -165,6 +168,10 @@ class SearchDaemon:
             self._worklog_worker.executor.shutdown(wait=True, cancel_futures=True)
             self._worklog_worker.connection.close()
             self._worklog_worker = None
+        if self._embedding_source_worker is not None:
+            self._embedding_source_worker.executor.shutdown(wait=True, cancel_futures=True)
+            self._embedding_source_worker.connection.close()
+            self._embedding_source_worker = None
         if self._connection is not None:
             self._connection.close()
             self._connection = None
@@ -223,7 +230,13 @@ class SearchDaemon:
     async def _dispatch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if time.monotonic_ns() > int(request.deadline_mono_ns):
             return self._error(request, "deadline_exceeded", "request deadline exceeded", retryable=True)
-        if self._store is None or self._executor is None or self._read_workers is None or self._worklog_worker is None:
+        if (
+            self._store is None
+            or self._executor is None
+            or self._read_workers is None
+            or self._worklog_worker is None
+            or self._embedding_source_worker is None
+        ):
             return self._error(request, "catalog_unavailable", "search index is not ready", retryable=True)
         try:
             if request.method == "search.ping.v2":
@@ -252,6 +265,15 @@ class SearchDaemon:
                     request,
                     await self._run_interactive_read(
                         lambda store: store.read_episode_embedding_hashes(**params),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                    ),
+                )
+            if request.method == "search.embedding.source.v2":
+                params = _embedding_source_params(request.params)
+                return self._result(
+                    request,
+                    await self._run_embedding_source_read(
+                        lambda store: store.read_embedding_source(**params),
                         deadline_mono_ns=int(request.deadline_mono_ns),
                     ),
                 )
@@ -459,6 +481,25 @@ class SearchDaemon:
             )
         finally:
             self._worklog_lock.release()
+
+    async def _run_embedding_source_read(self, function, *, deadline_mono_ns: int) -> dict[str, object]:
+        """Run projector bulk reads outside the latency-sensitive user pool."""
+
+        assert self._embedding_source_worker is not None
+        deadline = deadline_mono_ns / 1_000_000_000
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self._embedding_source_lock.acquire()
+        except TimeoutError as exc:
+            raise _ReadDeadlineExceeded from exc
+        worker = self._embedding_source_worker
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                worker.executor,
+                lambda: self._execute_read(worker.connection, lambda: function(worker.store), deadline_mono_ns),
+            )
+        finally:
+            self._embedding_source_lock.release()
 
     @staticmethod
     def _execute_read(connection: sqlite3.Connection, function, deadline_mono_ns: int):
@@ -763,6 +804,29 @@ def _embedding_write_params(value: dict) -> dict:
 def _embedding_hashes_params(value: dict) -> dict:
     _exact_keys(value, {"session_id", "model", "dims"})
     return {"session_id": _uuid(value["session_id"], "session_id"), "model": _text(value["model"], "model", 255), "dims": value["dims"]}
+
+
+def _embedding_source_params(value: dict) -> dict:
+    _exact_keys(value, {"session_id", "expected_generation_id", "expected_revision", "offset", "limit"})
+    expected_generation_id = value["expected_generation_id"]
+    expected_revision = value["expected_revision"]
+    offset = value["offset"]
+    limit = value["limit"]
+    if expected_generation_id is not None:
+        expected_generation_id = _uuid(expected_generation_id, "expected_generation_id")
+    if expected_revision is not None:
+        expected_revision = _revision(expected_revision, "expected_revision")
+    if type(offset) is not int or not 0 <= offset < 1_000_000_000:
+        raise ValueError("embedding source offset is invalid")
+    if type(limit) is not int or not 1 <= limit <= 1_000:
+        raise ValueError("embedding source limit is invalid")
+    return {
+        "session_id": _uuid(value["session_id"], "session_id"),
+        "expected_generation_id": expected_generation_id,
+        "expected_revision": expected_revision,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 def _embedding_query_params(value: dict) -> dict:

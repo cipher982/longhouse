@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from datetime import UTC
 from datetime import datetime
 from types import SimpleNamespace
-from uuid import UUID
 from uuid import uuid4
 
 import numpy as np
@@ -14,8 +12,6 @@ import pytest
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
 from zerg.services.embeddings_v2_projector import _run_forever
 from zerg.services.local_embedder import LocalEmbedderUnavailable
-from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
-from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 
 class FakeClient:
@@ -24,16 +20,10 @@ class FakeClient:
         self.calls = []
 
     async def call(self, method, params=None, **_kwargs):
-        self.calls.append((method, dict(params or {})))
-        return self.responses[method]
-
-
-class FakeWorkers:
-    def __init__(self, decoded):
-        self.decoded = decoded
-
-    async def read(self, *_args, **_kwargs):
-        return self.decoded
+        parsed = dict(params or {})
+        self.calls.append((method, parsed))
+        response = self.responses[method]
+        return response(parsed) if callable(response) else response
 
 
 def _local_embedder(monkeypatch, function):
@@ -41,6 +31,53 @@ def _local_embedder(monkeypatch, function):
         "zerg.services.embeddings_v2_projector.get_local_embedder",
         lambda: SimpleNamespace(embed_documents=function),
     )
+
+
+def _source(generation_id, records, *, revision="7", provider="codex"):
+    source_epoch = str(uuid4())
+    return {
+        "found": True,
+        "generation_id": generation_id,
+        "revision": revision,
+        "owner_id": "1",
+        "provider": provider,
+        "event_count": len(records),
+        "records": [
+            {
+                "timestamp": record.order_time_us,
+                "machine_id": "machine",
+                "provider": provider,
+                "opaque_source_id": "source",
+                "source_epoch": source_epoch,
+                "source_position": record.source_position,
+                "event_subordinal": record.event_subordinal,
+                "role": record.role,
+                "content_text": record.content_text,
+                "interaction_kind": getattr(
+                    record,
+                    "interaction_kind",
+                    "durable_user_message" if record.role == "user" else "provider_system",
+                ),
+                "tool_name": record.tool_name,
+                "tool_output_text": record.tool_output_text,
+            }
+            for record in records
+        ],
+        "has_more": False,
+    }
+
+
+def _snapshot(generation_id, *, revision="7"):
+    return {
+        "found": True,
+        "deleted": False,
+        "retired": False,
+        "snapshot_revision": revision,
+        "generation_id": generation_id,
+        "session": {"owner_id": "1"},
+        "objects": [],
+        "has_more": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -64,13 +101,13 @@ async def test_embedding_projector_workers_refill_independently():
 
 
 @pytest.mark.asyncio
-async def test_embedding_projector_quarantines_corrupt_render_object(monkeypatch):
+async def test_embedding_projector_retries_invalid_source_contract(monkeypatch):
     session_id = str(uuid4())
     catalog = FakeClient({"projector.state.fail.v2": {"changed": True}})
-    projector = EmbeddingsV2Projector(catalog=catalog, search=SimpleNamespace(), render_workers=SimpleNamespace())
+    projector = EmbeddingsV2Projector(catalog=catalog, search=SimpleNamespace())
 
     async def project(**_kwargs):
-        raise RenderObjectCorruptError("unsupported render shape")
+        raise ValueError("unsupported source shape")
 
     monkeypatch.setattr(projector, "_project", project)
     await projector._run_claim(
@@ -79,8 +116,8 @@ async def test_embedding_projector_quarantines_corrupt_render_object(monkeypatch
     )
 
     failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
-    assert failed["error_code"] == "render_object_permanent"
-    assert failed["retry_at"] == failed["failed_at"]
+    assert failed["error_code"] == "embedding_projection_failed"
+    assert failed["retry_at"] > failed["failed_at"]
 
 
 @pytest.mark.asyncio
@@ -93,7 +130,7 @@ async def test_embeddings_projector_overlaps_claimed_sessions(monkeypatch):
         }
     )
     search = FakeClient({"search.ping.v2": {"store_id": store_id, "schema_generation": "searchd-test"}})
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=SimpleNamespace())
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search)
     started: set[str] = set()
     both_started = asyncio.Event()
 
@@ -117,9 +154,7 @@ async def test_embedding_projector_deletes_retired_session(monkeypatch):
     catalog = FakeClient(
         {
             "projector.store.bind.v2": {},
-            "projector.state.claim.v2": {
-                "claimed": [{"session_id": session_id, "claimed_revision": "9", "failure_count": 0}]
-            },
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "9", "failure_count": 0}]},
             "storage.session.render_objects.list.v2": {"found": True, "deleted": False, "retired": True},
             "projector.state.complete.v2": {},
         }
@@ -127,11 +162,12 @@ async def test_embedding_projector_deletes_retired_session(monkeypatch):
     search = FakeClient(
         {
             "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": {"found": False},
             "search.session.delete.v2": {"deleted": True},
         }
     )
     monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: SimpleNamespace(model="test", dims=2))
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=SimpleNamespace(), worker_id="test")
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
 
     assert await projector.run_once(now=datetime.now(UTC)) == 1
     assert any(method == "search.session.delete.v2" for method, _ in search.calls)
@@ -141,7 +177,6 @@ async def test_embedding_projector_deletes_retired_session(monkeypatch):
 @pytest.mark.asyncio
 async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypatch):
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
-    object_id = hashlib.sha256(b"render").hexdigest()
     records = (
         SimpleNamespace(
             role="user",
@@ -174,31 +209,11 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
             event_subordinal=0,
         ),
     )
-    decoded = SimpleNamespace(
-        object_hash=object_id,
-        spec=SimpleNamespace(
-            session_id=UUID(session_id),
-            render_generation=UUID(generation_id),
-            records=records,
-            machine_id="machine",
-            provider="claude",
-            opaque_source_id="source",
-            source_epoch=uuid4(),
-        ),
-    )
     catalog = FakeClient(
         {
             "projector.store.bind.v2": {},
-            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]},
-            "storage.session.render_objects.list.v2": {
-                "found": True,
-                "deleted": False,
-                "snapshot_revision": "1",
-                "generation_id": generation_id,
-                "session": {"owner_id": "1"},
-                "objects": [{"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"}],
-                "has_more": False,
-            },
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "7", "failure_count": 0}]},
+            "storage.session.render_objects.list.v2": _snapshot(generation_id),
             "projector.state.complete.v2": {},
             "projector.state.fail.v2": {},
         }
@@ -206,6 +221,7 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     search = FakeClient(
         {
             "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": _source(generation_id, records, provider="claude"),
             "search.embedding.hashes.v2": {
                 "hashes": {},
                 "published_generation_id": generation_id,
@@ -224,7 +240,7 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
         return np.array([[1, 0] for _ in texts], dtype=np.float32)
 
     _local_embedder(monkeypatch, vectors)
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
     assert await projector.run_once(now=datetime.now(UTC)) == 1
     write = next(params for method, params in search.calls if method == "search.embedding.write.v2")
     assert write["episodes"][0]["episode_ordinal"] == 0
@@ -235,22 +251,7 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     assert "<command-name>/effort</command-name>" not in seen_texts[0]
     assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
 
-    decoded.spec.source_envelope_id = "a" * 64
-
-    async def pending_recovery(**_kwargs):
-        raise StorageV2SemanticRecoveryError("raw companion unavailable")
-
-    monkeypatch.setattr("zerg.services.embeddings_v2_projector.recover_render_interaction_kinds", pending_recovery)
-    missing_raw_projector = EmbeddingsV2Projector(
-        catalog=catalog,
-        search=search,
-        render_workers=FakeWorkers(decoded),
-        raw_workers=FakeWorkers(decoded),
-        worker_id="missing-raw",
-    )
-    assert await missing_raw_projector.run_once(now=datetime.now(UTC)) == 1
-    failed = [params for method, params in catalog.calls if method == "projector.state.fail.v2"][-1]
-    assert failed["error_code"] == "semantic_recovery_pending"
+    assert sum(method == "storage.session.render_objects.list.v2" for method, _ in catalog.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -266,7 +267,6 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
     second batch's not-yet-written chunk.
     """
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
-    object_id = hashlib.sha256(b"render").hexdigest()
     records = tuple(
         SimpleNamespace(
             role="user" if i % 2 == 0 else "assistant",
@@ -279,31 +279,11 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
         )
         for i in range(4)
     )
-    decoded = SimpleNamespace(
-        object_hash=object_id,
-        spec=SimpleNamespace(
-            session_id=UUID(session_id),
-            render_generation=UUID(generation_id),
-            records=records,
-            machine_id="machine",
-            provider="codex",
-            opaque_source_id="source",
-            source_epoch=uuid4(),
-        ),
-    )
     catalog = FakeClient(
         {
             "projector.store.bind.v2": {},
-            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]},
-            "storage.session.render_objects.list.v2": {
-                "found": True,
-                "deleted": False,
-                "snapshot_revision": "1",
-                "generation_id": generation_id,
-                "session": {"owner_id": "1"},
-                "objects": [{"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"}],
-                "has_more": False,
-            },
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "7", "failure_count": 0}]},
+            "storage.session.render_objects.list.v2": _snapshot(generation_id),
             "projector.state.complete.v2": {},
             "projector.state.fail.v2": {},
         }
@@ -311,6 +291,7 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
     search = FakeClient(
         {
             "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": _source(generation_id, records),
             "search.embedding.hashes.v2": {
                 "hashes": {},
                 "published_generation_id": generation_id,
@@ -327,7 +308,7 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
         return np.array([[1, 0] for _ in texts], dtype=np.float32)
 
     _local_embedder(monkeypatch, vectors)
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
     assert await projector.run_once(now=datetime.now(UTC)) == 1
 
     writes = [params for method, params in search.calls if method == "search.embedding.write.v2"]
@@ -338,9 +319,103 @@ async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypat
     assert {write["revision"] for write in writes} == {"7"}
 
 
+@pytest.mark.asyncio
+async def test_embedding_projector_rejects_search_revision_behind_claim(monkeypatch):
+    session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
+    records = (
+        SimpleNamespace(
+            role="user",
+            content_text="new revision",
+            tool_name=None,
+            tool_output_text=None,
+            order_time_us=1,
+            source_position=1,
+            event_subordinal=0,
+        ),
+    )
+    catalog = FakeClient(
+        {
+            "projector.store.bind.v2": {},
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "9", "failure_count": 0}]},
+            "storage.session.render_objects.list.v2": _snapshot(generation_id, revision="9"),
+            "projector.state.fail.v2": {},
+        }
+    )
+    search = FakeClient(
+        {
+            "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": _source(generation_id, records, revision="7"),
+        }
+    )
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: SimpleNamespace(model="test", dims=2))
+
+    assert await EmbeddingsV2Projector(catalog=catalog, search=search).run_once() == 1
+    failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
+    assert failed["error_code"] == "embedding_projection_failed"
+    assert not any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
+    assert not any(method == "search.embedding.write.v2" for method, _ in search.calls)
+
+
+@pytest.mark.asyncio
+async def test_embedding_projector_pages_one_fenced_source(monkeypatch):
+    session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
+    records = tuple(
+        SimpleNamespace(
+            role=role,
+            content_text=text,
+            tool_name=None,
+            tool_output_text=None,
+            order_time_us=index,
+            source_position=index,
+            event_subordinal=0,
+        )
+        for index, (role, text) in enumerate((("user", "question"), ("assistant", "answer")))
+    )
+    full_source = _source(generation_id, records)
+
+    def page(params):
+        offset = params["offset"]
+        return {
+            **full_source,
+            "records": full_source["records"][offset : offset + 1],
+            "has_more": offset + 1 < len(records),
+        }
+
+    catalog = FakeClient(
+        {
+            "projector.store.bind.v2": {},
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "7", "failure_count": 0}]},
+            "storage.session.render_objects.list.v2": _snapshot(generation_id),
+            "projector.state.complete.v2": {},
+            "projector.state.fail.v2": {},
+        }
+    )
+    search = FakeClient(
+        {
+            "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": page,
+            "search.embedding.hashes.v2": {
+                "hashes": {},
+                "published_generation_id": generation_id,
+                "published_revision": "7",
+            },
+            "search.embedding.write.v2": {"written": 1, "skipped": 0},
+        }
+    )
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: SimpleNamespace(model="test", dims=2))
+    _local_embedder(monkeypatch, lambda texts: np.array([[1, 0] for _ in texts], dtype=np.float32))
+
+    assert await EmbeddingsV2Projector(catalog=catalog, search=search).run_once() == 1
+    pages = [params for method, params in search.calls if method == "search.embedding.source.v2"]
+    assert [params["offset"] for params in pages] == [0, 1]
+    assert pages[0]["expected_generation_id"] == generation_id
+    assert pages[0]["expected_revision"] == "7"
+    assert pages[1]["expected_generation_id"] == generation_id
+    assert pages[1]["expected_revision"] == "7"
+
+
 def _minimal_claim_setup(session_id, generation_id, store_id):
     """Enough fake RPC responses to reach the embedding-generation call, no further."""
-    object_id = hashlib.sha256(b"render").hexdigest()
     records = (
         SimpleNamespace(
             role="user",
@@ -352,31 +427,11 @@ def _minimal_claim_setup(session_id, generation_id, store_id):
             event_subordinal=0,
         ),
     )
-    decoded = SimpleNamespace(
-        object_hash=object_id,
-        spec=SimpleNamespace(
-            session_id=UUID(session_id),
-            render_generation=UUID(generation_id),
-            records=records,
-            machine_id="machine",
-            provider="codex",
-            opaque_source_id="source",
-            source_epoch=uuid4(),
-        ),
-    )
     catalog = FakeClient(
         {
             "projector.store.bind.v2": {},
             "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]},
-            "storage.session.render_objects.list.v2": {
-                "found": True,
-                "deleted": False,
-                "snapshot_revision": "1",
-                "generation_id": generation_id,
-                "session": {"owner_id": "1"},
-                "objects": [{"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"}],
-                "has_more": False,
-            },
+            "storage.session.render_objects.list.v2": _snapshot(generation_id, revision="1"),
             "projector.state.complete.v2": {},
             "projector.state.fail.v2": {},
         }
@@ -384,6 +439,7 @@ def _minimal_claim_setup(session_id, generation_id, store_id):
     search = FakeClient(
         {
             "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": _source(generation_id, records, revision="1"),
             "search.embedding.hashes.v2": {
                 "hashes": {},
                 "published_generation_id": generation_id,
@@ -391,14 +447,14 @@ def _minimal_claim_setup(session_id, generation_id, store_id):
             },
         }
     )
-    return catalog, search, decoded
+    return catalog, search
 
 
 @pytest.mark.asyncio
 async def test_permanent_config_error_is_marked_for_quarantine_and_error_log(monkeypatch, caplog):
     """A deterministic config error is handed to catalog quarantine, not a retry timer."""
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
-    catalog, search, decoded = _minimal_claim_setup(session_id, generation_id, store_id)
+    catalog, search = _minimal_claim_setup(session_id, generation_id, store_id)
     config = SimpleNamespace(model="test-model", dims=2)
     monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
@@ -406,7 +462,7 @@ async def test_permanent_config_error_is_marked_for_quarantine_and_error_log(mon
         raise LocalEmbedderUnavailable("dims mismatch")
 
     _local_embedder(monkeypatch, broken)
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
     import logging
 
     with caplog.at_level(logging.ERROR):
@@ -427,7 +483,7 @@ async def test_transient_error_keeps_fast_backoff(monkeypatch):
     delay -- only a local model contract error should ever get the long retry.
     """
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
-    catalog, search, decoded = _minimal_claim_setup(session_id, generation_id, store_id)
+    catalog, search = _minimal_claim_setup(session_id, generation_id, store_id)
     config = SimpleNamespace(model="test-model", dims=2)
     monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
@@ -435,7 +491,7 @@ async def test_transient_error_keeps_fast_backoff(monkeypatch):
         raise TimeoutError("worker timed out")
 
     _local_embedder(monkeypatch, flaky)
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
     await projector.run_once(now=datetime.now(UTC))
 
     fail_params = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
@@ -473,11 +529,16 @@ async def test_embeddings_projector_completes_cleanly_for_never_rendered_session
             "projector.state.fail.v2": {},
         }
     )
-    search = FakeClient({"search.ping.v2": {"store_id": store_id, "schema_generation": "test"}})
+    search = FakeClient(
+        {
+            "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.source.v2": {"found": False},
+        }
+    )
     config = SimpleNamespace(model="test-model", dims=2)
     monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: config)
 
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(None), worker_id="test")
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
     assert await projector.run_once(now=datetime.now(UTC)) == 1
 
     assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)

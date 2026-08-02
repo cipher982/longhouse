@@ -16,22 +16,14 @@ from zerg.catalogd.client import CatalogClient
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.local_embedder import get_local_embedder
-from zerg.services.raw_object_workers import RawObjectWorkerPool
-from zerg.services.raw_object_workers import get_raw_object_worker_pool
-from zerg.services.render_object_workers import RenderObjectWorkerPool
-from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
 from zerg.services.session_processing.embeddings import EMBEDDING_MAX_CHUNKS_PER_PASS
 from zerg.services.session_processing.embeddings import embedding_to_bytes
 from zerg.services.session_processing.embeddings import iter_turn_chunks
-from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
-from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
-from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
-from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)
 PROJECTOR = EMBEDDING_PROJECTOR_ID
-PAGE_SIZE = 100
+SOURCE_PAGE_SIZE = 1_000
 PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "4")))
 
 
@@ -45,18 +37,12 @@ class EmbeddingsV2Projector:
         *,
         catalog: CatalogClient,
         search: CatalogClient,
-        render_workers: RenderObjectWorkerPool,
-        raw_workers: RawObjectWorkerPool | None = None,
         worker_id: str | None = None,
     ) -> None:
         self.catalog = catalog
         self.search = search
-        self.render_workers = render_workers
-        self.raw_workers = raw_workers
         self.worker_id = worker_id or f"embeddings-v2:{os.getpid()}"
         self._bound_store_id: str | None = None
-        self._raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
-        self._sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:
         observed_at = now or datetime.now(UTC)
@@ -131,34 +117,19 @@ class EmbeddingsV2Projector:
         except Exception as exc:
             # A local model/output contract failure will produce the identical
             # result on every retry. Every other exception here
-            # (including this file's own ValueErrors for catalog-side
-            # conditions like revision drift or a corrupt render page) is
+            # (including this file's own ValueErrors for generation or
+            # revision drift) is
             # genuinely transient and should keep retrying quickly, so this
             # must check the specific subclass, not ValueError broadly.
             is_permanent = isinstance(exc, LocalEmbedderUnavailable)
-            is_render_permanent = isinstance(exc, RenderObjectCorruptError)
-            is_semantic_recovery_permanent = isinstance(exc, StorageV2SemanticRecoveryPermanentError)
-            is_semantic_recovery_pending = isinstance(exc, StorageV2SemanticRecoveryError) and not is_semantic_recovery_permanent
             is_publication_pending = isinstance(exc, EmbeddingPublicationPending)
             if isinstance(session_id, str):
                 failures = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
                 failed_at = datetime.now(UTC)
-                retry_delay = (
-                    timedelta(seconds=max(60, min(300, 5 * 2 ** min(failures, 6))))
-                    if is_semantic_recovery_pending
-                    else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
-                    if not (is_permanent or is_render_permanent or is_semantic_recovery_permanent)
-                    else timedelta(0)
-                )
+                retry_delay = timedelta(seconds=min(300, 5 * 2 ** min(failures, 6))) if not is_permanent else timedelta(0)
                 error_code = (
                     "embedding_config_permanent"
                     if is_permanent
-                    else "render_object_permanent"
-                    if is_render_permanent
-                    else "semantic_recovery_permanent"
-                    if is_semantic_recovery_permanent
-                    else "semantic_recovery_pending"
-                    if is_semantic_recovery_pending
                     else "search_publication_pending"
                     if is_publication_pending
                     else "embedding_projection_failed"
@@ -172,11 +143,7 @@ class EmbeddingsV2Projector:
                         "error_code": error_code,
                         "error_message": str(exc)[:2048] or type(exc).__name__,
                         "failed_at": failed_at.isoformat(),
-                        "retry_at": (
-                            failed_at.isoformat()
-                            if is_permanent or is_render_permanent or is_semantic_recovery_permanent
-                            else (failed_at + retry_delay).isoformat()
-                        ),
+                        "retry_at": (failed_at.isoformat() if is_permanent else (failed_at + retry_delay).isoformat()),
                     },
                 )
             (logger.error if is_permanent else logger.warning)("Embedding projection failed session=%s error=%s", session_id, exc)
@@ -185,136 +152,97 @@ class EmbeddingsV2Projector:
         from zerg.models_config import get_embedding_space_config
 
         config = get_embedding_space_config()
-        self._raw_manifest_cache.pop(session_id, None)
-        self._sequence_context_cache = {key: value for key, value in self._sequence_context_cache.items() if key[0] != session_id}
-        generation_id: str | None = None
-        after_object_id: str | None = None
+        snapshot = await self.catalog.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": session_id,
+                "generation_id": None,
+                "snapshot_revision": claimed_revision,
+                "after_object_id": None,
+                "limit": 1,
+            },
+        )
+        if snapshot.get("deleted") is True or snapshot.get("retired") is True:
+            await self.search.call("search.session.delete.v2", {"session_id": session_id})
+            return True
+        if snapshot.get("found") is not True or str(snapshot.get("snapshot_revision")) != str(claimed_revision):
+            raise ValueError("catalog render snapshot is unavailable or drifted")
+        if snapshot.get("generation_id") is None:
+            return True
+        generation_id = _uuid(snapshot.get("generation_id"))
+        published_revision = claimed_revision
+        snapshot_session = snapshot.get("session")
+        if not isinstance(snapshot_session, dict) or not isinstance(snapshot_session.get("owner_id"), str):
+            raise ValueError("catalog omitted embedding session owner")
+        expected_owner_id = snapshot_session["owner_id"]
         records: list[dict[str, object]] = []
         owner_id: str | None = None
+        provider: str | None = None
+        expected_events: int | None = None
+        offset = 0
         while True:
-            page = await self.catalog.call(
-                "storage.session.render_objects.list.v2",
+            page = await self.search.call(
+                "search.embedding.source.v2",
                 {
                     "session_id": session_id,
-                    "generation_id": generation_id,
-                    "snapshot_revision": claimed_revision,
-                    "after_object_id": after_object_id,
-                    "limit": PAGE_SIZE,
+                    "expected_generation_id": generation_id,
+                    "expected_revision": str(published_revision) if published_revision is not None else None,
+                    "offset": offset,
+                    "limit": SOURCE_PAGE_SIZE,
                 },
             )
-            if page.get("deleted") is True or page.get("retired") is True:
-                await self.search.call("search.session.delete.v2", {"session_id": session_id})
-                return True
-            if page.get("found") is not True or str(page.get("snapshot_revision")) != str(claimed_revision):
-                raise ValueError("catalog render snapshot is unavailable or drifted")
-            if page.get("generation_id") is None:
-                # Session exists but has never been rendered (render_state
-                # 'pending', no current_render_generation) -- seen on
-                # zero-message CI/benchmark artifacts. There is nothing to
-                # embed, and this is permanent for this revision, not a
-                # transient catalog hiccup: calling _uuid(None) here raised
-                # "badly formed hexadecimal UUID string" and got retried
-                # forever at real cost, since it can never resolve on retry.
-                return True
+            if page.get("found") is not True:
+                raise EmbeddingPublicationPending("searchd has not published this render generation")
             page_generation = _uuid(page.get("generation_id"))
+            page_revision = _revision(page.get("revision"))
+            page_owner = page.get("owner_id")
+            page_provider = page.get("provider")
+            page_event_count = page.get("event_count")
+            page_records = page.get("records")
+            if (
+                not isinstance(page_owner, str)
+                or not page_owner
+                or not isinstance(page_provider, str)
+                or not page_provider
+                or type(page_event_count) is not int
+                or page_event_count < 0
+                or not isinstance(page_records, list)
+            ):
+                raise ValueError("searchd returned invalid embedding source metadata")
             if owner_id is None:
-                session = page.get("session")
-                if not isinstance(session, dict) or session.get("owner_id") is None:
-                    raise ValueError("catalog omitted embedding session owner")
-                owner_id = str(session["owner_id"])
-            generation_id = generation_id or page_generation
-            if page_generation != generation_id:
-                raise ValueError("render generation drifted")
-            objects = page.get("objects")
-            if not isinstance(objects, list):
-                raise ValueError("catalog returned invalid render objects")
-            for manifest in objects:
-                if not isinstance(manifest, dict):
-                    raise ValueError("catalog returned invalid render manifest")
-                object_id = _hash(manifest.get("object_id"))
-                object_path = manifest.get("object_path")
-                if not isinstance(object_path, str) or not object_path:
-                    raise ValueError("render object path is invalid")
-                decoded = await self.render_workers.read(object_path, _hash(manifest.get("object_hash")), lane="background")
-                if (
-                    str(decoded.spec.session_id) != session_id
-                    or str(decoded.spec.render_generation) != generation_id
-                    or decoded.object_hash != object_id
-                ):
-                    raise ValueError("render object identity does not match manifest")
-                session = page.get("session")
-                if not isinstance(session, dict) or session.get("owner_id") is None:
-                    raise ValueError("catalog omitted embedding session owner")
-                recovered_kinds = {}
-                source_envelope_id = getattr(decoded.spec, "source_envelope_id", None)
-                if source_envelope_id:
-                    recovered_kinds = await recover_render_interaction_kinds(
-                        catalog=self.catalog,
-                        raw_workers=self.raw_workers,
-                        session_id=session_id,
-                        owner_id=str(session["owner_id"]),
-                        provider=decoded.spec.provider,
-                        records=decoded.spec.records,
-                        source_envelope_id=source_envelope_id,
-                        manifest_cache=self._raw_manifest_cache,
-                        sequence_context_cache=self._sequence_context_cache,
-                        reclassify_sequence_controls=decoded.spec.provider.strip().lower() == "claude",
-                    )
-                records.extend(
-                    {
-                        "role": record.role,
-                        "content_text": record.content_text,
-                        "interaction_kind": (
-                            recovered_kinds[ordinal] if ordinal in recovered_kinds else getattr(record, "interaction_kind", None)
-                        ),
-                        "tool_name": record.tool_name,
-                        "tool_output_text": record.tool_output_text,
-                        "timestamp": record.order_time_us,
-                        "machine_id": decoded.spec.machine_id,
-                        "provider": decoded.spec.provider,
-                        "opaque_source_id": decoded.spec.opaque_source_id,
-                        "source_epoch": str(decoded.spec.source_epoch),
-                        "source_position": record.source_position,
-                        "event_subordinal": record.event_subordinal,
-                    }
-                    for ordinal, record in enumerate(decoded.spec.records)
-                )
-            if page.get("has_more") is not True:
+                owner_id = page_owner
+                provider = page_provider
+                expected_events = page_event_count
+            if (
+                page_generation != generation_id
+                or page_revision != published_revision
+                or page_owner != expected_owner_id
+                or (owner_id is not None and page_owner != owner_id)
+                or page_provider != provider
+                or page_event_count != expected_events
+            ):
+                raise ValueError("searchd embedding source identity drifted")
+            records.extend(_embedding_source_records(page_records))
+            if type(page.get("has_more")) is not bool:
+                raise ValueError("searchd returned invalid embedding source pagination")
+            if page["has_more"] is not True:
                 break
-            if not objects:
-                raise ValueError("catalog returned empty truncated page")
-            after_object_id = _hash(objects[-1].get("object_id"))
-        if generation_id is None:
-            return True
-        # The shared chunker sorts datetime timestamps only. Order records here and
-        # assign monotonic ids so its stable fallback preserves catalog ordering.
-        records.sort(
-            key=lambda record: (
-                int(record["timestamp"]),
-                str(record["machine_id"]),
-                str(record["provider"]),
-                str(record["opaque_source_id"]),
-                str(record["source_epoch"]),
-                int(record["source_position"]),
-                int(record["event_subordinal"]),
-            )
-        )
+            if not page_records:
+                raise ValueError("searchd returned an empty truncated embedding source page")
+            offset += len(page_records)
+        if len(records) != expected_events:
+            raise ValueError("searchd embedding source event count is inconsistent")
+        assert owner_id is not None and provider is not None
         for index, record in enumerate(records):
             record["id"] = index
-        chunks = list(iter_turn_chunks(records, provider=str(records[0]["provider"]) if records else None))
+        chunks = list(iter_turn_chunks(records, provider=provider))
         hashes_result = await self.search.call(
             "search.embedding.hashes.v2", {"session_id": session_id, "model": config.model, "dims": config.dims}
         )
         published_generation = hashes_result.get("published_generation_id")
         published_revision_value = hashes_result.get("published_revision")
-        if published_generation != generation_id or not isinstance(published_revision_value, str):
+        if published_generation != generation_id or published_revision_value != str(published_revision):
             raise EmbeddingPublicationPending("searchd has not published this render generation")
-        try:
-            published_revision = int(published_revision_value)
-        except ValueError as exc:
-            raise ValueError("searchd returned an invalid published revision") from exc
-        if published_revision < 0:
-            raise ValueError("searchd returned an invalid published revision")
         hashes = {int(key): value for key, value in (hashes_result.get("hashes") or {}).items() if isinstance(value, str)}
         all_missing = [chunk for chunk in chunks if hashes.get(chunk.chunk_index) != chunk.content_hash]
         missing = all_missing[: max(1, EMBEDDING_MAX_CHUNKS_PER_PASS)]
@@ -395,6 +323,43 @@ def _record_order_time(records: list[dict], record_index: object) -> int | None:
     return int(records[record_index]["timestamp"])
 
 
+def _embedding_source_records(value: list[object]) -> list[dict[str, object]]:
+    expected = {
+        "timestamp",
+        "machine_id",
+        "provider",
+        "opaque_source_id",
+        "source_epoch",
+        "source_position",
+        "event_subordinal",
+        "role",
+        "content_text",
+        "interaction_kind",
+        "tool_name",
+        "tool_output_text",
+    }
+    parsed: list[dict[str, object]] = []
+    for record in value:
+        if not isinstance(record, dict) or set(record) != expected:
+            raise ValueError("searchd embedding source record fields are invalid")
+        if (
+            type(record["timestamp"]) is not int
+            or type(record["source_position"]) is not int
+            or type(record["event_subordinal"]) is not int
+            or not all(
+                isinstance(record[field], str) and bool(record[field])
+                for field in ("machine_id", "provider", "opaque_source_id", "source_epoch", "role", "interaction_kind")
+            )
+        ):
+            raise ValueError("searchd embedding source record identity is invalid")
+        _uuid(record["source_epoch"])
+        for field in ("content_text", "tool_name", "tool_output_text"):
+            if record[field] is not None and not isinstance(record[field], str):
+                raise ValueError("searchd embedding source record text is invalid")
+        parsed.append(dict(record))
+    return parsed
+
+
 def _uuid(value: object) -> str:
     parsed = UUID(str(value))
     if str(parsed) != value:
@@ -402,10 +367,10 @@ def _uuid(value: object) -> str:
     return str(parsed)
 
 
-def _hash(value: object) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
-        raise ValueError("hash is invalid")
-    return value
+def _revision(value: object) -> int:
+    if not isinstance(value, str) or not value.isdecimal() or int(value) >= 1 << 63:
+        raise ValueError("revision is invalid")
+    return int(value)
 
 
 _task: asyncio.Task[None] | None = None
@@ -442,8 +407,6 @@ def start_embeddings_v2_projector() -> bool:
             EmbeddingsV2Projector(
                 catalog=catalog,
                 search=search,
-                render_workers=get_render_object_worker_pool(),
-                raw_workers=get_raw_object_worker_pool(),
             )
         ),
         name="embeddings-v2-projector",

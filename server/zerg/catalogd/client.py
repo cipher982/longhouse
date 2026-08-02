@@ -123,6 +123,7 @@ _SAFE_RETRY_METHODS = {
     "search.ping.v2",
     "search.index.object.v2",
     "search.index.publish.v2",
+    "search.embedding.source.v2",
     "search.query.v2",
     "worklog.day.v2",
     "worklog.snapshot.release.v2",

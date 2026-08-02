@@ -31,6 +31,7 @@ _WORKLOG_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _WORKLOG_SNAPSHOT_MAX_PAGES = 200
 _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
+_EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
@@ -905,6 +906,95 @@ class SearchStore:
             "hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows},
             "published_generation_id": str(published["generation_id"]) if published is not None else None,
             "published_revision": str(published["desired_revision"]) if published is not None else None,
+        }
+
+    def read_embedding_source(
+        self,
+        *,
+        session_id: str,
+        expected_generation_id: str | None,
+        expected_revision: int | None,
+        offset: int,
+        limit: int,
+    ) -> dict[str, object]:
+        """Read one fenced page of the semantic projection used for embedding."""
+
+        published = self.connection.execute(
+            "SELECT generation_id, desired_revision, owner_id, provider, event_count FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if published is None:
+            return {"found": False}
+        generation_id = str(published["generation_id"])
+        revision = int(published["desired_revision"])
+        if expected_generation_id is not None and expected_generation_id != generation_id:
+            raise ValueError("embedding source generation changed during pagination")
+        if expected_revision is not None and expected_revision != revision:
+            raise ValueError("embedding source revision changed during pagination")
+        rows = self.connection.execute(
+            """
+            SELECT e.order_time_us, e.machine_id, e.provider,
+                   e.opaque_source_id, e.source_epoch, e.source_position,
+                   e.event_subordinal, e.record_ordinal, e.role,
+                   e.content_text, e.interaction_kind, e.tool_name,
+                   e.tool_output_text
+              FROM session_index s
+              JOIN projection_membership m
+                ON m.session_id = s.session_id
+               AND m.generation_id = s.generation_id
+               AND m.desired_revision = s.desired_revision
+              JOIN events e
+                ON e.session_id = m.session_id
+               AND e.generation_id = m.generation_id
+               AND e.source_object_id = m.object_id
+             WHERE s.session_id = ?
+             ORDER BY e.order_time_us, e.machine_id, e.provider,
+                      e.opaque_source_id, e.source_epoch, e.source_position,
+                      e.event_subordinal, e.record_ordinal
+             LIMIT ? OFFSET ?
+            """,
+            (session_id, limit, offset),
+        ).fetchall()
+        total = int(published["event_count"])
+        if offset + len(rows) < total and len(rows) < limit:
+            raise ValueError("published embedding source event count is inconsistent")
+        records: list[dict[str, object]] = []
+        payload_bytes = 0
+        for row in rows:
+            record: dict[str, object] = {
+                "timestamp": int(row["order_time_us"]),
+                "machine_id": str(row["machine_id"]),
+                "provider": str(row["provider"]),
+                "opaque_source_id": str(row["opaque_source_id"]),
+                "source_epoch": str(row["source_epoch"]),
+                "source_position": int(row["source_position"]),
+                "event_subordinal": int(row["event_subordinal"]),
+                "role": str(row["role"]),
+                "content_text": row["content_text"],
+                "interaction_kind": str(row["interaction_kind"]),
+                "tool_name": row["tool_name"],
+                "tool_output_text": row["tool_output_text"],
+            }
+            # The protocol limit applies after JSON escaping. Measuring raw
+            # UTF-8 undercounts quotes, backslashes, newlines and controls,
+            # which can otherwise turn a valid database page into an
+            # unframeable response that retries forever.
+            record_bytes = 512 + len(json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode())
+            if records and payload_bytes + record_bytes > _EMBEDDING_SOURCE_PAGE_BYTES:
+                break
+            records.append(record)
+            payload_bytes += record_bytes
+        if offset + len(records) > total or (not records and offset < total):
+            raise ValueError("published embedding source event count is inconsistent")
+        return {
+            "found": True,
+            "generation_id": generation_id,
+            "revision": str(revision),
+            "owner_id": str(published["owner_id"]),
+            "provider": str(published["provider"]),
+            "event_count": total,
+            "records": records,
+            "has_more": offset + len(records) < total,
         }
 
     def _update_existing_object_semantics(
