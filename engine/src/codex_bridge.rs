@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,8 @@ const RUNTIME_EVENT_RETRY_DELAYS_MS: &[u64] = &[
     100, 500, 1_000, 2_500, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000, 30_000, 30_000,
 ];
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
+const APP_SERVER_EXIT_CHECK_MS: u64 = 100;
+const APP_SERVER_EXIT_RECONCILE_MS: u64 = 500;
 const QUIET_ACTIVE_TURN_STALL_MS: u64 = 120_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
@@ -47,7 +49,7 @@ const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=fal
 const LONGHOUSE_COORDINATION_TOOLS: &[&str] =
     &["search_sessions", "peers", "tail", "send", "inbox", "reply"];
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
-pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 4;
+pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 5;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
@@ -320,6 +322,22 @@ pub struct BridgeStateFile {
     #[serde(default)]
     pub terminal_reason: Option<String>,
     #[serde(default)]
+    pub terminal_reason_raw: Option<String>,
+    #[serde(default)]
+    pub first_failure_kind: Option<String>,
+    #[serde(default)]
+    pub first_failure_at: Option<String>,
+    #[serde(default)]
+    pub first_failure_detail: Option<String>,
+    #[serde(default)]
+    pub app_server_exit_code: Option<i32>,
+    #[serde(default)]
+    pub app_server_exit_signal: Option<i32>,
+    #[serde(default)]
+    pub owner_detached: bool,
+    #[serde(default)]
+    pub terminal_disconnected_at: Option<String>,
+    #[serde(default)]
     pub stopped_at: Option<String>,
     /// Stable across the original enqueue and any reconciliation republish, so
     /// duplicate delivery collapses server-side on the existing dedupe
@@ -366,6 +384,8 @@ enum StreamEvent {
     Rpc(Value),
     Stderr(String),
     StdoutParseError(String),
+    TransportClosed(String),
+    ChildExited(ExitStatus),
 }
 
 #[derive(Debug)]
@@ -523,6 +543,14 @@ enum IpcCommand {
     },
     Stop {
         terminal_reason: String,
+        terminal_reason_raw: Option<String>,
+        reply: oneshot::Sender<Result<Value>>,
+    },
+    Detach {
+        reply: oneshot::Sender<Result<Value>>,
+    },
+    Attach {
+        owner_pid: u32,
         reply: oneshot::Sender<Result<Value>>,
     },
 }
@@ -560,20 +588,32 @@ fn validate_thread_start_contract(
 }
 
 const TERMINAL_REASON_BRIDGE_STOP: &str = "bridge_stop";
-const TERMINAL_REASON_TERMINAL_DISCONNECTED: &str = "terminal_disconnected";
+const TERMINAL_REASON_USER_CLOSED: &str = "user_closed";
+const TERMINAL_REASON_PROVIDER_EXIT: &str = "provider_exit";
+const TERMINAL_REASON_PROCESS_GONE: &str = "process_gone";
+const TERMINAL_REASON_OWNER_GONE: &str =
+    crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE;
+const TERMINAL_REASON_PROVIDER_SIGNAL: &str = "provider_signal";
+const TERMINAL_REASON_UNKNOWN: &str = "unknown";
+const FAILURE_PROVIDER_TRANSPORT_LOST: &str = "provider_transport_lost";
 
 fn normalize_bridge_terminal_reason(value: Option<&str>) -> String {
     match value.map(str::trim).filter(|reason| !reason.is_empty()) {
-        Some(TERMINAL_REASON_TERMINAL_DISCONNECTED) => {
-            TERMINAL_REASON_TERMINAL_DISCONNECTED.to_string()
-        }
         Some(TERMINAL_REASON_BRIDGE_STOP) => TERMINAL_REASON_BRIDGE_STOP.to_string(),
-        Some("user_closed") => "user_closed".to_string(),
-        Some("process_gone") => "process_gone".to_string(),
-        Some("host_expired") => "host_expired".to_string(),
-        Some("provider_signal") => "provider_signal".to_string(),
-        _ => TERMINAL_REASON_BRIDGE_STOP.to_string(),
+        Some(TERMINAL_REASON_USER_CLOSED) => TERMINAL_REASON_USER_CLOSED.to_string(),
+        Some(TERMINAL_REASON_PROVIDER_EXIT) => TERMINAL_REASON_PROVIDER_EXIT.to_string(),
+        Some(TERMINAL_REASON_PROCESS_GONE) => TERMINAL_REASON_PROCESS_GONE.to_string(),
+        Some(TERMINAL_REASON_OWNER_GONE) => TERMINAL_REASON_OWNER_GONE.to_string(),
+        Some(TERMINAL_REASON_PROVIDER_SIGNAL) => TERMINAL_REASON_PROVIDER_SIGNAL.to_string(),
+        Some(_) => TERMINAL_REASON_UNKNOWN.to_string(),
+        None => TERMINAL_REASON_BRIDGE_STOP.to_string(),
     }
+}
+
+fn raw_bridge_terminal_reason(value: Option<&str>) -> Option<String> {
+    let value = value.map(str::trim).filter(|reason| !reason.is_empty())?;
+    (normalize_bridge_terminal_reason(Some(value)) == TERMINAL_REASON_UNKNOWN)
+        .then(|| value.to_string())
 }
 
 fn ipc_socket_path(state_file: &Path) -> PathBuf {
@@ -653,6 +693,21 @@ async fn handle_ipc_connection(
             terminal_reason: normalize_bridge_terminal_reason(
                 request.get("reason").and_then(Value::as_str),
             ),
+            terminal_reason_raw: request
+                .get("raw_reason")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(str::to_string),
+            reply: reply_tx,
+        },
+        Some("detach") => IpcCommand::Detach { reply: reply_tx },
+        Some("attach") => IpcCommand::Attach {
+            owner_pid: request
+                .get("owner_pid")
+                .and_then(Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok())
+                .context("IPC attach request missing valid owner_pid")?,
             reply: reply_tx,
         },
         Some("steer") => {
@@ -1323,15 +1378,23 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         tokio::time::interval(Duration::from_millis(THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS));
     thread_subscribe_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     thread_subscribe_retry.tick().await;
+    let mut app_server_exit_check =
+        tokio::time::interval(Duration::from_millis(APP_SERVER_EXIT_CHECK_MS));
+    app_server_exit_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    app_server_exit_check.tick().await;
+    let mut provider_events_open = true;
 
     loop {
         tokio::select! {
-            event_result = recv_event(&mut client) => {
-                let event = match event_result {
-                    Ok(event) => event,
-                    Err(err) => {
-                        fail_pending_pause_requests(&mut context, "failed", "Codex app-server connection closed.").await;
-                        return Err(err);
+            event = client.events_rx.recv(), if provider_events_open => {
+                let event = match event {
+                    Some(event) => event,
+                    None => {
+                        let detail = "Codex app-server event stream closed unexpectedly".to_string();
+                        eprintln!("[codex-bridge] {detail}");
+                        mark_provider_transport_lost(&mut context, &detail)?;
+                        provider_events_open = false;
+                        continue;
                     }
                 };
                 match event {
@@ -1361,6 +1424,21 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         update_bridge_error(&mut context, &detail)?;
                         bail!("codex bridge protocol error: {detail}");
                     }
+                    StreamEvent::TransportClosed(detail) => {
+                        eprintln!("[codex-bridge] {detail}");
+                        mark_provider_transport_lost(&mut context, &detail)?;
+                        provider_events_open = false;
+                    }
+                    StreamEvent::ChildExited(status) => {
+                        commit_owned_child_exit(&config, &mut client, &mut context, status).await?;
+                        break;
+                    }
+                }
+            }
+            _ = app_server_exit_check.tick(), if client.child.is_some() => {
+                if let Some(status) = client.child.as_mut().expect("child checked above").try_wait()? {
+                    commit_owned_child_exit(&config, &mut client, &mut context, status).await?;
+                    break;
                 }
             }
             _ = thread_subscribe_retry.tick() => {
@@ -1401,29 +1479,93 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         .map(|_| json!({}));
                         let _ = reply.send(result);
                     }
+                    IpcCommand::Detach { reply } => {
+                        let child_exit = observe_owned_child_exit(
+                            &mut client,
+                            Duration::from_millis(APP_SERVER_EXIT_RECONCILE_MS),
+                        )
+                        .await?;
+                        if let Some(status) = child_exit {
+                            let result = commit_owned_child_exit(
+                                &config,
+                                &mut client,
+                                &mut context,
+                                status,
+                            )
+                            .await
+                            .map(|_| json!({"terminal": true, "reason": TERMINAL_REASON_PROVIDER_EXIT}));
+                            let _ = reply.send(result);
+                            break;
+                        }
+                        mark_tui_detached(&mut context)?;
+                        let _ = reply.send(Ok(json!({
+                            "terminal": false,
+                            "status": context.state.status,
+                            "first_failure_kind": context.state.first_failure_kind,
+                        })));
+                    }
+                    IpcCommand::Attach { owner_pid, reply } => {
+                        let owner_process_start_time =
+                            crate::turn_claims::process_start_time_for_pid(Some(owner_pid));
+                        let result = match owner_process_start_time {
+                            Some(owner_process_start_time) => {
+                                mark_tui_attached(
+                                    &mut context,
+                                    owner_pid,
+                                    owner_process_start_time,
+                                )
+                                .map(|_| json!({}))
+                            }
+                            None => Err(anyhow!(
+                                "could not capture process identity for Codex wrapper pid {owner_pid}"
+                            )),
+                        };
+                        let _ = reply.send(result);
+                    }
                     IpcCommand::Stop {
                         terminal_reason,
+                        terminal_reason_raw,
                         reply,
                     } => {
-                        fail_pending_pause_requests(&mut context, "expired", "Codex bridge stopped before the question was answered.").await;
+                        // The wrapper can observe the TUI disconnect before
+                        // this loop observes waitpid. Reconcile the owned
+                        // child before accepting the wrapper's generic stop
+                        // reason so cleanup cannot overwrite provider_exit.
+                        let grace = Duration::from_millis(APP_SERVER_EXIT_RECONCILE_MS);
+                        let child_exit = observe_owned_child_exit(&mut client, grace).await?;
+                        if let Some(status) = child_exit {
+                            let result = commit_owned_child_exit(
+                                &config,
+                                &mut client,
+                                &mut context,
+                                status,
+                            )
+                            .await
+                            .map(|_| json!({}));
+                            let _ = reply.send(result);
+                            break;
+                        }
+                        fail_pending_pause_requests(
+                            &mut context,
+                            "expired",
+                            "Codex bridge stopped before the question was answered.",
+                        )
+                        .await;
                         crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
-                        context.state.status = "stopped".to_string();
-                        context.state.active_turn_id = None;
-                        context.state.last_error = None;
                         // Commit the terminal fact durably, hand it to the
                         // outbox, then acknowledge. No network I/O on this
                         // path: delivery is the daemon's job, and a state file
                         // that committed but never published is reconciled on
                         // the managed-observation tick.
-                        context.runtime.persist_local_phase("finished", None, Utc::now());
-                        crate::codex_teardown::stamp_terminal_commit(
-                            &mut context.state,
-                            config.machine_name.as_deref(),
+                        let commit = commit_bridge_terminal(
+                            &config,
+                            &mut context,
                             "session_ended",
                             &terminal_reason,
-                            BRIDGE_RUNTIME_SOURCE,
+                            terminal_reason_raw.as_deref(),
+                            None,
+                            None,
                         );
-                        let commit = write_state_file_durable(&context.state_file, &context.state);
                         if let Err(error) = commit {
                             // Nothing durable recorded this run as closed, so
                             // do not acknowledge success. The facade surfaces
@@ -1434,48 +1576,6 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             )));
                             shutdown_child(&mut client).await?;
                             break;
-                        }
-                        match crate::config::get_agent_runtime_events_outbox_dir() {
-                            Ok(outbox_dir) => {
-                                match crate::codex_teardown::publish_terminal_event(
-                                    &outbox_dir,
-                                    &context.state,
-                                ) {
-                                    Ok(()) => {
-                                        context.state.terminal_published = true;
-                                        if let Err(error) =
-                                            write_state_file(&context.state_file, &context.state)
-                                        {
-                                            // The event is durably queued; a
-                                            // failed bookkeeping write only
-                                            // costs one duplicate republish,
-                                            // which the dedupe key absorbs.
-                                            eprintln!(
-                                                "[codex-bridge] could not mark terminal event published: {error:#}"
-                                            );
-                                        }
-                                    }
-                                    Err(error) => {
-                                        eprintln!(
-                                            "[codex-bridge] terminal event enqueue failed, leaving for reconciliation: {error:#}"
-                                        );
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "[codex-bridge] could not resolve runtime-events outbox, leaving for reconciliation: {error:#}"
-                                );
-                            }
-                        }
-                        if let Some(path) = context.state.thread_path.as_deref() {
-                            wake_daemon_for_transcript(
-                                &config,
-                                path,
-                                "idle",
-                                &terminal_reason,
-                                None,
-                            );
                         }
                         // Release the provider before acknowledging. The facade
                         // removes the session contract on success, so a
@@ -1502,12 +1602,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 emit_runtime_keepalive(&config, &mut context).await;
             }
             _ = ownership_check.tick() => {
-                let observed = observe_ownership(
-                    config.owner_pid,
-                    owner_process_start_time.as_deref(),
-                    context.state.ws_url.as_deref(),
-                );
-                let should_stop = match observed {
+                let should_stop = if context.state.owner_detached {
+                    false
+                } else {
+                    let observed = observe_ownership(
+                        context.state.owner_pid,
+                        context.state.owner_process_start_time.as_deref(),
+                        context.state.ws_url.as_deref(),
+                    );
+                    match observed {
                     // `ps` failed. Hold the previous observation rather than
                     // counting a failed look as evidence of absence.
                     None => {
@@ -1518,9 +1621,10 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         ownership_watch.observe(crate::codex_bridge_ownership::OwnershipInputs {
                             headless_launch: config.launch_mode != BridgeLaunchMode::Tui,
                             terminal_attached,
-                            owner_recorded: config.owner_pid.is_some(),
+                            owner_recorded: context.state.owner_pid.is_some(),
                             owner_alive,
                         })
+                    }
                     }
                 };
                 if should_stop {
@@ -1533,8 +1637,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                     );
                     let (reply_tx, _reply_rx) = oneshot::channel();
                     let _ = ipc_self_tx.send(IpcCommand::Stop {
-                        terminal_reason: crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE
-                            .to_string(),
+                        terminal_reason: TERMINAL_REASON_OWNER_GONE.to_string(),
+                        terminal_reason_raw: None,
                         reply: reply_tx,
                     });
                 }
@@ -1988,10 +2092,14 @@ pub async fn cmd_codex_bridge_pause_response(_config: BridgePauseResponseConfig)
 }
 
 #[cfg(unix)]
-async fn stop_via_ipc(sock_path: &Path, terminal_reason: &str) -> Result<()> {
+async fn stop_via_ipc(
+    sock_path: &Path,
+    terminal_reason: &str,
+    terminal_reason_raw: Option<&str>,
+) -> Result<()> {
     tokio::time::timeout(
         IPC_STOP_TIMEOUT,
-        stop_via_ipc_inner(sock_path, terminal_reason),
+        stop_via_ipc_inner(sock_path, terminal_reason, terminal_reason_raw),
     )
     .await
     .map_err(|_| anyhow!("IPC stop timed out after {}s", IPC_STOP_TIMEOUT.as_secs()))?
@@ -2019,7 +2127,11 @@ fn parse_stop_ipc_response(response_buf: &[u8]) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn stop_via_ipc_inner(sock_path: &Path, terminal_reason: &str) -> Result<()> {
+async fn stop_via_ipc_inner(
+    sock_path: &Path,
+    terminal_reason: &str,
+    terminal_reason_raw: Option<&str>,
+) -> Result<()> {
     let mut stream = tokio::net::UnixStream::connect(sock_path)
         .await
         .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
@@ -2027,6 +2139,7 @@ async fn stop_via_ipc_inner(sock_path: &Path, terminal_reason: &str) -> Result<(
     let mut request = serde_json::to_vec(&json!({
         "kind": "stop",
         "reason": normalize_bridge_terminal_reason(Some(terminal_reason)),
+        "raw_reason": terminal_reason_raw,
     }))?;
     request.push(b'\n');
     stream.write_all(&request).await?;
@@ -2047,6 +2160,7 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
     }
     let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
     let sock_path = ipc_socket_path(&paths.state_file);
+    let terminal_reason_raw = raw_bridge_terminal_reason(config.terminal_reason.as_deref());
     let terminal_reason = normalize_bridge_terminal_reason(config.terminal_reason.as_deref());
     if !paths.state_file.exists() {
         if sock_path.exists() {
@@ -2054,7 +2168,12 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
                 "bridge state file is missing for session {}; attempting IPC stop via existing socket",
                 config.session_id
             );
-            return stop_via_ipc(&sock_path, &terminal_reason).await;
+            return stop_via_ipc(
+                &sock_path,
+                &terminal_reason,
+                terminal_reason_raw.as_deref(),
+            )
+            .await;
         }
         bail!(
             "managed Codex session {} has no bridge state or live IPC socket; stop was not acknowledged",
@@ -2062,7 +2181,11 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
         );
     }
     if sock_path.exists() {
-        return stop_via_ipc(&sock_path, &terminal_reason)
+        return stop_via_ipc(
+            &sock_path,
+            &terminal_reason,
+            terminal_reason_raw.as_deref(),
+        )
             .await
             .with_context(|| {
                 format!(
@@ -2579,16 +2702,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         .with_context(|| format!("spawning `{}` app-server", config.codex_bin))?;
     let child_pid = child.id();
     #[cfg(unix)]
-    let child_pgid = child_pid
-        .and_then(|pid| i32::try_from(pid).ok())
-        .and_then(|pid| {
-            let pgid = unsafe { libc::getpgid(pid) };
-            if pgid > 0 {
-                Some(pgid)
-            } else {
-                None
-            }
-        });
+    let child_pgid = capture_dedicated_child_pgid(child_pid).await;
     #[cfg(not(unix))]
     let child_pgid = None;
     let stdout = child.stdout.take().context("missing app-server stdout")?;
@@ -2650,7 +2764,10 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     });
     let ws_events_tx = events_tx.clone();
     tokio::spawn(async move {
-        while let Some(message) = ws_read.next().await {
+        let detail = loop {
+            let Some(message) = ws_read.next().await else {
+                break "app-server websocket stream ended without a close frame".to_string();
+            };
             match message {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
                     Ok(value) => {
@@ -2661,15 +2778,16 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
                             .send(StreamEvent::StdoutParseError(format!("{err}: {text}")));
                     }
                 },
-                Ok(Message::Close(_)) => break,
+                Ok(Message::Close(frame)) => {
+                    break format!("app-server websocket closed: {frame:?}");
+                }
                 Ok(_) => {}
                 Err(err) => {
-                    let _ = ws_events_tx
-                        .send(StreamEvent::Stderr(format!("websocket read error: {err}")));
-                    break;
+                    break format!("app-server websocket read error: {err}");
                 }
             }
-        }
+        };
+        let _ = ws_events_tx.send(StreamEvent::TransportClosed(detail));
     });
 
     Ok(RpcClient {
@@ -2683,6 +2801,19 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         next_request_id: 1,
         ws_url,
     })
+}
+
+#[cfg(unix)]
+async fn capture_dedicated_child_pgid(child_pid: Option<u32>) -> Option<i32> {
+    let pid = child_pid.and_then(|pid| i32::try_from(pid).ok())?;
+    for _ in 0..5 {
+        let pgid = unsafe { libc::getpgid(pid) };
+        if pgid == pid {
+            return Some(pgid);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    None
 }
 
 fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) -> Vec<OsString> {
@@ -2769,7 +2900,11 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
     });
     let ws_events_tx = events_tx.clone();
     tokio::spawn(async move {
-        while let Some(message) = ws_read.next().await {
+        let detail = loop {
+            let Some(message) = ws_read.next().await else {
+                break "remote app-server websocket stream ended without a close frame"
+                    .to_string();
+            };
             match message {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
                     Ok(value) => {
@@ -2780,15 +2915,16 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
                             .send(StreamEvent::StdoutParseError(format!("{err}: {text}")));
                     }
                 },
-                Ok(Message::Close(_)) => break,
+                Ok(Message::Close(frame)) => {
+                    break format!("remote app-server websocket closed: {frame:?}");
+                }
                 Ok(_) => {}
                 Err(err) => {
-                    let _ = ws_events_tx
-                        .send(StreamEvent::Stderr(format!("websocket read error: {err}")));
-                    break;
+                    break format!("remote app-server websocket read error: {err}");
                 }
             }
-        }
+        };
+        let _ = ws_events_tx.send(StreamEvent::TransportClosed(detail));
     });
 
     Ok(RpcClient {
@@ -2892,6 +3028,12 @@ async fn send_request(client: &mut RpcClient, method: &str, params: Value) -> Re
             StreamEvent::StdoutParseError(detail) => {
                 bail!("codex bridge protocol parse error while waiting for {method}: {detail}");
             }
+            StreamEvent::TransportClosed(detail) => {
+                bail!("codex app-server transport closed while waiting for {method}: {detail}");
+            }
+            StreamEvent::ChildExited(status) => {
+                bail!("codex app-server exited while waiting for {method}: {status}");
+            }
         }
     }
 }
@@ -2958,20 +3100,39 @@ async fn send_request_with_runtime(
             StreamEvent::StdoutParseError(detail) => {
                 bail!("codex bridge protocol parse error while waiting for {method}: {detail}");
             }
+            StreamEvent::TransportClosed(detail) => {
+                mark_provider_transport_lost(context, &detail)?;
+                bail!("codex app-server transport closed while waiting for {method}: {detail}");
+            }
+            StreamEvent::ChildExited(status) => {
+                bail!("codex app-server exited while waiting for {method}: {status}");
+            }
         }
     }
 }
 
 async fn recv_event(client: &mut RpcClient) -> Result<StreamEvent> {
-    match client.events_rx.recv().await {
-        Some(event) => Ok(event),
-        None => {
-            if let Some(ref mut child) = client.child {
-                if let Some(status) = child.try_wait()? {
-                    bail!("codex app-server exited early with status {status}");
+    loop {
+        tokio::select! {
+            event = client.events_rx.recv() => {
+                if let Some(event) = event {
+                    return Ok(event);
+                }
+                if let Some(status) = match client.child.as_mut() {
+                    Some(child) => child.try_wait()?,
+                    None => None,
+                } {
+                    return Ok(StreamEvent::ChildExited(status));
+                }
+                return Ok(StreamEvent::TransportClosed(
+                    "Codex app-server closed its output stream unexpectedly".to_string(),
+                ));
+            }
+            _ = tokio::time::sleep(Duration::from_millis(APP_SERVER_EXIT_CHECK_MS)), if client.child.is_some() => {
+                if let Some(status) = client.child.as_mut().expect("child checked above").try_wait()? {
+                    return Ok(StreamEvent::ChildExited(status));
                 }
             }
-            bail!("codex app-server closed its output stream unexpectedly");
         }
     }
 }
@@ -5251,26 +5412,158 @@ fn should_emit_progress(last_emit: Option<Instant>, throttle_ms: u64) -> bool {
     }
 }
 
+fn record_first_failure(state: &mut BridgeStateFile, kind: &str, detail: &str) {
+    if state.first_failure_kind.is_some() {
+        return;
+    }
+    state.first_failure_kind = Some(kind.to_string());
+    state.first_failure_at = Some(Utc::now().to_rfc3339());
+    state.first_failure_detail = Some(detail.chars().take(1000).collect());
+}
+
+fn mark_provider_transport_lost(context: &mut BridgeContext, detail: &str) -> Result<()> {
+    record_first_failure(
+        &mut context.state,
+        FAILURE_PROVIDER_TRANSPORT_LOST,
+        detail,
+    );
+    context.state.status = "degraded".to_string();
+    context.state.last_error = Some(detail.to_string());
+    write_state_file(&context.state_file, &context.state)
+}
+
+fn mark_tui_detached(context: &mut BridgeContext) -> Result<()> {
+    context.state.owner_pid = None;
+    context.state.owner_process_start_time = None;
+    context.state.owner_detached = true;
+    context.state.terminal_disconnected_at = Some(Utc::now().to_rfc3339());
+    write_state_file_durable(&context.state_file, &context.state)
+        .context("committing Codex terminal detach")
+}
+
+fn mark_tui_attached(
+    context: &mut BridgeContext,
+    owner_pid: u32,
+    owner_process_start_time: String,
+) -> Result<()> {
+    context.state.owner_pid = Some(owner_pid);
+    context.state.owner_process_start_time = Some(owner_process_start_time);
+    context.state.owner_detached = false;
+    context.state.terminal_disconnected_at = None;
+    write_state_file_durable(&context.state_file, &context.state)
+        .context("committing Codex terminal attachment")
+}
+
+fn exit_status_metadata(status: &ExitStatus) -> (Option<i32>, Option<i32>) {
+    let exit_code = status.code();
+    #[cfg(unix)]
+    let exit_signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let exit_signal = None;
+    (exit_code, exit_signal)
+}
+
+fn commit_bridge_terminal(
+    config: &BridgeRunConfig,
+    context: &mut BridgeContext,
+    terminal_state: &str,
+    terminal_reason: &str,
+    terminal_reason_raw: Option<&str>,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
+) -> Result<()> {
+    context.runtime.persist_local_phase("finished", None, Utc::now());
+    crate::codex_teardown::stamp_terminal_commit(
+        &mut context.state,
+        config.machine_name.as_deref(),
+        terminal_state,
+        terminal_reason,
+        terminal_reason_raw,
+        exit_code,
+        exit_signal,
+        BRIDGE_RUNTIME_SOURCE,
+    );
+    write_state_file_durable(&context.state_file, &context.state)
+        .context("committing Codex terminal state")?;
+    match crate::config::get_agent_runtime_events_outbox_dir() {
+        Ok(outbox_dir) => {
+            match crate::codex_teardown::publish_terminal_event(&outbox_dir, &context.state) {
+                Ok(()) => {
+                    context.state.terminal_published = true;
+                    if let Err(error) = write_state_file(&context.state_file, &context.state) {
+                        eprintln!(
+                            "[codex-bridge] could not mark terminal event published: {error:#}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[codex-bridge] terminal event enqueue failed, leaving for reconciliation: {error:#}"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "[codex-bridge] could not resolve runtime-events outbox, leaving for reconciliation: {error:#}"
+            );
+        }
+    }
+    if let Some(path) = context.state.thread_path.as_deref() {
+        wake_daemon_for_transcript(config, path, "idle", terminal_reason, None);
+    }
+    Ok(())
+}
+
+async fn commit_owned_child_exit(
+    config: &BridgeRunConfig,
+    client: &mut RpcClient,
+    context: &mut BridgeContext,
+    status: ExitStatus,
+) -> Result<()> {
+    let detail = format!("Codex app-server exited with status {status}");
+    record_first_failure(
+        &mut context.state,
+        TERMINAL_REASON_PROVIDER_EXIT,
+        &detail,
+    );
+    let (exit_code, exit_signal) = exit_status_metadata(&status);
+    fail_pending_pause_requests(
+        context,
+        "failed",
+        "Codex app-server exited before the request completed.",
+    )
+    .await;
+    crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
+    let commit = commit_bridge_terminal(
+        config,
+        context,
+        TERMINAL_REASON_PROCESS_GONE,
+        TERMINAL_REASON_PROVIDER_EXIT,
+        None,
+        exit_code,
+        exit_signal,
+    );
+    let cleanup = shutdown_child(client).await;
+    commit?;
+    cleanup?;
+    eprintln!("[codex-bridge] {detail}; committed provider_exit");
+    Ok(())
+}
+
 fn update_bridge_error(context: &mut BridgeContext, error: &str) -> Result<()> {
     context.state.status = "error".to_string();
     context.state.last_error = Some(error.to_string());
     write_state_file(&context.state_file, &context.state)
 }
 
-#[cfg(unix)]
-fn dedicated_child_process_group_id(child: &Child) -> Option<i32> {
-    let pid = child.id().and_then(|pid| i32::try_from(pid).ok())?;
-    let process_group_id = unsafe { libc::getpgid(pid) };
-    if process_group_id <= 0 || process_group_id != pid {
-        return None;
-    }
-    Some(process_group_id)
-}
-
 async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
-    if let Some(ref mut child) = client.child {
-        #[cfg(unix)]
-        if let Some(process_group_id) = dedicated_child_process_group_id(child) {
+    #[cfg(unix)]
+    if let Some(process_group_id) = client.child_pgid {
+        if process_group_id > 0 {
             unsafe {
                 let _ = libc::killpg(process_group_id, libc::SIGTERM);
             }
@@ -5282,12 +5575,33 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
                 }
             }
         }
+    }
+    if let Some(ref mut child) = client.child {
         if child.try_wait()?.is_none() {
             let _ = child.start_kill();
         }
         let _ = child.wait().await;
     }
     Ok(())
+}
+
+async fn observe_owned_child_exit(
+    client: &mut RpcClient,
+    grace: Duration,
+) -> Result<Option<ExitStatus>> {
+    let Some(child) = client.child.as_mut() else {
+        return Ok(None);
+    };
+    if let Some(status) = child.try_wait()? {
+        return Ok(Some(status));
+    }
+    if grace.is_zero() {
+        return Ok(None);
+    }
+    match tokio::time::timeout(grace, child.wait()).await {
+        Ok(status) => Ok(Some(status?)),
+        Err(_) => Ok(None),
+    }
 }
 
 async fn capture_owned_child_start_time(pid: u32) -> Option<String> {
@@ -6366,6 +6680,13 @@ mod tests {
             Some("test-box"),
             "session_ended",
             "bridge_stop",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             "2026-04-19T00:00:00+00:00",
             BRIDGE_RUNTIME_SOURCE,
         );
@@ -6385,14 +6706,21 @@ mod tests {
     }
 
     #[test]
-    fn terminal_event_carries_terminal_disconnected() {
+    fn terminal_event_carries_unknown_raw_reason() {
         let event = crate::codex_teardown::build_terminal_event(
             "session-123",
             Some("run-1"),
             Some("thread-123"),
             Some("test-box"),
             "session_ended",
-            TERMINAL_REASON_TERMINAL_DISCONNECTED,
+            TERMINAL_REASON_UNKNOWN,
+            Some("terminal_disconnected"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             "2026-04-19T00:00:00+00:00",
             BRIDGE_RUNTIME_SOURCE,
         );
@@ -6400,7 +6728,11 @@ mod tests {
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
         assert_eq!(
             event["payload"]["terminal_reason"],
-            TERMINAL_REASON_TERMINAL_DISCONNECTED
+            TERMINAL_REASON_UNKNOWN
+        );
+        assert_eq!(
+            event["payload"]["terminal_reason_raw"],
+            "terminal_disconnected"
         );
         assert_eq!(event["payload"]["terminal_source"], BRIDGE_RUNTIME_SOURCE);
     }
@@ -7030,7 +7362,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_bridge_terminal_reason_defaults_unknown_to_bridge_stop() {
+    fn normalize_bridge_terminal_reason_preserves_the_shared_vocabulary() {
         assert_eq!(
             normalize_bridge_terminal_reason(None),
             TERMINAL_REASON_BRIDGE_STOP
@@ -7041,12 +7373,185 @@ mod tests {
         );
         assert_eq!(
             normalize_bridge_terminal_reason(Some("future-new-reason")),
-            TERMINAL_REASON_BRIDGE_STOP
+            TERMINAL_REASON_UNKNOWN
         );
         assert_eq!(
-            normalize_bridge_terminal_reason(Some(TERMINAL_REASON_TERMINAL_DISCONNECTED)),
-            TERMINAL_REASON_TERMINAL_DISCONNECTED
+            normalize_bridge_terminal_reason(Some("clean_tui_exit")),
+            TERMINAL_REASON_UNKNOWN
         );
+        assert_eq!(
+            normalize_bridge_terminal_reason(Some(TERMINAL_REASON_PROVIDER_EXIT)),
+            TERMINAL_REASON_PROVIDER_EXIT
+        );
+        assert_eq!(
+            raw_bridge_terminal_reason(Some("future-new-reason")).as_deref(),
+            Some("future-new-reason")
+        );
+        assert_eq!(
+            raw_bridge_terminal_reason(Some("clean_tui_exit")).as_deref(),
+            Some("clean_tui_exit")
+        );
+    }
+
+    #[test]
+    fn tui_detach_keeps_the_run_nonterminal_and_releases_wrapper_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut context = make_test_context(&temp);
+        context.state.owner_pid = Some(1234);
+        context.state.owner_process_start_time = Some("start".to_string());
+
+        mark_tui_detached(&mut context).unwrap();
+
+        assert!(context.state.owner_detached);
+        assert_eq!(context.state.owner_pid, None);
+        assert_eq!(context.state.owner_process_start_time, None);
+        assert!(context.state.terminal_disconnected_at.is_some());
+        assert_eq!(context.state.status, "ready");
+        assert!(context.state.terminal_reason.is_none());
+        assert!(context.state.stopped_at.is_none());
+
+        mark_tui_attached(&mut context, 5678, "new-start".to_string()).unwrap();
+        assert!(!context.state.owner_detached);
+        assert_eq!(context.state.owner_pid, Some(5678));
+        assert_eq!(
+            context.state.owner_process_start_time.as_deref(),
+            Some("new-start")
+        );
+        assert_eq!(context.state.terminal_disconnected_at, None);
+    }
+
+    #[test]
+    fn provider_exit_keeps_the_transport_loss_as_the_first_observation() {
+        let mut state = BridgeStateFile {
+            session_id: "session-123".to_string(),
+            run_id: Some("run-1".to_string()),
+            status: "ready".to_string(),
+            app_server_pid: Some(4242),
+            ..Default::default()
+        };
+        record_first_failure(
+            &mut state,
+            FAILURE_PROVIDER_TRANSPORT_LOST,
+            "connection reset without closing handshake",
+        );
+        record_first_failure(
+            &mut state,
+            TERMINAL_REASON_PROVIDER_EXIT,
+            "exited with status 17",
+        );
+
+        crate::codex_teardown::stamp_terminal_commit(
+            &mut state,
+            Some("test-box"),
+            TERMINAL_REASON_PROCESS_GONE,
+            TERMINAL_REASON_PROVIDER_EXIT,
+            None,
+            Some(17),
+            None,
+            BRIDGE_RUNTIME_SOURCE,
+        );
+
+        assert_eq!(
+            state.first_failure_kind.as_deref(),
+            Some(FAILURE_PROVIDER_TRANSPORT_LOST)
+        );
+        assert_eq!(state.terminal_reason.as_deref(), Some(TERMINAL_REASON_PROVIDER_EXIT));
+        assert_eq!(state.app_server_exit_code, Some(17));
+        let event = state.terminal_event.unwrap();
+        assert_eq!(
+            event["payload"]["first_failure_kind"],
+            FAILURE_PROVIDER_TRANSPORT_LOST
+        );
+        assert_eq!(event["payload"]["terminal_reason"], TERMINAL_REASON_PROVIDER_EXIT);
+        assert_eq!(event["payload"]["exit_code"], 17);
+        assert_eq!(event["payload"]["app_server_pid"], 4242);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn owned_child_exit_is_observed_while_the_transport_channel_remains_open() {
+        let child = Command::new("sh")
+            .args(["-c", "exit 17"])
+            .spawn()
+            .unwrap();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
+        let mut client = RpcClient {
+            child: Some(child),
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://127.0.0.1:1".to_string(),
+        };
+
+        let event = recv_event(&mut client).await.unwrap();
+        let StreamEvent::ChildExited(status) = event else {
+            panic!("owned child exit was not observed: {event:?}");
+        };
+        assert_eq!(status.code(), Some(17));
+        drop(events_tx);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closed_transport_with_a_live_child_is_not_a_terminal_event() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .unwrap();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        drop(events_tx);
+        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
+        let mut client = RpcClient {
+            child: Some(child),
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://127.0.0.1:1".to_string(),
+        };
+
+        let event = recv_event(&mut client).await.unwrap();
+        assert!(matches!(event, StreamEvent::TransportClosed(_)));
+        client.child.as_mut().unwrap().kill().await.unwrap();
+        let _ = client.child.as_mut().unwrap().wait().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detach_reconciliation_does_not_invent_exit_for_a_live_child() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .unwrap();
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
+        let mut client = RpcClient {
+            child: Some(child),
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://127.0.0.1:1".to_string(),
+        };
+
+        let status = observe_owned_child_exit(&mut client, Duration::from_millis(25))
+            .await
+            .unwrap();
+        assert!(status.is_none());
+        assert!(client.child.as_mut().unwrap().try_wait().unwrap().is_none());
+        client.child.as_mut().unwrap().kill().await.unwrap();
+        let _ = client.child.as_mut().unwrap().wait().await;
     }
 
     #[tokio::test]
@@ -7057,14 +7562,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_ipc_preserves_terminal_disconnected_reason() {
+    async fn stop_ipc_classifies_unknown_reason_and_preserves_raw_value() {
         let reason = parse_stop_ipc_reason(json!({
             "kind": "stop",
-            "reason": TERMINAL_REASON_TERMINAL_DISCONNECTED,
+            "reason": "terminal_disconnected",
         }))
         .await;
 
-        assert_eq!(reason, TERMINAL_REASON_TERMINAL_DISCONNECTED);
+        assert_eq!(reason, TERMINAL_REASON_UNKNOWN);
     }
 
     #[cfg(unix)]
@@ -7176,6 +7681,7 @@ mod tests {
         let IpcCommand::Stop {
             terminal_reason,
             reply,
+            ..
         } = command
         else {
             panic!("expected stop command");

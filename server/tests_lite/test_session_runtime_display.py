@@ -991,9 +991,7 @@ def test_provider_terminal_ends_run_without_closing_session():
     assert display.terminal_reason == "provider_signal"
 
 
-def test_run_terminal_reason_collapses_to_canonical_value():
-    """Raw provider terminal_reason strings are not part of the wire contract.
-    The projection collapses provider signals into canonical TerminalReason values."""
+def test_run_terminal_reason_preserves_canonical_value():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="finished",
@@ -1008,7 +1006,7 @@ def test_run_terminal_reason_collapses_to_canonical_value():
     )
 
     assert display.lifecycle == "unknown"
-    assert display.terminal_reason == "provider_signal"
+    assert display.terminal_reason == "bridge_stop"
 
 
 def test_three_axis_fields_collapses_arbitrary_terminal_reason_to_provider_signal():
@@ -1048,6 +1046,30 @@ def test_process_gone_terminal_ends_run_without_closing_session():
     assert display.control_path == "managed"
     assert display.lifecycle == "unknown"
     assert display.terminal_reason == "process_gone"
+
+
+def test_provider_exit_reason_is_preserved_on_process_gone_run():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="finished",
+            terminal_state="process_gone",
+            terminal_reason="provider_exit",
+            terminal_source="codex_bridge_ws",
+            status="completed",
+            display_phase="Completed",
+        ),
+        capabilities=_make_kernel_capabilities(
+            live=False,
+            reattach=False,
+            control_plane="claude_channel_bridge",
+        ),
+        ended_at=None,
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.lifecycle == "unknown"
+    assert display.terminal_reason == "provider_exit"
+    assert display.is_live is False
 
 
 def test_process_gone_binding_ends_observation_without_closing_session():

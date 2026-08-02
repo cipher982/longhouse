@@ -124,9 +124,13 @@ enum APISignalTier: String, Codable, Hashable, Sendable, CaseIterable {
 enum APITerminalReason: String, Codable, Hashable, Sendable, CaseIterable {
     case sessionEnded = "session_ended"
     case userClosed = "user_closed"
+    case bridgeStop = "bridge_stop"
+    case providerExit = "provider_exit"
     case processGone = "process_gone"
+    case ownerGone = "owner_gone"
     case hostExpired = "host_expired"
     case providerSignal = "provider_signal"
+    case unknown = "unknown"
 }
 
 enum APITone: String, Codable, Hashable, Sendable, CaseIterable {

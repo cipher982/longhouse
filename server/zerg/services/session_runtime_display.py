@@ -82,9 +82,13 @@ class Tone(str, Enum):
 class TerminalReason(str, Enum):
     SESSION_ENDED = "session_ended"
     USER_CLOSED = "user_closed"
+    BRIDGE_STOP = "bridge_stop"
+    PROVIDER_EXIT = "provider_exit"
     PROCESS_GONE = "process_gone"
+    OWNER_GONE = "owner_gone"
     HOST_EXPIRED = "host_expired"
     PROVIDER_SIGNAL = "provider_signal"
+    UNKNOWN = "unknown"
 
 
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
@@ -548,7 +552,16 @@ def _derive_terminal_reason(terminal_state: str | None) -> str | None:
     normalized = terminal_state.strip().lower()
     if not normalized:
         return None
-    if normalized in {"process_gone", "host_expired", "user_closed"}:
+    if normalized in {
+        "user_closed",
+        "bridge_stop",
+        "provider_exit",
+        "process_gone",
+        "owner_gone",
+        "host_expired",
+        "provider_signal",
+        "unknown",
+    }:
         return normalized
     # Provider terminal values such as "session_ended" and "finished" collapse
     # to provider_signal. Machine-derived terminal values stay explicit.

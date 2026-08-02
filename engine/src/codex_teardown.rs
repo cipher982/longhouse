@@ -50,6 +50,13 @@ pub fn build_terminal_event(
     device_id: Option<&str>,
     terminal_state: &str,
     terminal_reason: &str,
+    terminal_reason_raw: Option<&str>,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
+    app_server_pid: Option<u32>,
+    first_failure_kind: Option<&str>,
+    first_failure_at: Option<&str>,
+    first_failure_detail: Option<&str>,
     occurred_at: &str,
     source: &str,
 ) -> Value {
@@ -70,7 +77,14 @@ pub fn build_terminal_event(
             "thread_id": thread_id,
             "terminal_state": terminal_state,
             "terminal_reason": terminal_reason,
+            "terminal_reason_raw": terminal_reason_raw,
             "terminal_source": source,
+            "exit_code": exit_code,
+            "exit_signal": exit_signal,
+            "app_server_pid": app_server_pid,
+            "first_failure_kind": first_failure_kind,
+            "first_failure_at": first_failure_at,
+            "first_failure_detail": first_failure_detail,
         }
     })
 }
@@ -84,6 +98,9 @@ pub fn stamp_terminal_commit(
     device_id: Option<&str>,
     terminal_state: &str,
     terminal_reason: &str,
+    terminal_reason_raw: Option<&str>,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
     source: &str,
 ) {
     let occurred_at = chrono::Utc::now().to_rfc3339();
@@ -94,6 +111,13 @@ pub fn stamp_terminal_commit(
         device_id,
         terminal_state,
         terminal_reason,
+        terminal_reason_raw,
+        exit_code,
+        exit_signal,
+        state.app_server_pid,
+        state.first_failure_kind.as_deref(),
+        state.first_failure_at.as_deref(),
+        state.first_failure_detail.as_deref(),
         &occurred_at,
         source,
     );
@@ -102,6 +126,9 @@ pub fn stamp_terminal_commit(
     state.last_error = None;
     state.terminal_state = Some(terminal_state.to_string());
     state.terminal_reason = Some(terminal_reason.to_string());
+    state.terminal_reason_raw = terminal_reason_raw.map(str::to_string);
+    state.app_server_exit_code = exit_code;
+    state.app_server_exit_signal = exit_signal;
     state.stopped_at = Some(occurred_at);
     state.terminal_dedupe_key = Some(terminal_dedupe_key(
         &state.session_id,
@@ -229,6 +256,9 @@ mod tests {
             Some("cinder"),
             "session_ended",
             "clean_tui_exit",
+            None,
+            None,
+            None,
             "codex_bridge_ws",
         );
         state
@@ -294,6 +324,9 @@ mod tests {
             Some("cinder"),
             "session_ended",
             "clean_tui_exit",
+            None,
+            None,
+            None,
             "codex_bridge_ws",
         );
         let path = state_dir.join(format!("{session_id}.json"));

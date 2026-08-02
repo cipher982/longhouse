@@ -21,7 +21,7 @@ use managed_launch_lifecycle::{
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::io::{IsTerminal, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -1551,22 +1551,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    let stop_result = stop_codex_bridge(
+    finish_codex_tui_session(
+        tui_result,
         &response.session_id,
         Some(response.run_id.as_str()),
-        "clean_tui_exit",
-    );
-    let exit = tui_result?;
-    let exit = finish_codex_teardown(
-        stop_result?,
-        &response.session_id,
         Some(&machine_name),
-        exit,
-    )?;
-    if exit != 0 {
-        std::process::exit(exit);
-    }
-    Ok(())
+    )
 }
 
 fn run_codex_tui(
@@ -1611,6 +1601,162 @@ fn run_codex_tui_with_recovery(
     }
     eprintln!("Codex terminal exited with code 1; reattaching to the healthy managed session…");
     run_codex_tui(codex_bin, ws_url, cwd, session_id, model, effort, bypass)
+}
+
+fn finish_codex_tui_session(
+    tui_result: anyhow::Result<i32>,
+    session_id: &str,
+    expected_run_id: Option<&str>,
+    banner_machine_name: Option<&str>,
+) -> anyhow::Result<()> {
+    match tui_result {
+        Ok(0) => {
+            let outcome = stop_codex_bridge(session_id, expected_run_id, "user_closed")?;
+            finish_codex_teardown(outcome, session_id, banner_machine_name, 0)?;
+            Ok(())
+        }
+        Ok(exit) => {
+            let provider_exited = match detach_codex_tui(session_id) {
+                Ok(provider_exited) => provider_exited,
+                Err(detach_error) => {
+                    let outcome = classify_codex_teardown(
+                        session_id,
+                        expected_run_id,
+                        Some(format!("terminal detach failed: {detach_error:#}")),
+                    );
+                    let exit = finish_codex_teardown(
+                        outcome,
+                        session_id,
+                        banner_machine_name,
+                        exit,
+                    )?;
+                    if exit != 0 {
+                        std::process::exit(exit);
+                    }
+                    return Ok(());
+                }
+            };
+            if provider_exited {
+                let outcome = classify_codex_teardown(
+                    session_id,
+                    expected_run_id,
+                    Some("provider exit observed while detaching the Codex terminal".to_string()),
+                );
+                let exit = finish_codex_teardown(
+                    outcome,
+                    session_id,
+                    banner_machine_name,
+                    exit,
+                )?;
+                if exit != 0 {
+                    std::process::exit(exit);
+                }
+                return Ok(());
+            }
+            eprintln!(
+                "Longhouse notice: the Codex terminal disconnected, but the managed provider is still supervised. Reattach with `longhouse codex attach --session-id {session_id}`."
+            );
+            std::process::exit(exit);
+        }
+        Err(error) => {
+            let detach_result = detach_codex_tui(session_id);
+            match detach_result {
+                Ok(false) => Err(error),
+                Ok(true) => {
+                    let outcome = classify_codex_teardown(
+                        session_id,
+                        expected_run_id,
+                        Some("provider exit observed while detaching the Codex terminal".to_string()),
+                    );
+                    finish_codex_teardown(outcome, session_id, banner_machine_name, 1)?;
+                    Err(error)
+                }
+                Err(detach_error) => {
+                    let outcome = classify_codex_teardown(
+                        session_id,
+                        expected_run_id,
+                        Some(format!("terminal detach failed: {detach_error:#}")),
+                    );
+                    match finish_codex_teardown(
+                        outcome,
+                        session_id,
+                        banner_machine_name,
+                        1,
+                    ) {
+                        Ok(_) => Err(error),
+                        Err(teardown_error) => Err(error.context(format!(
+                            "Codex terminal failed, detach failed ({detach_error:#}), and terminal reconciliation failed ({teardown_error:#})"
+                        ))),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn detach_codex_tui(session_id: &str) -> anyhow::Result<bool> {
+    let response = codex_tui_ipc(session_id, json!({"kind": "detach"}))?;
+    Ok(response
+        .get("terminal")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false))
+}
+
+#[cfg(not(unix))]
+fn detach_codex_tui(_session_id: &str) -> anyhow::Result<bool> {
+    anyhow::bail!("managed Codex terminal detach is only supported on Unix")
+}
+
+#[cfg(unix)]
+fn attach_codex_tui(session_id: &str) -> anyhow::Result<()> {
+    codex_tui_ipc(
+        session_id,
+        json!({
+            "kind": "attach",
+            "owner_pid": std::process::id(),
+        }),
+    )?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn attach_codex_tui(_session_id: &str) -> anyhow::Result<()> {
+    anyhow::bail!("managed Codex terminal attach is only supported on Unix")
+}
+
+#[cfg(unix)]
+fn codex_tui_ipc(
+    session_id: &str,
+    request: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+
+    let state_path = codex_bridge_state_path(session_id)?;
+    let socket_path = state_path.with_extension("sock");
+    let mut stream = UnixStream::connect(&socket_path)
+        .with_context(|| format!("connect to managed Codex bridge {}", socket_path.display()))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let mut request = serde_json::to_vec(&request)?;
+    request.push(b'\n');
+    stream.write_all(&request)?;
+    stream.shutdown(Shutdown::Write)?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let response: serde_json::Value = serde_json::from_slice(&response)
+        .context("parse managed Codex terminal IPC acknowledgement")?;
+    if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        anyhow::bail!(
+            "managed Codex terminal IPC failed: {}",
+            response
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown bridge error")
+        );
+    }
+    Ok(response)
 }
 
 fn codex_bridge_reattachable(session_id: &str) -> bool {
@@ -2086,6 +2232,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
     {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
+    attach_codex_tui(&args.session_id)?;
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &ws_url,
@@ -2095,13 +2242,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    let stop_result = stop_codex_bridge(&args.session_id, None, "clean_tui_exit");
-    let exit = tui_result?;
-    let exit = finish_codex_teardown(stop_result?, &args.session_id, Some("this machine"), exit)?;
-    if exit != 0 {
-        std::process::exit(exit);
-    }
-    Ok(())
+    finish_codex_tui_session(tui_result, &args.session_id, None, Some("this machine"))
 }
 
 fn main() -> anyhow::Result<()> {

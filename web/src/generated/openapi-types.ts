@@ -11249,7 +11249,7 @@ export interface components {
          * TerminalReason
          * @enum {string}
          */
-        TerminalReason: "session_ended" | "user_closed" | "process_gone" | "host_expired" | "provider_signal";
+        TerminalReason: "session_ended" | "user_closed" | "bridge_stop" | "provider_exit" | "process_gone" | "owner_gone" | "host_expired" | "provider_signal" | "unknown";
         /**
          * TimeSeriesResponse
          * @description Time series response.
