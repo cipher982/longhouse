@@ -3749,10 +3749,18 @@ class CatalogStore:
                     )
                     .exists()
                 )
-                storage_where.append(storage.c.owner_id == owner_text)
+                # Storage-v2 ingest may not carry the machine token's owner
+                # binding, while the managed lease has already bound the
+                # session in the live store. Match the detail/read ownership
+                # rule: live ownership wins, with storage ownership as the
+                # fallback for sessions that have no live row yet.
+                storage_owner = func.coalesce(LiveSession.__table__.c.owner_id, storage.c.owner_id)
+                storage_where.append(storage_owner == owner_text)
 
             joined = card.join(catalog, catalog.c.session_id == card.c.session_id)
-            storage_joined = storage.outerjoin(catalog, catalog.c.session_id == storage.c.session_id)
+            storage_joined = storage.outerjoin(catalog, catalog.c.session_id == storage.c.session_id).outerjoin(
+                LiveSession.__table__, LiveSession.__table__.c.session_id == storage.c.session_id
+            )
             candidates = union_all(
                 select(
                     card.c.session_id.label("session_id"),
