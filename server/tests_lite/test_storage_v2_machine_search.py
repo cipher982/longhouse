@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from starlette.requests import Request
 
 from zerg.routers import agents_search
@@ -16,6 +17,15 @@ def _request(path: str) -> Request:
 
 def _fail_legacy_factory():
     raise AssertionError("storage-v2 machine search must not open DATABASE_URL")
+
+
+def test_recall_contract_accepts_evaluator_depth():
+    app = FastAPI()
+    app.include_router(agents_search.router)
+    operation = app.openapi()["paths"]["/agents/recall"]["get"]
+    max_results = next(parameter for parameter in operation["parameters"] if parameter["name"] == "max_results")
+
+    assert max_results["schema"]["maximum"] == 25
 
 
 def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):

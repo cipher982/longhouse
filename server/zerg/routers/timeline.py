@@ -378,7 +378,7 @@ async def recall_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
-    max_results: int = Query(5, ge=1, le=20, description="Max matches"),
+    max_results: int = Query(5, ge=1, le=25, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
