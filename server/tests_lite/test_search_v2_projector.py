@@ -84,6 +84,33 @@ async def test_search_projector_overlaps_claimed_sessions(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_projector_overlaps_claimed_sessions(monkeypatch):
+    store_id = str(uuid4())
+    catalog = FakeClient(
+        {
+            "projector.store.bind.v2": {"changed": True},
+            "projector.state.claim.v2": {"claimed": [{"session_id": "one"}, {"session_id": "two"}]},
+        }
+    )
+    search = FakeClient({"search.ping.v2": {"store_id": store_id, "schema_generation": "searchd-test"}})
+    projector = SearchV2Projector(catalog=catalog, search=search, render_workers=SimpleNamespace())
+    started: set[str] = set()
+    both_started = asyncio.Event()
+
+    async def run_claim(state, *, claim_token):
+        assert claim_token
+        started.add(state["session_id"])
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+
+    monkeypatch.setattr(projector, "_run_claim", run_claim)
+
+    assert await projector.run_once(limit=2) == 2
+    assert started == {"one", "two"}
+
+
+@pytest.mark.asyncio
 async def test_search_projector_indexes_frozen_manifest_then_completes_claim(monkeypatch):
     session_id = str(uuid4())
     generation_id = str(uuid4())
