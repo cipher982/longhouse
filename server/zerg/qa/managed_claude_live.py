@@ -150,6 +150,11 @@ def transcript_paths(session_id: str) -> list[Path]:
     return sorted((Path.home() / ".claude" / "projects").glob(f"**/{session_id}.jsonl"))
 
 
+def transcript_lookup_id(longhouse_session_id: str, provider_session_id: str | None = None) -> str:
+    """Use Claude's provider id for transcript files, with a legacy fallback."""
+    return provider_session_id or longhouse_session_id
+
+
 def text_fragments(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -495,7 +500,7 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                 and prompt_sent_at is not None
                 and time.monotonic() >= prompt_sent_at + config.steer_delay_secs
             ):
-                steer_transcript_cursor = transcript_line_counts(session_id)
+                steer_transcript_cursor = transcript_line_counts(transcript_lookup_id(session_id, provider_session_id))
                 steer = channel_send(session_id, config.steer_text, meta={"intent": "steer"}, repo_root=repo_root)
                 steer_send_attempted = True
                 steer_send_returncode = steer.returncode
@@ -516,7 +521,7 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                     transcript_line,
                     transcript_timestamp,
                 ) = assistant_transcript_contains(
-                    session_id,
+                    transcript_lookup_id(session_id, provider_session_id),
                     config.steer_expected if config.steer_text else config.expected,
                     after_line_counts=steer_transcript_cursor if config.steer_text else None,
                 )
@@ -654,6 +659,7 @@ __all__ = [
     "strip_terminal_controls",
     "text_fragments",
     "transcript_line_counts",
+    "transcript_lookup_id",
     "transcript_paths",
     "utc_now",
     "wait_for_channel_ready",

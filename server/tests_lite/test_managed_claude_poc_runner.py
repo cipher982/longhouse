@@ -172,6 +172,13 @@ def test_find_channel_session_id_resolves_longhouse_id_by_cwd(tmp_path, monkeypa
     assert runner.find_channel_session_id(cwd) == session_id
 
 
+def test_transcript_lookup_id_uses_provider_session_id():
+    runner = _load_runner()
+
+    assert runner.transcript_lookup_id("longhouse-session", "provider-session") == "provider-session"
+    assert runner.transcript_lookup_id("longhouse-session") == "longhouse-session"
+
+
 def test_build_channel_send_command_adds_steer_metadata():
     runner = _load_runner()
 

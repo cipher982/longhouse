@@ -31,6 +31,7 @@ from zerg.qa.managed_claude_live import strip_terminal_controls  # noqa: E402,F4
 from zerg.qa.managed_claude_live import terminal_has_provider_auth_prompt  # noqa: E402,F401
 from zerg.qa.managed_claude_live import text_fragments  # noqa: E402,F401
 from zerg.qa.managed_claude_live import transcript_line_counts  # noqa: E402,F401
+from zerg.qa.managed_claude_live import transcript_lookup_id  # noqa: E402,F401
 from zerg.qa.managed_claude_live import transcript_paths  # noqa: E402,F401
 from zerg.qa.managed_claude_live import utc_now  # noqa: E402,F401
 from zerg.qa.managed_claude_live import wait_for_channel_ready  # noqa: E402,F401
