@@ -545,7 +545,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b74425734e664313283479705688cb7c1594ee290ab50e83db499c8863ded38a"
+              "oracle_digest": "fe95e150d5af4cd7ec01dd0429afb4bbb00fc4af659147e19c884898072bd827"
             }
           ]
         },
