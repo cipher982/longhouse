@@ -1033,8 +1033,23 @@ async def _commit_admitted_envelope(
         ):
             from zerg.services.session_pubsub import TOPIC_TIMELINE
             from zerg.services.session_pubsub import get_pubsub
+            from zerg.services.session_pubsub import topic_session
 
-            get_pubsub().publish(TOPIC_TIMELINE, {"session_id": str(spec.session_id), "kind": "durable_content"})
+            payload = {
+                "session_id": str(spec.session_id),
+                "kind": "ingest",
+                "events_inserted": int(render_manifest["event_count"] or 0),
+                "provider": spec.provider,
+                "source": "storage_v2",
+                "server_fanout_at_ms": int(datetime.now(UTC).timestamp() * 1000),
+            }
+            bus = get_pubsub()
+            # Storage-v2 is the durable archive path for managed providers. It
+            # must wake the focused workspace as well as the global timeline;
+            # otherwise a detail page attached to an empty shell never
+            # refetches the render events that just became durable.
+            bus.publish(topic_session(str(spec.session_id)), payload)
+            bus.publish(TOPIC_TIMELINE, payload)
         return _validated_receipt(committed.get("receipt"))
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)

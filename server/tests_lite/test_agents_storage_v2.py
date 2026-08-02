@@ -21,6 +21,10 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
+from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_pubsub import reset_pubsub_for_test
+from zerg.services.session_pubsub import topic_session
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RenderDetailCursor
 from zerg.storage_v2.contracts import envelope_id
@@ -239,6 +243,8 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
         machine_id="cinder",
         epoch=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"),
     )
+    reset_pubsub_for_test()
+    bus = get_pubsub()
 
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -254,6 +260,21 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
                 headers={"X-Longhouse-Storage-Lane": "live"},
             )
             assert response.status_code == 200, response.text
+            with bus.subscribe(topic_session(payload["session_id"]), since_seq=0) as session_sub, bus.subscribe(
+                TOPIC_TIMELINE, since_seq=0
+            ) as timeline_sub:
+                # The subscriptions intentionally replay from the beginning:
+                # the commit happened before they attached, and the replay
+                # buffer is the proof that both fan-out lanes received the
+                # same durable-content wake.
+                session_msg = await session_sub.next_message(timeout=0.1)
+                timeline_msg = await timeline_sub.next_message(timeout=0.1)
+            assert session_msg is not None
+            assert timeline_msg is not None
+            assert session_msg.payload == timeline_msg.payload
+            assert session_msg.payload["kind"] == "ingest"
+            assert session_msg.payload["source"] == "storage_v2"
+            assert session_msg.payload["events_inserted"] == 2
             receipt = response.json()
             assert receipt == {
                 "v": 2,
@@ -379,6 +400,7 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
         )
         assert decoded.envelope_id == payload["expected_envelope_id"]
     finally:
+        reset_pubsub_for_test()
         await workers.close()
         await catalog.close()
         await daemon.close()
