@@ -217,7 +217,7 @@ def test_codex_result_event_preserves_usage_and_unreported_cost() -> None:
     assert result == {
         "type": "turn.completed",
         "accounting_status": "provider_reported_usage_cost_unavailable",
-        "accounting_status_source": "factory_policy_classification",
+        "accounting_status_source": "producer_observation_classification",
         "usage": {
             "input_tokens": 10609,
             "cached_input_tokens": 0,

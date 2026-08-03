@@ -93,7 +93,7 @@ def _scrub_tree(root: Path, secrets: tuple[str, ...]) -> None:
 
 
 def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
-    """Refresh source references after redaction changed retained bytes."""
+    """Refresh and relativize source references after redaction."""
 
     if isinstance(value, list):
         return [_refresh_native_source_digests(item, artifact_root=artifact_root) for item in value]
@@ -110,9 +110,14 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
             updated_sources.append(source)
             continue
         try:
-            path = Path(source["path"]).expanduser().resolve(strict=True)
+            raw_path = Path(source["path"]).expanduser()
+            path = (raw_path if raw_path.is_absolute() else root / raw_path).resolve(strict=True)
             if path.is_relative_to(root) and path.is_file():
-                source = {**source, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                source = {
+                    **source,
+                    "path": path.relative_to(root).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
         except (OSError, ValueError):
             pass
         updated_sources.append(source)
@@ -210,7 +215,10 @@ def run_semantic_profile(
     evidence_root.mkdir(parents=True, exist_ok=True)
     observation = _redact_value(observation, secrets)
     _scrub_tree(evidence_root, secrets)
-    observation = _refresh_native_source_digests(observation, artifact_root=evidence_root)
+    # The factory manifest is relative to the invocation root (the parent of
+    # qualification-v2), not merely semantic-evidence. Keep source references
+    # portable when the complete run bundle is copied to another node.
+    observation = _refresh_native_source_digests(observation, artifact_root=output_root.parent)
     semantic_path = evidence_root / "semantic-observation.json"
     identity.atomic_json(semantic_path, observation)
     raw_digest = identity.sha256(semantic_path.read_bytes())

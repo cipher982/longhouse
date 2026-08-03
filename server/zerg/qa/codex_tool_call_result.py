@@ -127,7 +127,7 @@ def _compact_codex_result_event(events: list[dict[str, Any]], *, model: str | No
     compact: dict[str, Any] = {
         "type": event.get("type"),
         "accounting_status": "provider_reported_usage_cost_unavailable",
-        "accounting_status_source": "factory_policy_classification",
+        "accounting_status_source": "producer_observation_classification",
     }
     usage = _flatten_numeric_usage(event.get("usage"))
     if usage:

@@ -1239,14 +1239,17 @@ def _cursor_model_probe_with_runtime_home(
         and cursor_usage is not None
     ):
         cursor_result_event = {
-            key: result_event[key] for key in ("session_id", "request_id", "duration_ms", "duration_api_ms") if key in result_event
+            key: result_event[key]
+            for key in ("type", "subtype", "session_id", "request_id", "duration_ms", "duration_api_ms")
+            if key in result_event
         }
         cursor_result_event["usage"] = cursor_usage
         for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_write_input_tokens", "cacheRead", "cacheWrite"):
             if key in result_event:
                 cursor_result_event[key] = result_event[key]
         cursor_result_event["accounting_status"] = "subscription_aggregate_unreported"
-        cursor_result_event["accounting_status_source"] = "factory_policy_classification"
+        cursor_result_event["accounting_status_source"] = "producer_observation_classification"
+        cursor_result_event["model_source"] = "provider_event"
         row = _probe_status_row(
             probe,
             status="observed",
@@ -1268,6 +1271,7 @@ def _cursor_model_probe_with_runtime_home(
                 "path": str(capture_path.resolve()),
                 "sha256": _sha256(capture_path),
                 "kind": "provider_jsonl_stream",
+                "event_type": result_event.get("type"),
             }
         ]
         row["live_model_evidence"] = {

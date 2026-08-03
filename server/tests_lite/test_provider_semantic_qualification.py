@@ -179,6 +179,7 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     assert observation["live_model_evidence"]["model"] == "claude-haiku-test"
     assert observation["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
     source = observation["live_model_evidence"]["source_artifacts"][0]
+    assert source["path"] == "output/semantic-evidence/live/provider-stderr.log"
     assert source["sha256"] == hashlib.sha256((output / "semantic-evidence" / "live" / "provider-stderr.log").read_bytes()).hexdigest()
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained

@@ -823,6 +823,7 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
     model = event.get("model")
     if isinstance(model, str) and model.strip():
         compact["model"] = model.strip()
+        compact["model_source"] = "provider_event"
     aggregate_usage = _flatten_numeric_usage(event.get("usage"))
     model_usage = _flatten_numeric_usage(event.get("modelUsage"))
     if aggregate_usage and model_usage:
@@ -997,6 +998,12 @@ def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[s
     observed_model = _claude_observed_model(events)
     if compact_result is not None and "model" not in compact_result and observed_model is not None:
         compact_result["model"] = observed_model
+        compact_result["model_source"] = "provider_event"
+    if compact_result is not None and "model" not in compact_result:
+        requested_model = str(os.environ.get("ANTHROPIC_MODEL") or "").strip()
+        if requested_model:
+            compact_result["model"] = requested_model
+            compact_result["model_source"] = "invocation"
     session_ids = sorted({str(event.get("session_id") or "").strip() for event in events if str(event.get("session_id") or "").strip()})
     evidence = {
         "provider_version": version,
@@ -1267,13 +1274,9 @@ def _compact_opencode_result_event(
             for event in events
         ),
         "accounting_status": (
-            "provider_reported"
-            if usage and has_cost
-            else "provider_reported_usage_cost_unavailable"
-            if usage
-            else "not_observed"
+            "provider_reported" if usage and has_cost else "provider_reported_usage_cost_unavailable" if usage else "not_observed"
         ),
-        "accounting_status_source": "factory_policy_classification",
+        "accounting_status_source": "producer_observation_classification",
     }
     provider_model = part.get("modelID") or part.get("model")
     if isinstance(provider_model, str) and provider_model.strip():

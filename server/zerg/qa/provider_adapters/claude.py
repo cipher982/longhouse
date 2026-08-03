@@ -265,8 +265,19 @@ def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any
     if not isinstance(result_event, Mapping):
         return None
     model = _clean_optional_str(result_event.get("model") or canary.get("model"))
+    result_event_payload = dict(result_event)
+    if model and not result_event_payload.get("model"):
+        result_event_payload["model"] = model
+        result_event_payload["model_source"] = "invocation"
+    elif model and not result_event_payload.get("model_source"):
+        result_event_payload["model_source"] = "provider_event"
     source_artifacts = [
-        {"path": canary[path_key], "sha256": canary[digest_key], "kind": "provider_jsonl_stream"}
+        {
+            "path": canary[path_key],
+            "sha256": canary[digest_key],
+            "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
+            **({"event_type": result_event.get("type")} if path_key == "stdout_path" else {}),
+        }
         for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
         if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
     ]
@@ -274,7 +285,7 @@ def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any
         "source_canary": "claude_real_print",
         "operation_evidence": claude_real_print_operation_evidence(canary),
         "model": model,
-        "result_event": dict(result_event),
+        "result_event": result_event_payload,
         "source_artifacts": source_artifacts,
     }
 

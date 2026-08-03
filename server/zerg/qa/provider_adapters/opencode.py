@@ -240,7 +240,12 @@ def opencode_real_print_model_evidence(artifact: Mapping[str, Any]) -> dict[str,
         return None
     model = _clean_optional_str(result_event.get("model") or canary.get("model"))
     source_artifacts = [
-        {"path": canary[path_key], "sha256": canary[digest_key], "kind": "provider_jsonl_stream"}
+        {
+            "path": canary[path_key],
+            "sha256": canary[digest_key],
+            "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
+            **({"event_type": result_event.get("type")} if path_key == "stdout_path" else {}),
+        }
         for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
         if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
     ]

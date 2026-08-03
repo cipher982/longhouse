@@ -6099,6 +6099,7 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
         return payload
 
     observation = run_codex_real_tool_command(binary, api_key=api_key)
+    result_event = observation.get("result_event")
     redacted_events = observation.get("redacted_events")
     source_artifacts: list[dict[str, Any]] = []
     if isinstance(redacted_events, list):
@@ -6111,6 +6112,7 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
                 "path": str(native_path.resolve()),
                 "sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
                 "kind": "provider_jsonl_stream",
+                "event_type": result_event.get("type"),
             }
         )
     package.write_json(
@@ -6144,7 +6146,6 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
         "timed_out": observation["timed_out"],
         "error": observation["error"],
     }
-    result_event = observation.get("result_event")
     if isinstance(result_event, dict):
         payload["live_model_evidence"] = {
             "source_canary": "codex_tool_call_result_strict",
