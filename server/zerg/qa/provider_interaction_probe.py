@@ -1781,6 +1781,7 @@ def _start_claude_probe_session(
     environment: Mapping[str, str],
     timeout: float,
     session_name: str,
+    secrets: tuple[bytes, ...] = (),
 ) -> ProviderPtySession:
     """Launch Claude in a fresh profile and prove provider onboarding ended."""
 
@@ -1860,7 +1861,7 @@ def _start_claude_probe_session(
         return session
     except BaseException:
         session.close()
-        _redact_terminal_file(terminal_path)
+        _redact_terminal_file(terminal_path, secrets=secrets)
         raise
 
 
@@ -1895,6 +1896,7 @@ def _claude_effort_probe(
             environment=environment,
             timeout=timeout,
             session_name="Claude provider interaction probe",
+            secrets=secrets,
         )
         transcript_before = _transcript_snapshot(config_dir)
         session.submit_line("/effort high")
@@ -2004,6 +2006,7 @@ def _claude_clear_probe(
             environment=environment,
             timeout=timeout,
             session_name="Claude clear interaction probe",
+            secrets=secrets,
         )
         transcript_before = _transcript_snapshot(config_dir)
         session.submit_line("/clear")
@@ -2109,6 +2112,7 @@ def _claude_model_picker_probe(
             environment=environment,
             timeout=timeout,
             session_name="Claude model picker interaction probe",
+            secrets=secrets,
         )
         before_bytes = terminal_path.stat().st_size
         session.submit_line("/model")
