@@ -7,11 +7,13 @@ import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from typing import Mapping
 from uuid import NAMESPACE_URL
 from uuid import uuid5
 
+from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.universal_agent_harness import STATUS_BLOCKED
 from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
@@ -258,6 +260,33 @@ def claude_real_print_operation_evidence(canary: Mapping[str, Any]) -> dict[str,
     )
 
 
+def _claude_model_source_event_digest(canary: Mapping[str, Any]) -> str | None:
+    """Recover the provider model event when Claude's result says ``<synthetic>``."""
+
+    stdout_path = canary.get("stdout_path")
+    if not isinstance(stdout_path, str) or not stdout_path.strip():
+        return None
+    try:
+        lines = Path(stdout_path).expanduser().read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        model = event.get("model")
+        if not isinstance(model, str) and isinstance(event.get("message"), Mapping):
+            model = event["message"].get("model")
+        if isinstance(model, str) and model.strip() and model != "<synthetic>":
+            return raw_event_digest(event)
+    return None
+
+
 def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any] | None:
     """Return one canonical model-backed envelope for receipt derivation."""
 
@@ -268,6 +297,8 @@ def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any
     if result_event_payload.get("model") == "<synthetic>":
         result_event_payload.pop("model")
         result_event_payload.pop("model_source", None)
+        if model_source_event_digest := _claude_model_source_event_digest(canary):
+            result_event_payload["model_source_event_sha256"] = model_source_event_digest
     model = _clean_optional_str(result_event_payload.get("model") or canary.get("model"))
     if model and not result_event_payload.get("model"):
         result_event_payload["model"] = model
