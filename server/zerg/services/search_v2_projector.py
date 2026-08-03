@@ -13,6 +13,7 @@ from uuid import UUID
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.runtime_boot import RUNTIME_BOOT_ID
 from zerg.searchd.store import object_set_hash
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
@@ -57,7 +58,7 @@ class SearchV2Projector:
         self.search = search
         self.render_workers = render_workers
         self.raw_workers = raw_workers
-        self.worker_id = worker_id or f"search-v2:{os.getpid()}"
+        self.worker_id = worker_id or f"search-v2:{RUNTIME_BOOT_ID}"
         self._bound_store_id: str | None = None
         self._raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
         self._sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}

@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+from zerg.runtime_boot import RUNTIME_BOOT_ID
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.local_embedder import get_local_embedder
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
@@ -42,7 +43,7 @@ class EmbeddingsV2Projector:
     ) -> None:
         self.catalog = catalog
         self.search = search
-        self.worker_id = worker_id or f"embeddings-v2:{os.getpid()}"
+        self.worker_id = worker_id or f"embeddings-v2:{RUNTIME_BOOT_ID}"
         self._bound_store_id: str | None = None
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:

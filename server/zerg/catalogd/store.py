@@ -7888,25 +7888,32 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
-    def release_projector_claims_on_startup(self, *, observed_at: datetime) -> dict[str, Any]:
+    def release_projector_claims_on_startup(
+        self,
+        *,
+        active_worker_ids: tuple[str, ...],
+        observed_at: datetime,
+    ) -> dict[str, Any]:
         """Release leases whose workers cannot prove ownership across this daemon generation."""
 
         table = ProjectorState.__table__
+        stale_claim = and_(table.c.status == "claimed", table.c.projector.in_(KNOWN_PROJECTORS))
+        if active_worker_ids:
+            stale_claim = and_(stale_claim, or_(table.c.worker_id.is_(None), ~table.c.worker_id.in_(active_worker_ids)))
         with _write_transaction(self.engine) as connection:
-            claimed_count = int(connection.execute(select(func.count()).where(table.c.status == "claimed")).scalar_one())
+            claimed_count = int(connection.execute(select(func.count()).where(stale_claim)).scalar_one())
             if claimed_count == 0:
                 return {"released": 0, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, observed_at)
             connection.execute(
                 update(table)
-                .where(table.c.status == "claimed")
+                .where(stale_claim)
                 .values(
                     claimed_revision=None,
                     claim_token=None,
                     worker_id=None,
                     claim_expires_at=None,
                     status="idle",
-                    retry_at=None,
                     commit_seq=commit_seq,
                     updated_at=observed_at,
                 )

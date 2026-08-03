@@ -54,6 +54,7 @@ class CatalogDaemon:
         socket_path: Path,
         schema_generation: str = CATALOG_SCHEMA_GENERATION,
         checkpoint_interval_seconds: float = 30.0,
+        runtime_boot_id: str | None = None,
     ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.socket_path = socket_path.expanduser().resolve()
@@ -65,6 +66,7 @@ class CatalogDaemon:
         self._meta: CatalogMeta | None = None
         self._schema_generation = schema_generation
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
+        self._runtime_boot_id = runtime_boot_id
         self._executor: ThreadPoolExecutor | None = None
         self._read_executor: ThreadPoolExecutor | None = None
         self._projector_read_executor: ThreadPoolExecutor | None = None
@@ -94,11 +96,21 @@ class CatalogDaemon:
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
             self._store.ensure_known_projector_states()
-            # Projector workers live in the supervising Runtime Host process.
-            # If catalogd is starting, no worker that owned a durable claim can
-            # still prove ownership of it. Release those claims immediately
-            # instead of waiting through 15-minute/hour-long work leases.
-            self._store.release_projector_claims_on_startup(observed_at=datetime.now(UTC))
+            # A Runtime Host replacement cannot retain claim ownership, but a
+            # child-only catalogd restart must preserve work still running in
+            # the same host process. The shared boot id distinguishes them.
+            active_workers = (
+                ()
+                if self._runtime_boot_id is None
+                else (
+                    f"search-v2:{self._runtime_boot_id}",
+                    f"embeddings-v2:{self._runtime_boot_id}",
+                )
+            )
+            self._store.release_projector_claims_on_startup(
+                active_worker_ids=active_workers,
+                observed_at=datetime.now(UTC),
+            )
             self._meta = read_catalog_meta(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)

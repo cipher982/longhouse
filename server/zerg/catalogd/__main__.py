@@ -14,10 +14,10 @@ from pathlib import Path
 import zerg.bootstrap_sqlite  # noqa: F401  # pin sqlite before SQLAlchemy imports
 
 
-async def _run(database_path: Path, socket_path: Path) -> None:
+async def _run(database_path: Path, socket_path: Path, runtime_boot_id: str | None) -> None:
     from zerg.catalogd.server import CatalogDaemon
 
-    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path, runtime_boot_id=runtime_boot_id)
     stop_requested = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -42,6 +42,7 @@ def _serve_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--socket", type=Path, required=True)
+    parser.add_argument("--runtime-boot-id")
     return parser
 
 
@@ -107,7 +108,7 @@ def main() -> int:
 
     configure_logging(os.getenv("LOG_LEVEL", "INFO"))
     try:
-        asyncio.run(_run(args.database, args.socket))
+        asyncio.run(_run(args.database, args.socket, args.runtime_boot_id))
     except KeyboardInterrupt:
         return 0
     return 0

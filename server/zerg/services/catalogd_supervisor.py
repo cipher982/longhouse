@@ -19,6 +19,7 @@ from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
 from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 from zerg.config import get_settings_unchecked
 from zerg.config import sqlite_file_path
+from zerg.runtime_boot import RUNTIME_BOOT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,8 @@ class CatalogdSupervisor:
                     str(self.database_path),
                     "--socket",
                     str(self.socket_path),
+                    "--runtime-boot-id",
+                    RUNTIME_BOOT_ID,
                 )
                 self._process = process
                 self._write_status("starting", ownership="owned", pid=process.pid)

@@ -294,8 +294,14 @@ async def test_catalog_restart_releases_projector_claim_without_losing_completed
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    projector = "render-v2"
-    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    projector = "search-v2"
+    old_runtime_boot_id = str(uuid4())
+    old_worker_id = f"search-v2:{old_runtime_boot_id}"
+    daemon = CatalogDaemon(
+        database_path=database_path,
+        socket_path=socket_path,
+        runtime_boot_id=old_runtime_boot_id,
+    )
     await daemon.start()
     client = CatalogClient(socket_path)
     first_token = str(uuid4())
@@ -313,7 +319,7 @@ async def test_catalog_restart_releases_projector_claim_without_losing_completed
             "projector.state.claim.v2",
             {
                 "projector": projector,
-                "worker_id": "old-runtime",
+                "worker_id": old_worker_id,
                 "claim_token": first_token,
                 "now": now.isoformat(),
                 "lease_seconds": 3_600,
@@ -344,7 +350,7 @@ async def test_catalog_restart_releases_projector_claim_without_losing_completed
             "projector.state.claim.v2",
             {
                 "projector": projector,
-                "worker_id": "old-runtime",
+                "worker_id": old_worker_id,
                 "claim_token": second_token,
                 "now": (now + timedelta(seconds=2)).isoformat(),
                 "lease_seconds": 3_600,
@@ -356,7 +362,12 @@ async def test_catalog_restart_releases_projector_claim_without_losing_completed
         await client.close()
         await daemon.close()
 
-    restarted = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    new_runtime_boot_id = str(uuid4())
+    restarted = CatalogDaemon(
+        database_path=database_path,
+        socket_path=socket_path,
+        runtime_boot_id=new_runtime_boot_id,
+    )
     await restarted.start()
     restarted_client = CatalogClient(socket_path)
     try:
@@ -364,7 +375,7 @@ async def test_catalog_restart_releases_projector_claim_without_losing_completed
             "projector.state.claim.v2",
             {
                 "projector": projector,
-                "worker_id": "new-runtime",
+                "worker_id": f"search-v2:{new_runtime_boot_id}",
                 "claim_token": str(uuid4()),
                 "now": (now + timedelta(seconds=3)).isoformat(),
                 "lease_seconds": 3_600,
@@ -374,6 +385,64 @@ async def test_catalog_restart_releases_projector_claim_without_losing_completed
         assert reclaimed["claimed"][0]["session_id"] == session_id
         assert reclaimed["claimed"][0]["completed_revision"] == "5"
         assert reclaimed["claimed"][0]["claimed_revision"] == "9"
+    finally:
+        await restarted_client.close()
+        await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_catalog_child_restart_preserves_claim_from_same_runtime_boot(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    runtime_boot_id = str(uuid4())
+    worker_id = f"search-v2:{runtime_boot_id}"
+    claim_token = str(uuid4())
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path, runtime_boot_id=runtime_boot_id)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": "search-v2",
+                "session_id": session_id,
+                "desired_revision": 9,
+                "observed_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": worker_id,
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 3_600,
+                "limit": 1,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    restarted = CatalogDaemon(database_path=database_path, socket_path=socket_path, runtime_boot_id=runtime_boot_id)
+    await restarted.start()
+    restarted_client = CatalogClient(socket_path)
+    try:
+        replay = await restarted_client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": worker_id,
+                "claim_token": claim_token,
+                "now": (now + timedelta(seconds=1)).isoformat(),
+                "lease_seconds": 3_600,
+                "limit": 1,
+            },
+        )
+        assert replay["exact_replay"] is True
+        assert replay["claimed"][0]["session_id"] == session_id
     finally:
         await restarted_client.close()
         await restarted.close()
