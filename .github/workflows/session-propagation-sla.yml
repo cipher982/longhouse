@@ -25,6 +25,11 @@ on:
         required: false
         default: 'zerg'
         type: string
+      expected_hosted_commit:
+        description: 'Exact already-deployed Runtime Host commit (defaults to workflow SHA)'
+        required: false
+        default: ''
+        type: string
       include_experimental:
         description: 'Also run report-only provider and secondary-path cases'
         required: false
@@ -46,6 +51,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config
       - name: Build native pair once
         run: |
           cargo build --manifest-path engine/Cargo.toml --profile ci --bin longhouse --bin longhouse-engine
@@ -131,7 +138,7 @@ jobs:
       SESSION_PROPAGATION_OUTPUT_ROOT: ${{ github.workspace }}/artifacts/session-propagation-sla/gha-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.case }}
       SESSION_PROPAGATION_CODEX_EFFORT: low
       SESSION_PROPAGATION_PROVIDER_TO_PIXEL_ONLY: ${{ matrix.provider_to_pixel_only || false }}
-      SESSION_PROPAGATION_EXPECTED_HOSTED_COMMIT: ${{ github.sha }}
+      SESSION_PROPAGATION_EXPECTED_HOSTED_COMMIT: ${{ inputs.expected_hosted_commit || github.sha }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       INCLUDE_EXPERIMENTAL: ${{ inputs.include_experimental || 'false' }}
       LONGHOUSE_DEVICE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
