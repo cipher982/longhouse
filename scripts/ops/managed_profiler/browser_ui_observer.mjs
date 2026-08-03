@@ -452,11 +452,7 @@ async function waitForSessionIdFile(timeoutMs) {
 try {
   browser = await chromium.launch({
     headless: true,
-    // Containerized CI runners have no user namespaces available, so the Chrome
-    // sandbox aborts the process before the first page and Playwright reports it
-    // as "Target page, context or browser has been closed". This observer only
-    // ever loads the first-party Longhouse UI, so the sandbox buys nothing here.
-    args: ["--no-sandbox", ...(disableQuic ? ["--disable-quic"] : [])],
+    ...(disableQuic ? { args: ["--disable-quic"] } : {}),
   });
   emit("transport_mode", {
     mode: disableQuic ? "http_without_quic" : "default",

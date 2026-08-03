@@ -193,7 +193,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Playwright browser
-        run: cd e2e && bunx playwright install chromium
+        # --with-deps installs the shared libraries chromium links against.
+        # Without it the runner downloads a browser it cannot execute, and the
+        # profiler fails as "browser observer did not reach ready state" rather
+        # than as a missing libnspr4.so.
+        run: cd e2e && bunx playwright install --with-deps chromium
 
       - name: Select matrix case
         id: selection
