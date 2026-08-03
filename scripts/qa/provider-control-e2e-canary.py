@@ -42,6 +42,7 @@ CLAUDE_REAL_PRINT_ENV_KEYS = (
     "ANTHROPIC_MODEL",
 )
 CLAUDE_CHANNEL_STDOUT_TIMEOUT_SECS = 20.0
+OPENCODE_BARE_MODEL_VENDORS = frozenset({"deepseek", "~openai"})
 
 
 def _repo_root_from_script() -> Path:
@@ -1241,8 +1242,8 @@ def _opencode_qualification_model() -> str:
     # every real-run canary selects the same model as the interaction probe.
     if configured.startswith("openrouter/"):
         return configured
-    vendor = configured.split("/", 1)[0]
-    if vendor not in {"deepseek", "~openai"}:
+    vendor, separator, model_name = configured.partition("/")
+    if vendor not in OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
         raise ValueError(
             "OpenCode qualification model must use openrouter/ or a supported "
             f"bare OpenRouter vendor; got {configured!r}"

@@ -109,6 +109,9 @@ def test_opencode_model_argument_rejects_an_unrecognized_bare_vendor() -> None:
     with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
         provider_interaction_probe._opencode_cli_model("anthropic/claude-sonnet")  # noqa: SLF001
 
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        provider_interaction_probe._opencode_cli_model("deepseek/")  # noqa: SLF001
+
 
 def test_provider_auth_prompt_detection_does_not_match_bare_status_or_help_text() -> None:
     assert provider_interaction_probe._looks_like_provider_auth_prompt("HTTP 401 retry; API key examples") is False  # noqa: SLF001

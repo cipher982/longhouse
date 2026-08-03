@@ -50,6 +50,7 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _NEGATIVE_PROOF_QUIESCENCE_SECONDS = MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
+_OPENCODE_BARE_MODEL_VENDORS = frozenset({"deepseek", "~openai"})
 _PROVIDER_VERSION_PATTERNS = {
     "antigravity": antigravity_release_identity.VERSION_LINE,
     "claude": claude_release_identity.VERSION_LINE,
@@ -591,8 +592,8 @@ def _opencode_cli_model(model: str | None) -> str | None:
         return None
     if value.startswith("openrouter/"):
         return value
-    vendor = value.split("/", 1)[0]
-    if vendor not in {"deepseek", "~openai"}:
+    vendor, separator, model_name = value.partition("/")
+    if vendor not in _OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
         raise ValueError("OpenCode qualification model must use openrouter/ or a supported " f"bare OpenRouter vendor; got {value!r}")
     return f"openrouter/{value}"
 

@@ -43,6 +43,10 @@ def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> 
     with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
         canary._opencode_qualification_model()  # noqa: SLF001
 
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/")
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        canary._opencode_qualification_model()  # noqa: SLF001
+
 
 def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance() -> None:
     canary = _load_canary()

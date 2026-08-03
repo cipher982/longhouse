@@ -52,10 +52,10 @@ _HOOK_EVENTS = (
 )
 
 _ARTIFACT_SECRET_PATTERNS = (
-    (re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"), b"sk-ant-<redacted>"),
-    (re.compile(rb"sk-or-v1-[A-Za-z0-9_-]+"), b"sk-or-v1-<redacted>"),
-    (re.compile(rb"crsr_[A-Za-z0-9]+"), b"crsr_<redacted>"),
-    (re.compile(rb"sk-[A-Za-z0-9_-]{20,}"), b"sk-<redacted>"),
+    re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"),
+    re.compile(rb"sk-or-v1-[A-Za-z0-9_-]+"),
+    re.compile(rb"crsr_[A-Za-z0-9]+"),
+    re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
 )
 
 
@@ -83,7 +83,12 @@ def _artifact_secret_values() -> tuple[bytes, ...]:
 
 
 def _scrub_artifact_tree(root: Path) -> None:
-    """Keep retained Gate 0 evidence free of provider credentials."""
+    """Keep retained evidence secret-free without corrupting binary stores.
+
+    Cursor's native stores and the shipper database are SQLite files. Redaction
+    must preserve byte length so SQLite pages, WAL offsets, and the retained
+    source hashes remain readable after the scrub pass.
+    """
 
     exact_values = _artifact_secret_values()
     for path in root.rglob("*"):
@@ -95,9 +100,9 @@ def _scrub_artifact_tree(root: Path) -> None:
             continue
         redacted = original
         for secret in exact_values:
-            redacted = redacted.replace(secret, b"<provider-secret-redacted>")
-        for pattern, replacement in _ARTIFACT_SECRET_PATTERNS:
-            redacted = pattern.sub(replacement, redacted)
+            redacted = redacted.replace(secret, b"_" * len(secret))
+        for pattern in _ARTIFACT_SECRET_PATTERNS:
+            redacted = pattern.sub(lambda match: b"_" * len(match.group(0)), redacted)
         if redacted != original:
             path.write_bytes(redacted)
 
@@ -1746,7 +1751,7 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
                 payload = destination.read_bytes()
                 exact_secrets = _artifact_secret_values()
                 if any(secret in payload for secret in exact_secrets) or any(
-                    pattern.search(payload) for pattern, _replacement in _ARTIFACT_SECRET_PATTERNS
+                    pattern.search(payload) for pattern in _ARTIFACT_SECRET_PATTERNS
                 ):
                     raise RuntimeError("Cursor native store contains provider credential material")
                 try:
