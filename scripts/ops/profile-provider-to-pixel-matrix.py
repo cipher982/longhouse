@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,14 +95,59 @@ def provider_identity(provider: str) -> dict[str, Any]:
 
 
 def hosted_identity(subdomain: str) -> dict[str, Any] | None:
-    try:
-        with urllib.request.urlopen(
-            f"https://{subdomain}.longhouse.ai/api/health", timeout=15
-        ) as response:
-            value = json.load(response)
-    except Exception:
-        return None
-    return value if isinstance(value, dict) else None
+    for attempt in range(10):
+        try:
+            with urllib.request.urlopen(
+                f"https://{subdomain}.longhouse.ai/api/health", timeout=15
+            ) as response:
+                value = json.load(response)
+            return value if isinstance(value, dict) else None
+        except Exception:
+            if attempt < 9:
+                time.sleep(1)
+    return None
+
+
+def single_run_aggregate(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    case = next(iter(metrics.get("cases") or []), {})
+    if not isinstance(case, dict) or not case:
+        return {}, []
+    clean = (
+        case.get("verdict") in {"pass", "slow"}
+        and not case.get("failure_classification")
+        and case.get("provider_timeout") is not True
+    )
+
+    def stats(key: str) -> dict[str, Any]:
+        value = case.get(key)
+        values = [value] if isinstance(value, int) and not isinstance(value, bool) else []
+        return {
+            "count": len(values),
+            "min": value if values else None,
+            "p50": value if values else None,
+            "p95": value if values else None,
+            "max": value if values else None,
+            "target": case.get(key.removesuffix("_ms") + "_target_ms"),
+        }
+
+    metric_keys = sorted(
+        key
+        for key, value in case.items()
+        if key.endswith("_ms") and (value is None or isinstance(value, int))
+    )
+    all_metrics = {key: stats(key) for key in metric_keys}
+    clean_metrics = {key: stats(key) for key in metric_keys}
+    if not clean:
+        for metric in clean_metrics.values():
+            metric.update({"count": 0, "min": None, "p50": None, "p95": None, "max": None})
+    aggregate = {
+        **all_metrics,
+        "clean_observation_count": 1 if clean else 0,
+        "clean_metrics": clean_metrics,
+        "batch_verdict": str(case.get("verdict") or "error"),
+        "verdict_counts": {str(case.get("verdict") or "error"): 1},
+    }
+    return aggregate, [case]
 
 
 def format_ms(value: Any) -> str:
@@ -231,14 +277,26 @@ def main(argv: list[str]) -> int:
             command.extend(["--trust-longhouse-codex-hooks", "--codex-effort", "low"])
         completed = subprocess.run(command, cwd=ROOT, check=False)
         batch = read_json(provider_dir / "batch-metrics.json")
+        aggregate = batch.get("aggregate") or {}
+        runs = batch.get("runs") or []
+        if not aggregate and args.iterations == 1:
+            aggregate, cases = single_run_aggregate(read_json(provider_dir / "metrics.json"))
+            runs = [
+                {
+                    "run_id": provider_run_id,
+                    "metrics_path": str(provider_dir / "metrics.json"),
+                    "exit_code": completed.returncode,
+                    "verdict": aggregate.get("batch_verdict", "error"),
+                }
+            ] if cases else []
         payload["providers"].append(
             {
                 "provider": provider,
                 "sla_case_id": PROVIDER_CASES[provider],
                 "exit_code": completed.returncode,
                 "artifact_dir": str(provider_dir),
-                "aggregate": batch.get("aggregate") or {},
-                "runs": batch.get("runs") or [],
+                "aggregate": aggregate,
+                "runs": runs,
             }
         )
         if completed.returncode == 1:
