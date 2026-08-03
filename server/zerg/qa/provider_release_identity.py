@@ -335,30 +335,49 @@ def run_identity_profile(
     if pre_execution_identity != actual_identity:
         raise RequestError("provider executable changed before execution")
     argv = [str(binary), "--version"]
-    env = {"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}
-    timed_out = False
-    error: str | None = None
-    result: subprocess.CompletedProcess[str] | None = None
-    try:
-        result = subprocess.run(
-            argv,
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        timed_out = True
-        error = "timeout"
-        stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-        stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
-    except OSError as exc:
-        error = str(exc)
-        stdout = ""
-        stderr = ""
-    else:
-        stdout, stderr = result.stdout, result.stderr
+    # Provider launchers are allowed to consult HOME even for a version probe
+    # (Cursor's observed-install wrapper does). Keep that probe hermetic: the
+    # release factory must never make an identity check depend on the operator's
+    # browser/profile home or mutate it. The directory lives beside the retained
+    # run output so it is visible inside the qualification sandbox, then is
+    # removed with the temporary directory after the probe.
+    with tempfile.TemporaryDirectory(prefix="longhouse-provider-identity-", dir=output_root.parent) as identity_home:
+        identity_home_path = Path(identity_home)
+        identity_tmp = identity_home_path / "tmp"
+        identity_tmp.mkdir(mode=0o700)
+        env = {
+            "HOME": str(identity_home_path),
+            "XDG_CACHE_HOME": str(identity_home_path / ".cache"),
+            "XDG_CONFIG_HOME": str(identity_home_path / ".config"),
+            "XDG_DATA_HOME": str(identity_home_path / ".local" / "share"),
+            "TMPDIR": str(identity_tmp),
+            "PATH": os.environ.get("PATH", ""),
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+        timed_out = False
+        error: str | None = None
+        result: subprocess.CompletedProcess[str] | None = None
+        try:
+            result = subprocess.run(
+                argv,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            error = "timeout"
+            stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+            stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
+        except OSError as exc:
+            error = str(exc)
+            stdout = ""
+            stderr = ""
+        else:
+            stdout, stderr = result.stdout, result.stderr
     try:
         post_execution_identity = sha256_file(binary)
     except OSError:

@@ -326,6 +326,50 @@ def test_calendar_versioned_providers_need_their_own_grammar(tmp_path: Path) -> 
     assert result["assertions"]["exact_executable_identity_observed"] == "pass"
 
 
+def test_identity_probe_supplies_an_ephemeral_home_to_provider_launchers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A version probe must not inherit the operator's profile home."""
+
+    ambient_home = tmp_path / "ambient-home"
+    monkeypatch.setenv("HOME", str(ambient_home))
+    marker = tmp_path / "observed-home"
+    binary = tmp_path / "cursor-home-aware"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        f"home = Path(os.environ['HOME'])\nPath({str(marker)!r}).write_text(str(home), encoding='utf-8')\n"
+        "assert home.is_dir()\n"
+        "print('2026.07.23-e383d2b')\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    executable_identity = f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}"
+    output = tmp_path / "cursor-output"
+
+    result = provider_qualification.run(
+        _request(
+            tmp_path,
+            provider="cursor",
+            binary=binary,
+            executable_identity=executable_identity,
+            expected_version="2026.07.23-e383d2b",
+        ),
+        output,
+    )
+
+    assert result["execution_status"] == "completed"
+    assert result["assertions"] == {
+        "exact_executable_identity_observed": "pass",
+        "reported_version_matches_expected": "pass",
+    }
+    observed_home = Path(marker.read_text(encoding="utf-8"))
+    assert observed_home != ambient_home
+    assert not observed_home.exists()
+
+
 def test_cursor_is_reachable_through_the_shared_qualification_dispatcher() -> None:
     """Cursor's proof is driven like every other provider's, not by hand."""
     from zerg.qa.provider_qualification import _PROFILES
