@@ -308,7 +308,7 @@ pub(crate) async fn ship_opencode_database_with_trace(
             record_opencode_reconciliation_attempt(conn, &candidate.source_key)?;
         }
 
-        let parse_result =
+        let mut parse_result =
             match opencode_db::parse_opencode_session(path, &candidate.provider_session_id) {
                 Ok(result) => result,
                 Err(error) => {
@@ -322,6 +322,11 @@ pub(crate) async fn ship_opencode_database_with_trace(
                     continue;
                 }
             };
+        if let Some(project) =
+            opencode_db::managed_project_for_opencode(&candidate.provider_session_id)
+        {
+            parse_result.metadata.project = Some(project);
+        }
 
         let new_offset = parse_result.last_good_offset.max(candidate.version);
         let provider_session_id = parse_result
@@ -4557,6 +4562,7 @@ mod tests {
                 "provider": "opencode",
                 "longhouse_session_id": managed_session_id,
                 "opencode_session_id": "ses_test",
+                "project": "managed-project",
                 "phase": "idle"
             })
             .to_string(),
@@ -4582,6 +4588,7 @@ mod tests {
         handle.join().unwrap();
         let first_payload = decode_payload(&captured.lock().unwrap()[0]);
         assert_eq!(first_payload["id"], managed_session_id);
+        assert_eq!(first_payload["project"], "managed-project");
 
         std::fs::remove_dir_all(&state_root).unwrap();
         let _removed_env = EnvVarGuard::remove("LONGHOUSE_OPENCODE_STATE_ROOT");

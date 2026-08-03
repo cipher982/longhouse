@@ -1085,6 +1085,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
     }
+    if let Some(project) = &args.project {
+        start.args(["--project", project]);
+    }
     if let Some(dir) = &args.claude_dir {
         start.arg("--claude-dir").arg(dir);
     }

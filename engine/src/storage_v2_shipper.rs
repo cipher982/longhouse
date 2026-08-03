@@ -1232,8 +1232,13 @@ pub(crate) fn prepare_next_opencode_envelope(
                 capabilities.max_records,
                 capabilities.max_raw_record_bytes,
             )?;
-            let parse_result =
+            let mut parse_result =
                 opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
+            if let Some(project) =
+                opencode_db::managed_project_for_opencode(&candidate.provider_session_id)
+            {
+                parse_result.metadata.project = Some(project);
+            }
             let managed_session_id = managed_session_id.or_else(|| {
                 opencode_db::managed_longhouse_session_id_for_opencode(
                     &candidate.provider_session_id,

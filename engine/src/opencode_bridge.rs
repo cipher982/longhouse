@@ -26,6 +26,7 @@ pub struct StartConfig {
     pub session_id: String,
     pub run_id: String,
     pub cwd: PathBuf,
+    pub project: Option<String>,
     pub display_name: Option<String>,
     pub opencode_bin: Option<String>,
     pub claude_dir: Option<PathBuf>,
@@ -161,6 +162,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             "connection_id": Uuid::new_v4().to_string(), "lease_generation": Uuid::new_v4().to_string(),
             "provider_session_id": provider_session_id, "server_url": server_url,
             "pid": pid, "cwd": cwd, "username": USERNAME, "password": password,
+            "project": config.project,
             "log_path": log_path, "started_at": now, "updated_at": now,
             "process_start_time": process_start_time, "process_command": process_command,
             "launch_mode": config.launch_mode, "owner_wrapper_pid": 0, "owner_wrapper_start_time": ""

@@ -122,6 +122,11 @@ pub fn managed_longhouse_session_id_for_opencode(provider_session_id: &str) -> O
     )
 }
 
+pub fn managed_project_for_opencode(provider_session_id: &str) -> Option<String> {
+    managed_opencode_binding_from_roots(provider_session_id, &opencode_state_roots())
+        .and_then(|(_, project)| project)
+}
+
 /// A newly created top-level session can become visible in OpenCode's SQLite
 /// store a few milliseconds before the private server event monitor updates its
 /// managed bridge state. Hold that source briefly instead of permanently
@@ -337,6 +342,14 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
     provider_session_id: &str,
     roots: &[PathBuf],
 ) -> Option<String> {
+    managed_opencode_binding_from_roots(provider_session_id, roots)
+        .map(|(session_id, _)| session_id)
+}
+
+fn managed_opencode_binding_from_roots(
+    provider_session_id: &str,
+    roots: &[PathBuf],
+) -> Option<(String, Option<String>)> {
     let provider_session_id = provider_session_id.trim();
     if provider_session_id.is_empty() {
         return None;
@@ -399,7 +412,13 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
                 continue;
             };
             if Uuid::parse_str(longhouse_session_id).is_ok() {
-                return Some(longhouse_session_id.to_string());
+                let project = value
+                    .get("project")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
+                return Some((longhouse_session_id.to_string(), project));
             }
         }
     }
@@ -2321,6 +2340,7 @@ mod tests {
                 "server_url": "http://127.0.0.1:12345",
                 "pid": 12345,
                 "cwd": "/tmp/project",
+                "project": "longhouse",
                 "started_at": "2026-06-23T12:00:00Z",
                 "updated_at": "2026-06-23T12:00:01Z"
             })
@@ -2335,6 +2355,16 @@ mod tests {
             )
             .as_deref(),
             Some(longhouse_session_id)
+        );
+        assert_eq!(
+            managed_opencode_binding_from_roots(
+                "ses_native_server",
+                std::slice::from_ref(&state_root),
+            ),
+            Some((
+                longhouse_session_id.to_string(),
+                Some("longhouse".to_string())
+            ))
         );
         assert_eq!(
             managed_longhouse_session_id_for_opencode_from_roots(

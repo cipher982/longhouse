@@ -623,6 +623,8 @@ enum OpencodeBridgeCommands {
         #[arg(long, default_value = ".")]
         cwd: PathBuf,
         #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
         display_name: Option<String>,
         #[arg(long)]
         opencode_bin: Option<String>,
@@ -1631,6 +1633,7 @@ fn main() -> anyhow::Result<()> {
                 session_id,
                 run_id,
                 cwd,
+                project,
                 display_name,
                 opencode_bin,
                 claude_dir,
@@ -1640,6 +1643,7 @@ fn main() -> anyhow::Result<()> {
                     session_id,
                     run_id,
                     cwd,
+                    project,
                     display_name,
                     opencode_bin,
                     claude_dir,
