@@ -364,36 +364,66 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
     index, connection = _index(tmp_path, rows)
     try:
         query = _unit([rng.random() for _ in range(DIMS)])
-        for project, provider, environment, excluded, since in itertools.product(
-            [None, "zerg"],
-            [None, "claude"],
-            [None, "local", "development"],
-            [None, ["test"], ["test", "development"]],
-            [None, "2026-04-01"],
-        ):
-            resident = index.search(
-                query,
-                owner_id="42",
-                limit=5,
-                project=project,
-                provider=provider,
-                environment=environment,
-                exclude_environments=excluded,
-                since_iso=since,
+        combinations = list(
+            itertools.product(
+                [None, "zerg"],
+                [None, "claude"],
+                [None, "local", "development"],
+                [None, ["test"], ["test", "development"]],
+                [None, "2026-04-01"],
             )
-            reference = _reference_search(
-                connection,
-                query,
-                owner_id="42",
-                limit=5,
-                project=project,
-                provider=provider,
-                environment=environment,
-                exclude_environments=excluded,
-                since_iso=since,
-            )
-            assert [r["session_id"] for r in resident] == reference, (
-                f"divergence for project={project} provider={provider} environment={environment} excluded={excluded} since={since}"
-            )
+        )
+
+        def assert_equivalent() -> None:
+            for project, provider, environment, excluded, since in combinations:
+                resident = index.search(
+                    query,
+                    owner_id="42",
+                    limit=5,
+                    project=project,
+                    provider=provider,
+                    environment=environment,
+                    exclude_environments=excluded,
+                    since_iso=since,
+                )
+                reference = _reference_search(
+                    connection,
+                    query,
+                    owner_id="42",
+                    limit=5,
+                    project=project,
+                    provider=provider,
+                    environment=environment,
+                    exclude_environments=excluded,
+                    since_iso=since,
+                )
+                assert [r["session_id"] for r in resident] == reference, (
+                    f"divergence for project={project} provider={provider} environment={environment} "
+                    f"excluded={excluded} since={since}"
+                )
+
+        assert_equivalent()
+
+        # Repeat the oracle after the store changes shape. Vector updates,
+        # metadata updates, and session pruning must all reach the resident
+        # snapshot without changing ranking/filter semantics.
+        connection.execute(
+            "UPDATE episode_embeddings SET embedding = ? WHERE session_id = 's1'",
+            (_unit([0, 0, 0, 1]).tobytes(),),
+        )
+        connection.execute("UPDATE session_index SET project = 'other', environment = 'local' WHERE session_id = 's3'")
+        connection.execute("DELETE FROM episode_embeddings WHERE session_id = 's2'")
+        connection.execute("DELETE FROM embedding_publications WHERE session_id = 's2'")
+        connection.execute("DELETE FROM session_index WHERE session_id = 's2'")
+        connection.commit()
+        index.load(connection)
+        assert_equivalent()
+
+        # Cold restart reconstructs the same derived snapshot from SQLite.
+        connection.close()
+        connection = open_search_database(tmp_path / "search.db")
+        index = ResidentEpisodeIndex(model=MODEL, dims=DIMS)
+        index.load(connection)
+        assert_equivalent()
     finally:
         connection.close()
