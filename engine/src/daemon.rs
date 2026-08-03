@@ -2928,35 +2928,11 @@ fn start_runtime_outbox_post(
     client: ShipperClient,
     posts: Vec<outbox::PendingRuntimeEventPost>,
 ) {
-    let post_count = posts.len();
-    tasks.spawn_local(async move {
-        let join_started = Instant::now();
-        let post_task = tokio::spawn(async move {
-            let task_started = Instant::now();
-            let (sent, kept) = outbox::post_pending_runtime_event_files(&client, posts).await;
-            (sent, kept, task_started.elapsed().as_millis() as u64)
-        });
-        match post_task.await {
-            Ok((sent, kept, task_elapsed_ms)) => (
-                sent,
-                kept,
-                join_started.elapsed().as_millis() as u64,
-                task_elapsed_ms,
-            ),
-            Err(err) => {
-                tracing::warn!(
-                    post_count,
-                    "Outbox runtime-event POST worker task failed: {}",
-                    err
-                );
-                (
-                    0,
-                    post_count,
-                    join_started.elapsed().as_millis() as u64,
-                    join_started.elapsed().as_millis() as u64,
-                )
-            }
-        }
+    tasks.spawn(async move {
+        let started = Instant::now();
+        let (sent, kept) = outbox::post_pending_runtime_event_files(&client, posts).await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        (sent, kept, elapsed_ms, elapsed_ms)
     });
 }
 
