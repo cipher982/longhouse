@@ -19,6 +19,61 @@ enum UITestHooks {
     static let transcriptBenchmarkDebuggerEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_DEBUGGER"
     static let transcriptBenchmarkTemperatureEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_TEMPERATURE"
     static let appearanceOverrideArgument = "-LONGHOUSE_UI_TEST_APPEARANCE"
+    static let profilerServerEnvironmentKey = "LONGHOUSE_PROFILE_SERVER_URL"
+    static let profilerSessionEnvironmentKey = "LONGHOUSE_PROFILE_SESSION_TOKEN"
+
+    static func installProfilerAuthIfPresent() {
+#if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard let serverURL = nonemptyEnvironmentValue(
+            profilerServerEnvironmentKey,
+            environment: environment
+        ),
+            let sessionToken = nonemptyEnvironmentValue(
+                profilerSessionEnvironmentKey,
+                environment: environment
+            ),
+            let host = URL(string: serverURL)?.host,
+            let cookie = HTTPCookie(properties: [
+                .domain: host,
+                .path: "/",
+                .name: SharedAuthStore.sessionCookieName,
+                .value: sessionToken,
+                .secure: "TRUE",
+                .expires: Date().addingTimeInterval(3600),
+            ]) else {
+            return
+        }
+        SharedAuthStore.saveServerURL(serverURL)
+        SharedAuthStore.setManagedCookies([cookie], for: serverURL)
+        SharedAuthStore.primeSharedCookieStorage(for: serverURL)
+#endif
+    }
+
+    static var isProfilerSession: Bool {
+#if DEBUG
+        nonemptyEnvironmentValue(profilerSessionEnvironmentKey) != nil
+#else
+        false
+#endif
+    }
+
+    static func recordProfilerStreamStage(sessionId: String, stage: String) {
+#if DEBUG
+        guard isProfilerSession else { return }
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("longhouse-profiler-stream-ready", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data().write(
+                to: directory.appendingPathComponent("\(sessionId).\(stage)"),
+                options: .atomic
+            )
+        } catch {
+            return
+        }
+#endif
+    }
 
     static var shouldResetState: Bool {
         ProcessInfo.processInfo.environment[resetStateEnvironmentKey] == "1"
@@ -138,7 +193,14 @@ enum UITestHooks {
     }
 
     private static func nonemptyEnvironmentValue(_ key: String) -> String? {
-        let raw = ProcessInfo.processInfo.environment[key]?
+        nonemptyEnvironmentValue(key, environment: ProcessInfo.processInfo.environment)
+    }
+
+    private static func nonemptyEnvironmentValue(
+        _ key: String,
+        environment: [String: String]
+    ) -> String? {
+        let raw = environment[key]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }

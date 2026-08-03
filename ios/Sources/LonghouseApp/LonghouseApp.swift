@@ -150,6 +150,7 @@ final class AppState: ObservableObject {
     private var runtimeTokenRefreshTask: Task<Void, Never>?
 
     init() {
+        UITestHooks.installProfilerAuthIfPresent()
         // App-group defaults are the fast launch source. Keychain reads can
         // block for seconds after device unlock and must not run in init on the
         // main actor; restoreSession validates credentials asynchronously.
@@ -485,7 +486,7 @@ final class AppState: ObservableObject {
     }
 
     func ensurePushRegistrationIfPossible() async {
-        guard isAuthenticated else {
+        guard isAuthenticated, !UITestHooks.isProfilerSession else {
             return
         }
         let granted = await PushNotificationStore.ensureAuthorizedAndRegister()

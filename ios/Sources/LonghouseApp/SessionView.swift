@@ -1634,6 +1634,11 @@ final class SessionViewModel: ObservableObject {
         let serverTrace: SessionWorkspaceStream.WorkspaceChanged.ServerTrace?
     }
 
+    private struct PendingProvisionalRender {
+        let preview: SessionTranscriptPreview
+        let telemetry: PendingRealtimeTelemetry
+    }
+
     @Published var detail: SessionDetail?
     // Benchmark-only attribution. These deliberately are not @Published: the
     // subsequent transcript mutation owns the SwiftUI invalidation, preventing
@@ -1686,6 +1691,8 @@ final class SessionViewModel: ObservableObject {
     private var streamAuthRefreshAttempted = false
     var hasRealtimeStreamTaskForTesting: Bool { streamTask != nil }
     private var pendingRealtimeTelemetry: PendingRealtimeTelemetry?
+    private var realtimeTranscriptPreview: SessionTranscriptPreview?
+    private var pendingProvisionalRender: PendingProvisionalRender?
     private var activeSessionId: String?
     private var activeServerURL: String?
     private var lastWorkspaceEvents: [SessionEvent] = []
@@ -1758,6 +1765,8 @@ final class SessionViewModel: ObservableObject {
             submittedInputs = []
             transcriptDiagnostics = nil
             pendingRealtimeTelemetry = nil
+            realtimeTranscriptPreview = nil
+            pendingProvisionalRender = nil
             lastWorkspaceEvents = []
             lastWorkspaceProjectionItems = []
             loadedProjectionItemCount = 0
@@ -2179,6 +2188,11 @@ final class SessionViewModel: ObservableObject {
         )
         guard diagnostics.stage == "rendered" || diagnostics.stage == "failed" else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
+        await reportProvisionalPreviewRenderBeacon(
+            api: api,
+            sessionId: sessionId,
+            webkitDiagnostics: diagnostics
+        )
         await reportStateRenderBeacon(
             api: api,
             sessionId: sessionId,
@@ -2314,6 +2328,7 @@ final class SessionViewModel: ObservableObject {
         // optimization only — refreshTail() remains the correctness backstop.
         let s = streamFactory(base, sessionId, lastPubsubSeq, lastWorkspaceRevisionFingerprint)
         stream = s
+        UITestHooks.recordProfilerStreamStage(sessionId: sessionId, stage: "started")
         streamTask = Task { [weak self] in
             let events = await s.start()
             for await event in events {
@@ -2328,12 +2343,15 @@ final class SessionViewModel: ObservableObject {
         case .connected:
             streamConnected = true
             streamAuthRefreshAttempted = false
+            UITestHooks.recordProfilerStreamStage(sessionId: sessionId, stage: "connected")
             openWaterfall?.mark("stream_connected")
         case .disconnected:
             streamConnected = false
+            UITestHooks.recordProfilerStreamStage(sessionId: sessionId, stage: "disconnected")
             openWaterfall?.mark("stream_disconnected")
         case .unauthorized:
             streamConnected = false
+            UITestHooks.recordProfilerStreamStage(sessionId: sessionId, stage: "unauthorized")
             openWaterfall?.mark("stream_unauthorized")
             await handleStreamUnauthorized(sessionId: sessionId, appState: appState)
         case .replayGap(let gap):
@@ -2348,10 +2366,11 @@ final class SessionViewModel: ObservableObject {
             break
         case .changed(let change):
             // Push wake -> refetch the compact tail and emit render beacon.
+            UITestHooks.recordProfilerStreamStage(sessionId: sessionId, stage: "changed")
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
             let calibration = await stream?.clockCalibration()
                 ?? SessionWorkspaceStream.ClockCalibration(skewMs: 0, rttMs: nil, uncertaintyMs: nil, sampleCount: 0)
-            pendingRealtimeTelemetry = PendingRealtimeTelemetry(
+            let realtimeTelemetry = PendingRealtimeTelemetry(
                 latestEventId: change.latest_event_id,
                 serverFanoutAtMs: change.server_fanout_at_ms,
                 clientReceivedAtMs: nowMs,
@@ -2364,6 +2383,7 @@ final class SessionViewModel: ObservableObject {
                 shipTrace: change.ship_trace,
                 serverTrace: change.server_trace
             )
+            pendingRealtimeTelemetry = realtimeTelemetry
             if let seq = change.pubsub_seq {
                 lastPubsubSeq = seq
             }
@@ -2378,6 +2398,10 @@ final class SessionViewModel: ObservableObject {
                     "seq=\(change.pubsub_seq ?? 0) provisional=\(transcriptPreview.isProvisional)"
                 )
                 if transcriptPreview.isProvisional {
+                    pendingProvisionalRender = PendingProvisionalRender(
+                        preview: transcriptPreview,
+                        telemetry: realtimeTelemetry
+                    )
                     return
                 }
             }
@@ -2457,6 +2481,7 @@ final class SessionViewModel: ObservableObject {
 
     private func applyRealtimeTranscriptPreview(_ preview: SessionTranscriptPreview, sessionId: String) {
         guard activeSessionId == sessionId else { return }
+        realtimeTranscriptPreview = preview
         let currentDetail = detail?.replacingTranscriptPreview(preview)
         if let currentDetail {
             detail = currentDetail
@@ -2560,6 +2585,7 @@ final class SessionViewModel: ObservableObject {
                 "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
             )
             self.detail = tail.session
+            self.realtimeTranscriptPreview = tail.session.transcriptPreview
             let events = tail.events
             let buildStartedAt = Date()
             let mergedEvents = mergeRefreshedTail(events)
@@ -3064,6 +3090,47 @@ final class SessionViewModel: ObservableObject {
         if pendingTelemetry != nil {
             pendingRealtimeTelemetry = nil
         }
+    }
+
+    private func reportProvisionalPreviewRenderBeacon(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        webkitDiagnostics: RenderBeaconReporter.WebKitDiagnostics
+    ) async {
+        guard webkitDiagnostics.stage == "rendered" else { return }
+        guard let pendingRender = pendingProvisionalRender,
+              pendingRender.preview.isProvisional,
+              let emittedAt = pendingRender.preview.timestamp.flatMap(LonghouseDateParser.parse) else {
+            return
+        }
+        let pendingTelemetry = pendingRender.telemetry
+        let managed = detail?.stateFacts.controlOwnership == "owned"
+        guard let payload = await RenderBeaconReporter.shared.payload(
+            sessionId: sessionId,
+            latestEventId: String(pendingTelemetry.latestEventId),
+            emittedAt: emittedAt,
+            managed: managed,
+            clockSkewMs: pendingTelemetry.clockSkewMs,
+            clockSyncRttMs: pendingTelemetry.clockSyncRttMs,
+            clockSyncUncertaintyMs: pendingTelemetry.clockSyncUncertaintyMs,
+            clockSyncSampleCount: pendingTelemetry.clockSyncSampleCount,
+            serverFanoutAtMs: pendingTelemetry.serverFanoutAtMs,
+            clientReceivedAtMs: pendingTelemetry.clientReceivedAtMs,
+            pubsubSeq: pendingTelemetry.pubsubSeq,
+            stateCommitSeq: pendingTelemetry.catalogCommitSeq,
+            statePhase: detail?.stateFacts.activityState,
+            stateObservedAtMs: detail?.stateFacts.activityObservedAt.flatMap { LonghouseDateParser.parse($0) }
+                .map { Int64($0.timeIntervalSince1970 * 1000) },
+            shipTraceId: pendingTelemetry.shipTrace?.trace_id,
+            providerObservedAtMs: pendingTelemetry.shipTrace?.observed_at_ms,
+            engineEnqueuedAtMs: pendingTelemetry.shipTrace?.enqueued_at_ms,
+            engineJobStartedAtMs: pendingTelemetry.shipTrace?.job_started_at_ms,
+            engineHTTPSendStartedAtMs: pendingTelemetry.shipTrace?.http_send_started_at_ms,
+            serverHandlerEnteredAtMs: pendingTelemetry.serverTrace?.handler_entered_at_ms,
+            webkit: webkitDiagnostics
+        ) else { return }
+        await api.postRenderBeacon(payload)
+        pendingProvisionalRender = nil
     }
 
     private func reportStateRenderBeacon(

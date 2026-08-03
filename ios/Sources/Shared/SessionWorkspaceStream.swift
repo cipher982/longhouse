@@ -1,9 +1,53 @@
 import Foundation
 import OSLog
 
+private enum SessionStreamTransportEvent: @unchecked Sendable {
+    case response(HTTPURLResponse)
+    case data(Data)
+}
+
+private final class SessionStreamDataDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<SessionStreamTransportEvent, Error>.Continuation
+
+    init(continuation: AsyncThrowingStream<SessionStreamTransportEvent, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let response = response as? HTTPURLResponse else {
+            continuation.finish(throwing: URLError(.badServerResponse))
+            completionHandler(.cancel)
+            return
+        }
+        continuation.yield(.response(response))
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        continuation.yield(.data(data))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: (any Error)?
+    ) {
+        if let error {
+            continuation.finish(throwing: error)
+        } else {
+            continuation.finish()
+        }
+    }
+}
+
 /// Realtime push from the server for a single session workspace.
 ///
-/// Thin SSE (text/event-stream) client using URLSession.AsyncBytes. Parses
+/// Thin SSE (text/event-stream) client using URLSessionDataDelegate. Parses
 /// the event:/id:/data: grammar manually — there's no Apple SSE API.
 ///
 /// Lifecycle: create with `start(sessionId:)`, observe via `AsyncStream`,
@@ -308,6 +352,7 @@ actor SessionWorkspaceStream {
         var req = URLRequest(url: url)
         req.addValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         if lastEventId > 0 {
             req.addValue(String(lastEventId), forHTTPHeaderField: "Last-Event-ID")
         }
@@ -316,59 +361,80 @@ actor SessionWorkspaceStream {
         } else if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
             req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
+        req.assumesHTTP3Capable = false
         // waitsForConnectivity: the URLSession waits during transient network
         // unavailability (cell→wifi transitions) instead of failing fast.
-        let config = URLSessionConfiguration.default
+        // Keep the long-lived SSE lane off the shared Alt-Svc cache. The
+        // hosted edge can advertise HTTP/3 for ordinary requests while its
+        // streaming response remains buffered; an ephemeral session starts
+        // this connection on the reliable HTTP/2 path instead.
+        let config = URLSessionConfiguration.ephemeral
         config.waitsForConnectivity = true
         config.timeoutIntervalForRequest = 600
         config.timeoutIntervalForResource = 3600
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
+        let transport = AsyncThrowingStream<SessionStreamTransportEvent, Error>.makeStream()
+        let delegate = SessionStreamDataDelegate(continuation: transport.continuation)
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        let dataTask = session.dataTask(with: req)
+        defer {
+            dataTask.cancel()
+            session.invalidateAndCancel()
+            transport.continuation.finish()
+        }
 
         logger.debug("workspace stream request started session=\(self.sessionId, privacy: .public) since_seq=\(self.lastEventId, privacy: .public) skip_initial=\(self.skipInitial, privacy: .public)")
-        let (bytes, response) = try await session.bytes(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            logger.error("workspace stream bad response session=\(self.sessionId, privacy: .public)")
-            throw URLError(.badServerResponse)
-        }
-        if http.statusCode == 401 {
-            logger.info("workspace stream unauthorized session=\(self.sessionId, privacy: .public)")
-            throw UnauthorizedError()
-        }
-        guard http.statusCode == 200 else {
-            logger.error("workspace stream non-200 session=\(self.sessionId, privacy: .public) status=\(http.statusCode, privacy: .public)")
-            throw URLError(.badServerResponse)
-        }
-        logger.debug("workspace stream response connected session=\(self.sessionId, privacy: .public)")
-
+        dataTask.resume()
+        var responseAccepted = false
+        var bytesBuffer = Data()
         var eventName = ""
         var eventId: String? = nil
         var dataBuffer = ""
 
-        for try await line in bytes.lines {
+        for try await transportEvent in transport.stream {
             if Task.isCancelled { break }
-            if line.isEmpty {
-                await self.dispatch(eventName: eventName, eventId: eventId, payload: dataBuffer)
-                eventName = ""
-                eventId = nil
-                dataBuffer = ""
-                continue
-            }
-            if line.hasPrefix(":") {
-                // SSE comment / keep-alive. Ignore.
-                continue
-            }
-            if let sep = line.firstIndex(of: ":") {
-                let field = String(line[..<sep])
-                var value = String(line[line.index(after: sep)...])
-                if value.hasPrefix(" ") { value.removeFirst() }
-                switch field {
-                case "event": eventName = value
-                case "id": eventId = value
-                case "data":
-                    if !dataBuffer.isEmpty { dataBuffer.append("\n") }
-                    dataBuffer.append(value)
-                default: break
+            switch transportEvent {
+            case .response(let http):
+                if http.statusCode == 401 {
+                    logger.info("workspace stream unauthorized session=\(self.sessionId, privacy: .public)")
+                    throw UnauthorizedError()
+                }
+                guard http.statusCode == 200 else {
+                    logger.error("workspace stream non-200 session=\(self.sessionId, privacy: .public) status=\(http.statusCode, privacy: .public)")
+                    throw URLError(.badServerResponse)
+                }
+                responseAccepted = true
+                logger.debug("workspace stream response connected session=\(self.sessionId, privacy: .public)")
+            case .data(let data):
+                guard responseAccepted else { continue }
+                bytesBuffer.append(data)
+                while let newline = bytesBuffer.firstIndex(of: 0x0A) {
+                    var lineData = bytesBuffer[..<newline]
+                    bytesBuffer.removeSubrange(...newline)
+                    if lineData.last == 0x0D { lineData = lineData.dropLast() }
+                    let line = String(decoding: lineData, as: UTF8.self)
+                    if line.isEmpty {
+                        await self.dispatch(eventName: eventName, eventId: eventId, payload: dataBuffer)
+                        eventName = ""
+                        eventId = nil
+                        dataBuffer = ""
+                        continue
+                    }
+                    if line.hasPrefix(":") {
+                        continue
+                    }
+                    if let sep = line.firstIndex(of: ":") {
+                        let field = String(line[..<sep])
+                        var value = String(line[line.index(after: sep)...])
+                        if value.hasPrefix(" ") { value.removeFirst() }
+                        switch field {
+                        case "event": eventName = value
+                        case "id": eventId = value
+                        case "data":
+                            if !dataBuffer.isEmpty { dataBuffer.append("\n") }
+                            dataBuffer.append(value)
+                        default: break
+                        }
+                    }
                 }
             }
         }

@@ -88,6 +88,21 @@ struct SessionViewModelTests {
         #expect(model.isInitialLoading == false)
         #expect(model.items.map(\.id) == ["prose:synthetic:preview:321"])
 
+        let diagnostics = RenderBeaconReporter.WebKitDiagnostics(
+            stage: "rendered",
+            payload_byte_size: 256,
+            row_count: 1,
+            latest_item_id: "prose:synthetic:preview:321",
+            render_sequence: 1,
+            js_failure_count: 0,
+            should_stick_to_bottom: true,
+            web_view_loaded: true,
+            error_description: nil
+        )
+        await model.recordTranscriptDiagnostics(diagnostics, sessionId: "session-1", appState: appState)
+        let previewBeacons = await api.renderBeacons()
+        #expect(previewBeacons.contains { $0.event_id == "-321" && $0.webkit == diagnostics })
+
         await api.resumePausedTailResponses()
         await startTask.value
         model.stop()
