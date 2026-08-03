@@ -781,7 +781,7 @@ def evaluate_observation(
     raw_events = observation.get("raw_events")
     raw_events = raw_events if isinstance(raw_events, list) else []
     all_probes_inapplicable = all(probe.disposition in {"policy_disabled", "upstream_absent"} for probe in contract.interaction_probes)
-    if not (all_probes_inapplicable and not raw_events):
+    if not (all_probes_inapplicable and not raw_events and not live_evidence):
         if live_evidence:
             boundary = observation.get("semantic_boundary")
             if (
@@ -891,7 +891,7 @@ def evaluate_observation(
         status = STATUS_FAIL
     elif any(status == STATUS_BLOCKED for status in statuses):
         status = STATUS_BLOCKED
-    elif all(status == STATUS_NOT_APPLICABLE for status in statuses):
+    elif all_probes_inapplicable and live_evidence:
         status = STATUS_NOT_APPLICABLE
     else:
         status = STATUS_PASS

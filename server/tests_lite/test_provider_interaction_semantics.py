@@ -65,7 +65,7 @@ def test_generated_observation_passes_for_every_provider(provider: str) -> None:
     assert all(row["status"] in {"pass", "not_applicable"} for row in result["assertions"])
 
 
-def test_live_policy_disabled_provider_is_not_applicable_without_boundary_rows() -> None:
+def test_live_policy_disabled_provider_is_not_applicable_with_boundary_fixture() -> None:
     observation = generated_fake_observation("antigravity")
     observation.update({"evidence_class": "live_no_token", "synthetic": False, "raw_events": []})
 
@@ -73,6 +73,19 @@ def test_live_policy_disabled_provider_is_not_applicable_without_boundary_rows()
 
     assert result["status"] == "not_applicable"
     assert result["provider_status"] == "not_applicable"
+
+
+def test_live_policy_disabled_provider_without_boundary_fixture_is_blocked() -> None:
+    observation = generated_fake_observation("antigravity")
+    observation.update({"evidence_class": "live_no_token", "synthetic": False, "raw_events": []})
+    observation.pop("semantic_boundary")
+
+    result = evaluate_observation("antigravity", observation)
+
+    assert result["status"] == "blocked"
+    assert result["provider_status"] == "blocked"
+    boundary = next(row for row in result["assertions"] if row["probe_id"] == "shared_title_boundary")
+    assert boundary["failure_code"] == "interaction_title_boundary_missing"
 
 
 def test_missing_non_policy_probe_is_blocked() -> None:

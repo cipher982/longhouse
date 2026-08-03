@@ -6,8 +6,9 @@ from pathlib import Path
 
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
 from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
-from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
 from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
+from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
+from zerg.qa.cursor_helm_gate0 import _scrub_artifact_tree
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
 
@@ -48,6 +49,20 @@ def test_project_hooks_cover_identity_transcript_and_control_events(tmp_path: Pa
         "beforeShellExecution",
         "stop",
     }
+
+
+def test_gate0_artifact_scrubber_removes_exact_and_structured_provider_keys(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CURSOR_API_KEY", "fixture-token-that-is-not-prefix-shaped")
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    payload = artifact / "terminal.raw"
+    payload.write_bytes(b"fixture-token-that-is-not-prefix-shaped crsr_secret123")
+
+    _scrub_artifact_tree(artifact)
+
+    retained = payload.read_bytes()
+    assert b"fixture-token-that-is-not-prefix-shaped" not in retained
+    assert b"crsr_secret123" not in retained
 
 
 def test_hook_event_reader_ignores_partial_or_invalid_lines(tmp_path: Path) -> None:

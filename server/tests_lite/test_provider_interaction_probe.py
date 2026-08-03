@@ -126,18 +126,23 @@ def test_cursor_model_identity_accepts_cli_alias_and_display_name(requested: str
 def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monkeypatch, tmp_path: Path) -> None:
     binary = tmp_path / "cursor-agent"
     binary.write_text("fixture", encoding="utf-8")
+    runtime_homes: list[Path] = []
     stdout = "\n".join(
         [
             '{"type":"system","subtype":"init","model":"grok-4.5","apiKeySource":"apiKey","session_id":"s"}',
             '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"s"}',
-            '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"ok","usage":{"input_tokens":12,"output_tokens":3}}',
+            '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"fixture-token","usage":{"input_tokens":12,"output_tokens":3}}',
         ]
     )
+
+    def fake_run(*_args, **kwargs):
+        runtime_homes.append(Path(kwargs["env"]["HOME"]))
+        return CompletedProcess([], 0, stdout, "")
 
     monkeypatch.setattr(
         provider_interaction_probe.subprocess,
         "run",
-        lambda *_args, **_kwargs: CompletedProcess([], 0, stdout, ""),
+        fake_run,
     )
 
     artifact_root = tmp_path / "artifacts"
@@ -173,6 +178,8 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
     assert evaluation["verification_scope"] == "provider_native"
     assert evaluation["assertions"][-1]["probe_id"] == "shared_title_boundary"
     assert row["live_model_evidence"]["result_event"]["usage"]["input_tokens"] == 12
+    assert runtime_homes and not runtime_homes[0].exists()
+    assert all(b"fixture-token" not in path.read_bytes() for path in artifact_root.rglob("*") if path.is_file())
 
 
 def test_codex_model_probe_keeps_provider_auth_outside_the_artifact_root(monkeypatch, tmp_path: Path) -> None:

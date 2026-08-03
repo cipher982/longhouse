@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -49,6 +50,56 @@ _HOOK_EVENTS = (
     "afterShellExecution",
     "stop",
 )
+
+_ARTIFACT_SECRET_PATTERNS = (
+    (re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"), b"sk-ant-<redacted>"),
+    (re.compile(rb"sk-or-v1-[A-Za-z0-9_-]+"), b"sk-or-v1-<redacted>"),
+    (re.compile(rb"crsr_[A-Za-z0-9]+"), b"crsr_<redacted>"),
+    (re.compile(rb"sk-[A-Za-z0-9_-]{20,}"), b"sk-<redacted>"),
+)
+
+
+def _artifact_secret_values() -> tuple[bytes, ...]:
+    names = (
+        "CURSOR_API_KEY",
+        "CURSOR_ACCESS_TOKEN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "CODEX_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "XAI_API_KEY",
+        "ZAI_API_KEY",
+    )
+    return tuple(
+        sorted(
+            {value.encode("utf-8") for name in names if (value := str(os.environ.get(name) or "").strip())},
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _scrub_artifact_tree(root: Path) -> None:
+    """Keep retained Gate 0 evidence free of provider credentials."""
+
+    exact_values = _artifact_secret_values()
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            original = path.read_bytes()
+        except OSError:
+            continue
+        redacted = original
+        for secret in exact_values:
+            redacted = redacted.replace(secret, b"<provider-secret-redacted>")
+        for pattern, replacement in _ARTIFACT_SECRET_PATTERNS:
+            redacted = pattern.sub(replacement, redacted)
+        if redacted != original:
+            path.write_bytes(redacted)
 
 
 def _now() -> str:
@@ -1277,6 +1328,12 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     }
     output_path = artifact_root / "gate0.json"
 
+    def write_report() -> dict[str, Any]:
+        report["finished_at"] = _now()
+        output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _scrub_artifact_tree(artifact_root)
+        return json.loads(output_path.read_text(encoding="utf-8"))
+
     def record_reset_observation(value: dict[str, Any]) -> dict[str, Any]:
         observation = {
             **value,
@@ -1322,9 +1379,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             report["selected_identity_path"] = "conversation_reset"
             report["status"] = "passed"
             report["failure_code"] = None
-            report["finished_at"] = _now()
-            output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            return report
+            return write_report()
         provider_id = _create_chat(binary, workspace)
         report["scenarios"]["create_chat_resume"] = _identity_scenario(
             name="create_chat_resume",
@@ -1411,9 +1466,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         report["failure_code"] = type(exc).__name__
         report["error"] = str(exc)
         report["traceback"] = traceback.format_exc()
-    report["finished_at"] = _now()
-    output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return report
+    return write_report()
 
 
 def _file_sha256(path: Path) -> str:

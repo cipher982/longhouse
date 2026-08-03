@@ -223,16 +223,33 @@ _TERMINAL_SECRET_PATTERNS = (
 )
 
 
-def _redact_terminal_file(path: Path) -> None:
+def _secret_values(environment: Mapping[str, str]) -> tuple[bytes, ...]:
+    return tuple(
+        sorted(
+            {value.encode("utf-8") for name in _NO_TOKEN_AUTH_ENV_NAMES if (value := str(environment.get(name) or "").strip())},
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _redact_bytes(value: bytes, *, secrets: tuple[bytes, ...] = ()) -> bytes:
+    redacted = value
+    for secret in secrets:
+        redacted = redacted.replace(secret, b"<provider-secret-redacted>")
+    for pattern, replacement in _TERMINAL_SECRET_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
+def _redact_terminal_file(path: Path, *, secrets: tuple[bytes, ...] = ()) -> None:
     """Remove provider key material that a TUI may echo during onboarding."""
 
     try:
         original = path.read_bytes()
     except OSError:
         return
-    redacted = original
-    for pattern, replacement in _TERMINAL_SECRET_PATTERNS:
-        redacted = pattern.sub(replacement, redacted)
+    redacted = _redact_bytes(original, secrets=secrets)
     if redacted != original:
         try:
             path.write_bytes(redacted)
@@ -250,7 +267,9 @@ def _native_source_snapshot(root: Path, *, artifact_root: Path, limit: int = 128
         paths = sorted(path for path in root.rglob("*") if path.is_file())
     except OSError:
         return []
-    for path in paths[:limit]:
+    if len(paths) > limit:
+        return []
+    for path in paths:
         evidence = _file_evidence(path, artifact_root=artifact_root)
         if evidence is not None:
             rows.append(evidence)
@@ -316,8 +335,13 @@ def _write_native_event_capture(
     return source_rows, receipt
 
 
-def _terminal_evidence(path: Path, *, artifact_root: Path) -> dict[str, Any] | None:
-    _redact_terminal_file(path)
+def _terminal_evidence(
+    path: Path,
+    *,
+    artifact_root: Path,
+    secrets: tuple[bytes, ...] = (),
+) -> dict[str, Any] | None:
+    _redact_terminal_file(path, secrets=secrets)
     return _file_evidence(path, artifact_root=artifact_root)
 
 
@@ -370,11 +394,19 @@ def _codex_rollout_paths(codex_home: Path) -> list[Path]:
     return sorted(path for path in sessions_root.rglob("*.jsonl") if path.is_file())
 
 
-def _materialize_codex_native_file(path: Path, *, codex_home: Path, evidence_root: Path) -> Path | None:
+def _materialize_codex_native_file(
+    path: Path,
+    *,
+    codex_home: Path,
+    evidence_root: Path,
+    secrets: tuple[bytes, ...] = (),
+) -> Path | None:
     try:
         relative_path = path.resolve().relative_to(codex_home.resolve())
         file_bytes = path.read_bytes()
     except (OSError, ValueError):
+        return None
+    if any(secret and secret in file_bytes for secret in secrets):
         return None
     destination = evidence_root / relative_path
     try:
@@ -390,6 +422,7 @@ def _codex_native_store_snapshot(
     *,
     artifact_root: Path,
     evidence_root: Path,
+    secrets: tuple[bytes, ...] = (),
 ) -> list[dict[str, Any]]:
     """Hash non-secret Codex state relevant to the native archive absence proof."""
 
@@ -400,16 +433,23 @@ def _codex_native_store_snapshot(
         paths = sorted(path for path in codex_home.rglob("*") if path.is_file())
     except OSError:
         return []
+    if len(paths) > 128:
+        return []
     for path in paths:
         if path.name == "auth.json" or ".tmp" in path.parts:
             continue
         if path.suffix not in {".jsonl", ".sqlite", ".sqlite-shm", ".sqlite-wal"}:
             continue
-        materialized = _materialize_codex_native_file(path, codex_home=codex_home, evidence_root=evidence_root)
+        materialized = _materialize_codex_native_file(
+            path,
+            codex_home=codex_home,
+            evidence_root=evidence_root,
+            secrets=secrets,
+        )
         evidence = _file_evidence(materialized, artifact_root=artifact_root) if materialized is not None else None
         if evidence is not None:
             rows.append(evidence)
-    return rows[:128]
+    return rows
 
 
 def _codex_native_interaction_capture(
@@ -417,6 +457,7 @@ def _codex_native_interaction_capture(
     *,
     artifact_root: Path,
     evidence_root: Path,
+    secrets: tuple[bytes, ...] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Extract native records that characterize ``/model`` then cancel.
 
@@ -433,7 +474,12 @@ def _codex_native_interaction_capture(
             file_bytes = path.read_bytes()
         except OSError:
             continue
-        materialized = _materialize_codex_native_file(path, codex_home=codex_home, evidence_root=evidence_root)
+        materialized = _materialize_codex_native_file(
+            path,
+            codex_home=codex_home,
+            evidence_root=evidence_root,
+            secrets=secrets,
+        )
         if materialized is None:
             continue
         file_digest = hashlib.sha256(file_bytes).hexdigest()
@@ -474,6 +520,7 @@ def _codex_native_interaction_capture(
             codex_home,
             artifact_root=artifact_root,
             evidence_root=evidence_root,
+            secrets=secrets,
         )
         stable_snapshots = 1
         stable_seconds = 0.0
@@ -483,6 +530,7 @@ def _codex_native_interaction_capture(
                 codex_home,
                 artifact_root=artifact_root,
                 evidence_root=evidence_root,
+                secrets=secrets,
             )
             if next_sources == current_sources:
                 stable_snapshots += 1
@@ -549,6 +597,7 @@ def _opencode_native_interaction_capture(
     output_root: Path,
     artifact_root: Path,
     probe_id: str,
+    secrets: tuple[bytes, ...] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Capture OpenCode's native SQLite event for the reset probe.
 
@@ -567,13 +616,17 @@ def _opencode_native_interaction_capture(
             paths = sorted(path for path in data_root.rglob("*") if path.is_file())
         except OSError:
             return None
+        if len(paths) > 128:
+            return None
         rows: list[dict[str, Any]] = []
         payload: list[tuple[str, bytes]] = []
-        for path in paths[:128]:
+        for path in paths:
             try:
-                relative_path = str(path.resolve().relative_to(artifact_root.resolve()))
+                relative_path = str(path.resolve().relative_to(data_root.resolve()))
                 file_bytes = path.read_bytes()
             except (OSError, ValueError):
+                return None
+            if any(secret and secret in file_bytes for secret in secrets):
                 return None
             rows.append(
                 {
@@ -596,7 +649,7 @@ def _opencode_native_interaction_capture(
                 message_count = int(connection.execute("SELECT count(*) FROM message").fetchone()[0])
                 part_count = int(connection.execute("SELECT count(*) FROM part").fetchone()[0])
                 session_count = int(connection.execute("SELECT count(*) FROM session").fetchone()[0])
-            database_source_path = str(database.resolve().relative_to(artifact_root.resolve()))
+            database_source_path = str(database.resolve().relative_to(data_root.resolve()))
             database_bytes = dict(native_payload).get(database_source_path)
             if database_bytes is None:
                 return None
@@ -637,7 +690,7 @@ def _opencode_native_interaction_capture(
     frozen_rows: list[dict[str, Any]] = []
     frozen_database_path: str | None = None
     try:
-        database_source_path = str(database.resolve().relative_to(artifact_root.resolve()))
+        database_source_path = str(database.resolve().relative_to(data_root.resolve()))
         sqlite_sidecar_paths = {
             database_source_path,
             f"{database_source_path}-wal",
@@ -750,6 +803,7 @@ def _run_terminal_interaction_probe(
 
     terminal_path = output_root / "terminal.raw"
     env = dict(environment)
+    secrets = _secret_values(env)
     env["HOME"] = str(home)
     env["TERM"] = "xterm-256color"
     env["LINES"] = "40"
@@ -817,7 +871,7 @@ def _run_terminal_interaction_probe(
             timeout=timeout,
             message=f"{provider} did not acknowledge {probe.probe_id}",
         )
-        terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root)
+        terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root, secrets=secrets)
         if native_capture is not None:
             process_status = session.process.returncode
             session.close()
@@ -870,7 +924,7 @@ def _run_terminal_interaction_probe(
             terminal_acknowledged=True,
         )
     except (OSError, RuntimeError, TimeoutError) as exc:
-        terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root)
+        terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root, secrets=secrets)
         after_sources = _native_source_snapshot(native_root, artifact_root=artifact_root)
         message = str(exc)
         failure_code = "interaction_probe_setup_failed"
@@ -890,7 +944,7 @@ def _run_terminal_interaction_probe(
     finally:
         if session is not None:
             session.close()
-        _redact_terminal_file(terminal_path)
+        _redact_terminal_file(terminal_path, secrets=secrets)
 
 
 def _codex_model_probe(
@@ -906,14 +960,15 @@ def _codex_model_probe(
     output_root.mkdir(parents=True, exist_ok=False)
     workspace = output_root / "workspace"
     workspace.mkdir()
-    home = output_root / "home"
-    home.mkdir(mode=0o700)
     evidence_root = output_root / "codex-native-store"
     env = dict(environment)
     runtime_home = Path(tempfile.mkdtemp(prefix="longhouse-codex-interaction-"))
+    home = runtime_home / "home"
+    home.mkdir(mode=0o700)
     codex_home = runtime_home / "codex-home"
     codex_home.mkdir(mode=0o700)
     env["CODEX_HOME"] = str(codex_home)
+    secrets = _secret_values(env)
     auth_receipt: dict[str, str] | None = None
     api_key = str(env.get("CODEX_API_KEY") or "").strip()
     try:
@@ -955,6 +1010,7 @@ def _codex_model_probe(
                 codex_home,
                 artifact_root=artifact_root,
                 evidence_root=evidence_root,
+                secrets=secrets,
             ),
         )
         if auth_receipt is not None:
@@ -991,60 +1047,68 @@ def _opencode_interaction_probes(
         output_root.mkdir(parents=True, exist_ok=False)
         workspace = output_root / "workspace"
         workspace.mkdir()
-        home = output_root / "home"
-        home.mkdir(mode=0o700)
-        data_root = output_root / "data"
-        config_root = output_root / "config"
-        cache_root = output_root / "cache"
-        for path in (data_root, config_root, cache_root):
-            path.mkdir(mode=0o700)
-        env = dict(environment)
-        env.update(
-            {
-                "XDG_CONFIG_HOME": str(config_root),
-                "XDG_DATA_HOME": str(data_root),
-                "XDG_CACHE_HOME": str(cache_root),
-            }
-        )
-        model = _opencode_cli_model(env.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"))
-        argv = [str(binary)]
-        if model is not None:
-            argv.extend(("--model", model))
-        argv.extend((str(workspace), "--pure", "--mini", "--no-replay"))
-        row = _run_terminal_interaction_probe(
-            provider="opencode",
-            probe=probe,
-            artifact_root=artifact_root,
-            output_root=output_root,
-            workspace=workspace,
-            home=home,
-            native_root=data_root,
-            environment=env,
-            argv=argv,
-            ready_markers=("Ask anything",),
-            acknowledgement_markers=("help",) if probe.probe_id == "opencode_help_command" else ("session",),
-            timeout=timeout,
-            native_capture=lambda _process_status,
-            data_root=data_root,
-            output_root=output_root,
-            probe_id=probe.probe_id: _opencode_native_interaction_capture(
-                data_root,
-                output_root=output_root,
+        runtime_root = Path(tempfile.mkdtemp(prefix="longhouse-opencode-interaction-"))
+        try:
+            home = runtime_root / "home"
+            home.mkdir(mode=0o700)
+            data_root = runtime_root / "data"
+            config_root = runtime_root / "config"
+            cache_root = runtime_root / "cache"
+            for path in (data_root, config_root, cache_root):
+                path.mkdir(mode=0o700)
+            env = dict(environment)
+            env.update(
+                {
+                    "XDG_CONFIG_HOME": str(config_root),
+                    "XDG_DATA_HOME": str(data_root),
+                    "XDG_CACHE_HOME": str(cache_root),
+                }
+            )
+            secrets = _secret_values(env)
+            model = _opencode_cli_model(env.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"))
+            argv = [str(binary)]
+            if model is not None:
+                argv.extend(("--model", model))
+            argv.extend((str(workspace), "--pure", "--mini", "--no-replay"))
+            row = _run_terminal_interaction_probe(
+                provider="opencode",
+                probe=probe,
                 artifact_root=artifact_root,
-                probe_id=probe_id,
-            ),
-        )
-        rows.append(row)
-        native_rows.extend(row.get("native_source_rows") or [])
+                output_root=output_root,
+                workspace=workspace,
+                home=home,
+                native_root=data_root,
+                environment=env,
+                argv=argv,
+                ready_markers=("Ask anything",),
+                acknowledgement_markers=("help",) if probe.probe_id == "opencode_help_command" else ("session",),
+                timeout=timeout,
+                native_capture=lambda _process_status,
+                data_root=data_root,
+                output_root=output_root,
+                probe_id=probe.probe_id,
+                secrets=secrets: _opencode_native_interaction_capture(
+                    data_root,
+                    output_root=output_root,
+                    artifact_root=artifact_root,
+                    probe_id=probe_id,
+                    secrets=secrets,
+                ),
+            )
+            rows.append(row)
+            native_rows.extend(row.get("native_source_rows") or [])
+        finally:
+            shutil.rmtree(runtime_root, ignore_errors=True)
     return rows, native_rows
 
 
-def _cursor_model_probe(
+def _cursor_model_probe_with_runtime_home(
     *,
     binary: Path,
     artifact_root: Path,
     timeout: float,
     environment: Mapping[str, str],
+    runtime_home: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     contract = contract_for_provider("cursor")
     assert contract is not None
@@ -1054,10 +1118,11 @@ def _cursor_model_probe(
     output_root.mkdir(parents=True, exist_ok=False)
     workspace = output_root / "workspace"
     workspace.mkdir()
-    home = output_root / "home"
+    home = runtime_home / "home"
     home.mkdir(mode=0o700)
     events_path = output_root / "cursor-hooks.jsonl"
     env = dict(environment)
+    secrets = _secret_values(env)
     env["LONGHOUSE_SESSION_ID"] = f"direct-{invocation}"
     env["LONGHOUSE_CURSOR_GATE0_EVENTS"] = str(events_path)
     env["HOME"] = str(home)
@@ -1086,7 +1151,10 @@ def _cursor_model_probe(
         str(environment.get("CURSOR_MODEL") or "auto"),
         "Longhouse provider qualification probe. Reply with one short word.",
     ]
-    before_sources = _native_source_snapshot(home / ".cursor", artifact_root=artifact_root)
+    # Cursor's native profile is credential-bearing state. Keep it outside the
+    # retained evidence tree; the stream-json result and hook receipt are the
+    # provider-native evidence for this print probe.
+    before_sources: list[dict[str, Any]] = []
     result = subprocess.run(
         argv,
         cwd=workspace,
@@ -1098,19 +1166,21 @@ def _cursor_model_probe(
     )
     stdout_path = output_root / "stdout.log"
     stderr_path = output_root / "stderr.log"
-    stdout_path.write_text(result.stdout or "", encoding="utf-8")
-    stderr_path.write_text(result.stderr or "", encoding="utf-8")
-    terminal_path.write_text(f"stdout\n{result.stdout or ''}\nstderr\n{result.stderr or ''}", encoding="utf-8")
-    _redact_terminal_file(stdout_path)
-    _redact_terminal_file(stderr_path)
-    _redact_terminal_file(terminal_path)
-    terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root)
-    native_rows = _native_source_snapshot(home / ".cursor", artifact_root=artifact_root)
+    safe_stdout = _redact_bytes((result.stdout or "").encode("utf-8"), secrets=secrets).decode("utf-8", errors="replace")
+    safe_stderr = _redact_bytes((result.stderr or "").encode("utf-8"), secrets=secrets).decode("utf-8", errors="replace")
+    stdout_path.write_text(safe_stdout, encoding="utf-8")
+    stderr_path.write_text(safe_stderr, encoding="utf-8")
+    terminal_path.write_text(f"stdout\n{safe_stdout}\nstderr\n{safe_stderr}", encoding="utf-8")
+    _redact_terminal_file(stdout_path, secrets=secrets)
+    _redact_terminal_file(stderr_path, secrets=secrets)
+    _redact_terminal_file(terminal_path, secrets=secrets)
+    terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root, secrets=secrets)
+    native_rows: list[dict[str, Any]] = []
     file_evidence = _file_evidence(events_path, artifact_root=artifact_root)
     if file_evidence is not None:
         native_rows.append(file_evidence)
-    combined = f"{result.stdout}\n{result.stderr}\n{events_path.read_text(encoding='utf-8') if events_path.exists() else ''}"
-    stream_events = _cursor_stream_json_events(result.stdout)
+    combined = f"{safe_stdout}\n{safe_stderr}\n{events_path.read_text(encoding='utf-8') if events_path.exists() else ''}"
+    stream_events = _cursor_stream_json_events(safe_stdout)
     init_event = next(
         (event for event in stream_events if event.get("type") == "system" and event.get("subtype") == "init"),
         None,
@@ -1256,6 +1326,26 @@ def _cursor_model_probe(
             submitted_input_sequence=[],
         )
     return [row], stream_source_rows or native_rows or before_sources
+
+
+def _cursor_model_probe(
+    *,
+    binary: Path,
+    artifact_root: Path,
+    timeout: float,
+    environment: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    runtime_home = Path(tempfile.mkdtemp(prefix="longhouse-cursor-interaction-"))
+    try:
+        return _cursor_model_probe_with_runtime_home(
+            binary=binary,
+            artifact_root=artifact_root,
+            timeout=timeout,
+            environment=environment,
+            runtime_home=runtime_home,
+        )
+    finally:
+        shutil.rmtree(runtime_home, ignore_errors=True)
 
 
 def _cursor_stream_json_events(stdout: str) -> list[dict[str, Any]]:
@@ -1414,6 +1504,50 @@ def _new_transcript_rows(
     return rows, sources
 
 
+def _materialize_claude_source_rows(
+    source_rows: list[dict[str, Any]],
+    *,
+    config_dir: Path,
+    output_root: Path,
+    artifact_root: Path,
+    secrets: tuple[bytes, ...] = (),
+) -> list[dict[str, Any]]:
+    """Copy only the proven transcript files into retained evidence.
+
+    Claude's profile can contain credentials, so the live profile stays in an
+    external temporary directory. The semantic provenance gate still needs a
+    byte-addressable source under the retained artifact root; copying the
+    complete transcript file preserves every offset and digest while allowing
+    the provider profile to be deleted after the probe.
+    """
+
+    materialized_root = output_root / "claude-native-store"
+    copied: dict[Path, bytes] = {}
+    remapped: list[dict[str, Any]] = []
+    for source in source_rows:
+        source_path = Path(str(source.get("source_path") or "")).expanduser()
+        try:
+            resolved_source = source_path.resolve(strict=True)
+            relative = resolved_source.relative_to(config_dir.resolve())
+            file_bytes = copied.get(resolved_source)
+            if file_bytes is None:
+                file_bytes = resolved_source.read_bytes()
+                copied[resolved_source] = file_bytes
+            if any(secret and secret in file_bytes for secret in secrets):
+                raise RuntimeError("Claude native transcript contained configured credential material")
+            destination = materialized_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists() and destination.read_bytes() != file_bytes:
+                raise RuntimeError("Claude native transcript source changed during materialization")
+            destination.write_bytes(file_bytes)
+            remapped_source = dict(source)
+            remapped_source["source_path"] = str(destination.resolve().relative_to(artifact_root.resolve()))
+            remapped.append(remapped_source)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("Claude native transcript source could not be materialized") from exc
+    return remapped
+
+
 def _claude_command_window(
     rows: list[dict[str, Any]],
     sources: list[dict[str, Any]],
@@ -1461,6 +1595,7 @@ def _claude_native_store_capture(
     artifact_root: Path,
     timeout: float,
     command: str,
+    secrets: tuple[bytes, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Freeze a stable Claude store snapshot for a bounded absence claim."""
 
@@ -1489,7 +1624,10 @@ def _claude_native_store_capture(
                 relative = path.relative_to(config_dir)
                 target = store_root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(path.read_bytes())
+                file_bytes = path.read_bytes()
+                if any(secret and secret in file_bytes for secret in secrets):
+                    raise RuntimeError("Claude native store contained configured credential material")
+                target.write_bytes(file_bytes)
             source_rows = _native_source_snapshot(store_root, artifact_root=artifact_root)
             return (
                 source_rows,
@@ -1739,22 +1877,25 @@ def _claude_effort_probe(
     output_root.mkdir(parents=True, exist_ok=False)
     workspace = output_root / "workspace"
     workspace.mkdir()
-    home = output_root / "home"
+    runtime_root = Path(tempfile.mkdtemp(prefix="longhouse-claude-effort-"))
+    home = runtime_root / "home"
     home.mkdir(mode=0o700)
-    config_dir = output_root / "claude-config"
+    config_dir = runtime_root / "claude-config"
     config_dir.mkdir(mode=0o700)
     terminal_path = output_root / "terminal.raw"
-    session = _start_claude_probe_session(
-        binary=binary,
-        workspace=workspace,
-        home=home,
-        config_dir=config_dir,
-        terminal_path=terminal_path,
-        environment=environment,
-        timeout=timeout,
-        session_name="Claude provider interaction probe",
-    )
+    secrets = _secret_values(environment)
+    session: ProviderPtySession | None = None
     try:
+        session = _start_claude_probe_session(
+            binary=binary,
+            workspace=workspace,
+            home=home,
+            config_dir=config_dir,
+            terminal_path=terminal_path,
+            environment=environment,
+            timeout=timeout,
+            session_name="Claude provider interaction probe",
+        )
         transcript_before = _transcript_snapshot(config_dir)
         session.submit_line("/effort high")
 
@@ -1785,6 +1926,13 @@ def _claude_effort_probe(
             stable_seconds=_NEGATIVE_PROOF_QUIESCENCE_SECONDS,
         )
         raw_rows, source_rows = _claude_command_window(raw_rows, source_rows, command="/effort")
+        source_rows = _materialize_claude_source_rows(
+            source_rows,
+            config_dir=config_dir,
+            output_root=output_root,
+            artifact_root=artifact_root,
+            secrets=secrets,
+        )
         capture_receipt = {
             **capture_receipt,
             "raw_event_count": len(raw_rows),
@@ -1808,7 +1956,7 @@ def _claude_effort_probe(
                 "acknowledgement": "local_command_stdout",
                 "provider_session_id": provider_session_id,
                 "longhouse_session_id": f"direct-{invocation}",
-                "state_path": str(config_dir),
+                "state_path": str((output_root / "claude-native-store").relative_to(artifact_root)),
                 "native_source_rows": source_rows,
                 "raw_events": raw_rows,
                 "terminal_path": str(terminal_path),
@@ -1819,8 +1967,10 @@ def _claude_effort_probe(
             source_rows,
         )
     finally:
-        session.close()
-        _redact_terminal_file(terminal_path)
+        if session is not None:
+            session.close()
+        _redact_terminal_file(terminal_path, secrets=secrets)
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
 
 def _claude_clear_probe(
@@ -1836,22 +1986,25 @@ def _claude_clear_probe(
     output_root.mkdir(parents=True, exist_ok=False)
     workspace = output_root / "workspace"
     workspace.mkdir()
-    home = output_root / "home"
+    runtime_root = Path(tempfile.mkdtemp(prefix="longhouse-claude-clear-"))
+    home = runtime_root / "home"
     home.mkdir(mode=0o700)
-    config_dir = output_root / "claude-config"
+    config_dir = runtime_root / "claude-config"
     config_dir.mkdir(mode=0o700)
     terminal_path = output_root / "terminal.raw"
-    session = _start_claude_probe_session(
-        binary=binary,
-        workspace=workspace,
-        home=home,
-        config_dir=config_dir,
-        terminal_path=terminal_path,
-        environment=environment,
-        timeout=timeout,
-        session_name="Claude clear interaction probe",
-    )
+    secrets = _secret_values(environment)
+    session: ProviderPtySession | None = None
     try:
+        session = _start_claude_probe_session(
+            binary=binary,
+            workspace=workspace,
+            home=home,
+            config_dir=config_dir,
+            terminal_path=terminal_path,
+            environment=environment,
+            timeout=timeout,
+            session_name="Claude clear interaction probe",
+        )
         transcript_before = _transcript_snapshot(config_dir)
         session.submit_line("/clear")
 
@@ -1878,6 +2031,13 @@ def _claude_clear_probe(
             stable_seconds=_NEGATIVE_PROOF_QUIESCENCE_SECONDS,
         )
         raw_rows, source_rows = _claude_command_window(raw_rows, source_rows, command="/clear")
+        source_rows = _materialize_claude_source_rows(
+            source_rows,
+            config_dir=config_dir,
+            output_root=output_root,
+            artifact_root=artifact_root,
+            secrets=secrets,
+        )
         capture_receipt = {
             **capture_receipt,
             "raw_event_count": len(raw_rows),
@@ -1901,7 +2061,7 @@ def _claude_clear_probe(
                 "acknowledgement": "local_command_stdout",
                 "provider_session_id": provider_session_id,
                 "longhouse_session_id": f"direct-{invocation}",
-                "state_path": str(config_dir),
+                "state_path": str((output_root / "claude-native-store").relative_to(artifact_root)),
                 "native_source_rows": source_rows,
                 "raw_events": raw_rows,
                 "terminal_path": str(terminal_path),
@@ -1912,8 +2072,10 @@ def _claude_clear_probe(
             source_rows,
         )
     finally:
-        session.close()
-        _redact_terminal_file(terminal_path)
+        if session is not None:
+            session.close()
+        _redact_terminal_file(terminal_path, secrets=secrets)
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
 
 def _claude_model_picker_probe(
@@ -1929,22 +2091,25 @@ def _claude_model_picker_probe(
     output_root.mkdir(parents=True, exist_ok=False)
     workspace = output_root / "workspace"
     workspace.mkdir()
-    home = output_root / "home"
+    runtime_root = Path(tempfile.mkdtemp(prefix="longhouse-claude-model-"))
+    home = runtime_root / "home"
     home.mkdir(mode=0o700)
-    config_dir = output_root / "claude-config"
+    config_dir = runtime_root / "claude-config"
     config_dir.mkdir(mode=0o700)
     terminal_path = output_root / "terminal.raw"
-    session = _start_claude_probe_session(
-        binary=binary,
-        workspace=workspace,
-        home=home,
-        config_dir=config_dir,
-        terminal_path=terminal_path,
-        environment=environment,
-        timeout=timeout,
-        session_name="Claude model picker interaction probe",
-    )
+    secrets = _secret_values(environment)
+    session: ProviderPtySession | None = None
     try:
+        session = _start_claude_probe_session(
+            binary=binary,
+            workspace=workspace,
+            home=home,
+            config_dir=config_dir,
+            terminal_path=terminal_path,
+            environment=environment,
+            timeout=timeout,
+            session_name="Claude model picker interaction probe",
+        )
         before_bytes = terminal_path.stat().st_size
         session.submit_line("/model")
         _wait(
@@ -1973,8 +2138,9 @@ def _claude_model_picker_probe(
             artifact_root=artifact_root,
             timeout=timeout,
             command="/model",
+            secrets=secrets,
         )
-        terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root)
+        terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root, secrets=secrets)
         return (
             {
                 "probe_id": probe_id,
@@ -1998,7 +2164,8 @@ def _claude_model_picker_probe(
     finally:
         if session is not None:
             session.close()
-        _redact_terminal_file(terminal_path)
+        _redact_terminal_file(terminal_path, secrets=secrets)
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
 
 def _declared_probe_rows(provider: str) -> list[dict[str, Any]]:
@@ -2055,6 +2222,7 @@ def produce_live_observation(
             "synthetic": True,
             "probes": _declared_probe_rows(provider),
             "raw_events": [],
+            "semantic_boundary": semantic_boundary_fixture(provider),
             "native_source_rows": [],
             "reason": "Antigravity is Shadow-only; managed TUI control is policy-disabled.",
         }
