@@ -27,16 +27,30 @@ const BENIGN_CONSOLE_PATTERNS = [
   /Download the React DevTools/,
   /\[HMR\]/,
   /Failed to load resource.*favicon/i,
+  // Response collection below records owned frontend/API failures with the
+  // exact URL and status. Chromium's generic console message omits the URL,
+  // so treating it as authoritative makes a third-party font CDN outage look
+  // like a Longhouse 500.
+  /^Failed to load resource: the server responded with a status of \d+/i,
   /Content Security Policy/,
 ];
 
 /** Attach console error + 4xx/5xx response collectors to a page. */
-function attachErrorCollectors(page: Page): {
+function attachErrorCollectors(
+  page: Page,
+  frontendBaseUrl: string,
+  apiBaseUrl: string,
+): {
   consoleErrors: string[];
   serverErrors: string[];
 } {
   const consoleErrors: string[] = [];
   const serverErrors: string[] = [];
+  const ownedOrigins = new Set(
+    [frontendBaseUrl, apiBaseUrl]
+      .filter(Boolean)
+      .map((url) => new URL(url).origin),
+  );
 
   page.on("console", (msg) => {
     if (msg.type() === "error") {
@@ -50,10 +64,13 @@ function attachErrorCollectors(page: Page): {
   page.on("response", (response) => {
     const url = response.url();
     const status = response.status();
-    // Catch 4xx (excluding 401 — handled separately) and all 5xx
+    const owned = ownedOrigins.has(new URL(url).origin);
+    // Catch all owned 5xx responses, including static assets, and owned API
+    // 4xx responses. Authentication checks retain their more specific errors.
     if (
-      url.includes("/api/") &&
-      (status >= 500 || (status >= 400 && status !== 401))
+      owned &&
+      (status >= 500 ||
+        (url.includes("/api/") && status >= 400 && status !== 401))
     ) {
       serverErrors.push(`${status} ${url}`);
     }
@@ -188,11 +205,19 @@ async function findClosedSessionIdViaAgentsApi(
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
 
-test("auth + timeline loads with session rows", async ({ context }) => {
+test("auth + timeline loads with session rows", async ({
+  context,
+  frontendBaseUrl,
+  apiBaseUrl,
+}) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
-  const { consoleErrors, serverErrors } = attachErrorCollectors(page);
+  const { consoleErrors, serverErrors } = attachErrorCollectors(
+    page,
+    frontendBaseUrl,
+    apiBaseUrl,
+  );
 
   let authFailed = false;
   page.on("response", (response) => {
@@ -355,12 +380,18 @@ test("removed loop login handoff resolves to timeline", async ({
 
 test("forum route redirects to timeline without auth errors", async ({
   context,
+  frontendBaseUrl,
+  apiBaseUrl,
 }) => {
   // Budget includes auth checks + redirect + timeline render.
   test.setTimeout(45_000);
 
   const page = await context.newPage();
-  const { consoleErrors, serverErrors } = attachErrorCollectors(page);
+  const { consoleErrors, serverErrors } = attachErrorCollectors(
+    page,
+    frontendBaseUrl,
+    apiBaseUrl,
+  );
 
   const authErrors: string[] = [];
   page.on("response", (response) => {
@@ -428,6 +459,8 @@ test("forum route redirects to timeline without auth errors", async ({
 test("session detail renders event timeline", async ({
   context,
   agentsRequest,
+  frontendBaseUrl,
+  apiBaseUrl,
 }) => {
   test.setTimeout(45_000);
 
@@ -441,7 +474,11 @@ test("session detail renders event timeline", async ({
 
   const page = await context.newPage();
 
-  const { consoleErrors, serverErrors } = attachErrorCollectors(page);
+  const { consoleErrors, serverErrors } = attachErrorCollectors(
+    page,
+    frontendBaseUrl,
+    apiBaseUrl,
+  );
   const authErrors: string[] = [];
   let detailPath = "";
   const timelineItems = page.locator(
