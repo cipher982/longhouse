@@ -219,6 +219,20 @@ class _DenseRecallResult:
     coverage: RecallCoverage
 
 
+def _server_build_commit() -> str | None:
+    """Return the serving artifact SHA when this is a packaged build."""
+
+    from zerg.build_info import BuildIdentityMissing
+    from zerg.build_info import load
+
+    try:
+        return load().commit
+    except BuildIdentityMissing:
+        # Source/dev installs intentionally have no staged build identity. The
+        # production evaluator requires this field and fails if it is absent.
+        return None
+
+
 def _catalog_owner_id(auth: object) -> int:
     owner_id = getattr(auth, "owner_id", None)
     if owner_id is None:
@@ -1088,5 +1102,11 @@ async def recall_sessions(
             embedding_dims=ACTIVE_EMBEDDING_DIMS,
             embedding_revision=EMBEDDING_ARTIFACT_REVISION,
             coverage=dense_result.coverage,
+            server_commit=_server_build_commit(),
         )
-    return RecallResponse(matches=matches, total=len(matches), lanes=list(lanes))
+    return RecallResponse(
+        matches=matches,
+        total=len(matches),
+        lanes=list(lanes),
+        server_commit=_server_build_commit(),
+    )

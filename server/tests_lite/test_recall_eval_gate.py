@@ -47,6 +47,7 @@ def _payload(*, coverage: dict[str, object] | None) -> dict[str, object]:
         "embedding_dims": 256,
         "embedding_revision": "a" * 40,
         "coverage": coverage,
+        "server_commit": "c" * 40,
     }
 
 
@@ -67,6 +68,7 @@ def test_live_eval_request_requires_complete_coverage_and_real_result_depth(monk
         limit=25,
         days=365,
         mode="semantic",
+        expected_sha="c" * 40,
     )
 
     assert payload["coverage"]["ready"] is True
@@ -89,6 +91,18 @@ def test_live_eval_request_requires_complete_coverage_and_real_result_depth(monk
             limit=25,
             days=365,
             mode="semantic",
+            expected_sha="c" * 40,
+        )
+
+    with pytest.raises(ValueError, match="serving commit mismatch"):
+        recall_eval.search_recall(
+            "why did we change it?",
+            base_url="https://example.test",
+            token="device-token",
+            limit=25,
+            days=365,
+            mode="semantic",
+            expected_sha="d" * 40,
         )
 
 
@@ -106,6 +120,7 @@ def test_report_records_corpus_range_and_fails_errors_or_mixed_spaces():
                 embedding_dims=256,
                 embedding_revision="a" * 40,
                 coverage=_coverage(commit_seq="10"),
+                server_commit="c" * 40,
             ),
             recall_eval.Result(
                 query=query,
@@ -122,6 +137,7 @@ def test_report_records_corpus_range_and_fails_errors_or_mixed_spaces():
                 embedding_dims=256,
                 embedding_revision="b" * 40,
                 coverage=_coverage(commit_seq="12", episodes=82_960),
+                server_commit="c" * 40,
             ),
         ],
     )

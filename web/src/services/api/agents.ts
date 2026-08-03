@@ -1219,6 +1219,7 @@ export interface RecallResponse {
   embedding_dims: number | null;
   embedding_revision: string | null;
   coverage: RecallCoverage | null;
+  server_commit: string | null;
 }
 
 export interface RecallCoverage {

@@ -27,6 +27,7 @@ describe("RecallPanel", () => {
         embedding_model: "google/embeddinggemma-300m",
         embedding_dims: 256,
         embedding_revision: "a".repeat(40),
+        server_commit: "b".repeat(40),
         coverage: {
           ready: true,
           projector: "embeddings-test-256d-p2",

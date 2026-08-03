@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import statistics
 import subprocess
 import time
@@ -38,6 +39,7 @@ DEFAULT_MIN_CATEGORY_HITS_AT_25 = {
     "causal": 7,
     "supersession": 6,
 }
+_FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass
@@ -64,6 +66,7 @@ class Result:
     embedding_dims: int | None = None
     embedding_revision: str | None = None
     coverage: dict[str, object] | None = None
+    server_commit: str | None = None
 
     def gold_rank(self) -> int | None:
         """1-based rank of the first gold session, or None if absent.
@@ -158,6 +161,9 @@ class Report:
         projectors = {str(coverage["projector"]) for coverage in self._coverage_snapshots()}
         if self.strategy != "lexical" and len(projectors) != 1:
             failures.append(f"evaluation observed {len(projectors)} corpus projectors instead of one")
+        server_commits = self.server_commits()
+        if len(server_commits) != 1:
+            failures.append(f"evaluation observed {len(server_commits)} serving commits instead of one")
         if self.false_negative_rate() > max_false_negative_rate:
             failures.append(f"false_negative_rate {self.false_negative_rate():.3f} exceeds {max_false_negative_rate:.3f}")
         if self.recall_at(5) < min_recall_at_5:
@@ -187,6 +193,9 @@ class Report:
 
     def _coverage_snapshots(self) -> list[dict[str, object]]:
         return [result.coverage for result in self.results if result.coverage is not None]
+
+    def server_commits(self) -> list[str]:
+        return sorted({result.server_commit for result in self.results if result.server_commit is not None})
 
     def corpus_coverage_metadata(self) -> dict[str, object] | None:
         snapshots = self._coverage_snapshots()
@@ -250,7 +259,16 @@ def load_queries() -> tuple[list[Query], set[str]]:
     return queries, excluded
 
 
-def search_recall(query: str, *, base_url: str, token: str, limit: int, days: int, mode: str) -> dict:
+def search_recall(
+    query: str,
+    *,
+    base_url: str,
+    token: str,
+    limit: int,
+    days: int,
+    mode: str,
+    expected_sha: str,
+) -> dict:
     params = urllib.parse.urlencode({"query": query, "max_results": limit, "since_days": days, "context_turns": 0, "mode": mode})
     request = urllib.request.Request(
         f"{base_url}/api/agents/recall?{params}",
@@ -265,6 +283,9 @@ def search_recall(query: str, *, base_url: str, token: str, limit: int, days: in
     expected_lanes = {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[mode]
     if payload.get("lanes") != expected_lanes:
         raise ValueError(f"recall lane attribution mismatch: expected {expected_lanes}, got {payload.get('lanes')}")
+    server_commit = payload.get("server_commit")
+    if server_commit != expected_sha:
+        raise ValueError(f"serving commit mismatch: expected {expected_sha}, got {server_commit}")
     matches = payload.get("matches")
     if not isinstance(matches, list) or any(not isinstance(match, dict) for match in matches):
         raise ValueError("recall returned malformed matches")
@@ -316,8 +337,16 @@ def search_recall(query: str, *, base_url: str, token: str, limit: int, days: in
 
 
 def _search_mode(mode: str):
-    def search(query: str, *, base_url: str, token: str, limit: int, days: int) -> dict:
-        return search_recall(query, base_url=base_url, token=token, limit=limit, days=days, mode=mode)
+    def search(query: str, *, base_url: str, token: str, limit: int, days: int, expected_sha: str) -> dict:
+        return search_recall(
+            query,
+            base_url=base_url,
+            token=token,
+            limit=limit,
+            days=days,
+            mode=mode,
+            expected_sha=expected_sha,
+        )
 
     return search
 
@@ -331,6 +360,19 @@ STRATEGIES = {
 }
 
 
+def _local_git_sha() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strategy", default="auto", choices=sorted(STRATEGIES))
@@ -340,7 +382,17 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Emit machine-readable output.")
     parser.add_argument("--max-false-negative-rate", type=float, default=DEFAULT_MAX_FALSE_NEGATIVE_RATE)
     parser.add_argument("--min-recall-at-5", type=float, default=DEFAULT_MIN_RECALL_AT_5)
+    parser.add_argument(
+        "--expected-sha",
+        help="Exact 40-character server commit every evaluated response must report (defaults to this checkout).",
+    )
     args = parser.parse_args()
+
+    evaluator_git_sha = _local_git_sha()
+    expected_sha = args.expected_sha or evaluator_git_sha
+    if not _FULL_GIT_SHA.fullmatch(expected_sha):
+        print(f"Expected server SHA must be a full 40-character lowercase git SHA, got {expected_sha!r}.")
+        return 2
 
     base_url = os.environ.get("LONGHOUSE_EVAL_URL", DEFAULT_URL).rstrip("/")
     token = os.environ.get("LONGHOUSE_EVAL_TOKEN") or (TOKEN_PATH.read_text().strip() if TOKEN_PATH.exists() else "")
@@ -358,7 +410,14 @@ def main() -> int:
     for query in queries:
         started = time.monotonic()
         try:
-            payload = search(query.query, base_url=base_url, token=token, limit=args.limit, days=args.days)
+            payload = search(
+                query.query,
+                base_url=base_url,
+                token=token,
+                limit=args.limit,
+                days=args.days,
+                expected_sha=expected_sha,
+            )
             returned = [str(match.get("session_id") or "") for match in payload["matches"]]
             # Sessions that produced this work discuss retrieval itself and would
             # match every query about retrieval.
@@ -373,6 +432,7 @@ def main() -> int:
                     embedding_dims=payload.get("embedding_dims"),
                     embedding_revision=payload.get("embedding_revision"),
                     coverage=payload.get("coverage"),
+                    server_commit=payload.get("server_commit"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - report, never abort the sweep
@@ -384,21 +444,13 @@ def main() -> int:
         min_recall_at_5=args.min_recall_at_5,
         min_category_hits_at_25=DEFAULT_MIN_CATEGORY_HITS_AT_25,
     )
-    try:
-        git_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        git_sha = "unknown"
     query_set_sha256 = hashlib.sha256(QUERIES_PATH.read_bytes()).hexdigest()
     metadata = {
         "evaluated_at": datetime.now(UTC).isoformat(),
         "base_url": base_url,
-        "git_sha": git_sha,
+        "git_sha": evaluator_git_sha,
+        "expected_server_sha": expected_sha,
+        "observed_server_commits": report.server_commits(),
         "query_set_sha256": query_set_sha256,
         "query_count": len(report.results),
         "limit": args.limit,

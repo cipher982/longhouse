@@ -54,7 +54,7 @@ could do, since a reranker cannot recover what first-stage retrieval missed.
 ```bash
 python eval/recall/run_eval.py --strategy lexical
 python eval/recall/run_eval.py --strategy semantic
-python eval/recall/run_eval.py --strategy auto --verbose
+python eval/recall/run_eval.py --strategy auto --expected-sha "$SHIPPED_SHA" --verbose
 ```
 
 Requires a device token at `~/.longhouse/machine/device-token`, or
@@ -71,6 +71,9 @@ For dense strategies it also requires a complete corpus certificate on every
 response and records the projector, catalog watermark range, session/episode
 count ranges, zero-defect resident invariants, and per-query error details. A
 missing/incomplete certificate or mixed embedding space/projector fails the run.
+Every response must also report the exact serving commit requested with
+`--expected-sha` (the evaluator checkout SHA by default), so a split deployment
+cohort cannot produce one blended quality score.
 
 ## Rules
 

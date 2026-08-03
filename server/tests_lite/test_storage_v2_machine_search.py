@@ -152,6 +152,7 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
         }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", context_v2)
+    monkeypatch.setattr(agents_search, "_server_build_commit", lambda: "c" * 40)
 
     response = asyncio.run(
         agents_search.recall_sessions(
@@ -175,6 +176,7 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert response.matches[0].evidence == "the migration completed"
     assert response.matches[0].total_events == 12
     assert response.matches[0].context[0]["content_text"] == "please migrate"
+    assert response.server_commit == "c" * 40
 
 
 def test_recall_rejects_unknown_query_parameters_before_search():

@@ -7828,6 +7828,8 @@ export interface components {
             /** Embedding Revision */
             embedding_revision?: string | null;
             coverage?: components["schemas"]["RecallCoverage"] | null;
+            /** Server Commit */
+            server_commit?: string | null;
         };
         /**
          * ResetType

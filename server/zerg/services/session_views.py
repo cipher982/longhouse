@@ -1869,6 +1869,7 @@ class RecallResponse(BaseModel):
     embedding_dims: Optional[int] = None
     embedding_revision: Optional[str] = None
     coverage: Optional[RecallCoverage] = None
+    server_commit: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{40}$")
 
     @model_validator(mode="after")
     def validate_recall_contract(self) -> "RecallResponse":
