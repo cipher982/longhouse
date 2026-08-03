@@ -2756,43 +2756,43 @@ struct LonghouseMenuBarCoreTests {
         #expect(clearedSession?.bridgePid == 42)
     }
 
-    /// The consumer-contract test.
+    /// The consumer-contract test: the recorded envelope decodes into the type
+    /// the app actually uses.
     ///
-    /// Nothing decoded real producer output into the real consumer type, which
-    /// is how a native replacement that `HealthSnapshot` cannot parse stayed
-    /// marked `available`. Point this at a built facade to check it for real;
-    /// without one it verifies the recorded contract shape so CI still fails on
-    /// a schema regression.
+    /// The producer end is held by the Rust test
+    /// `desktop_envelope_matches_the_swift_consumer_fixture`, which compares the
+    /// full recursive shape of the emitted envelope against this same fixture
+    /// and is built from current source every run. Producer drift fails there,
+    /// consumer drift fails here, and neither side needs a binary to be right.
+    ///
+    /// This deliberately does not go hunting for a built facade. It used to try
+    /// `engine/target/{debug,release}/longhouse`, which was unsound in both
+    /// directions: `longhouse local-health` shells out to the *paired*
+    /// `longhouse-engine`, so an executable facade can sit next to a stale
+    /// engine and emit last month's envelope. That either fails as a bogus
+    /// `keyNotFound: severity` that reads like a product regression, or -- worse
+    /// -- passes, reporting a live producer as verified when what really got
+    /// checked was a binary nobody built on purpose. `verify-pair` does not
+    /// rescue it either: it proves the facade and engine match each other, not
+    /// that either matches the source tree, so a uniformly stale pair sails
+    /// through. Whether the tree happens to be built is not this test's subject.
+    ///
+    /// Set `LONGHOUSE_HEALTH_BIN` to also run a specific binary end to end. That
+    /// is opt-in because only the caller knows the binary is worth trusting.
     @Test
     func nativeProducerOutputDecodesIntoHealthSnapshot() throws {
-        // Deliberately does not consider ~/.local/bin/longhouse. That is the
-        // user's installed binary, not the code under test, and letting it
-        // decide this result would make the check pass or fail on machine state.
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // LonghouseMenuBarCoreTests
-            .deletingLastPathComponent()  // Tests
-            .deletingLastPathComponent()  // LonghouseMenuBarHarness
-            .deletingLastPathComponent()  // desktop
-            .deletingLastPathComponent()  // repo root
-        let candidates = [
-            ProcessInfo.processInfo.environment["LONGHOUSE_HEALTH_BIN"],
-            repoRoot.appendingPathComponent("engine/target/debug/longhouse").path as String,
-            repoRoot.appendingPathComponent("engine/target/release/longhouse").path as String,
-        ].compactMap { $0 }
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/native-desktop-health.json")
+        let recorded = try HealthSnapshotDecoder.decode(data: Data(contentsOf: fixtureURL))
+        #expect(recorded.severity == "green")
+        #expect(recorded.managedSessions?.count == 1)
+        #expect(recorded.realtime?.runtimeUrl != nil)
+        #expect(recorded.engineStatus?.payload != nil)
 
-        guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            // No facade built (clean CI checkout). Decode the shared fixture
-            // instead. The Rust test `desktop_envelope_matches_the_swift_consumer_fixture`
-            // asserts the producer still emits every key this file records, so
-            // the two cannot drift apart silently.
-            let fixtureURL = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .appendingPathComponent("Fixtures/native-desktop-health.json")
-            let snapshot = try HealthSnapshotDecoder.decode(data: Data(contentsOf: fixtureURL))
-            #expect(snapshot.severity == "green")
-            #expect(snapshot.managedSessions?.count == 1)
-            #expect(snapshot.realtime?.runtimeUrl != nil)
-            #expect(snapshot.engineStatus?.payload != nil)
+        guard let binary = ProcessInfo.processInfo.environment["LONGHOUSE_HEALTH_BIN"],
+              FileManager.default.isExecutableFile(atPath: binary)
+        else {
             return
         }
 
