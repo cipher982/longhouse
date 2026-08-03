@@ -9,6 +9,7 @@ keeps raw evidence under an isolated evidence directory.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -1072,8 +1073,10 @@ def _record_pty_session(
     finally:
         os.close(master_fd)
         if process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=2)
     output = b"".join(chunks).decode("utf-8", errors="replace")
     recording_path.write_text(output, encoding="utf-8")
     return subprocess.CompletedProcess(
@@ -1225,6 +1228,9 @@ def run_managed_cold_resume(args: argparse.Namespace, evidence_root: Path, codex
         assertions = {
             "same_longhouse_session": str(resumed_state.get("session_id") or "") == session_id,
             "same_provider_thread": str(resumed_state.get("thread_id") or "") == thread_id,
+            "subscribed_thread_matches_provider_thread": (
+                str(resumed_state.get("thread_id") or "") == thread_id and resumed_state.get("thread_subscription_status") == "subscribed"
+            ),
             "new_run": resumed_state.get("run_id") != initial_state.get("run_id"),
             "new_connection": resumed_state.get("connection_id") != initial_state.get("connection_id"),
             "new_app_server_process": (
@@ -1258,6 +1264,7 @@ def run_managed_cold_resume(args: argparse.Namespace, evidence_root: Path, codex
             resumed_run_id=resumed_state.get("run_id"),
             initial_connection_id=initial_state.get("connection_id"),
             resumed_connection_id=resumed_state.get("connection_id"),
+            subscribed_thread_id=resumed_state.get("thread_id"),
             seed_marker=marker,
             recording=str(recording),
             evidence_root=str(root),
