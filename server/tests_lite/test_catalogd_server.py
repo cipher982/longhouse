@@ -116,6 +116,37 @@ async def test_interactive_reads_do_not_queue_behind_projector_read_lane(daemon_
 
 
 @pytest.mark.asyncio
+async def test_interactive_read_lane_preserves_eighth_admission_slot(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    entered = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    entered_count = 0
+
+    def block_interactive_read_lane() -> None:
+        nonlocal entered_count
+        with lock:
+            entered_count += 1
+            if entered_count == 7:
+                entered.set()
+        release.wait(timeout=2)
+
+    blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(7)]
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        ping = await client.call("ping.v2", timeout_seconds=0.25)
+        assert ping["ready"] is True
+    finally:
+        release.set()
+        await asyncio.gather(*blocked)
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_device_auth_is_typed_read_only_and_reports_commit_seq(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)

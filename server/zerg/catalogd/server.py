@@ -34,6 +34,13 @@ from zerg.catalogd.store import CatalogStore
 
 logger = logging.getLogger(__name__)
 
+# Browser QA opens timeline/detail surfaces concurrently, and an SSE client
+# that disconnects cannot cancel an already-running synchronous SQLite read.
+# Four slots let those abandoned reads queue every new timeline/auth request
+# past the RPC deadline. Eight remains bounded to the normal hosted core count
+# while preserving one admission wave for active interactive traffic.
+CATALOG_INTERACTIVE_READ_WORKERS = 8
+
 
 class CatalogDaemonError(RuntimeError):
     pass
@@ -79,7 +86,10 @@ class CatalogDaemon:
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
-            self._read_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalogd-read")
+            self._read_executor = ThreadPoolExecutor(
+                max_workers=CATALOG_INTERACTIVE_READ_WORKERS,
+                thread_name_prefix="catalogd-read",
+            )
             self._projector_read_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="catalogd-projector-read")
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
