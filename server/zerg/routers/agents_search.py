@@ -21,6 +21,7 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import ValidationError
 from pydantic import model_validator
 
 from zerg.catalogd.client import CatalogRemoteError
@@ -105,6 +106,83 @@ class _RecallContextPayload(BaseModel):
     context: list[_RecallContextTurn]
     total_events: int = Field(ge=0)
     timing: _SearchReadTiming
+
+
+class _ProjectorLagPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    states: list[dict[str, object]]
+    lag_count: int = Field(ge=0)
+    uninitialized_count: int = Field(ge=0)
+    indexed_through: str = Field(pattern=r"^[0-9]+$")
+    commit_seq: str = Field(pattern=r"^[0-9]+$")
+    observed_at: str = Field(min_length=1)
+
+
+async def _require_complete_projection_coverage(*, timeout_seconds: float) -> None:
+    """Reject a corpus that the active embedding projector has never covered.
+
+    searchd's resident gate validates every row it knows about. Catalogd owns
+    the authoritative eligible-session set, so a fresh or partially rebuilt
+    searchd could otherwise prove an empty/partial local set complete. Projector
+    completion is published only after each searchd mutation commits. Requiring
+    every eligible session to have completed this projector at least once closes
+    that outer gap. Searchd retains the current generation/revision/dimension/
+    normalization/locator proof without globally blocking ordinary revision
+    churn that has already produced a usable embedding.
+    """
+
+    from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalog = get_catalogd_client()
+    if catalog is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "coverage_status_unavailable", "message": "Embedding coverage status is unavailable."},
+        )
+
+    async def lag(projector: str) -> _ProjectorLagPayload:
+        try:
+            result = await catalog.call(
+                "projector.state.list_lag.v2",
+                {"projector": projector, "after_session_id": None, "limit": 1},
+                timeout_seconds=timeout_seconds,
+            )
+        except (CatalogRemoteError, CatalogUnavailable) as exc:
+            reason = exc.code if isinstance(exc, CatalogRemoteError) else "catalogd_unavailable"
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "coverage_status_unavailable",
+                    "message": "Embedding coverage status is unavailable.",
+                    "reason": reason,
+                },
+            ) from exc
+        try:
+            return _ProjectorLagPayload.model_validate(result)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "coverage_status_unavailable",
+                    "message": "Embedding coverage status is malformed.",
+                    "reason": "invalid_catalog_response",
+                },
+            ) from exc
+
+    embedding_lag = await lag(EMBEDDING_PROJECTOR_ID)
+    if embedding_lag.uninitialized_count:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "embedding_coverage_incomplete",
+                "message": "The active embedding corpus is incomplete.",
+                "catalog_coverage": {
+                    EMBEDDING_PROJECTOR_ID: embedding_lag.model_dump(exclude={"states"}),
+                },
+            },
+        )
 
 
 def _catalog_owner_id(auth: object) -> int:
@@ -369,7 +447,10 @@ async def _semantic_recall_matches(
     config = get_embedding_space_config()
 
     async def _run() -> list[RecallMatch]:
-        query_vec = await embed_query(query)
+        query_vec, _coverage = await asyncio.gather(
+            embed_query(query),
+            _require_complete_projection_coverage(timeout_seconds=timeout_seconds),
+        )
 
         # Scoping is a SQL predicate against searchd's own session_index
         # (owner/project/provider/environment/recency), not an enumerated

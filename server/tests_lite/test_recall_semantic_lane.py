@@ -16,6 +16,16 @@ import pytest
 from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch
 
+_REAL_COVERAGE_CHECK = agents_search._require_complete_projection_coverage
+
+
+@pytest.fixture(autouse=True)
+def _complete_catalog_projection(monkeypatch):
+    async def complete(*, timeout_seconds):
+        assert timeout_seconds > 0
+
+    monkeypatch.setattr(agents_search, "_require_complete_projection_coverage", complete)
+
 
 def _match(session_id: str, score: float) -> RecallMatch:
     return RecallMatch(session_id=session_id, chunk_index=0, score=score)
@@ -89,6 +99,92 @@ async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypat
             limit=5,
             timeout_seconds=1.0,
         )
+
+
+@pytest.mark.asyncio
+async def test_uninitialized_embedding_projection_closes_the_outer_coverage_gate(monkeypatch):
+    from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+    from zerg.services import catalogd_supervisor
+
+    seen = []
+
+    class FakeCatalog:
+        async def call(self, method, params, *, timeout_seconds):
+            assert method == "projector.state.list_lag.v2"
+            assert timeout_seconds == 1.0
+            seen.append(params["projector"])
+            return {
+                "states": [],
+                "lag_count": 1,
+                "uninitialized_count": 1,
+                "indexed_through": "9",
+                "commit_seq": "10",
+                "observed_at": "2026-08-02T00:00:00+00:00",
+            }
+
+    monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: FakeCatalog())
+    # Override the file's autouse success stub with the real boundary.
+    monkeypatch.setattr(
+        agents_search,
+        "_require_complete_projection_coverage",
+        _REAL_COVERAGE_CHECK,
+    )
+    with pytest.raises(agents_search.HTTPException) as incomplete:
+        await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
+
+    assert incomplete.value.status_code == 503
+    assert incomplete.value.detail["code"] == "embedding_coverage_incomplete"
+    assert seen == [EMBEDDING_PROJECTOR_ID]
+
+
+@pytest.mark.asyncio
+async def test_completed_embedding_projection_allows_ordinary_revision_lag(monkeypatch):
+    from zerg.services import catalogd_supervisor
+
+    class FakeCatalog:
+        async def call(self, _method, _params, *, timeout_seconds):
+            assert timeout_seconds == 1.0
+            return {
+                "states": [],
+                "lag_count": 1,
+                "uninitialized_count": 0,
+                "indexed_through": "9",
+                "commit_seq": "10",
+                "observed_at": "2026-08-02T00:00:00+00:00",
+            }
+
+    monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: FakeCatalog())
+    monkeypatch.setattr(
+        agents_search,
+        "_require_complete_projection_coverage",
+        _REAL_COVERAGE_CHECK,
+    )
+
+    await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
+
+
+@pytest.mark.asyncio
+async def test_malformed_projector_coverage_is_typed_unavailable(monkeypatch):
+    from zerg.services import catalogd_supervisor
+
+    class FakeCatalog:
+        async def call(self, _method, _params, *, timeout_seconds):
+            assert timeout_seconds == 1.0
+            return {"lag_count": "not-an-integer"}
+
+    monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: FakeCatalog())
+    monkeypatch.setattr(
+        agents_search,
+        "_require_complete_projection_coverage",
+        _REAL_COVERAGE_CHECK,
+    )
+
+    with pytest.raises(agents_search.HTTPException) as unavailable:
+        await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
+
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail["code"] == "coverage_status_unavailable"
+    assert unavailable.value.detail["reason"] == "invalid_catalog_response"
 
 
 @pytest.mark.asyncio
