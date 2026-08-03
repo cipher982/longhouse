@@ -81,6 +81,7 @@ print(json.dumps({{"type": "item.completed", "item": {{
     "id": "message-1", "type": "agent_message",
     "text": output.rstrip("\\n") if behavior != "semantic_mismatch" else "DIFFERENT"
 }}}}))
+print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 12, "output_tokens": 3}}}}))
 """
 
 
@@ -1115,6 +1116,14 @@ def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     for record in bundle["records"]:
         assert record["provider_build_identity"] == build_identity
         assert record["provider_build_granularity"] == "full_installed_tree"
+    semantic_path = output_root / "semantic-evidence" / "semantic-observation.json"
+    semantic_observation = json.loads(semantic_path.read_text(encoding="utf-8"))
+    source = semantic_observation["live_model_evidence"]["source_artifacts"][0]
+    assert not Path(source["path"]).is_absolute()
+    assert (output_root.parent / source["path"]).is_file()
+    assert bundle["execution_metadata"]["semantic_evidence_digest"] == (
+        "sha256:" + hashlib.sha256(semantic_path.read_bytes()).hexdigest()
+    )
 
 
 @pytest.mark.timeout(30)
@@ -1287,6 +1296,8 @@ def test_helm_interrupt_uses_probe_and_interrupt_scenarios(tmp_path: Path, monke
         "managed_bridge_cleanup_completed": "pass",
     }
     assert bundle["coverage_manifest"]["evidence_class"] == "live_token"
+    semantic_path = tmp_path / "output" / "semantic-evidence" / "semantic-observation.json"
+    assert semantic_path.is_file()
     for record in bundle["records"]:
         assert record["longhouse_build_id"] == "sha256:" + "a" * 64
 

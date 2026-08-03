@@ -828,7 +828,7 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
         "native_event_sha256": _native_event_digest(event),
     }
     model = event.get("model")
-    if isinstance(model, str) and model.strip():
+    if isinstance(model, str) and model.strip() and model != "<synthetic>":
         compact["model"] = model.strip()
         compact["model_source"] = "provider_event"
     aggregate_usage = _flatten_numeric_usage(event.get("usage"))

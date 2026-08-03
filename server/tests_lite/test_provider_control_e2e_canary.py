@@ -106,3 +106,39 @@ def test_opencode_result_event_marks_missing_cost_without_calling_it_free() -> N
     assert result["accounting_status"] == "provider_reported_usage_cost_unavailable"
     assert result["accounting_status_source"] == "producer_observation_classification"
     assert "total_cost_usd" not in result
+
+
+def test_opencode_part_shaped_result_preserves_the_native_event_type() -> None:
+    canary = _load_canary()
+    result = canary._compact_opencode_result_event(  # noqa: SLF001
+        [
+            {
+                "type": "message.part.updated",
+                "sessionID": "ses_fixture",
+                "part": {"type": "step-finish", "tokens": {"input": 12, "output": 3}},
+            }
+        ],
+        marker="UNUSED",
+        requested_model="openrouter/deepseek/deepseek-v4-flash",
+    )
+
+    assert result is not None
+    assert result["type"] == "message.part.updated"
+    assert result["part_type"] == "step-finish"
+
+
+def test_claude_synthetic_result_model_is_not_provider_identity() -> None:
+    canary = _load_canary()
+
+    result = canary._compact_claude_result_event(  # noqa: SLF001
+        {
+            "type": "result",
+            "model": "<synthetic>",
+            "result": "LONGHOUSE_MARKER",
+        },
+        marker="LONGHOUSE_MARKER",
+    )
+
+    assert result is not None
+    assert "model" not in result
+    assert "model_source" not in result

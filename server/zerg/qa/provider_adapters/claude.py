@@ -264,11 +264,14 @@ def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any
     result_event = canary.get("result_event")
     if not isinstance(result_event, Mapping):
         return None
-    model = _clean_optional_str(result_event.get("model") or canary.get("model"))
     result_event_payload = dict(result_event)
+    if result_event_payload.get("model") == "<synthetic>":
+        result_event_payload.pop("model")
+        result_event_payload.pop("model_source", None)
+    model = _clean_optional_str(result_event_payload.get("model") or canary.get("model"))
     if model and not result_event_payload.get("model"):
         result_event_payload["model"] = model
-        result_event_payload["model_source"] = "invocation"
+        result_event_payload["model_source"] = "provider_event" if result_event_payload.get("model_source_event_sha256") else "invocation"
     elif model and not result_event_payload.get("model_source"):
         result_event_payload["model_source"] = "provider_event"
     source_artifacts = [

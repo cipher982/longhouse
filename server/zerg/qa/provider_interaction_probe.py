@@ -1103,6 +1103,20 @@ def _opencode_interaction_probes(
     return rows, native_rows
 
 
+def _cursor_init_event(events: list[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    return next(
+        (
+            event
+            for event in events
+            if event.get("type") == "system"
+            and event.get("subtype") == "init"
+            and isinstance(event.get("model"), str)
+            and event["model"].strip()
+        ),
+        None,
+    )
+
+
 def _cursor_model_probe_with_runtime_home(
     *,
     binary: Path,
@@ -1182,10 +1196,7 @@ def _cursor_model_probe_with_runtime_home(
         native_rows.append(file_evidence)
     combined = f"{safe_stdout}\n{safe_stderr}\n{events_path.read_text(encoding='utf-8') if events_path.exists() else ''}"
     stream_events = _cursor_stream_json_events(safe_stdout)
-    init_event = next(
-        (event for event in stream_events if event.get("type") == "system" and event.get("subtype") == "init"),
-        None,
-    )
+    init_event = _cursor_init_event(stream_events)
     result_event = next(
         (
             event

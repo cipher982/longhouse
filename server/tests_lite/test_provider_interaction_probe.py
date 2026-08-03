@@ -126,6 +126,16 @@ def test_cursor_stream_json_parser_keeps_native_init_and_result_records() -> Non
     assert events[1]["request_id"] == "r"
 
 
+def test_cursor_model_probe_selects_the_first_model_bearing_init_event() -> None:
+    events = [
+        {"type": "system", "subtype": "init"},
+        {"type": "system", "subtype": "init", "model": "grok-4.5"},
+        {"type": "result", "subtype": "success"},
+    ]
+
+    assert provider_interaction_probe._cursor_init_event(events) is events[1]  # noqa: SLF001
+
+
 @pytest.mark.parametrize(
     ("requested", "observed"),
     (("cursor-grok-4.5-high", "Cursor Grok 4.5 High"), ("gpt-5.6-sol", "gpt-5.6-sol")),
