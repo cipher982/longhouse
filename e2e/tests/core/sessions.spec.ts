@@ -741,11 +741,22 @@ test.describe("Sessions Page", () => {
       const NativeEventSource = window.EventSource;
       const sessionIds: string[] = [];
       (
-        window as typeof window & { __timelineSessionUpserts?: string[] }
+        window as typeof window & {
+          __timelineSessionUpserts?: string[];
+          __timelineStreamOpen?: boolean;
+        }
       ).__timelineSessionUpserts = sessionIds;
+      (
+        window as typeof window & { __timelineStreamOpen?: boolean }
+      ).__timelineStreamOpen = false;
       window.EventSource = class ObservedEventSource extends NativeEventSource {
         constructor(url: string | URL, init?: EventSourceInit) {
           super(url, init);
+          this.addEventListener("open", () => {
+            (
+              window as typeof window & { __timelineStreamOpen?: boolean }
+            ).__timelineStreamOpen = true;
+          });
           this.addEventListener("session_upsert", (event) => {
             const payload = JSON.parse((event as MessageEvent).data);
             const sessionId = payload?.session?.head?.id;
@@ -755,15 +766,16 @@ test.describe("Sessions Page", () => {
       };
     });
 
-    const streamConnected = page.waitForResponse((response) => {
-      return (
-        response.url().includes("/api/timeline/sessions/stream") &&
-        response.status() === 200
-      );
-    });
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await streamConnected;
+    await page.waitForFunction(
+      () =>
+        (
+          window as typeof window & { __timelineStreamOpen?: boolean }
+        ).__timelineStreamOpen === true,
+      undefined,
+      { timeout: 10_000 },
+    );
 
     const rows = page.getByTestId("session-row");
     const olderRow = page.locator(
