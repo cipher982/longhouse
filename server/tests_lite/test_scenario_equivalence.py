@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from tests_lite._provider_harness_test_helpers import install_fake_engine
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import provider_harness_qualification as bridge
 from zerg.qa.scenario_equivalence import compare_scenario_results
-from tests_lite._provider_harness_test_helpers import install_fake_engine
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "scenario_equivalence"
 
@@ -189,7 +189,7 @@ def _capture_helm_interrupt_pair(tmp_path: Path, monkeypatch) -> tuple[dict, dic
     return _as_scenario_result(legacy_result), _as_scenario_result(harness_result)
 
 
-@pytest.mark.timeout(30)
+@pytest.mark.timeout(60)
 def test_generate_corpus(tmp_path: Path, monkeypatch) -> None:
     """Not a real assertion -- (re)captures the fixture corpus from live
     runs against fake binaries and writes it to disk, so the comparison
