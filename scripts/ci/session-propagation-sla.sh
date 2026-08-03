@@ -62,11 +62,23 @@ if [[ "$missing" == "1" ]]; then
 fi
 
 engine_pid=""
+# Bounded shutdown. An unbounded `wait` here held one job open for the full
+# 2-hour timeout after the profiler had already finished and written its result,
+# because the ephemeral Machine Agent did not exit on SIGTERM. Give it a grace
+# period, then SIGKILL, and never block the job on a process that will not die.
+ENGINE_SHUTDOWN_GRACE_SECS="${ENGINE_SHUTDOWN_GRACE_SECS:-10}"
 cleanup() {
-  if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
-    kill "$engine_pid" 2>/dev/null || true
-    wait "$engine_pid" 2>/dev/null || true
+  if [[ -z "$engine_pid" ]] || ! kill -0 "$engine_pid" 2>/dev/null; then
+    return
   fi
+  kill "$engine_pid" 2>/dev/null || true
+  for _ in $(seq 1 "$ENGINE_SHUTDOWN_GRACE_SECS"); do
+    kill -0 "$engine_pid" 2>/dev/null || return
+    sleep 1
+  done
+  echo "Machine Agent ignored SIGTERM after ${ENGINE_SHUTDOWN_GRACE_SECS}s; sending SIGKILL" >&2
+  kill -9 "$engine_pid" 2>/dev/null || true
+  wait "$engine_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
 
