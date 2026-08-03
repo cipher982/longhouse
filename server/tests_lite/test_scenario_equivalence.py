@@ -189,6 +189,7 @@ def _capture_helm_interrupt_pair(tmp_path: Path, monkeypatch) -> tuple[dict, dic
     return _as_scenario_result(legacy_result), _as_scenario_result(harness_result)
 
 
+@pytest.mark.timeout(30)
 def test_generate_corpus(tmp_path: Path, monkeypatch) -> None:
     """Not a real assertion -- (re)captures the fixture corpus from live
     runs against fake binaries and writes it to disk, so the comparison

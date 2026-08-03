@@ -130,7 +130,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0a7be1c140fda707d738f2aff57f6529cb1ee104c9b12091059af13ccf6f9dbf"
+              "oracle_digest": "f0c1ad6a0940812a0684bafc9f4b0246544cf08a680c9b340ae2a0bc2310ab62"
             }
           ]
         },
