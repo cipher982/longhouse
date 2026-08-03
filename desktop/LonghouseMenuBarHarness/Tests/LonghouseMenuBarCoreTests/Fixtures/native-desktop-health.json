@@ -1,55 +1,76 @@
 {
-  "schema_version": 1,
-  "collection_tier": "native_fast",
   "collected_at": "2026-08-03T16:00:00Z",
-  "health_state": "healthy",
-  "severity": "green",
-  "headline": "Longhouse native fast health is healthy",
-  "reasons": [],
-  "suggested_actions": [],
+  "collection_tier": "native_fast",
   "engine_status": {
-    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "age_seconds": 0,
     "exists": true,
     "fresh": true,
-    "age_seconds": 0,
+    "path": "/example/.longhouse/agent/engine-status.json",
     "payload": {
-      "version": "test",
-      "daemon_pid": 1,
-      "last_updated": "2026-08-03T16:00:00Z"
+      "daemon_pid": 4242,
+      "last_updated": "2026-08-03T16:00:00Z",
+      "sessions": [
+        {
+          "bridge": {
+            "heartbeat_at": "2026-08-03T16:00:00Z",
+            "pid": 4243,
+            "status": "ready"
+          },
+          "first_user_message": "example",
+          "provider": "claude",
+          "reason_codes": [],
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "state": "attached",
+          "timeline_title": "Review the panel",
+          "title_source": "prompt",
+          "title_state": "pending",
+          "workspace": {
+            "label": "longhouse"
+          }
+        }
+      ],
+      "version": "0.1.33"
     }
   },
-  "transport": {
-    "status": "healthy",
-    "status_reason": "healthy",
-    "status_summary": "Shipping healthy."
-  },
-  "spool": {
-    "pending_count": 0,
-    "dead_count": 0
-  },
+  "headline": "Longhouse native fast health is healthy",
+  "health_state": "healthy",
   "managed_sessions": [
     {
-      "session_id": "0f3c6fdb-193e-4eb8-954f-aebb236fe90e",
-      "provider": "claude",
-      "workspace_label": "zerg",
-      "timeline_title": "example",
-      "first_user_message": "example",
-      "title_state": "pending",
-      "title_source": "prompt",
-      "state": "attached",
+      "bridge_heartbeat_at": "2026-08-03T16:00:00Z",
+      "bridge_pid": 4243,
       "bridge_status": "ready",
-      "bridge_heartbeat_at": "2026-08-03T15:24:54.536371+00:00",
-      "reason_codes": []
+      "first_user_message": "example",
+      "provider": "claude",
+      "reason_codes": [],
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "state": "attached",
+      "timeline_title": "Review the panel",
+      "title_source": "prompt",
+      "title_state": "pending",
+      "workspace_label": "longhouse"
     }
   ],
   "managed_summary": {
     "attached_count": 1,
-    "detached_count": 0,
-    "degraded_count": 0
+    "degraded_count": 0,
+    "detached_count": 0
   },
   "realtime": {
-    "runtime_url": "https://david010.longhouse.ai",
-    "machine_name": "cinder",
-    "token_path": "/Users/davidrose/.longhouse/machine/device-token"
+    "machine_name": "example-machine",
+    "runtime_url": "https://example.longhouse.ai",
+    "token_path": "/example/.longhouse/machine/device-token"
+  },
+  "reasons": [],
+  "schema_version": 1,
+  "severity": "green",
+  "spool": {
+    "dead_count": 0,
+    "pending_count": 0
+  },
+  "suggested_actions": [],
+  "transport": {
+    "status": "healthy",
+    "status_reason": "healthy",
+    "status_summary": "Shipping healthy."
   }
 }

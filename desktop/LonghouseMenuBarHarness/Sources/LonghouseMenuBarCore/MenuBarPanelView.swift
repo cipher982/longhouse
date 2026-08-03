@@ -491,7 +491,16 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if snapshot.currentManagedSessions.isEmpty {
+            if snapshot.managedSessions == nil {
+                // Absent evidence, not an observed absence. "No managed sessions"
+                // here would be a false negative — the producer could not read
+                // session evidence at all.
+                PanelSection(title: "Sessions") {
+                    Text("Session evidence is unavailable on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+            } else if snapshot.currentManagedSessions.isEmpty {
                 PanelSection(title: "Sessions") {
                     Text("No managed sessions are running on this Mac.")
                         .font(.system(size: 12, weight: .medium))

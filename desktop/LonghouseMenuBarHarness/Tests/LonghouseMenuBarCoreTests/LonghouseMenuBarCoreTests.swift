@@ -2524,6 +2524,61 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func absentEvidenceRendersUnknownRatherThanHealthy() {
+        // No engine payload at all: the producer could not read upload or
+        // transport evidence. Rendering "Clear" and "Connected" from that would
+        // assert a healthy state nobody observed.
+        let blind = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-03T16:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Longhouse",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, launchReadiness: nil
+        )
+        let facts = blind.menuBarPresentation(relativeTo: Date()).facts
+        let value = { (id: String) in facts.first(where: { $0.id == id })?.value }
+
+        #expect(value("durable-upload") == "Unknown")
+        #expect(value("transport") == "Unknown")
+        #expect(facts.first(where: { $0.id == "transport" })?.promotion == .unavailable)
+    }
+
+    @Test
+    func absentSessionEvidenceIsNotAnObservedAbsence() {
+        let blind = makeHealthySnapshot(sessions: nil)
+        let observed = makeHealthySnapshot(sessions: [])
+
+        // nil means "could not read"; [] means "read, and there were none".
+        #expect(blind.managedSessions == nil)
+        #expect(observed.managedSessions?.isEmpty == true)
+    }
+
+    @Test
+    func singleSessionProjectionFailureClearsOnlyThatSession() {
+        let runtimeHost = { (id: String) in
+            ManagedSessionSnapshot(
+                sessionId: id, provider: "codex", workspaceLabel: "longhouse",
+                branch: "main", state: "attached", phase: "thinking",
+                lastActivityAt: nil, bridgeStatus: nil, bridgePid: nil,
+                bridgeHeartbeatAt: nil, reasonCodes: [], authority: "runtime_host",
+                presentation: SessionPresentationSnapshot(
+                    primary: SessionPresentationLabelSnapshot(
+                        key: "thinking", label: "Thinking", tone: "active"
+                    ),
+                    access: nil
+                )
+            )
+        }
+        let snapshot = makeHealthySnapshot(sessions: [runtimeHost("a"), runtimeHost("b")])
+
+        let cleared = snapshot.clearingRuntimeHostProjection(for: "a")
+        let sessions = cleared.managedSessions ?? []
+
+        #expect(sessions.first(where: { $0.sessionId == "a" })?.presentation == nil)
+        // The healthy session keeps its Runtime Host authority.
+        #expect(sessions.first(where: { $0.sessionId == "b" })?.presentation != nil)
+    }
+
+    @Test
     func neverAttemptedProducerIsNeverCurrent() {
         let state = ProducerRefreshState.neverAttempted
         #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)

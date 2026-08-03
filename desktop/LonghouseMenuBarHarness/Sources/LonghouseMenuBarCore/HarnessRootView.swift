@@ -23,7 +23,10 @@ public struct HarnessRootView: View {
 
     public var body: some View {
         Group {
-            if store.isRecovering && store.snapshot == nil {
+            // Bounded, not raw `isRecovering`. A producer that times out on
+            // every attempt reports transient forever, so the raw flag would
+            // pin this on the settling view with nothing else ever shown.
+            if store.isBrieflyRecovering && store.snapshot == nil {
                 MenuBarSettlingView()
             } else if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
                 MenuBarBootingView()
@@ -35,7 +38,7 @@ public struct HarnessRootView: View {
                     feedback: store.feedback,
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
-                    isManualRefreshing: store.isManualRefreshActive || store.isRecovering,
+                    isManualRefreshing: store.isManualRefreshActive || store.isBrieflyRecovering,
                     headerSummaryVariant: headerSummaryVariant,
                     // Recomputed against presentationDate so the banner appears
                     // and its age advances while the panel stays open.

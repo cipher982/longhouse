@@ -3099,6 +3099,52 @@ mod tests {
         assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
     }
 
+    /// The canonical envelope both the Rust golden test and the Swift consumer
+    /// fixture are built from. Synthetic on purpose: deterministic, and it keeps
+    /// real machine paths, URLs, and session ids out of the repo.
+    fn canonical_desktop_envelope() -> Value {
+        let engine_payload = serde_json::json!({
+            "version": "0.1.33",
+            "daemon_pid": 4242,
+            "last_updated": "2026-08-03T16:00:00Z",
+            "sessions": [{
+                "session_id": "00000000-0000-4000-8000-000000000001",
+                "provider": "claude",
+                "state": "attached",
+                "timeline_title": "Review the panel",
+                "first_user_message": "example",
+                "title_state": "pending",
+                "title_source": "prompt",
+                "workspace": {"label": "longhouse"},
+                "bridge": {
+                    "status": "ready",
+                    "pid": 4243,
+                    "heartbeat_at": "2026-08-03T16:00:00Z",
+                },
+                "reason_codes": [],
+            }],
+        });
+        let machine_state = serde_json::json!({
+            "runtime_url": "https://example.longhouse.ai",
+            "machine_name": "example-machine",
+        });
+        let fast = native_fast_health_from_parts(
+            Path::new("/example/.longhouse/agent/engine-status.json"),
+            true,
+            Some(0),
+            Some(engine_payload.clone()),
+            None,
+        );
+        serde_json::to_value(native_desktop_health_from_parts(
+            fast,
+            Some(engine_payload),
+            Some(&machine_state),
+            Some("/example/.longhouse/machine/device-token".to_string()),
+            "2026-08-03T16:00:00Z".to_string(),
+        ))
+        .unwrap()
+    }
+
     /// Golden check against the fixture the Swift consumer test decodes.
     ///
     /// Without this the fixture is hand-maintained and independent of what Rust
@@ -3114,60 +3160,51 @@ mod tests {
         let fixture: Value =
             serde_json::from_str(&std::fs::read_to_string(&fixture_path).unwrap()).unwrap();
 
-        let engine_payload = serde_json::json!({
-            "version": "test",
-            "sessions": [{"session_id": "s1", "provider": "claude", "state": "attached"}],
-        });
-        let machine_state = serde_json::json!({
-            "runtime_url": "https://example.longhouse.ai",
-            "machine_name": "cinder",
-        });
-        let fast = native_fast_health_from_parts(
-            Path::new("/tmp/engine-status.json"),
-            true,
-            Some(0),
-            Some(engine_payload.clone()),
-            None,
+        let emitted = canonical_desktop_envelope();
+
+        // Set LONGHOUSE_UPDATE_FIXTURES=1 to rewrite the fixture after an
+        // intentional envelope change.
+        if std::env::var("LONGHOUSE_UPDATE_FIXTURES").as_deref() == Ok("1") {
+            std::fs::write(
+                &fixture_path,
+                format!("{}\n", serde_json::to_string_pretty(&emitted).unwrap()),
+            )
+            .unwrap();
+        }
+
+        // Compare the whole recursive shape, not a handful of key names. Key
+        // presence alone would let a type change through -- and a type change is
+        // exactly what breaks Swift decoding, which is the failure this test
+        // exists to catch.
+        fn shape(value: &Value) -> Value {
+            match value {
+                Value::Object(map) => Value::Object(
+                    map.iter()
+                        .map(|(key, child)| (key.clone(), shape(child)))
+                        .collect(),
+                ),
+                // Compare the element shape, not the element count, so a fixture
+                // with one session still pins the row structure.
+                Value::Array(items) => Value::Array(
+                    items.first().map(|item| vec![shape(item)]).unwrap_or_default(),
+                ),
+                Value::String(_) => Value::String("string".into()),
+                Value::Number(number) => {
+                    Value::String(if number.is_f64() { "number" } else { "integer" }.into())
+                }
+                Value::Bool(_) => Value::String("bool".into()),
+                Value::Null => Value::String("null".into()),
+            }
+        }
+
+        assert_eq!(
+            shape(&fixture),
+            shape(&emitted),
+            "native envelope no longer matches the Swift consumer fixture.\n\
+             Regenerate it with:\n  \
+             cargo run --bin longhouse -- local-health --fast --json > {}",
+            fixture_path.display()
         );
-        let emitted = serde_json::to_value(native_desktop_health_from_parts(
-            fast,
-            Some(engine_payload),
-            Some(&machine_state),
-            Some("/tmp/device-token".to_string()),
-            "2026-08-03T16:00:00Z".to_string(),
-        ))
-        .unwrap();
-
-        let keys = |value: &Value| -> Vec<String> {
-            let mut names: Vec<String> = value
-                .as_object()
-                .map(|object| object.keys().cloned().collect())
-                .unwrap_or_default();
-            names.sort();
-            names
-        };
-
-        // Every key the fixture records must still be emitted. Extra keys are
-        // fine; a missing one means the consumer fixture has gone stale.
-        for key in keys(&fixture) {
-            assert!(
-                emitted.get(&key).is_some(),
-                "native envelope no longer emits `{key}`; regenerate {}",
-                fixture_path.display()
-            );
-        }
-        for key in keys(&fixture["managed_summary"]) {
-            assert!(
-                emitted["managed_summary"].get(&key).is_some(),
-                "managed_summary no longer emits `{key}`"
-            );
-        }
-        for key in keys(&fixture["engine_status"]) {
-            assert!(
-                emitted["engine_status"].get(&key).is_some(),
-                "engine_status no longer emits `{key}`"
-            );
-        }
         // The false-negative the Desktop contract forbids must stay absent.
         assert!(fixture["managed_summary"].get("orphan_bridge_count").is_none());
     }

@@ -74,6 +74,10 @@ enum SessionProjectionEvent: Sendable {
     /// Liveness evidence with no payload — an SSE keepalive or any other line.
     /// Renews the projection lease so a healthy idle stream does not expire.
     case alive
+    /// This session's Runtime Host projection could not be fetched. The stream
+    /// as a whole may be fine, so the global lease still renews; only this
+    /// session's Runtime Host fields lose authority.
+    case projectionUnavailable(sessionId: String)
     /// The stream failed and is backing off. Emitted on every failed attempt so
     /// the store can stop presenting Runtime Host projection as current — the
     /// stream retries forever, so silence here is indistinguishable from health.
@@ -297,6 +301,12 @@ enum SessionProjectionStream {
                 dataLines.append(line.dropFirst(5).trimmingCharacters(in: .whitespaces))
             }
         }
+
+        // Reaching here means the server closed the stream. Returning normally
+        // would let the retry loop reconnect and renew the authority lease on
+        // every cycle, so a server that accepts and immediately hangs up would
+        // look permanently healthy.
+        throw URLError(.networkConnectionLost)
     }
 
     private static func bootstrap(
@@ -313,7 +323,7 @@ enum SessionProjectionStream {
         guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
 
         var succeeded = 0
-        await withTaskGroup(of: SessionProjection?.self) { group in
+        await withTaskGroup(of: (String, SessionProjection?).self) { group in
             for sessionId in sessionIds {
                 group.addTask {
                     do {
@@ -324,23 +334,29 @@ enum SessionProjectionStream {
                         request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
                         let (data, response) = try await URLSession.shared.data(for: request)
                         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                            return nil
+                            return (sessionId, nil)
                         }
                         let decoder = JSONDecoder()
                         decoder.keyDecodingStrategy = .convertFromSnakeCase
-                        return try decoder.decode(SessionDetail.self, from: data).projection
+                        return (sessionId, try decoder.decode(SessionDetail.self, from: data).projection)
                     } catch {
                         logger.error(
                             "Runtime Host session bootstrap failed for \(sessionId, privacy: .public): \(String(describing: error), privacy: .public)"
                         )
-                        return nil
+                        return (sessionId, nil)
                     }
                 }
             }
-            for await projection in group {
+            for await (sessionId, projection) in group {
                 if let projection {
                     succeeded += 1
                     continuation.yield(.delta(projection))
+                } else {
+                    // The stream may still be healthy overall, so the global
+                    // lease is not the right lever. Drop authority for this one
+                    // session rather than letting its stale Runtime Host fields
+                    // ride along under a renewed lease.
+                    continuation.yield(.projectionUnavailable(sessionId: sessionId))
                 }
             }
         }

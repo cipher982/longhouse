@@ -406,6 +406,11 @@ public final class SnapshotStore: ObservableObject {
                     let updated = snapshot.removingSession(sessionId)
                     self.snapshot = updated
                     self.persistCachedSnapshot(updated)
+                case let .projectionUnavailable(sessionId):
+                    guard let snapshot = self.snapshot else { return }
+                    let updated = snapshot.clearingRuntimeHostProjection(for: sessionId)
+                    self.snapshot = updated
+                    self.persistCachedSnapshot(updated)
                 }
             }
         }

@@ -222,6 +222,15 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return replacingManagedSessions(sessions)
     }
 
+    /// Same, for a single session whose Runtime Host lookup failed while the
+    /// stream as a whole stayed healthy.
+    func clearingRuntimeHostProjection(for sessionId: String) -> HealthSnapshot {
+        let sessions = managedSessions?.map { session in
+            session.sessionId == sessionId ? session.clearingRuntimeHostProjection() : session
+        }
+        return replacingManagedSessions(sessions)
+    }
+
     private func replacingManagedSessions(
         _ sessions: [ManagedSessionSnapshot]?,
         replacementEngineStatus: EngineStatusSnapshot? = nil,
