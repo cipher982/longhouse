@@ -71,7 +71,8 @@ def command_json(argv: list[str]) -> dict[str, Any] | None:
 
 
 def provider_identity(provider: str) -> dict[str, Any]:
-    executable = shutil.which(provider)
+    executable_name = "agent" if provider == "cursor" else provider
+    executable = shutil.which(executable_name)
     if not executable:
         return {"available": False}
     path = Path(executable).resolve()
@@ -85,6 +86,7 @@ def provider_identity(provider: str) -> dict[str, Any]:
     )
     return {
         "available": True,
+        "command": executable_name,
         "path": str(path),
         "sha256": digest,
         "version": (completed.stdout + completed.stderr).strip()[:500],

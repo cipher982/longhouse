@@ -4,6 +4,7 @@
 //! private state. Runtime plugins and answerable permission pauses stay out of
 //! this first native slice until their reply path is native too.
 
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -47,6 +48,16 @@ struct ExistingState {
     pid: u32,
     provider_session_id: String,
     server_url: String,
+}
+
+#[derive(Default)]
+struct OpenCodeLiveTranscript {
+    assistant_message_ids: HashSet<String>,
+    message_id: Option<String>,
+    part_id: Option<String>,
+    text: String,
+    seq: u64,
+    item_seq: u64,
 }
 
 pub fn start(config: StartConfig) -> Result<StartResult> {
@@ -283,6 +294,7 @@ pub fn attach(
     let monitor_password = state.password.clone();
     let monitor_cwd = state.cwd.clone();
     let monitor_session_id = normalize_uuid(session_id, "session_id")?;
+    let monitor_provider_session_id = state.provider_session_id.clone();
     let monitor = thread::spawn(move || {
         monitor_opencode_session_rollovers(
             &monitor_server_url,
@@ -291,6 +303,7 @@ pub fn attach(
             &monitor_cwd,
             &state_path,
             &monitor_session_id,
+            &monitor_provider_session_id,
             stop_rx,
         )
     });
@@ -313,10 +326,13 @@ fn monitor_opencode_session_rollovers(
     expected_directory: &str,
     state_path: &Path,
     longhouse_session_id: &str,
+    provider_session_id: &str,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
+        let mut active_provider_session_id = provider_session_id.to_string();
+        let mut live_transcript = OpenCodeLiveTranscript::default();
         while !*stop.borrow() {
             if let Err(error) = monitor_opencode_events_once(
                 server_url,
@@ -325,6 +341,8 @@ fn monitor_opencode_session_rollovers(
                 expected_directory,
                 state_path,
                 longhouse_session_id,
+                &mut active_provider_session_id,
+                &mut live_transcript,
                 &mut stop,
             )
             .await
@@ -356,6 +374,8 @@ async fn monitor_opencode_events_once(
     expected_directory: &str,
     state_path: &Path,
     longhouse_session_id: &str,
+    active_provider_session_id: &mut String,
+    live_transcript: &mut OpenCodeLiveTranscript,
     stop: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let mut response = reqwest::Client::builder()
@@ -403,8 +423,26 @@ async fn monitor_opencode_events_once(
                         provider_session_id,
                         Some(&provider_binding_path(longhouse_session_id)?),
                     )?;
+                    active_provider_session_id.clear();
+                    active_provider_session_id.push_str(provider_session_id);
+                    live_transcript.reset();
+                }
+                if let Some(live_event) = live_transcript.apply_event(
+                    &event,
+                    active_provider_session_id,
+                    longhouse_session_id,
+                ) {
+                    enqueue_live_transcript_event(live_event);
                 }
                 if let Some(provider_session_id) = idle_session_id(&event) {
+                    if provider_session_id != active_provider_session_id {
+                        continue;
+                    }
+                    if let Some(live_event) = live_transcript
+                        .complete_event(active_provider_session_id, longhouse_session_id)
+                    {
+                        enqueue_live_transcript_event(live_event);
+                    }
                     let longhouse_session_id = longhouse_session_id.to_string();
                     let provider_session_id = provider_session_id.to_string();
                     tokio::spawn(async move {
@@ -462,6 +500,208 @@ fn idle_session_id(event: &Value) -> Option<&str> {
     idle.then(|| properties.get("sessionID").and_then(Value::as_str))
         .flatten()
         .filter(|value| !value.trim().is_empty())
+}
+
+impl OpenCodeLiveTranscript {
+    fn reset(&mut self) {
+        self.assistant_message_ids.clear();
+        self.message_id = None;
+        self.part_id = None;
+        self.text.clear();
+        self.item_seq = 0;
+    }
+
+    fn apply_event(
+        &mut self,
+        event: &Value,
+        provider_session_id: &str,
+        longhouse_session_id: &str,
+    ) -> Option<Value> {
+        let payload = event.get("payload")?;
+        let event_type = payload.get("type").and_then(Value::as_str)?;
+        let properties = payload.get("properties")?;
+        if event_type == "message.updated" {
+            let info = properties.get("info")?;
+            if info.get("sessionID").and_then(Value::as_str) != Some(provider_session_id) {
+                return None;
+            }
+            let message_id = info.get("id").and_then(Value::as_str)?;
+            if info.get("role").and_then(Value::as_str) == Some("assistant") {
+                self.assistant_message_ids.insert(message_id.to_string());
+            } else {
+                self.assistant_message_ids.remove(message_id);
+            }
+            return None;
+        }
+
+        let (message_id, part_id, next_text, delta, method) = match event_type {
+            "message.part.updated" => {
+                let part = properties.get("part")?;
+                let session_id = properties
+                    .get("sessionID")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.get("sessionID").and_then(Value::as_str))?;
+                if session_id != provider_session_id
+                    || part.get("type").and_then(Value::as_str) != Some("text")
+                    || part.get("ignored").and_then(Value::as_bool) == Some(true)
+                {
+                    return None;
+                }
+                let message_id = part.get("messageID").and_then(Value::as_str)?;
+                if !self.assistant_message_ids.contains(message_id) {
+                    return None;
+                }
+                let part_id = part.get("id").and_then(Value::as_str)?;
+                let next_text = part.get("text").and_then(Value::as_str)?.to_string();
+                if next_text.is_empty() {
+                    self.message_id = Some(message_id.to_string());
+                    self.part_id = Some(part_id.to_string());
+                    self.text.clear();
+                    self.item_seq = 0;
+                    return None;
+                }
+                let delta = if self.message_id.as_deref() == Some(message_id)
+                    && self.part_id.as_deref() == Some(part_id)
+                    && next_text.starts_with(&self.text)
+                {
+                    next_text[self.text.len()..].to_string()
+                } else {
+                    next_text.clone()
+                };
+                (
+                    message_id.to_string(),
+                    part_id.to_string(),
+                    next_text,
+                    delta,
+                    event_type,
+                )
+            }
+            "message.part.delta" => {
+                if properties.get("sessionID").and_then(Value::as_str) != Some(provider_session_id)
+                    || properties.get("field").and_then(Value::as_str) != Some("text")
+                {
+                    return None;
+                }
+                let message_id = properties.get("messageID").and_then(Value::as_str)?;
+                let part_id = properties.get("partID").and_then(Value::as_str)?;
+                if !self.assistant_message_ids.contains(message_id)
+                    || self.message_id.as_deref() != Some(message_id)
+                    || self.part_id.as_deref() != Some(part_id)
+                {
+                    return None;
+                }
+                let delta = properties.get("delta").and_then(Value::as_str)?;
+                if delta.is_empty() {
+                    return None;
+                }
+                (
+                    message_id.to_string(),
+                    part_id.to_string(),
+                    format!("{}{delta}", self.text),
+                    delta.to_string(),
+                    event_type,
+                )
+            }
+            _ => return None,
+        };
+
+        if next_text == self.text {
+            return None;
+        }
+        let new_item = self.message_id.as_deref() != Some(message_id.as_str())
+            || self.part_id.as_deref() != Some(part_id.as_str());
+        self.message_id = Some(message_id.clone());
+        self.part_id = Some(part_id.clone());
+        self.text = next_text;
+        self.seq = self.seq.saturating_add(1);
+        self.item_seq = if new_item {
+            1
+        } else {
+            self.item_seq.saturating_add(1)
+        };
+        Some(self.runtime_event(
+            longhouse_session_id,
+            provider_session_id,
+            &message_id,
+            &part_id,
+            method,
+            &delta,
+            false,
+        ))
+    }
+
+    fn complete_event(
+        &mut self,
+        provider_session_id: &str,
+        longhouse_session_id: &str,
+    ) -> Option<Value> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let message_id = self.message_id.clone()?;
+        let part_id = self.part_id.clone()?;
+        self.seq = self.seq.saturating_add(1);
+        self.item_seq = self.item_seq.saturating_add(1);
+        let event = self.runtime_event(
+            longhouse_session_id,
+            provider_session_id,
+            &message_id,
+            &part_id,
+            "session.idle",
+            "",
+            true,
+        );
+        self.reset();
+        Some(event)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn runtime_event(
+        &self,
+        longhouse_session_id: &str,
+        provider_session_id: &str,
+        message_id: &str,
+        part_id: &str,
+        method: &str,
+        delta: &str,
+        turn_completed: bool,
+    ) -> Value {
+        let observed_at = chrono::Utc::now();
+        json!({
+            "runtime_key": format!("opencode:{longhouse_session_id}"),
+            "session_id": longhouse_session_id,
+            "provider": "opencode",
+            "source": "opencode_bridge_live",
+            "kind": "progress_signal",
+            "occurred_at": observed_at.to_rfc3339(),
+            "dedupe_key": format!(
+                "opencode:live:{longhouse_session_id}:{provider_session_id}:{message_id}:{part_id}:{}",
+                self.seq
+            ),
+            "payload": {
+                "progress_kind": "bridge_live_transcript_delta",
+                "managed_transport": "opencode_server_bridge",
+                "thread_id": provider_session_id,
+                "turn_id": message_id,
+                "item_id": part_id,
+                "seq": self.seq,
+                "item_seq": self.item_seq,
+                "method": method,
+                "delta": delta,
+                "live_text": self.text,
+                "turn_completed": turn_completed,
+            }
+        })
+    }
+}
+
+fn enqueue_live_transcript_event(event: Value) {
+    let Ok(outbox_dir) = crate::config::get_agent_runtime_events_outbox_dir() else {
+        return;
+    };
+    if let Err(error) = crate::outbox::enqueue_runtime_event(&outbox_dir, &event) {
+        tracing::warn!(error = %error, "failed to enqueue OpenCode live transcript event");
+    }
 }
 
 #[cfg(unix)]
@@ -1034,5 +1274,108 @@ mod tests {
             expected.as_ref()
         ));
         assert!(!event_matches_directory(&json!({}), expected.as_ref()));
+    }
+
+    #[test]
+    fn streams_assistant_text_deltas_for_the_active_opencode_session() {
+        let mut transcript = OpenCodeLiveTranscript::default();
+        let provider_session_id = "ses_active";
+        let longhouse_session_id = "11111111-1111-4111-8111-111111111111";
+
+        assert!(transcript
+            .apply_event(
+                &json!({"payload": {"type": "message.updated", "properties": {
+                    "info": {"id": "msg_assistant", "sessionID": provider_session_id, "role": "assistant"}
+                }}}),
+                provider_session_id,
+                longhouse_session_id,
+            )
+            .is_none());
+        assert!(transcript
+            .apply_event(
+                &json!({"payload": {"type": "message.part.updated", "properties": {
+                    "part": {"id": "part_text", "messageID": "msg_assistant", "sessionID": provider_session_id, "type": "text", "text": ""}
+                }}}),
+                provider_session_id,
+                longhouse_session_id,
+            )
+            .is_none());
+
+        let first = transcript
+            .apply_event(
+                &json!({"payload": {"type": "message.part.delta", "properties": {
+                    "sessionID": provider_session_id, "messageID": "msg_assistant", "partID": "part_text", "field": "text", "delta": "Hi"
+                }}}),
+                provider_session_id,
+                longhouse_session_id,
+            )
+            .unwrap();
+        let second = transcript
+            .apply_event(
+                &json!({"payload": {"type": "message.part.delta", "properties": {
+                    "sessionID": provider_session_id, "messageID": "msg_assistant", "partID": "part_text", "field": "text", "delta": " there"
+                }}}),
+                provider_session_id,
+                longhouse_session_id,
+            )
+            .unwrap();
+
+        assert_eq!(first["provider"], "opencode");
+        assert_eq!(first["source"], "opencode_bridge_live");
+        assert_eq!(
+            first["payload"]["progress_kind"],
+            "bridge_live_transcript_delta"
+        );
+        assert_eq!(
+            first["payload"]["managed_transport"],
+            "opencode_server_bridge"
+        );
+        assert_eq!(first["payload"]["thread_id"], provider_session_id);
+        assert_eq!(first["payload"]["turn_id"], "msg_assistant");
+        assert_eq!(first["payload"]["live_text"], "Hi");
+        assert_eq!(first["payload"]["seq"], 1);
+        assert_eq!(first["payload"]["item_seq"], 1);
+        assert_eq!(second["payload"]["live_text"], "Hi there");
+        assert_eq!(second["payload"]["delta"], " there");
+        assert_eq!(second["payload"]["seq"], 2);
+        assert_eq!(second["payload"]["item_seq"], 2);
+
+        let completed = transcript
+            .complete_event(provider_session_id, longhouse_session_id)
+            .unwrap();
+        assert_eq!(completed["payload"]["turn_completed"], true);
+        assert_eq!(completed["payload"]["live_text"], "Hi there");
+        assert_eq!(completed["payload"]["seq"], 3);
+        assert!(transcript
+            .complete_event(provider_session_id, longhouse_session_id)
+            .is_none());
+    }
+
+    #[test]
+    fn ignores_user_text_and_other_opencode_sessions() {
+        let mut transcript = OpenCodeLiveTranscript::default();
+        let longhouse_session_id = "11111111-1111-4111-8111-111111111111";
+        for (message_id, session_id, role) in [
+            ("msg_user", "ses_active", "user"),
+            ("msg_other", "ses_other", "assistant"),
+        ] {
+            transcript.apply_event(
+                &json!({"payload": {"type": "message.updated", "properties": {
+                    "info": {"id": message_id, "sessionID": session_id, "role": role}
+                }}}),
+                "ses_active",
+                longhouse_session_id,
+            );
+            assert!(transcript
+                .apply_event(
+                    &json!({"payload": {"type": "message.part.updated", "properties": {
+                        "part": {"id": "part", "messageID": message_id, "sessionID": session_id, "type": "text", "text": "not assistant output"}
+                    }}}),
+                    "ses_active",
+                    longhouse_session_id,
+                )
+                .is_none());
+        }
+        assert!(transcript.text.is_empty());
     }
 }
