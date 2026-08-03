@@ -205,18 +205,31 @@ def runtime_observation_rows(limit: int) -> list[dict]:
 
 
 def client_render_observation_rows(limit: int) -> list[dict]:
-    if not table_exists("session_observations"):
+    if table_exists("client_render_receipts"):
+        records = rows(
+            """
+            SELECT observation_id AS id, 'client_render_beacon' AS source,
+                   observed_at, received_at, payload_json
+            FROM client_render_receipts
+            WHERE session_id=?
+            ORDER BY observed_at DESC, observation_id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        )
+    elif table_exists("session_observations"):
+        records = rows(
+            """
+            SELECT id, source, observed_at, received_at, payload_json
+            FROM session_observations
+            WHERE session_id=? AND source_domain='client' AND kind='client_render'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        )
+    else:
         return []
-    records = rows(
-        """
-        SELECT id, source, observed_at, received_at, payload_json
-        FROM session_observations
-        WHERE session_id=? AND source_domain='client' AND kind='client_render'
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (session_id, limit),
-    )
     normalized = []
     for record in records:
         raw_payload = json.loads(record.pop("payload_json") or "{}")
@@ -227,6 +240,32 @@ def client_render_observation_rows(limit: int) -> list[dict]:
     return normalized
 
 
+def client_render_observation_stats() -> dict | None:
+    if table_exists("client_render_receipts"):
+        return one(
+            """
+            SELECT count(*) AS count, min(observed_at) AS first_observed_at,
+                   max(observed_at) AS last_observed_at, min(received_at) AS first_received_at,
+                   max(received_at) AS last_received_at
+            FROM client_render_receipts
+            WHERE session_id=?
+            """,
+            (session_id,),
+        )
+    if table_exists("session_observations"):
+        return one(
+            """
+            SELECT count(*) AS count, min(observed_at) AS first_observed_at,
+                   max(observed_at) AS last_observed_at, min(received_at) AS first_received_at,
+                   max(received_at) AS last_received_at
+            FROM session_observations
+            WHERE session_id=? AND source_domain='client' AND kind='client_render'
+            """,
+            (session_id,),
+        )
+    return None
+
+
 payload: dict[str, object] = {
     "db_path": db_path,
     "session_id": session_id,
@@ -234,6 +273,7 @@ payload: dict[str, object] = {
         "sessions": table_exists("sessions"),
         "events": table_exists("events"),
         "session_observations": table_exists("session_observations"),
+        "client_render_receipts": table_exists("client_render_receipts"),
         "session_runtime_state": table_exists("session_runtime_state"),
         "session_turns": table_exists("session_turns"),
     },
@@ -257,16 +297,7 @@ if table_exists("live_sessions"):
     payload["recent_events"] = []
     payload["runtime_observation_stats"] = None
     payload["recent_runtime_observations"] = []
-    payload["client_render_observation_stats"] = one(
-        """
-        SELECT count(*) AS count, min(observed_at) AS first_observed_at,
-               max(observed_at) AS last_observed_at, min(received_at) AS first_received_at,
-               max(received_at) AS last_received_at
-        FROM session_observations
-        WHERE session_id=? AND source_domain='client' AND kind='client_render'
-        """,
-        (session_id,),
-    ) if table_exists("session_observations") else None
+    payload["client_render_observation_stats"] = client_render_observation_stats()
     payload["recent_client_render_observations"] = client_render_observation_rows(limit)
     payload["recent_turns"] = []
     json.dump(payload, sys.stdout, default=str)
@@ -361,20 +392,8 @@ else:
     payload["runtime_observation_stats"] = None
     payload["recent_runtime_observations"] = []
 
-if table_exists("session_observations"):
-    payload["client_render_observation_stats"] = one(
-        """
-        SELECT
-            count(*) AS count,
-            min(observed_at) AS first_observed_at,
-            max(observed_at) AS last_observed_at,
-            min(received_at) AS first_received_at,
-            max(received_at) AS last_received_at
-        FROM session_observations
-        WHERE session_id=? AND source_domain='client' AND kind='client_render'
-        """,
-        (session_id,),
-    )
+if table_exists("client_render_receipts") or table_exists("session_observations"):
+    payload["client_render_observation_stats"] = client_render_observation_stats()
     payload["recent_client_render_observations"] = client_render_observation_rows(limit)
 else:
     payload["client_render_observation_stats"] = None
