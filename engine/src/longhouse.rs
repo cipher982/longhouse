@@ -2738,11 +2738,20 @@ fn terminate_and_reap_child(
                 } else {
                     let _ = child.kill();
                 }
-                let _ = child.wait();
+                // Do not turn the emergency path back into an unbounded wait.
+                // A process in an uninterruptible kernel state may not be
+                // reapable immediately even after SIGKILL; the wrapper must
+                // return and the OS will reap the child when this owner exits.
+                let reap_deadline = std::time::Instant::now() + Duration::from_millis(250);
+                while std::time::Instant::now() < reap_deadline {
+                    match child.try_wait() {
+                        Ok(Some(_)) | Err(_) => break,
+                        Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                    }
+                }
                 return;
             }
             Err(_) => {
-                let _ = child.wait();
                 return;
             }
         }
