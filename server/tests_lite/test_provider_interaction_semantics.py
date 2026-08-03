@@ -357,6 +357,19 @@ def test_live_observation_requires_a_separate_semantic_boundary_fixture() -> Non
     assert boundary["failure_code"] == "interaction_title_boundary_missing"
 
 
+def test_live_observation_requires_the_canonical_semantic_boundary_fixture() -> None:
+    observation = generated_fake_observation("codex")
+    observation["evidence_class"] = "live_no_token"
+    observation["synthetic"] = False
+    observation["semantic_boundary"]["ordinary_marker"] = "weakened-fixture"
+
+    result = evaluate_observation("codex", observation)
+
+    boundary = next(row for row in result["assertions"] if row["probe_id"] == "shared_title_boundary")
+    assert boundary["status"] == "blocked"
+    assert boundary["failure_code"] == "interaction_title_boundary_fixture_mismatch"
+
+
 def test_raw_provider_fields_cannot_override_parser_semantics() -> None:
     raw = {
         "type": "user",

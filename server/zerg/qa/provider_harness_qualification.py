@@ -1062,7 +1062,7 @@ def _cursor_observed_install_executor(
     gate_status = full_column_gate.get("status")
     provider_status = full_column_gate.get("provider_status")
     gate0_passed = gate0 is not None and gate0.get("status") == "passed"
-    if not gate0_passed or gate_status != "pass" or provider_status == "fail" or live_result.get("status") != "pass":
+    if not gate0_passed or gate_status != "pass" or provider_status in {"fail", "blocked"} or live_result.get("status") != "pass":
         assertion_outcome = (
             AssertionOutcome.BLOCKED
             if provider_status == "blocked" or live_result.get("status") == "blocked"

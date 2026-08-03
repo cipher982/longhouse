@@ -798,6 +798,15 @@ def evaluate_observation(
                         "evidence_basis": "hermetic_semantic_regression_required",
                     }
                 )
+            elif dict(boundary) != semantic_boundary_fixture(provider):
+                assertion_rows.append(
+                    {
+                        "probe_id": "shared_title_boundary",
+                        "status": STATUS_BLOCKED,
+                        "failure_code": "interaction_title_boundary_fixture_mismatch",
+                        "evidence_basis": "hermetic_semantic_regression_required",
+                    }
+                )
             else:
                 ordinary_event = boundary.get("ordinary_event")
                 unknown_event = boundary.get("unknown_slash_event")

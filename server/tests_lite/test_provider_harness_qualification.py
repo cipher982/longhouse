@@ -15,6 +15,7 @@ from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
+from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_harness_qualification as bridge
 from zerg.qa import provider_interaction_semantics as interaction_semantics
@@ -644,6 +645,73 @@ def test_cursor_full_column_gate_accepts_live_gate0_limits() -> None:
     gate = bridge._full_column_gate(payload, provider="cursor")  # noqa: SLF001
 
     assert gate["status"] == "pass"
+
+
+def test_cursor_observed_install_executor_demotes_blocked_live_provider_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "cursor-install"
+    root.mkdir()
+    binary = root / "cursor-agent"
+    binary.write_text("cursor fixture\n", encoding="utf-8")
+    binary.chmod(0o700)
+    build_identity = f"sha256:{_closure_digest(root)}"
+    request = _request(
+        tmp_path,
+        profile=cursor_release_identity.OBSERVED_INSTALL_PROFILE,
+        binary=binary,
+        identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
+        build_identity=build_identity,
+        provider="cursor",
+        version="2026.07.23-test",
+        granularity="full_installed_tree",
+        scenario_evidence={"interaction_semantics": "live_token"},
+    )
+    evidence_root = tmp_path / "output" / "evidence"
+    gate0 = tmp_path / "gate0.json"
+    gate0.write_text(json.dumps({"status": "passed", "provider": "cursor"}), encoding="utf-8")
+    monkeypatch.setenv("LONGHOUSE_CURSOR_GATE0_ARTIFACT", str(gate0))
+
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_CURSOR_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row: dict[str, object] = {"provider": "cursor", "scenario": scenario, "status": status}
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+    interaction = next(row for row in results if row["scenario"] == "interaction_semantics")
+    interaction.update(status="blocked", failure_code="interaction_native_raw_evidence_missing")
+    results.append(
+        {
+            "provider": "cursor",
+            "scenario": LIVE_TOKEN_HARNESS_SCENARIO,
+            "status": "pass",
+        }
+    )
+    monkeypatch.setattr(
+        bridge,
+        "run_harness",
+        lambda _options: {
+            "results": results,
+            "provider_execution_coverage_matrix": {
+                "provider_coverage_gap_kind_counts": {"cursor": {"passed": 29}},
+                "missing_provider_actions": [],
+            },
+        },
+    )
+
+    observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        evidence_root,
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert observation["status"] == "blocked"
+    assert observation["full_column_gate"]["provider_status"] == "blocked"
+    assert assertions[0].outcome.value == "blocked"
 
 
 def test_claude_profile_runs_one_full_column_and_reuses_live_print_result(

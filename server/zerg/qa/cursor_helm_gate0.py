@@ -1504,12 +1504,35 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
         if not isinstance(scenario, dict):
             continue
         candidates: list[tuple[str, str | None]] = []
-        store_db = scenario.get("store_db")
-        if isinstance(store_db, str) and store_db.strip():
-            candidates.append((store_db, str(scenario.get("provider_conversation_id") or "").strip() or None))
-        raw_source_ids = scenario.get("raw_source_ids")
-        if isinstance(raw_source_ids, list):
-            candidates.extend((value, None) for value in raw_source_ids if isinstance(value, str) and value.strip())
+
+        def add_scenario_sources(source_record: dict[str, Any], *, label: str) -> None:
+            expected_agent_id = next(
+                (
+                    str(source_record.get(key) or "").strip()
+                    for key in ("provider_conversation_id", "provider_session_id", "store_agent_id")
+                    if str(source_record.get(key) or "").strip()
+                ),
+                None,
+            )
+            store_db = source_record.get("store_db")
+            if isinstance(store_db, str) and store_db.strip():
+                if expected_agent_id is None:
+                    raise RuntimeError(f"Cursor native store source has no provider identity: {label}")
+                candidates.append((store_db, expected_agent_id))
+            raw_source_ids = source_record.get("raw_source_ids")
+            if isinstance(raw_source_ids, list):
+                for raw_source in raw_source_ids:
+                    if not isinstance(raw_source, str) or not raw_source.strip():
+                        continue
+                    if expected_agent_id is None:
+                        raise RuntimeError(f"Cursor native source has no provider identity: {label}")
+                    candidates.append((raw_source, expected_agent_id))
+
+        add_scenario_sources(scenario, label=scenario_name)
+        for nested_name in ("before", "after"):
+            nested = scenario.get(nested_name)
+            if isinstance(nested, dict):
+                add_scenario_sources(nested, label=f"{scenario_name}.{nested_name}")
         for raw_source, expected_agent_id in candidates:
             source = Path(raw_source).expanduser().resolve(strict=True)
             if not source.is_file():
@@ -1564,7 +1587,6 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
                 "path": str(events_path.relative_to(artifact_root)),
                 "sha256": _file_sha256(events_path),
                 "size": events_path.stat().st_size,
-                "byte_exact": True,
             }
         )
     if not any(item.get("kind") == "cursor_store_db" for item in receipts):
