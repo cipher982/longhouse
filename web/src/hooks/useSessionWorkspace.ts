@@ -151,14 +151,14 @@ export function useSessionWorkspace(
   const [streamConnected, setStreamConnected] = useState(false);
   const [streamTranscriptPreview, setStreamTranscriptPreview] =
     useState<SessionTranscriptPreview | null | undefined>(undefined);
-  const pendingRenderBeaconRef = useRef<PendingRenderBeacon | null>(null);
+  const pendingRenderBeaconsRef = useRef<PendingRenderBeacon[]>([]);
   const pendingStateRenderBeaconRef = useRef<PendingStateRenderBeacon | null>(null);
   const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] = useState(0);
   const [pendingStateRenderBeaconVersion, setPendingStateRenderBeaconVersion] = useState(0);
 
   useEffect(() => {
     setStreamTranscriptPreview(undefined);
-    pendingRenderBeaconRef.current = null;
+    pendingRenderBeaconsRef.current = [];
     pendingStateRenderBeaconRef.current = null;
   }, [sessionId]);
 
@@ -308,7 +308,7 @@ export function useSessionWorkspace(
             );
           }
 
-          pendingRenderBeaconRef.current = {
+          const pendingRenderBeacon = {
             sessionId,
             latestEventId: data.latest_event_id,
             latestEventEmittedAtMs: data.latest_event_emitted_at_ms ?? null,
@@ -318,6 +318,14 @@ export function useSessionWorkspace(
             shipTrace: data.ship_trace ?? null,
             serverTrace: data.server_trace ?? null,
           };
+          pendingRenderBeaconsRef.current = [
+            ...pendingRenderBeaconsRef.current.filter(
+              (pending) =>
+                pending.sessionId !== pendingRenderBeacon.sessionId ||
+                pending.latestEventId !== pendingRenderBeacon.latestEventId,
+            ),
+            pendingRenderBeacon,
+          ];
           setPendingRenderBeaconVersion((version) => version + 1);
 
           if (isFreshTranscriptPreview) {
@@ -495,31 +503,42 @@ export function useSessionWorkspace(
   );
 
   useEffect(() => {
-    const pending = pendingRenderBeaconRef.current;
-    if (!pending || pending.sessionId !== sessionId) return;
-    if (!pending.latestEventEmittedAtMs) return;
+    const pendingBeacons = pendingRenderBeaconsRef.current;
+    if (pendingBeacons.length === 0) return;
     const previewEventId = streamTranscriptPreview
       ? -Math.abs(streamTranscriptPreview.event_id)
       : null;
-    const latestEventIsRendered =
-      events.some((event) => event.id === pending.latestEventId) ||
-      (previewEventId === pending.latestEventId && shouldRenderTranscriptPreview(streamTranscriptPreview));
-    if (!latestEventIsRendered) return;
+    const rendered: PendingRenderBeacon[] = [];
+    const waiting: PendingRenderBeacon[] = [];
+    for (const pending of pendingBeacons) {
+      const latestEventIsRendered =
+        pending.sessionId === sessionId &&
+        (events.some((event) => event.id === pending.latestEventId) ||
+          (previewEventId === pending.latestEventId && shouldRenderTranscriptPreview(streamTranscriptPreview)));
+      if (latestEventIsRendered && pending.latestEventEmittedAtMs) {
+        rendered.push(pending);
+      } else {
+        waiting.push(pending);
+      }
+    }
+    pendingRenderBeaconsRef.current = waiting;
+    if (rendered.length === 0) return;
 
     const caps = currentThreadSession?.capabilities;
     const managed = Boolean(caps && (caps.live_control_available || caps.host_reattach_available));
-    emitRenderBeacon({
-      sessionId: pending.sessionId,
-      latestEventId: pending.latestEventId,
-      latestEventEmittedAtMs: pending.latestEventEmittedAtMs,
-      managed,
-      serverFanoutAtMs: pending.serverFanoutAtMs,
-      clientReceivedAtMs: pending.clientReceivedAtMs,
-      pubsubSeq: pending.pubsubSeq,
-      shipTrace: pending.shipTrace,
-      serverTrace: pending.serverTrace,
-    });
-    pendingRenderBeaconRef.current = null;
+    for (const pending of rendered) {
+      emitRenderBeacon({
+        sessionId: pending.sessionId,
+        latestEventId: pending.latestEventId,
+        latestEventEmittedAtMs: pending.latestEventEmittedAtMs,
+        managed,
+        serverFanoutAtMs: pending.serverFanoutAtMs,
+        clientReceivedAtMs: pending.clientReceivedAtMs,
+        pubsubSeq: pending.pubsubSeq,
+        shipTrace: pending.shipTrace,
+        serverTrace: pending.serverTrace,
+      });
+    }
   }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession, streamTranscriptPreview]);
 
   useEffect(() => {

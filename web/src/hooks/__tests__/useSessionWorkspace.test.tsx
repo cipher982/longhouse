@@ -822,6 +822,92 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("keeps a live paint receipt when a later workspace wake arrives before effects flush", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
+            pubsub_seq?: number;
+            ship_trace?: {
+              trace_id?: string;
+              observed_at_ms?: number;
+              enqueued_at_ms?: number;
+              job_started_at_ms?: number;
+              http_send_started_at_ms?: number;
+            } | null;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+    const shipTrace = {
+      trace_id: "trace-live-before-state",
+      observed_at_ms: 1_779_220_000_000,
+      enqueued_at_ms: 1_779_220_000_001,
+      job_started_at_ms: 1_779_220_000_002,
+      http_send_started_at_ms: 1_779_220_000_003,
+    };
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: -321,
+        thread_session_count: 1,
+        latest_event_emitted_at_ms: 1_779_220_000_000,
+        server_fanout_at_ms: 1_779_220_000_120,
+        pubsub_seq: 8,
+        ship_trace: shipTrace,
+        transcript_preview: {
+          event_id: 321,
+          text: "Live answer",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        latest_event_emitted_at_ms: 1_779_220_000_010,
+        server_fanout_at_ms: 1_779_220_000_130,
+        pubsub_seq: 9,
+      });
+    });
+
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitRenderBeacon).toHaveBeenCalledWith(
+        expect.objectContaining({
+          latestEventId: -321,
+          shipTrace,
+        }),
+      );
+    });
+  });
+
   it("waits to emit render telemetry until the latest SSE event is in the rendered projection", async () => {
     let handlers:
       | {
