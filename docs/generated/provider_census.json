@@ -1297,6 +1297,7 @@
     {
       "path": "server/tests_lite/test_session_live_previews.py",
       "providers": [
+        "claude",
         "codex",
         "cursor",
         "opencode"
@@ -1809,6 +1810,7 @@
     {
       "path": "server/zerg/services/session_live_previews.py",
       "providers": [
+        "claude",
         "codex",
         "cursor",
         "opencode"
@@ -1817,6 +1819,7 @@
     {
       "path": "server/zerg/services/session_runtime.py",
       "providers": [
+        "claude",
         "codex",
         "cursor",
         "opencode"

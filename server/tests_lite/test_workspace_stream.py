@@ -1095,7 +1095,7 @@ def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
     assert changed["server_trace"]["handler_entered_at_ms"] > 4
 
 
-def test_live_catalog_workspace_event_matches_ios_required_contract():
+def test_live_catalog_workspace_event_matches_ios_required_contract(monkeypatch):
     """Production live-catalog SSE must decode before durable transcript shipping."""
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
@@ -1109,7 +1109,6 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
         {
             "kind": "transcript_preview",
             "server_fanout_at_ms": 1234,
-            "catalog_commit_seq": "41",
             "transcript_preview": {
                 "event_id": 7,
                 "text": "visible before durability",
@@ -1129,6 +1128,13 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
             },
         },
     )
+    monkeypatch.setattr(
+        timeline_mod,
+        "read_live_catalog_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("live previews must not wait for a catalog read")
+        ),
+    )
 
     async def _run():
         request = _DisconnectAfterNCycles(2)
@@ -1138,6 +1144,7 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
             session_id=session_id,
             skip_initial=True,
             last_event_id=0,
+            owner_id=1,
         ):
             events.append(event)
             if event.get("event") == "workspace_changed":
@@ -1148,7 +1155,10 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
     changed = json.loads(next(event["data"] for event in events if event["event"] == "workspace_changed"))
     assert changed["change_kind"] == "transcript_preview"
     assert changed["latest_event_id"] == -7
-    assert changed["catalog_commit_seq"] == 41
+    assert changed["latest_event_emitted_at_ms"] == int(
+        datetime.fromisoformat(timestamp).timestamp() * 1000
+    )
+    assert changed["catalog_commit_seq"] is None
     assert changed["transcript_preview"]["text"] == "visible before durability"
     # Required, non-optional fields in SessionWorkspaceStream.WorkspaceChanged.
     assert isinstance(changed["session_id"], str)

@@ -3,7 +3,7 @@
 //! Claude invokes this once per hook event. It must stay small: parse stdin,
 //! enqueue a presence record, seed a managed transcript binding, and exit 0.
 
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -41,9 +41,10 @@ fn run_inner() -> anyhow::Result<()> {
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
     if event == "SessionStart" {
-        if let (Some(managed), Some(native)) =
-            (managed_session_id.as_deref(), provider_session_id.as_deref())
-        {
+        if let (Some(managed), Some(native)) = (
+            managed_session_id.as_deref(),
+            provider_session_id.as_deref(),
+        ) {
             let _ =
                 crate::claude_channel_server::update_managed_provider_session_id(managed, native);
         }
@@ -76,6 +77,14 @@ fn run_inner() -> anyhow::Result<()> {
         }
     }
     enqueue_presence(&longhouse_home()?.join("agent/outbox"), &payload)?;
+    if event == "Stop" && managed_session_id.is_some() {
+        enqueue_live_transcript_event(claude_live_transcript_event(
+            &session_id,
+            provider_session_id.as_deref(),
+            transcript_path.as_deref(),
+            &input,
+        ));
+    }
     if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
         println!(
             "{}",
@@ -85,12 +94,124 @@ fn run_inner() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn claude_live_transcript_event(
+    session_id: &str,
+    provider_session_id: Option<&str>,
+    transcript_path: Option<&str>,
+    input: &Value,
+) -> Option<Value> {
+    let transcript = transcript_path.and_then(last_assistant_transcript_message);
+    let text = string(input, "last_assistant_message")
+        .or_else(|| transcript.as_ref().map(|message| message.text.clone()))?;
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let observed_at = transcript
+        .as_ref()
+        .and_then(|message| message.timestamp.clone())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let turn_id = transcript
+        .as_ref()
+        .and_then(|message| message.uuid.clone())
+        .or_else(|| provider_session_id.map(str::to_owned))
+        .unwrap_or_else(|| session_id.to_owned());
+    let thread_id = provider_session_id.unwrap_or(session_id);
+    Some(json!({
+        "runtime_key": format!("claude:{session_id}"),
+        "session_id": session_id,
+        "provider": "claude",
+        "source": "claude_hook_live",
+        "kind": "progress_signal",
+        "occurred_at": observed_at,
+        "dedupe_key": format!("claude:hook-live:{session_id}:{turn_id}"),
+        "payload": {
+            "progress_kind": "bridge_live_transcript_delta",
+            "managed_transport": "claude_native_hooks",
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "item_id": turn_id,
+            "seq": 1,
+            "item_seq": 1,
+            "live_text": text,
+            "turn_completed": true,
+        }
+    }))
+}
+
+#[derive(Debug)]
+struct AssistantTranscriptMessage {
+    text: String,
+    uuid: Option<String>,
+    timestamp: Option<String>,
+}
+
+fn last_assistant_transcript_message(path: &str) -> Option<AssistantTranscriptMessage> {
+    const TAIL_BYTES: u64 = 1024 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).ok()?;
+    let mut lines = raw.lines();
+    if start > 0 {
+        lines.next();
+    }
+    lines
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(assistant_transcript_message)
+        .last()
+}
+
+fn assistant_transcript_message(row: Value) -> Option<AssistantTranscriptMessage> {
+    if row.get("type").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let content = row.pointer("/message/content")?;
+    let text = match content {
+        Value::String(value) => value.trim().to_owned(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(AssistantTranscriptMessage {
+        text,
+        uuid: string(&row, "uuid"),
+        timestamp: string(&row, "timestamp"),
+    })
+}
+
+fn enqueue_live_transcript_event(event: Option<Value>) {
+    let (Some(event), Ok(outbox_dir)) =
+        (event, crate::config::get_agent_runtime_events_outbox_dir())
+    else {
+        return;
+    };
+    if let Err(error) = crate::outbox::enqueue_runtime_event(&outbox_dir, &event) {
+        tracing::warn!(error = %error, "failed to enqueue Claude live transcript event");
+    }
+}
+
 /// Managed sessions report under the Longhouse id, so without this the
 /// provider-native id only reaches the server when a transcript ships. Carrying
 /// it on every managed presence record lets the server re-bind the alias
 /// immediately (e.g. after an out-of-band `claude --resume` rotates the native
 /// id). Unmanaged payloads skip it: their `session_id` is already the native id.
-fn attach_provider_session_id(payload: &mut Value, managed: bool, provider_session_id: Option<&str>) {
+fn attach_provider_session_id(
+    payload: &mut Value,
+    managed: bool,
+    provider_session_id: Option<&str>,
+) {
     if !managed {
         return;
     }
@@ -227,5 +348,31 @@ mod tests {
         let mut missing = json!({"session_id": "lh-id", "state": "idle"});
         attach_provider_session_id(&mut missing, true, None);
         assert!(missing.get("provider_session_id").is_none());
+    }
+
+    #[test]
+    fn stop_hook_builds_live_transcript_event_from_claude_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                "{\"type\":\"user\",\"message\":{\"content\":\"question\"}}\n",
+                "{\"type\":\"assistant\",\"uuid\":\"answer-1\",\"timestamp\":\"2026-08-03T02:00:00Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"speed of light\"},{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n"
+            ),
+        )
+        .unwrap();
+
+        let event = claude_live_transcript_event(
+            "longhouse-session",
+            Some("claude-session"),
+            transcript.to_str(),
+            &json!({}),
+        )
+        .unwrap();
+        assert_eq!(event["source"], "claude_hook_live");
+        assert_eq!(event["occurred_at"], "2026-08-03T02:00:00Z");
+        assert_eq!(event["payload"]["live_text"], "speed of light");
+        assert_eq!(event["payload"]["turn_completed"], true);
     }
 }

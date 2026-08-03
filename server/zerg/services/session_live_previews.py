@@ -20,6 +20,7 @@ from zerg.utils.time import normalize_utc
 LIVE_PREVIEW_SOURCES = {
     "codex_bridge_live",
     "codex_console_live",
+    "claude_hook_live",
     "cursor_hook_live",
     "cursor_print",
     "opencode_bridge_live",
@@ -56,7 +57,7 @@ def live_preview_candidate_from_runtime_event(
     if event.session_id is None:
         return None
     provider = (event.provider or "").strip().lower()
-    if provider not in {"codex", "cursor", "opencode"}:
+    if provider not in {"codex", "claude", "cursor", "opencode"}:
         return None
     source = (event.source or "").strip()
     if source.lower() not in LIVE_PREVIEW_SOURCES:

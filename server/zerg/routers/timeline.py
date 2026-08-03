@@ -1831,7 +1831,11 @@ async def _live_catalog_workspace_stream(
             preview_event_id = _workspace_preview_event_id(preview)
             latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
             catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
-            if catalog_commit_seq is None and owner_id is not None:
+            # A provisional transcript preview is already the render payload.
+            # Do not put a catalog read in front of SSE fanout merely to attach
+            # an advisory commit number; under projector pressure that added a
+            # full catalog deadline to every provider-to-pixel update.
+            if catalog_commit_seq is None and owner_id is not None and preview is None:
                 try:
                     _session, _provider_alias, raw_commit_seq = await asyncio.to_thread(
                         read_live_catalog_session,
@@ -1854,6 +1858,7 @@ async def _live_catalog_workspace_stream(
                         "session_id": str(session_id),
                         "change_kind": _workspace_change_kind(message.payload),
                         "latest_event_id": latest_event_id,
+                        "latest_event_emitted_at_ms": _workspace_preview_ts_ms(preview),
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "catalog_commit_seq": catalog_commit_seq,
                         "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),

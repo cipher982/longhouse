@@ -85,6 +85,7 @@ def test_provider_bridges_share_live_preview_path(tmp_path):
 
     with SessionLocal() as db:
         cursor = _seed_session(db, started_at=now - timedelta(minutes=1), provider="cursor")
+        claude = _seed_session(db, started_at=now - timedelta(minutes=1), provider="claude")
         opencode = _seed_session(db, started_at=now - timedelta(minutes=1), provider="opencode")
         result = ingest_runtime_events(
             db,
@@ -98,6 +99,14 @@ def test_provider_bridges_share_live_preview_path(tmp_path):
                     source="cursor_hook_live",
                 ),
                 _bridge_event(
+                    session_id=claude.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="Claude reply",
+                    provider="claude",
+                    source="claude_hook_live",
+                ),
+                _bridge_event(
                     session_id=opencode.id,
                     occurred_at=now,
                     seq=1,
@@ -108,10 +117,11 @@ def test_provider_bridges_share_live_preview_path(tmp_path):
             ],
         )
         db.commit()
-        previews = load_session_live_preview_map(db, [cursor.id, opencode.id])
+        previews = load_session_live_preview_map(db, [cursor.id, claude.id, opencode.id])
 
-    assert result.accepted == 2
+    assert result.accepted == 3
     assert previews[str(cursor.id)].text == "Cursor reply"
+    assert previews[str(claude.id)].text == "Claude reply"
     assert previews[str(opencode.id)].text == "OpenCode reply"
 
 
