@@ -236,6 +236,17 @@ def test_storage_v2_gate_stub_returns_a_durable_receipt() -> None:
     assert receipt["render_state"] == "ready"
 
 
+def test_storage_v2_gate_receipt_is_explicitly_local_and_synthetic() -> None:
+    envelope_id = "a" * 64
+
+    receipt = _storage_v2_receipt_payload(json.dumps({"expected_envelope_id": envelope_id}).encode())
+
+    assert receipt["object_hash"] == "a" * 64
+    # The wire contract uses the durable state expected by the real engine, but
+    # this harness must not present its local receipt as hosted-ingest proof.
+    assert receipt["raw_state"] == "durable"
+
+
 def test_storage_v2_gate_stub_rejects_an_invalid_envelope_id() -> None:
     with pytest.raises(ValueError, match="canonical expected envelope id"):
         _storage_v2_receipt_payload(b'{"expected_envelope_id":"not-a-hash"}')

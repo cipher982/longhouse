@@ -964,12 +964,14 @@ def _ship_cursor_store(
     store: Path,
     workspace: Path,
     events_path: Path,
+    shipper_db: Path,
     registration_url: str,
     timeout: float,
 ) -> dict[str, Any]:
     """Run the real engine ship path against Gate 0's local host contract."""
 
-    db_path = Path.home() / ".longhouse" / "agent" / "longhouse-shipper.db"
+    db_path = shipper_db.expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
             engine,
@@ -1004,12 +1006,20 @@ def _ship_cursor_store(
         raise RuntimeError("Longhouse Cursor source ship returned invalid JSON") from exc
     if not isinstance(summary, dict) or summary.get("status") != "ok":
         raise RuntimeError(f"Longhouse Cursor source ship returned an invalid result: {summary!r}")
+    events_shipped = summary.get("events_shipped")
+    if isinstance(events_shipped, bool) or not isinstance(events_shipped, int) or events_shipped <= 0:
+        raise RuntimeError(
+            "Longhouse Cursor source ship reported no shipped events; " f"the source-binding proof is incomplete: {summary!r}"
+        )
     return {
         "engine": engine,
         "store": str(store),
         "shipper_db": str(db_path),
         "protocol": summary.get("protocol"),
-        "events_shipped": summary.get("events_shipped"),
+        "events_shipped": events_shipped,
+        "receipt_host": "gate0_local_contract_stub",
+        "receipt_semantics": "synthetic_storage_v2_receipt",
+        "external_ingest_verified": False,
     }
 
 
@@ -1097,6 +1107,7 @@ def _managed_conversation_reset_scenario(
     )
     registration_thread.start()
     registration_url = f"http://127.0.0.1:{registration_server.server_address[1]}"
+    shipper_db = events_path.parent / "longhouse-shipper.db"
     argv = [
         "longhouse",
         "cursor",
@@ -1248,6 +1259,7 @@ def _managed_conversation_reset_scenario(
             store=old_store,
             workspace=workspace,
             events_path=events_path,
+            shipper_db=shipper_db,
             registration_url=registration_url,
             timeout=timeout,
         )
@@ -1256,6 +1268,7 @@ def _managed_conversation_reset_scenario(
             store=new_store,
             workspace=workspace,
             events_path=events_path,
+            shipper_db=shipper_db,
             registration_url=registration_url,
             timeout=timeout,
         )
@@ -1345,7 +1358,11 @@ def _managed_conversation_reset_scenario(
                 "source_ship_protocol": "storage-v2",
                 "old_source": old_ship,
                 "new_source": new_ship,
-                "source_binding_checked_in": "longhouse-shipper.db",
+                "source_binding_checked_in": "per_gate_run_shipper_db",
+                "shipper_db_scope": "per_gate_run_artifact",
+                "receipt_host": "gate0_local_contract_stub",
+                "receipt_semantics": "synthetic_storage_v2_receipt",
+                "external_ingest_verified": False,
             },
             "longhouse": {
                 "provider_alias_ids": list(aliases),

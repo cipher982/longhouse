@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from types import ModuleType
 
+import pytest
+
 from zerg.qa.repo_root import default_repo_root
 
 
@@ -36,6 +38,10 @@ def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> 
 
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/fixture/model")
     assert canary._opencode_qualification_model() == "openrouter/fixture/model"  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "anthropic/claude-sonnet")
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        canary._opencode_qualification_model()  # noqa: SLF001
 
 
 def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance() -> None:

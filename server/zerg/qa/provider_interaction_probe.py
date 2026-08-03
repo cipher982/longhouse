@@ -589,7 +589,12 @@ def _opencode_cli_model(model: str | None) -> str | None:
     value = str(model or "").strip()
     if not value:
         return None
-    return value if value.startswith("openrouter/") else f"openrouter/{value}"
+    if value.startswith("openrouter/"):
+        return value
+    vendor = value.split("/", 1)[0]
+    if vendor not in {"deepseek", "~openai"}:
+        raise ValueError("OpenCode qualification model must use openrouter/ or a supported " f"bare OpenRouter vendor; got {value!r}")
+    return f"openrouter/{value}"
 
 
 def _opencode_native_interaction_capture(
