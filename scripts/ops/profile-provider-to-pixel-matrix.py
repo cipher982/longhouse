@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -95,16 +94,23 @@ def provider_identity(provider: str) -> dict[str, Any]:
 
 
 def hosted_identity(subdomain: str) -> dict[str, Any] | None:
-    for attempt in range(10):
+    url = f"https://{subdomain}.longhouse.ai/api/health"
+    for attempt in range(20):
         try:
-            with urllib.request.urlopen(
-                f"https://{subdomain}.longhouse.ai/api/health", timeout=15
-            ) as response:
-                value = json.load(response)
-            return value if isinstance(value, dict) else None
-        except Exception:
-            if attempt < 9:
-                time.sleep(1)
+            completed = subprocess.run(
+                ["curl", "-fsS", "--max-time", "10", url],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            value = json.loads(completed.stdout) if completed.returncode == 0 else None
+            if isinstance(value, dict):
+                return value
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            pass
+        if attempt < 19:
+            time.sleep(1)
     return None
 
 
