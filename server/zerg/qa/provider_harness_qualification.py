@@ -248,6 +248,22 @@ def _scenario_result(harness_payload: dict[str, Any], *, provider: str, scenario
     return matches[0]
 
 
+def _copy_live_model_evidence(observation: dict[str, Any], scenario_result: Mapping[str, Any]) -> None:
+    """Carry the universal harness's native receipt into the release envelope.
+
+    The universal provider adapters produce this envelope for every
+    model-backed lane. The release bridge must preserve it verbatim enough for
+    the control-plane worker to verify the retained native source artifact;
+    otherwise a provider can appear model-backed merely because its scenario
+    status was ``pass``.
+    """
+
+    data = scenario_result.get("data")
+    evidence = data.get("live_model_evidence") if isinstance(data, Mapping) else None
+    if isinstance(evidence, Mapping):
+        observation["live_model_evidence"] = dict(evidence)
+
+
 def _reported_version(probe_result: dict[str, Any], expected_version: str) -> tuple[AssertionOutcome, str]:
     if probe_result.get("status") != "pass":
         return AssertionOutcome.INFRASTRUCTURE_ERROR, "unreported"
@@ -559,9 +575,7 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
         "probe_identity": probe_result,
         "codex_tool_call_result_strict": strict_result,
     }
-    strict_model_evidence = (strict_result.get("data") or {}).get("live_model_evidence")
-    if isinstance(strict_model_evidence, Mapping):
-        observation["live_model_evidence"] = dict(strict_model_evidence)
+    _copy_live_model_evidence(observation, strict_result)
     return codex_tool_call_result.emit_proof_bundle(
         request=request,
         output_root=output_root,
@@ -759,9 +773,7 @@ def _claude_full_column_executor(
         LIVE_TOKEN_HARNESS_SCENARIO: live_result,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
-    live_model_evidence = (live_result.get("data") or {}).get("live_model_evidence")
-    if isinstance(live_model_evidence, Mapping):
-        observation["live_model_evidence"] = dict(live_model_evidence)
+    _copy_live_model_evidence(observation, live_result)
     return observation, assertions, secrets
 
 
@@ -892,9 +904,7 @@ def _opencode_full_column_executor(
         "release_gate_failures": release_gate_failures,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
-    live_model_evidence = (live_result.get("data") or {}).get("live_model_evidence")
-    if isinstance(live_model_evidence, Mapping):
-        observation["live_model_evidence"] = dict(live_model_evidence)
+    _copy_live_model_evidence(observation, live_result)
     return observation, assertions, secrets
 
 
@@ -1119,13 +1129,11 @@ def _cursor_observed_install_executor(
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
         "cursor_gate0": gate0,
     }
-    interaction_model_evidence = (interaction_result.get("data") or {}).get("live_model_evidence")
-    if isinstance(interaction_model_evidence, Mapping):
-        # Cursor's native stream probe is the authoritative source for model,
-        # token usage, and subscription accounting. Gate 0 proves the wider
-        # managed-session surface, while this envelope proves one bounded
-        # model-backed request without copying a daily Cursor profile.
-        observation["live_model_evidence"] = dict(interaction_model_evidence)
+    # Cursor's native stream probe is the authoritative source for model,
+    # token usage, and subscription accounting. Gate 0 proves the wider
+    # managed-session surface, while this envelope proves one bounded
+    # model-backed request without copying a daily Cursor profile.
+    _copy_live_model_evidence(observation, interaction_result)
     secrets = tuple(value for name in ("CURSOR_API_KEY",) if (value := str(os.environ.get(name) or "").strip()))
     return observation, (assertion,), secrets
 

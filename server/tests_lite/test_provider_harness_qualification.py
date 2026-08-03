@@ -407,6 +407,34 @@ def _passing_antigravity_full_column_payload(evidence_root: Path) -> dict:
     }
 
 
+def test_release_bridge_preserves_native_source_artifacts_for_each_model_backed_lane() -> None:
+    source_artifacts = [
+        {
+            "path": "evidence/provider.jsonl",
+            "sha256": "a" * 64,
+            "kind": "provider_jsonl_stream",
+            "event_type": "result",
+            "event_sha256": "b" * 64,
+        }
+    ]
+    for provider in ("claude", "codex", "opencode", "cursor"):
+        evidence = {
+            "source_canary": f"{provider}_model_probe",
+            "model": "fixture-model",
+            "result_event": {"type": "result"},
+            "source_artifacts": source_artifacts,
+        }
+        observation: dict[str, object] = {}
+
+        bridge._copy_live_model_evidence(  # noqa: SLF001
+            observation,
+            {"data": {"live_model_evidence": evidence}},
+        )
+
+        assert observation["live_model_evidence"] == evidence
+        assert observation["live_model_evidence"] is not evidence
+
+
 def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> None:
     gate = bridge._full_column_gate(_passing_full_column_payload())  # noqa: SLF001
 
