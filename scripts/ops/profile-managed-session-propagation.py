@@ -42,8 +42,12 @@ DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-session-propagation"
 BRIDGE_ROOT = Path.home() / ".longhouse" / "managed-local" / "codex-bridge"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 CODEX_HOOKS_JSON = Path.home() / ".codex" / "hooks.json"
-CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-codex-hook.sh"
-BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
+CODEX_LONGHOUSE_HOOK_SCRIPT = (
+    Path.home() / ".codex" / "hooks" / "longhouse-codex-hook.sh"
+)
+BROWSER_UI_OBSERVER_SCRIPT = (
+    ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
+)
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_OBSERVATION_LIMIT = 200
 METRICS_SCHEMA_VERSION = 6
@@ -138,15 +142,26 @@ def live_first_output_target_ms() -> int:
 
 
 def durable_archive_target_ms() -> int:
-    return metric_target_ms(sla_manifest(), "durable_archive_local_to_hosted_ms", 3_000) or 3_000
+    return (
+        metric_target_ms(sla_manifest(), "durable_archive_local_to_hosted_ms", 3_000)
+        or 3_000
+    )
 
 
 def warm_session_created_target_ms() -> int:
-    return metric_target_ms(sla_manifest(), "warm_session_created_to_card_paint_ms", 500) or 500
+    return (
+        metric_target_ms(sla_manifest(), "warm_session_created_to_card_paint_ms", 500)
+        or 500
+    )
 
 
 def content_promotion_target_ms() -> int:
-    return metric_target_ms(sla_manifest(), "content_durable_to_timeline_card_paint_ms", 500) or 500
+    return (
+        metric_target_ms(
+            sla_manifest(), "content_durable_to_timeline_card_paint_ms", 500
+        )
+        or 500
+    )
 
 
 def managed_close_target_ms() -> int:
@@ -154,11 +169,21 @@ def managed_close_target_ms() -> int:
 
 
 def cold_timeline_card_target_ms() -> int:
-    return metric_target_ms(sla_manifest(), "cold_timeline_navigation_to_card_paint_ms", 2_000) or 2_000
+    return (
+        metric_target_ms(
+            sla_manifest(), "cold_timeline_navigation_to_card_paint_ms", 2_000
+        )
+        or 2_000
+    )
 
 
 def cold_timeline_close_target_ms() -> int:
-    return metric_target_ms(sla_manifest(), "cold_timeline_navigation_to_close_paint_ms", 2_000) or 2_000
+    return (
+        metric_target_ms(
+            sla_manifest(), "cold_timeline_navigation_to_close_paint_ms", 2_000
+        )
+        or 2_000
+    )
 
 
 DEFAULT_SLA_CASE_BY_PROFILE_PROVIDER = {
@@ -166,6 +191,7 @@ DEFAULT_SLA_CASE_BY_PROFILE_PROVIDER = {
     ("warm-live", "codex"): "managed_codex_warm_live_graceful_close",
     ("warm-live", "claude"): "managed_claude_warm_live_graceful_close",
     ("warm-live", "cursor"): "managed_cursor_helm_content_promotion",
+    ("warm-live", "opencode"): "managed_opencode_warm_lifecycle",
 }
 
 
@@ -184,9 +210,13 @@ def resolve_sla_case(args: argparse.Namespace) -> dict[str, Any] | None:
         raise SystemExit(f"--sla-case {case_id!r} is undefined and cannot be profiled")
     provider = case.get("provider")
     if provider not in {args.provider, "all"}:
-        raise SystemExit(f"--sla-case {case_id!r} provider={provider!r} does not match --provider {args.provider!r}")
+        raise SystemExit(
+            f"--sla-case {case_id!r} provider={provider!r} does not match --provider {args.provider!r}"
+        )
     if case.get("profile") not in {args.profile, "none"}:
-        raise SystemExit(f"--sla-case {case_id!r} profile={case.get('profile')!r} does not match --profile {args.profile!r}")
+        raise SystemExit(
+            f"--sla-case {case_id!r} profile={case.get('profile')!r} does not match --profile {args.profile!r}"
+        )
     return case
 
 
@@ -258,10 +288,14 @@ class Profiler:
         self.project = args.project
         self.subdomain = args.subdomain
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
-        self.browser_ui_base_url = args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
+        self.browser_ui_base_url = (
+            args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
+        )
         self.sla_case = resolve_sla_case(args)
         self.profile_class = args.profile_class or (
-            self.sla_case.get("profile_class") if self.sla_case else profile_class_for(args.profile)
+            self.sla_case.get("profile_class")
+            if self.sla_case
+            else profile_class_for(args.profile)
         )
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
         self._observe_lock = threading.Lock()
@@ -290,7 +324,9 @@ class Profiler:
             "ownership": ownership,
             "session_id": session_id,
             "provider_session_id": provider_session_id,
-            "external_correlation_key": payload.get("external_correlation_key") if payload else None,
+            "external_correlation_key": payload.get("external_correlation_key")
+            if payload
+            else None,
             "source": source,
             "event": event,
             "observed_at_wall": utc_now(),
@@ -364,7 +400,11 @@ class Profiler:
             if str(item.get("session_id") or item.get("id") or "") == session_id
             or str(item.get("provider_session_id") or "") == session_id
         ]
-        return {"managed": managed, "unmanaged": unmanaged, "summary": summarize_local_health(data)}
+        return {
+            "managed": managed,
+            "unmanaged": unmanaged,
+            "summary": summarize_local_health(data),
+        }
 
     def hosted_debug(self, session_id: str) -> dict[str, Any] | None:
         cmd = [
@@ -603,7 +643,11 @@ print(json.dumps(result, default=str))
             check=False,
         )
         data = safe_json_loads(proc.stdout)
-        return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+        return (
+            [row for row in data if isinstance(row, dict)]
+            if isinstance(data, list)
+            else []
+        )
 
     def measure_remote_clock_skew_ms(self) -> int | None:
         cmd = [
@@ -631,7 +675,9 @@ print(json.dumps(result, default=str))
         if self._browser_session_cookie:
             return self._browser_session_cookie
 
-        explicit_token = os.environ.get("LONGHOUSE_BROWSER_SESSION_TOKEN") or os.environ.get("LONGHOUSE_DEVICE_TOKEN")
+        explicit_token = os.environ.get(
+            "LONGHOUSE_BROWSER_SESSION_TOKEN"
+        ) or os.environ.get("LONGHOUSE_DEVICE_TOKEN")
         if explicit_token and explicit_token.strip():
             self._browser_session_cookie = explicit_token.strip()
             return self._browser_session_cookie
@@ -1015,6 +1061,7 @@ print(json.dumps(payload))
         *,
         case_id: str,
         ownership: str,
+        timeout: float = 90,
     ) -> None:
         token = self.browser_session_cookie()
         if not token:
@@ -1034,6 +1081,7 @@ import json, sys, time
 import httpx
 
 token, sid, project, nonce = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+timeout_seconds = float(sys.argv[5])
 headers = {"Cookie": f"longhouse_session={token}"}
 params = {"skip_initial": "true"}
 event_name = None
@@ -1087,7 +1135,7 @@ def flush_event():
     return False
 
 try:
-    timeout = httpx.Timeout(95.0, connect=3.0, read=95.0)
+    timeout = httpx.Timeout(timeout_seconds + 5, connect=3.0, read=timeout_seconds + 5)
     with httpx.stream(
         "GET",
         f"http://127.0.0.1:8000/api/timeline/sessions/{sid}/workspace/stream",
@@ -1100,7 +1148,7 @@ try:
             emit("error", error=f"status={response.status_code} body={body[:500]}")
             raise SystemExit(0)
         emit("ready")
-        deadline = time.monotonic() + 90
+        deadline = time.monotonic() + timeout_seconds
         for line in response.iter_lines():
             if time.monotonic() > deadline:
                 break
@@ -1133,6 +1181,7 @@ except Exception as exc:
                 session_id,
                 self.project,
                 nonce,
+                str(timeout),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -1577,7 +1626,10 @@ except Exception as exc:
                 session_id=current_session_id or PENDING_BROWSER_SESSION_ID,
                 payload=data,
             )
-            if event in {"browser_close_card_painted", "browser_cold_close_card_painted"}:
+            if event in {
+                "browser_close_card_painted",
+                "browser_cold_close_card_painted",
+            }:
                 break
 
         try:
@@ -1595,7 +1647,11 @@ except Exception as exc:
                 source="browser_ui",
                 event="browser_ui_error",
                 session_id=session_id,
-                payload={"returncode": proc.returncode, "stderr": stderr[-1000:], "script": str(script_path)},
+                payload={
+                    "returncode": proc.returncode,
+                    "stderr": stderr[-1000:],
+                    "script": str(script_path),
+                },
             )
 
     def start_timeline_live_poll(
@@ -1605,6 +1661,7 @@ except Exception as exc:
         *,
         case_id: str,
         ownership: str,
+        timeout: float = 90,
     ) -> threading.Thread:
         thread = threading.Thread(
             target=lambda: self.poll_timeline_transcript_preview(
@@ -1612,6 +1669,7 @@ except Exception as exc:
                 nonce,
                 case_id=case_id,
                 ownership=ownership,
+                timeout=timeout,
             ),
             name=f"timeline-live-poll-{session_id}",
             daemon=True,
@@ -1626,6 +1684,7 @@ except Exception as exc:
         *,
         case_id: str,
         ownership: str,
+        timeout: float = 90,
     ) -> threading.Thread:
         thread = threading.Thread(
             target=lambda: self.stream_timeline_transcript_preview_sse(
@@ -1633,6 +1692,7 @@ except Exception as exc:
                 nonce,
                 case_id=case_id,
                 ownership=ownership,
+                timeout=timeout,
             ),
             name=f"timeline-live-sse-{session_id}",
             daemon=True,
@@ -1658,7 +1718,10 @@ except Exception as exc:
                 source="hosted_db",
                 event="empty_shell_observed",
                 session_id=session_id,
-                payload={"observation_interval_ms": observation_interval_ms, **compact_hosted(data)},
+                payload={
+                    "observation_interval_ms": observation_interval_ms,
+                    **compact_hosted(data),
+                },
             )
             return True
         self.observe(
@@ -1668,7 +1731,10 @@ except Exception as exc:
             source="hosted_db",
             event="empty_shell_observation_missing",
             session_id=session_id,
-            payload={"observation_interval_ms": observation_interval_ms, **compact_hosted(data or {})},
+            payload={
+                "observation_interval_ms": observation_interval_ms,
+                **compact_hosted(data or {}),
+            },
         )
         return False
 
@@ -1682,7 +1748,10 @@ except Exception as exc:
         interval: float = 0.1,
     ) -> dict[str, Any] | None:
         deadline = time.monotonic() + timeout
-        baseline_seen = self.event_observed_at_ms(case_id, session_id, "empty_shell_observed") is not None
+        baseline_seen = (
+            self.event_observed_at_ms(case_id, session_id, "empty_shell_observed")
+            is not None
+        )
         last: dict[str, Any] | None = None
         while time.monotonic() < deadline:
             last = self.hosted_db_direct(session_id)
@@ -1879,7 +1948,9 @@ except Exception as exc:
                     ownership=ownership,
                 )
         if not session_id or not ws_url:
-            raise RuntimeError(f"managed launch did not return session/ws url: {launch.short()}")
+            raise RuntimeError(
+                f"managed launch did not return session/ws url: {launch.short()}"
+            )
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -1921,10 +1992,14 @@ except Exception as exc:
                 "check_for_update_on_startup=false",
             ]
             if self.args.codex_effort:
-                tui_cmd.extend(["-c", f"model_reasoning_effort={self.args.codex_effort}"])
+                tui_cmd.extend(
+                    ["-c", f"model_reasoning_effort={self.args.codex_effort}"]
+                )
             if self.args.codex_model:
                 tui_cmd.extend(["--model", self.args.codex_model])
-            tui_cmd.extend(["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"])
+            tui_cmd.extend(
+                ["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"]
+            )
             remote_exec = f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} exec {shlex.join(tui_cmd)}"
             remote_cmd = (
                 "stty rows 40 cols 120 2>/dev/null || true; "
@@ -1948,7 +2023,9 @@ except Exception as exc:
                 session_id=session_id,
                 payload={"pid": tui.pid, "log": str(tui_log)},
             )
-        state = self.wait_bridge_thread(session_id, case_id=case_id, ownership=ownership)
+        state = self.wait_bridge_thread(
+            session_id, case_id=case_id, ownership=ownership
+        )
         thread_id = state.get("thread_id") if state else None
         thread_path = Path(str(state.get("thread_path") or "")) if state else None
         if not thread_id:
@@ -1982,7 +2059,14 @@ except Exception as exc:
                 payload={"reason": "provider_precondition"},
             )
             self.run_observed(
-                ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--force"],
+                [
+                    "longhouse-engine",
+                    "codex-bridge",
+                    "stop",
+                    "--session-id",
+                    session_id,
+                    "--force",
+                ],
                 case_id=case_id,
                 ownership=ownership,
                 event_prefix="shutdown",
@@ -2020,16 +2104,19 @@ except Exception as exc:
                 nonce,
                 case_id=case_id,
                 ownership=ownership,
+                timeout=15,
             )
             timeline_live_sse = self.start_timeline_live_sse(
                 session_id,
                 nonce,
                 case_id=case_id,
                 ownership=ownership,
+                timeout=15,
             )
         content_promotion_case = bool(
             self.sla_case
-            and "content_durable_to_timeline_card_paint_ms" in set(self.sla_case.get("metrics") or [])
+            and "content_durable_to_timeline_card_paint_ms"
+            in set(self.sla_case.get("metrics") or [])
         )
         if self.args.profile == "warm-live":
             browser_session_ready = self.wait_for_observation(
@@ -2059,7 +2146,11 @@ except Exception as exc:
                 "timeline_transcript_preview_sse_ready",
                 timeout=10,
             )
-            warm_ready = browser_session_ready and sse_ready and (browser_workspace_ready or content_promotion_case)
+            warm_ready = (
+                browser_session_ready
+                and sse_ready
+                and (browser_workspace_ready or content_promotion_case)
+            )
             if warm_ready:
                 self.observe(
                     case_id=case_id,
@@ -2100,7 +2191,14 @@ except Exception as exc:
                     payload={"reason": "warm_live_precondition_timeout"},
                 )
                 self.run_observed(
-                    ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--force"],
+                    [
+                        "longhouse-engine",
+                        "codex-bridge",
+                        "stop",
+                        "--session-id",
+                        session_id,
+                        "--force",
+                    ],
                     case_id=case_id,
                     ownership=ownership,
                     event_prefix="shutdown",
@@ -2110,7 +2208,9 @@ except Exception as exc:
                 terminate_process(tui)
                 if browser_ui is not None:
                     browser_ui.join(timeout=150)
-                self.write_snapshot(case_id, ownership, session_id, "warm_ready_timeout")
+                self.write_snapshot(
+                    case_id, ownership, session_id, "warm_ready_timeout"
+                )
                 return {
                     "case_id": case_id,
                     "session_id": session_id,
@@ -2219,7 +2319,14 @@ except Exception as exc:
             session_id=session_id,
         )
         self.run_observed(
-            ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--force"],
+            [
+                "longhouse-engine",
+                "codex-bridge",
+                "stop",
+                "--session-id",
+                session_id,
+                "--force",
+            ],
             case_id=case_id,
             ownership=ownership,
             event_prefix="shutdown",
@@ -2268,7 +2375,13 @@ except Exception as exc:
         nonce = f"LH_PROBE_CURSOR_MANAGED_{self.run_id}"
         workspace = Path(
             self.args.cursor_workspace
-            or Path.home() / ".longhouse" / "canaries" / "provider-live" / "cursor" / "product-e2e" / "workspace"
+            or Path.home()
+            / ".longhouse"
+            / "canaries"
+            / "provider-live"
+            / "cursor"
+            / "product-e2e"
+            / "workspace"
         ).resolve()
         workspace.mkdir(parents=True, exist_ok=True)
         state_root = get_managed_local_dir("cursor-helm")
@@ -2279,7 +2392,8 @@ except Exception as exc:
         content_promotion_poll: threading.Thread | None = None
         content_promotion_case = bool(
             self.sla_case
-            and "content_durable_to_timeline_card_paint_ms" in set(self.sla_case.get("metrics") or [])
+            and "content_durable_to_timeline_card_paint_ms"
+            in set(self.sla_case.get("metrics") or [])
         )
         hosted_discovered_session_id: str | None = None
         launch_started_epoch: float | None = None
@@ -2337,14 +2451,20 @@ except Exception as exc:
                 self.args.cursor_model,
                 f"Reply with exactly {nonce}",
             ]
-            launch_started_epoch = time.time() + ((self.remote_clock_skew_ms or 0) / 1000.0) - 2.0
+            launch_started_epoch = (
+                time.time() + ((self.remote_clock_skew_ms or 0) / 1000.0) - 2.0
+            )
             self.observe(
                 case_id=case_id,
                 provider=self.args.provider,
                 ownership=ownership,
                 source="harness",
                 event="launch_requested",
-                payload={"nonce": nonce, "cmd": redact_cmd(launch_cmd), "workspace": str(workspace)},
+                payload={
+                    "nonce": nonce,
+                    "cmd": redact_cmd(launch_cmd),
+                    "workspace": str(workspace),
+                },
             )
             self.observe(
                 case_id=case_id,
@@ -2354,7 +2474,9 @@ except Exception as exc:
                 event="prompt_sent_started",
                 payload={"transport": "cursor_helm_launch_prompt", "nonce": nonce},
             )
-            session = _PtyProcess.start(launch_cmd, cwd=workspace, terminal_path=terminal_path)
+            session = _PtyProcess.start(
+                launch_cmd, cwd=workspace, terminal_path=terminal_path
+            )
             self.observe(
                 case_id=case_id,
                 provider=self.args.provider,
@@ -2367,7 +2489,10 @@ except Exception as exc:
             last_hosted_discovery = 0.0
 
             def discover_hosted_cursor_session() -> None:
-                nonlocal hosted_discovered_session_id, session_id, content_promotion_poll
+                nonlocal \
+                    hosted_discovered_session_id, \
+                    session_id, \
+                    content_promotion_poll
                 nonlocal last_hosted_discovery
                 if launch_started_epoch is None or hosted_discovered_session_id:
                     return
@@ -2377,7 +2502,9 @@ except Exception as exc:
                 last_hosted_discovery = now
                 candidates = self.hosted_recent_cursor_sessions(launch_started_epoch)
                 workspace_candidates = [
-                    row for row in candidates if str(row.get("cwd") or "") == str(workspace)
+                    row
+                    for row in candidates
+                    if str(row.get("cwd") or "") == str(workspace)
                 ]
                 candidates = workspace_candidates or candidates
                 if not candidates:
@@ -2400,7 +2527,8 @@ except Exception as exc:
                     event="hosted_session_discovered",
                     session_id=candidate_id,
                     payload={
-                        "discovery_latency_ms": monotonic_ms() - self.started_monotonic_ms,
+                        "discovery_latency_ms": monotonic_ms()
+                        - self.started_monotonic_ms,
                         "catalog_row": candidate,
                     },
                 )
@@ -2410,7 +2538,8 @@ except Exception as exc:
                         case_id=case_id,
                         ownership=ownership,
                         hosted=hosted,
-                        observation_interval_ms=monotonic_ms() - self.started_monotonic_ms,
+                        observation_interval_ms=monotonic_ms()
+                        - self.started_monotonic_ms,
                     )
                     content_promotion_poll = self.start_content_promotion_poll(
                         candidate_id,
@@ -2435,7 +2564,10 @@ except Exception as exc:
                     terminal = terminal_path.read_text(errors="ignore")
                 except OSError:
                     terminal = ""
-                if "Trust this workspace" in terminal and "Use arrow keys to navigate" in terminal:
+                if (
+                    "Trust this workspace" in terminal
+                    and "Use arrow keys to navigate" in terminal
+                ):
                     os.write(session.master_fd, b"a")
                     time.sleep(0.15)
                     os.write(session.master_fd, b"\r")
@@ -2466,11 +2598,16 @@ except Exception as exc:
                     break
                 time.sleep(0.1)
             if state is None:
-                raise RuntimeError(f"timed out waiting for Cursor Helm state under {state_root}")
+                raise RuntimeError(
+                    f"timed out waiting for Cursor Helm state under {state_root}"
+                )
             local_session_id = str(state.get("session_id") or "")
             if not local_session_id:
                 raise RuntimeError(f"Cursor Helm state has no session id: {state}")
-            if hosted_discovered_session_id and hosted_discovered_session_id != local_session_id:
+            if (
+                hosted_discovered_session_id
+                and hosted_discovered_session_id != local_session_id
+            ):
                 self.observe(
                     case_id=case_id,
                     provider=self.args.provider,
@@ -2478,7 +2615,10 @@ except Exception as exc:
                     source="harness",
                     event="hosted_local_session_id_mismatch",
                     session_id=hosted_discovered_session_id,
-                    payload={"hosted_session_id": hosted_discovered_session_id, "local_session_id": local_session_id},
+                    payload={
+                        "hosted_session_id": hosted_discovered_session_id,
+                        "local_session_id": local_session_id,
+                    },
                 )
                 raise RuntimeError(
                     "Cursor hosted discovery did not bind to local Helm state: "
@@ -2500,8 +2640,13 @@ except Exception as exc:
                 source="cursor_native_hooks",
                 event="managed_state_observed",
                 session_id=session_id,
-                provider_session_id=str((claim or {}).get("conversation_uuid") or "") or None,
-                payload={"state": state, "binding_claim": claim, "state_root": str(state_root)},
+                provider_session_id=str((claim or {}).get("conversation_uuid") or "")
+                or None,
+                payload={
+                    "state": state,
+                    "binding_claim": claim,
+                    "state_root": str(state_root),
+                },
             )
             session_id_file.write_text(session_id + "\n")
             self.observe(
@@ -2511,8 +2656,12 @@ except Exception as exc:
                 source="harness",
                 event="session_id_observed",
                 session_id=session_id,
-                provider_session_id=str((claim or {}).get("conversation_uuid") or "") or None,
-                payload={"state_root": str(state_root), "binding_claim_path": str(claim_path)},
+                provider_session_id=str((claim or {}).get("conversation_uuid") or "")
+                or None,
+                payload={
+                    "state_root": str(state_root),
+                    "binding_claim_path": str(claim_path),
+                },
             )
             self.observe(
                 case_id=case_id,
@@ -2521,11 +2670,19 @@ except Exception as exc:
                 source="harness",
                 event="prompt_sent_started",
                 session_id=session_id,
-                provider_session_id=str((claim or {}).get("conversation_uuid") or "") or None,
-                payload={"transport": "cursor_helm_launch_prompt", "nonce": nonce, "already_in_flight": True},
+                provider_session_id=str((claim or {}).get("conversation_uuid") or "")
+                or None,
+                payload={
+                    "transport": "cursor_helm_launch_prompt",
+                    "nonce": nonce,
+                    "already_in_flight": True,
+                },
             )
 
-            if self.args.profile not in {"cold-timeline", "warm-live"} and not self.args.skip_browser_ui:
+            if (
+                self.args.profile not in {"cold-timeline", "warm-live"}
+                and not self.args.skip_browser_ui
+            ):
                 browser_ui = self.start_browser_ui_observer(
                     session_id,
                     nonce,
@@ -2568,7 +2725,10 @@ except Exception as exc:
                     timeout=15,
                 )
                 browser_workspace_ready = (
-                    self.event_observed_at_ms(case_id, session_id, "browser_detail_workspace_stream_ready") is not None
+                    self.event_observed_at_ms(
+                        case_id, session_id, "browser_detail_workspace_stream_ready"
+                    )
+                    is not None
                     if content_promotion_case
                     else self.wait_for_observation(
                         case_id,
@@ -2622,7 +2782,12 @@ except Exception as exc:
                 ownership=ownership,
                 timeout=180,
             )
-            if self.event_observed_at_ms(case_id, session_id, "assistant_response_local") is not None:
+            if (
+                self.event_observed_at_ms(
+                    case_id, session_id, "assistant_response_local"
+                )
+                is not None
+            ):
                 self.poll_hosted_session(
                     session_id,
                     case_id=case_id,
@@ -2700,7 +2865,8 @@ except Exception as exc:
                 "case_id": case_id,
                 "session_id": session_id,
                 "nonce": nonce,
-                "provider_session_id": str((claim or {}).get("conversation_uuid") or "") or None,
+                "provider_session_id": str((claim or {}).get("conversation_uuid") or "")
+                or None,
                 "state_root": str(state_root),
                 "workspace": str(workspace),
             }
@@ -2708,7 +2874,359 @@ except Exception as exc:
             if session_id:
                 try:
                     run_cmd(
-                        ["longhouse-engine", "cursor-helm", "stop", "--session-id", session_id],
+                        [
+                            "longhouse-engine",
+                            "cursor-helm",
+                            "stop",
+                            "--session-id",
+                            session_id,
+                        ],
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+            if session is not None:
+                session.close()
+
+    def run_managed_opencode(self) -> dict[str, Any]:
+        """Run a real attached OpenCode Helm turn through the shared UI path."""
+
+        from zerg.qa.opencode_conversation_reset import _matching_session
+        from zerg.qa.pty_session import ProviderPtySession
+        from zerg.qa.pty_session import wait_for_terminal_quiescence
+
+        case_id = "E1"
+        ownership = "managed"
+        nonce = f"LH_PROBE_OPENCODE_MANAGED_{self.run_id}"
+        name = f"{self.args.name_prefix}-managed-opencode-{self.run_id}"
+        workspace = Path(
+            self.args.opencode_workspace
+            or Path.home()
+            / ".longhouse"
+            / "canaries"
+            / "provider-live"
+            / "opencode"
+            / "workspace"
+        ).resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        terminal_path = self.output_dir / "opencode-terminal.raw"
+        database_path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+        state_roots = (
+            Path.home() / ".claude" / "managed-local" / "opencode-server",
+            Path.home()
+            / ".longhouse"
+            / "managed-local"
+            / "opencode"
+            / "bridge"
+            / "sessions",
+        )
+        session_id_file = self.output_dir / "browser-session-id.txt"
+        session_id_file.unlink(missing_ok=True)
+        started_at = time.time()
+        session: ProviderPtySession | None = None
+        session_id: str | None = None
+        browser_ui: threading.Thread | None = None
+
+        try:
+            self.browser_session_cookie()
+            if self.args.profile == "warm-live" and not self.args.skip_browser_ui:
+                browser_ui = self.start_browser_ui_observer(
+                    "-",
+                    nonce,
+                    case_id=case_id,
+                    ownership=ownership,
+                    session_id_file=session_id_file,
+                )
+                browser_ready = self.wait_for_observation(
+                    case_id,
+                    PENDING_BROWSER_SESSION_ID,
+                    "browser_ui_loaded",
+                    timeout=30,
+                )
+                stream_ready = self.wait_for_observation(
+                    case_id,
+                    PENDING_BROWSER_SESSION_ID,
+                    "browser_timeline_stream_connected",
+                    timeout=10,
+                )
+                if not browser_ready or not stream_ready:
+                    raise RuntimeError(
+                        "warm OpenCode browser observer did not reach ready state before managed launch: "
+                        f"browser_ready={browser_ready} stream_ready={stream_ready}"
+                    )
+
+            launch_cmd = [
+                "longhouse",
+                "opencode",
+                "--cwd",
+                str(workspace),
+                "--project",
+                self.project,
+                "--name",
+                name,
+                "--url",
+                self.browser_ui_base_url,
+            ]
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="launch_requested",
+                payload={
+                    "nonce": nonce,
+                    "cmd": redact_cmd(launch_cmd),
+                    "workspace": str(workspace),
+                },
+            )
+            session = ProviderPtySession.start(
+                argv=launch_cmd,
+                cwd=workspace,
+                env=os.environ.copy(),
+                terminal_path=terminal_path,
+                thread_name="managed-opencode-profiler-terminal",
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="managed_launch_completed",
+                payload={"pid": session.process.pid, "terminal": str(terminal_path)},
+            )
+
+            state: dict[str, Any] | None = None
+            state_path: Path | None = None
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if not session.alive():
+                    raise RuntimeError(
+                        f"managed OpenCode exited during launch ({session.process.returncode})"
+                    )
+                for root in state_roots:
+                    for candidate in root.glob("*.json"):
+                        try:
+                            if candidate.stat().st_mtime < started_at - 1:
+                                continue
+                        except OSError:
+                            continue
+                        row = read_json(candidate)
+                        if not row or not row.get("server_url"):
+                            continue
+                        if Path(str(row.get("cwd") or "")).resolve() != workspace:
+                            continue
+                        state = row
+                        state_path = candidate
+                        break
+                    if state is not None:
+                        break
+                if state is not None:
+                    break
+                time.sleep(0.05)
+            if state is None or state_path is None:
+                raise RuntimeError(
+                    "timed out waiting for managed OpenCode bridge state"
+                )
+
+            session_id = str(state.get("session_id") or state_path.stem)
+            provider_session_id = str(state.get("provider_session_id") or "")
+            session_id_file.write_text(session_id + "\n")
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="opencode_server_bridge",
+                event="session_id_observed",
+                session_id=session_id,
+                provider_session_id=provider_session_id or None,
+                payload={
+                    "state_path": str(state_path),
+                    "server_url": state.get("server_url"),
+                },
+            )
+            self.write_snapshot(case_id, ownership, session_id, "post_launch")
+
+            timeline_live_poll = self.start_timeline_live_poll(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                timeout=15,
+            )
+            timeline_live_sse = self.start_timeline_live_sse(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                timeout=15,
+            )
+            content_promotion_poll: threading.Thread | None = None
+            if self.args.profile == "warm-live":
+                browser_session_ready = self.wait_for_observation(
+                    case_id,
+                    session_id,
+                    "browser_session_id_received",
+                    timeout=20,
+                )
+                sse_ready = self.wait_for_observation(
+                    case_id,
+                    session_id,
+                    "timeline_transcript_preview_sse_ready",
+                    timeout=10,
+                )
+                if not browser_session_ready or not sse_ready:
+                    raise RuntimeError(
+                        "warm OpenCode observers did not bind to the managed session: "
+                        f"browser_session_ready={browser_session_ready} timeline_sse_ready={sse_ready}"
+                    )
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="harness",
+                    event="warm_ready_at",
+                    session_id=session_id,
+                    payload={"browser_session_ready": True, "timeline_sse_ready": True},
+                )
+                self.observe_content_promotion_baseline(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+                content_promotion_poll = self.start_content_promotion_poll(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+
+            wait_for_terminal_quiescence(session, timeout=45)
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="prompt_sent_started",
+                session_id=session_id,
+                payload={"transport": "opencode_attached_tui", "nonce": nonce},
+            )
+            session.submit_line(f"Reply with exactly {nonce}")
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="prompt_sent",
+                session_id=session_id,
+                payload={"transport": "opencode_attached_tui", "nonce": nonce},
+            )
+
+            local_provider_session_id: str | None = None
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                local_provider_session_id = _matching_session(
+                    database_path, nonce, assistant=True
+                )
+                if local_provider_session_id:
+                    break
+                if not session.alive():
+                    break
+                time.sleep(0.02)
+            if local_provider_session_id:
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="opencode_sqlite",
+                    event="assistant_response_local",
+                    session_id=session_id,
+                    provider_session_id=local_provider_session_id,
+                    payload={"database_path": str(database_path), "nonce": nonce},
+                )
+                self.poll_hosted_session(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                    predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+                    event="assistant_response_hosted",
+                    timeout=180,
+                    interval=0.25,
+                )
+            else:
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="opencode_sqlite",
+                    event="provider_response_timeout",
+                    session_id=session_id,
+                    payload={"database_path": str(database_path)},
+                )
+
+            if content_promotion_poll is not None:
+                content_promotion_poll.join(timeout=20)
+            timeline_live_poll.join(timeout=20)
+            timeline_live_sse.join(timeout=20)
+            self.write_snapshot(case_id, ownership, session_id, "post_response")
+
+            timeline_close_sse = self.start_timeline_close_sse(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+            )
+            self.wait_for_observation(
+                case_id,
+                session_id,
+                "timeline_close_sse_ready",
+                timeout=10,
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="shutdown_requested",
+                session_id=session_id,
+            )
+            stop = self.run_observed(
+                ["longhouse", "opencode", "stop", "--session-id", session_id],
+                case_id=case_id,
+                ownership=ownership,
+                event_prefix="shutdown",
+                timeout=30,
+                session_id=session_id,
+            )
+            if stop.returncode != 0:
+                raise RuntimeError(f"managed OpenCode stop failed: {stop.short()}")
+            session.close()
+            session = None
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: lifecycle_closed(data),
+                event="hosted_runtime_closed",
+                timeout=30,
+                interval=0.25,
+            )
+            timeline_close_sse.join(timeout=12)
+            if browser_ui is not None:
+                browser_ui.join(timeout=150)
+            self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
+            return {
+                "case_id": case_id,
+                "session_id": session_id,
+                "nonce": nonce,
+                "provider_session_id": local_provider_session_id
+                or provider_session_id
+                or None,
+                "state_path": str(state_path),
+                "workspace": str(workspace),
+            }
+        finally:
+            if session_id:
+                try:
+                    run_cmd(
+                        ["longhouse", "opencode", "stop", "--session-id", session_id],
                         timeout=15,
                     )
                 except Exception:
@@ -2822,13 +3340,15 @@ except Exception as exc:
         session_id: str | None = None
         observed_expected = False
         while proc.poll() is None:
-            imported_count, session_id, observed_expected = self.import_claude_poc_events(
-                events_path,
-                case_id=case_id,
-                ownership=ownership,
-                imported_count=imported_count,
-                session_id=session_id,
-                observed_expected=observed_expected,
+            imported_count, session_id, observed_expected = (
+                self.import_claude_poc_events(
+                    events_path,
+                    case_id=case_id,
+                    ownership=ownership,
+                    imported_count=imported_count,
+                    session_id=session_id,
+                    observed_expected=observed_expected,
+                )
             )
             time.sleep(0.1)
         stdout, stderr = proc.communicate()
@@ -2858,11 +3378,23 @@ except Exception as exc:
             },
         )
         if not session_id:
-            raise RuntimeError(f"managed Claude POC did not report a session id: returncode={proc.returncode}")
-        if proc.returncode != 0 or not observed_expected:
+            raise RuntimeError(
+                f"managed Claude POC did not report a session id: returncode={proc.returncode}"
+            )
+        if not observed_expected:
             raise RuntimeError(
                 "managed Claude POC failed: "
                 f"returncode={proc.returncode} observed_expected={observed_expected}"
+            )
+        if proc.returncode != 0:
+            self.observe(
+                case_id=case_id,
+                provider="claude",
+                ownership=ownership,
+                source="claude_poc",
+                event="provider_close_degraded",
+                session_id=session_id,
+                payload={"returncode": proc.returncode},
             )
 
         self.poll_timeline_session(
@@ -2923,7 +3455,9 @@ except Exception as exc:
                 continue
             event = str(row.get("event") or "")
             payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-            row_session_id = str(payload.get("session_id") or session_id or "").strip() or None
+            row_session_id = (
+                str(payload.get("session_id") or session_id or "").strip() or None
+            )
             wall = row.get("observed_at_wall")
             if event == "session_id_observed" and row_session_id:
                 session_id = row_session_id
@@ -2957,7 +3491,12 @@ except Exception as exc:
                     source="provider_transcript",
                     event="assistant_response_local",
                     session_id=row_session_id,
-                    payload={"timestamp": timestamp, "poc_event": event, "observed_at_wall": wall, **payload},
+                    payload={
+                        "timestamp": timestamp,
+                        "poc_event": event,
+                        "observed_at_wall": wall,
+                        **payload,
+                    },
                 )
             elif event in {"exit_sent", "exit_sent_after_timeout"} and row_session_id:
                 self.observe(
@@ -2982,7 +3521,9 @@ except Exception as exc:
         return len(lines), session_id, observed_expected
 
     def prepare_codex_hooks(self, *, case_id: str, ownership: str) -> None:
-        result = self.probe_codex_longhouse_hooks(trust=self.args.trust_longhouse_codex_hooks)
+        result = self.probe_codex_longhouse_hooks(
+            trust=self.args.trust_longhouse_codex_hooks
+        )
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -3028,7 +3569,9 @@ except Exception as exc:
                 "before": before,
                 "after": after,
                 "trusted_written": len(writes) if trust else 0,
-                "write_status": (write_result or {}).get("status") if isinstance(write_result, dict) else None,
+                "write_status": (write_result or {}).get("status")
+                if isinstance(write_result, dict)
+                else None,
             }
 
     def wait_codex_tui_precondition(
@@ -3072,7 +3615,9 @@ except Exception as exc:
         )
         return None
 
-    def wait_bridge_thread(self, session_id: str, *, case_id: str, ownership: str) -> dict[str, Any] | None:
+    def wait_bridge_thread(
+        self, session_id: str, *, case_id: str, ownership: str
+    ) -> dict[str, Any] | None:
         state_path = BRIDGE_ROOT / f"{session_id}.json"
         deadline = time.monotonic() + 60
         last = None
@@ -3096,7 +3641,9 @@ except Exception as exc:
         )
         return last
 
-    def wait_bridge_ws_url(self, session_id: str, *, case_id: str, ownership: str) -> str | None:
+    def wait_bridge_ws_url(
+        self, session_id: str, *, case_id: str, ownership: str
+    ) -> str | None:
         state_path = BRIDGE_ROOT / f"{session_id}.json"
         deadline = time.monotonic() + 30
         last = None
@@ -3284,9 +3831,16 @@ except Exception as exc:
             interval=0.25,
         )
         self.write_snapshot(case_id, ownership, session_id, "post_exec")
-        return {"case_id": case_id, "session_id": session_id, "nonce": nonce, "rollout": str(rollout)}
+        return {
+            "case_id": case_id,
+            "session_id": session_id,
+            "nonce": nonce,
+            "rollout": str(rollout),
+        }
 
-    def write_snapshot(self, case_id: str, ownership: str, session_id: str, label: str) -> None:
+    def write_snapshot(
+        self, case_id: str, ownership: str, session_id: str, label: str
+    ) -> None:
         local = call_or_error(lambda: self.local_health(session_id))
         hosted_debug = call_or_error(lambda: self.hosted_debug(session_id))
         hosted_direct = call_or_error(lambda: self.hosted_db_direct(session_id))
@@ -3302,8 +3856,12 @@ except Exception as exc:
             "local_health": local,
             "hosted_debug": compact_hosted(hosted),
             "timeline": compact_timeline(timeline or {}),
-            "empty_shell_projection": empty_shell_projection_proof(hosted, timeline or {}),
-            "content_promotion_projection": content_promotion_projection_proof(hosted, timeline or {}),
+            "empty_shell_projection": empty_shell_projection_proof(
+                hosted, timeline or {}
+            ),
+            "content_promotion_projection": content_promotion_projection_proof(
+                hosted, timeline or {}
+            ),
             "sse": sse,
         }
         path = self.output_dir / f"{case_id}-{label}-{session_id}.json"
@@ -3318,7 +3876,9 @@ except Exception as exc:
             payload={"path": str(path), **compact_snapshot(payload)},
         )
 
-    def write_summary(self, results: list[dict[str, Any]], errors: list[str]) -> list[dict[str, Any]]:
+    def write_summary(
+        self, results: list[dict[str, Any]], errors: list[str]
+    ) -> list[dict[str, Any]]:
         metrics: list[dict[str, Any]] = []
         lines = [
             "# Managed Session Propagation Profile",
@@ -3355,7 +3915,9 @@ except Exception as exc:
                     "run_id": self.run_id,
                     "profile_class": self.profile_class,
                     "sla_case_id": self.sla_case.get("id") if self.sla_case else None,
-                    "sla_status": self.sla_case.get("status") if self.sla_case else None,
+                    "sla_status": self.sla_case.get("status")
+                    if self.sla_case
+                    else None,
                     "project": self.project,
                     "subdomain": self.subdomain,
                     "generated_at": utc_now(),
@@ -3379,9 +3941,16 @@ except Exception as exc:
         )
         return metrics
 
-    def verdict_for(self, case_id: str, session_id: str, nonce: str) -> tuple[str, str, dict[str, Any]]:
-        active_metrics = set(self.sla_case.get("metrics") or []) if self.sla_case else set()
-        requires_promotion = not active_metrics or "content_durable_to_timeline_card_paint_ms" in active_metrics
+    def verdict_for(
+        self, case_id: str, session_id: str, nonce: str
+    ) -> tuple[str, str, dict[str, Any]]:
+        active_metrics = (
+            set(self.sla_case.get("metrics") or []) if self.sla_case else set()
+        )
+        requires_promotion = (
+            not active_metrics
+            or "content_durable_to_timeline_card_paint_ms" in active_metrics
+        )
         requires_live = not active_metrics or any(
             metric in active_metrics
             for metric in (
@@ -3405,7 +3974,9 @@ except Exception as exc:
                 "cold_timeline_navigation_to_close_paint_ms",
             )
         )
-        requires_durable = not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
+        requires_durable = (
+            not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
+        )
         hosted = self.hosted_db_direct(session_id) or {}
         if not hosted.get("session"):
             # The catalog-owned live store and the debug helper can briefly
@@ -3468,9 +4039,12 @@ except Exception as exc:
             "content_durable_published",
             "browser_timeline_card_painted",
         )
-        content_promotion_latency = valid_monotonic_delta_ms(content_promotion_raw_latency)
+        content_promotion_latency = valid_monotonic_delta_ms(
+            content_promotion_raw_latency
+        )
         content_promotion_order_valid = (
-            content_promotion_raw_latency is not None and content_promotion_raw_latency >= 0
+            content_promotion_raw_latency is not None
+            and content_promotion_raw_latency >= 0
             if content_promotion_raw_latency is not None
             else None
         )
@@ -3538,14 +4112,28 @@ except Exception as exc:
             case_id,
             session_id,
             "assistant_response_local",
-            "browser_transcript_preview_first_painted",
+            "browser_live_transcript_first_painted",
         )
+        if browser_live_first_from_local_latency is None:
+            browser_live_first_from_local_latency = self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                "assistant_response_local",
+                "browser_transcript_preview_first_painted",
+            )
         browser_live_full_from_local_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "browser_transcript_preview_nonce_painted",
+            "browser_live_transcript_nonce_painted",
         )
+        if browser_live_full_from_local_latency is None:
+            browser_live_full_from_local_latency = self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                "assistant_response_local",
+                "browser_transcript_preview_nonce_painted",
+            )
         browser_live_first_from_local_wall_latency = self.event_wall_delta_ms(
             case_id,
             session_id,
@@ -3598,14 +4186,19 @@ except Exception as exc:
             )
         workspace_stream_event = (
             "browser_workspace_preview_stream_changed"
-            if self.event_observed_at_ms(case_id, session_id, "browser_workspace_preview_stream_changed") is not None
+            if self.event_observed_at_ms(
+                case_id, session_id, "browser_workspace_preview_stream_changed"
+            )
+            is not None
             else "browser_workspace_stream_changed"
         )
-        browser_workspace_to_first_paint_latency = self.event_payload_elapsed_delta_nearest_before_ms(
-            case_id,
-            session_id,
-            workspace_stream_event,
-            "browser_live_transcript_first_painted",
+        browser_workspace_to_first_paint_latency = (
+            self.event_payload_elapsed_delta_nearest_before_ms(
+                case_id,
+                session_id,
+                workspace_stream_event,
+                "browser_live_transcript_first_painted",
+            )
         )
         if browser_workspace_to_first_paint_latency is None:
             browser_workspace_to_first_paint_latency = self.event_delta_any_order_ms(
@@ -3614,11 +4207,13 @@ except Exception as exc:
                 workspace_stream_event,
                 "browser_live_transcript_first_painted",
             )
-        browser_workspace_to_tail_paint_latency = self.event_payload_elapsed_delta_nearest_before_ms(
-            case_id,
-            session_id,
-            workspace_stream_event,
-            "browser_live_transcript_nonce_painted",
+        browser_workspace_to_tail_paint_latency = (
+            self.event_payload_elapsed_delta_nearest_before_ms(
+                case_id,
+                session_id,
+                workspace_stream_event,
+                "browser_live_transcript_nonce_painted",
+            )
         )
         if browser_workspace_to_tail_paint_latency is None:
             browser_workspace_to_tail_paint_latency = self.event_delta_any_order_ms(
@@ -3739,7 +4334,9 @@ except Exception as exc:
         )
         latest_health = self.latest_local_health_summary(case_id, session_id)
         latest_health_state = latest_health.get("health_state")
-        transport_failure = self.transport_failure_classification(case_id, session_id, latest_health_state)
+        transport_failure = self.transport_failure_classification(
+            case_id, session_id, latest_health_state
+        )
         ownership = qualification_ownership(session, self.args.ownership)
         transport = session.get("managed_transport") or "-"
         metrics: dict[str, Any] = {
@@ -3767,7 +4364,8 @@ except Exception as exc:
             "content_durable_to_timeline_card_paint_target_ms": content_promotion_target_ms(),
             "content_durable_to_timeline_card_paint_pass": (
                 content_promotion_latency <= content_promotion_target_ms()
-                if content_promotion_latency is not None and content_promotion_order_valid is True
+                if content_promotion_latency is not None
+                and content_promotion_order_valid is True
                 else None
             ),
             "content_promotion_order_valid": content_promotion_order_valid,
@@ -3825,8 +4423,12 @@ except Exception as exc:
             "browser_workspace_stream_to_first_paint_ms": browser_workspace_to_first_paint_latency,
             "browser_workspace_stream_to_tail_paint_ms": browser_workspace_to_tail_paint_latency,
             "browser_workspace_stream_after_sse_ms": browser_workspace_after_sse_latency,
-            "browser_runtime_state_stream_to_paint_ms": state_settlement.get("stream_to_paint_ms"),
-            "browser_runtime_state_fanout_to_paint_ms": state_settlement.get("fanout_to_paint_ms"),
+            "browser_runtime_state_stream_to_paint_ms": state_settlement.get(
+                "stream_to_paint_ms"
+            ),
+            "browser_runtime_state_fanout_to_paint_ms": state_settlement.get(
+                "fanout_to_paint_ms"
+            ),
             "browser_runtime_state_settlement_count": state_settlement.get("count", 0),
             "web_state_render_beacon_count": client_state.get("web_count", 0),
             "web_state_render_beacon_p50_ms": client_state.get("web_p50_ms"),
@@ -3916,11 +4518,17 @@ except Exception as exc:
             live_timing_source = "harness_observed"
         metrics["live_first_from_local_ms"] = live_first_from_local_latency
         metrics["warm_live_output_local_to_paint_ms"] = live_first_from_local_latency
-        metrics["live_first_source"] = live_ui_source if live_first_from_local_latency is not None else None
-        metrics["live_first_timing_source"] = live_timing_source if live_first_from_local_latency is not None else None
+        metrics["live_first_source"] = (
+            live_ui_source if live_first_from_local_latency is not None else None
+        )
+        metrics["live_first_timing_source"] = (
+            live_timing_source if live_first_from_local_latency is not None else None
+        )
         metrics["live_tail_non_slo_from_local_ms"] = live_full_from_local_latency
         if live_first_from_local_latency is not None:
-            metrics["live_first_pass"] = live_first_from_local_latency <= live_first_output_target_ms()
+            metrics["live_first_pass"] = (
+                live_first_from_local_latency <= live_first_output_target_ms()
+            )
 
         promotion_note = "promotion=not_applicable"
         if requires_promotion:
@@ -3941,7 +4549,7 @@ except Exception as exc:
                     f"promotion={promotion_state} "
                     f"content_to_card={content_promotion_latency}ms "
                     f"target={content_promotion_target_ms()}ms "
-                    f"poll={metrics.get('content_promotion_observation_interval_ms', '-') }ms"
+                    f"poll={metrics.get('content_promotion_observation_interval_ms', '-')}ms"
                 )
 
         live_ui = "live_first=missing"
@@ -3961,20 +4569,30 @@ except Exception as exc:
                 f"target={live_first_output_target_ms()}ms"
             )
             if live_full_from_local_latency is not None:
-                live_ui += f" live_tail_non_slo_from_local={live_full_from_local_latency}ms"
+                live_ui += (
+                    f" live_tail_non_slo_from_local={live_full_from_local_latency}ms"
+                )
 
         cold_note = "cold=not_run"
         if requires_cold:
             cold_parts = []
             if cold_card_latency is not None:
-                card_state = "pass" if cold_card_latency <= cold_timeline_card_target_ms() else "slow"
+                card_state = (
+                    "pass"
+                    if cold_card_latency <= cold_timeline_card_target_ms()
+                    else "slow"
+                )
                 cold_parts.append(
                     f"card={card_state} nav_to_card={cold_card_latency}ms target={cold_timeline_card_target_ms()}ms"
                 )
             else:
                 cold_parts.append("card=missing")
             if cold_close_latency is not None:
-                close_state = "pass" if cold_close_latency <= cold_timeline_close_target_ms() else "slow"
+                close_state = (
+                    "pass"
+                    if cold_close_latency <= cold_timeline_close_target_ms()
+                    else "slow"
+                )
                 cold_parts.append(
                     f"close={close_state} nav_to_close={cold_close_latency}ms target={cold_timeline_close_target_ms()}ms"
                 )
@@ -3991,14 +4609,19 @@ except Exception as exc:
             transcript += f" provider={provider_latency}ms"
         if durable_archive_latency is not None:
             transcript += f" local_to_hosted={durable_archive_latency}ms"
-            if propagation_latency is not None and propagation_latency != durable_archive_latency:
+            if (
+                propagation_latency is not None
+                and propagation_latency != durable_archive_latency
+            ):
                 transcript += f" poll_observed={propagation_latency}ms"
         if card_latency is not None:
             transcript += f" timeline_card_pre_ingest={card_latency}ms"
         if browser_card_latency is not None:
             transcript += f" browser_card_from_session_id={browser_card_latency}ms"
         if content_promotion_raw_latency is not None:
-            transcript += f" content_to_browser_card_raw={content_promotion_raw_latency}ms"
+            transcript += (
+                f" content_to_browser_card_raw={content_promotion_raw_latency}ms"
+            )
         if first_live_http_latency is not None:
             transcript += f" first_live_http={first_live_http_latency}ms"
         if live_http_latency is not None:
@@ -4012,17 +4635,23 @@ except Exception as exc:
         if browser_live_full_latency is not None:
             transcript += f" browser_live={browser_live_full_latency}ms"
         if first_live_http_from_local_latency is not None:
-            transcript += f" first_live_http_from_local={first_live_http_from_local_latency}ms"
+            transcript += (
+                f" first_live_http_from_local={first_live_http_from_local_latency}ms"
+            )
         if live_http_from_local_latency is not None:
             transcript += f" live_http_from_local={live_http_from_local_latency}ms"
         if first_live_sse_from_local_latency is not None:
-            transcript += f" first_live_sse_from_local={first_live_sse_from_local_latency}ms"
+            transcript += (
+                f" first_live_sse_from_local={first_live_sse_from_local_latency}ms"
+            )
         if live_sse_from_local_latency is not None:
             transcript += f" live_sse_from_local={live_sse_from_local_latency}ms"
         if browser_live_first_from_local_latency is not None:
             transcript += f" browser_first_live_from_local={browser_live_first_from_local_latency}ms"
         if browser_live_full_from_local_latency is not None:
-            transcript += f" browser_live_from_local={browser_live_full_from_local_latency}ms"
+            transcript += (
+                f" browser_live_from_local={browser_live_full_from_local_latency}ms"
+            )
         if browser_live_first_from_local_wall_latency is not None:
             transcript += f" browser_first_live_from_local_wall={browser_live_first_from_local_wall_latency}ms"
         if browser_live_full_from_local_wall_latency is not None:
@@ -4032,7 +4661,9 @@ except Exception as exc:
         if browser_live_full_from_live_truth_wall_latency is not None:
             transcript += f" browser_live_from_live_truth={browser_live_full_from_live_truth_wall_latency}ms"
         if browser_first_after_sse_latency is not None:
-            transcript += f" sse_to_browser_first_live={browser_first_after_sse_latency}ms"
+            transcript += (
+                f" sse_to_browser_first_live={browser_first_after_sse_latency}ms"
+            )
         if browser_full_after_sse_latency is not None:
             transcript += f" sse_to_browser_live={browser_full_after_sse_latency}ms"
         if browser_workspace_to_first_paint_latency is not None:
@@ -4056,15 +4687,25 @@ except Exception as exc:
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
-            transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
+            transcript += (
+                f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
+            )
         if durable_archive_latency is not None:
-            durable_state = "pass" if durable_archive_latency <= durable_archive_target_ms() else "slow"
-            metrics["durable_archive_pass"] = durable_archive_latency <= durable_archive_target_ms()
+            durable_state = (
+                "pass"
+                if durable_archive_latency <= durable_archive_target_ms()
+                else "slow"
+            )
+            metrics["durable_archive_pass"] = (
+                durable_archive_latency <= durable_archive_target_ms()
+            )
             transcript += f" durable_archive={durable_state} target={durable_archive_target_ms()}ms"
         bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
         if bridge_live:
             metrics["bridge_live_ingest_lag_ms"] = bridge_live.get("ingest_lag_ms")
-            metrics["bridge_live_skew_adjusted_lag_ms"] = bridge_live.get("skew_adjusted_lag_ms")
+            metrics["bridge_live_skew_adjusted_lag_ms"] = bridge_live.get(
+                "skew_adjusted_lag_ms"
+            )
             metrics["bridge_live_method"] = bridge_live.get("method")
             live_parts = []
             for key, label in (
@@ -4120,15 +4761,21 @@ except Exception as exc:
             close_note = "close=closed"
             if close_latency is not None:
                 close_note += f" source={close_source} observed_in={close_latency}ms"
-                close_state = "pass" if close_latency <= managed_close_target_ms() else "slow"
+                close_state = (
+                    "pass" if close_latency <= managed_close_target_ms() else "slow"
+                )
                 metrics["close_pass"] = close_latency <= managed_close_target_ms()
-                close_note += f" close_slo={close_state} target={managed_close_target_ms()}ms"
+                close_note += (
+                    f" close_slo={close_state} target={managed_close_target_ms()}ms"
+                )
                 if close_sse_latency is not None and close_http_latency is not None:
                     close_note += f" http_observed_in={close_http_latency}ms"
                 if close_browser_latency is not None:
                     close_note += f" browser_observed_in={close_browser_latency}ms"
                 if close_browser_after_http_latency is not None:
-                    close_note += f" http_to_browser={close_browser_after_http_latency}ms"
+                    close_note += (
+                        f" http_to_browser={close_browser_after_http_latency}ms"
+                    )
                 if close_browser_after_sse_latency is not None:
                     close_note += f" sse_to_browser={close_browser_after_sse_latency}ms"
             if terminal.get("ingest_lag_ms") is not None:
@@ -4145,7 +4792,9 @@ except Exception as exc:
                 note += f" message={message!r}"
             metrics["precondition"] = precondition
             metrics["verdict"] = "blocked"
-            metrics["notes"] = f"{note}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{note}; {close_note}; ownership={ownership}, transport={transport}"
+            )
             return "blocked", metrics["notes"], metrics
         if metrics["provider_timeout"]:
             metrics["verdict"] = "provider_timeout"
@@ -4155,9 +4804,11 @@ except Exception as exc:
             )
             return "provider_timeout", metrics["notes"], metrics
         if transport_failure is not None and (
-            (requires_promotion and metrics["content_durable_to_timeline_card_paint_pass"] is not True)
-            or
-            (requires_live and metrics["live_first_pass"] is not True)
+            (
+                requires_promotion
+                and metrics["content_durable_to_timeline_card_paint_pass"] is not True
+            )
+            or (requires_live and metrics["live_first_pass"] is not True)
             or (
                 requires_cold
                 and (
@@ -4176,10 +4827,16 @@ except Exception as exc:
         if requires_durable and not contains:
             verdict = "partial" if closed else "missing"
             metrics["verdict"] = verdict
-            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            )
             return verdict, metrics["notes"], metrics
         is_managed_case = case_id == "B1" or ownership in {"managed", "managed_local"}
-        if requires_promotion and is_managed_case and metrics["content_durable_to_timeline_card_paint_pass"] is not True:
+        if (
+            requires_promotion
+            and is_managed_case
+            and metrics["content_durable_to_timeline_card_paint_pass"] is not True
+        ):
             verdict = "missing" if content_promotion_latency is None else "slow"
             metrics["verdict"] = verdict
             metrics["notes"] = (
@@ -4204,7 +4861,9 @@ except Exception as exc:
                 else "slow"
             )
             metrics["verdict"] = verdict
-            metrics["notes"] = f"{live_ui}; {cold_note}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{live_ui}; {cold_note}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            )
             return verdict, metrics["notes"], metrics
         if requires_close and not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
@@ -4217,7 +4876,9 @@ except Exception as exc:
                 )
                 return "contaminated", metrics["notes"], metrics
             metrics["verdict"] = "partial"
-            metrics["notes"] = f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
+            )
             return "partial", metrics["notes"], metrics
         if transport_failure is not None and (
             (requires_close and metrics["close_pass"] is False)
@@ -4231,11 +4892,15 @@ except Exception as exc:
             return "contaminated", metrics["notes"], metrics
         if requires_close and is_managed_case and metrics["close_pass"] is False:
             metrics["verdict"] = "slow"
-            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            )
             return "slow", metrics["notes"], metrics
         if requires_durable and metrics["durable_archive_pass"] is False:
             metrics["verdict"] = "slow"
-            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            )
             return "slow", metrics["notes"], metrics
         metrics["verdict"] = "pass"
         extra = f"; {cold_note}" if requires_cold else ""
@@ -4246,7 +4911,9 @@ except Exception as exc:
         )
         return "pass", metrics["notes"], metrics
 
-    def browser_client_render_beacons(self, case_id: str, session_id: str) -> list[dict[str, Any]]:
+    def browser_client_render_beacons(
+        self, case_id: str, session_id: str
+    ) -> list[dict[str, Any]]:
         """Return browser beacon payloads when live-catalog persistence is unavailable."""
         beacons: list[dict[str, Any]] = []
         for row in self.observations:
@@ -4271,7 +4938,9 @@ except Exception as exc:
                 beacons.append(value)
         return beacons
 
-    def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
+    def event_delta_ms(
+        self, case_id: str, session_id: str, start_event: str, end_event: str
+    ) -> int | None:
         start = None
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
@@ -4297,7 +4966,9 @@ except Exception as exc:
             return None
         return end - start
 
-    def event_observed_at_ms(self, case_id: str, session_id: str, event: str) -> int | None:
+    def event_observed_at_ms(
+        self, case_id: str, session_id: str, event: str
+    ) -> int | None:
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
                 continue
@@ -4320,7 +4991,9 @@ except Exception as exc:
             return None
         return end - start
 
-    def event_payload_wall_ms(self, case_id: str, session_id: str, event: str) -> int | None:
+    def event_payload_wall_ms(
+        self, case_id: str, session_id: str, event: str
+    ) -> int | None:
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
                 continue
@@ -4344,7 +5017,9 @@ except Exception as exc:
             return None
         return end - start
 
-    def event_payload_elapsed_ms(self, case_id: str, session_id: str, event: str) -> int | None:
+    def event_payload_elapsed_ms(
+        self, case_id: str, session_id: str, event: str
+    ) -> int | None:
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
                 continue
@@ -4358,7 +5033,9 @@ except Exception as exc:
                 return int(value)
         return None
 
-    def event_payload_int(self, case_id: str, session_id: str, event: str, key: str) -> int | None:
+    def event_payload_int(
+        self, case_id: str, session_id: str, event: str, key: str
+    ) -> int | None:
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
                 continue
@@ -4400,7 +5077,9 @@ except Exception as exc:
             return None
         return end - max(starts)
 
-    def runtime_state_settlement_metrics(self, case_id: str, session_id: str) -> dict[str, Any]:
+    def runtime_state_settlement_metrics(
+        self, case_id: str, session_id: str
+    ) -> dict[str, Any]:
         """Match each browser state paint to the catalog commit that woke it."""
         streams: dict[int, list[tuple[int, dict[str, Any]]]] = {}
         for row in self.observations:
@@ -4445,12 +5124,20 @@ except Exception as exc:
             item = {"stream_to_paint_ms": observed - stream_observed}
             fanout_at_ms = int_or_none(detail.get("server_fanout_at_ms"))
             paint_at_ms = payload_wall_timestamp(row)
-            if fanout_at_ms is not None and paint_at_ms is not None and paint_at_ms >= fanout_at_ms:
+            if (
+                fanout_at_ms is not None
+                and paint_at_ms is not None
+                and paint_at_ms >= fanout_at_ms
+            ):
                 item["fanout_to_paint_ms"] = paint_at_ms - fanout_at_ms
             settlements.append(item)
 
         stream_values = [item["stream_to_paint_ms"] for item in settlements]
-        fanout_values = [item["fanout_to_paint_ms"] for item in settlements if "fanout_to_paint_ms" in item]
+        fanout_values = [
+            item["fanout_to_paint_ms"]
+            for item in settlements
+            if "fanout_to_paint_ms" in item
+        ]
         return {
             "count": len(settlements),
             "stream_to_paint_ms": percentile(stream_values, 50),
@@ -4490,7 +5177,9 @@ except Exception as exc:
             time.sleep(interval)
         return self.event_observed_at_ms(case_id, session_id, event) is not None
 
-    def provider_precondition_for(self, case_id: str, session_id: str) -> dict[str, Any] | None:
+    def provider_precondition_for(
+        self, case_id: str, session_id: str
+    ) -> dict[str, Any] | None:
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
                 continue
@@ -4501,7 +5190,9 @@ except Exception as exc:
                 return {}
         return None
 
-    def latest_local_health_summary(self, case_id: str, session_id: str) -> dict[str, Any]:
+    def latest_local_health_summary(
+        self, case_id: str, session_id: str
+    ) -> dict[str, Any]:
         for row in reversed(self.observations):
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
                 continue
@@ -4825,7 +5516,9 @@ def empty_shell_projection_proof(
     listing_status = timeline.get("listing_status")
     return {
         "catalog_source": source,
-        "hidden_from_default_timeline": int_or_none(row.get("hidden_from_default_timeline")),
+        "hidden_from_default_timeline": int_or_none(
+            row.get("hidden_from_default_timeline")
+        ),
         "content_counts": hosted_content_counts(hosted),
         "default_listing_status": listing_status,
         "default_listing_contains_session": bool(matches),
@@ -4842,11 +5535,15 @@ def content_promotion_projection_proof(
     listing_status = timeline.get("listing_status")
     return {
         "catalog_source": source,
-        "hidden_from_default_timeline": int_or_none(row.get("hidden_from_default_timeline")),
+        "hidden_from_default_timeline": int_or_none(
+            row.get("hidden_from_default_timeline")
+        ),
         "content_counts": hosted_content_counts(hosted),
         "default_listing_status": listing_status,
         "default_listing_contains_session": bool(matches),
-        "proven": hosted_content_published(hosted) and listing_status == 200 and bool(matches),
+        "proven": hosted_content_published(hosted)
+        and listing_status == 200
+        and bool(matches),
     }
 
 
@@ -4878,9 +5575,15 @@ def terminal_details(data: dict[str, Any]) -> dict[str, Any]:
         if event.get("kind") != "terminal_signal":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
-        payload_source = str(payload.get("terminal_source") or "").strip() if isinstance(payload, dict) else ""
+        payload_source = (
+            str(payload.get("terminal_source") or "").strip()
+            if isinstance(payload, dict)
+            else ""
+        )
         event_source = str(event.get("source") or "").strip()
-        candidate = _terminal_details_from_event(event, payload if isinstance(payload, dict) else {})
+        candidate = _terminal_details_from_event(
+            event, payload if isinstance(payload, dict) else {}
+        )
         if fallback is None:
             fallback = candidate
         preferred_source = str(details.get("source") or "").strip()
@@ -4893,7 +5596,9 @@ def terminal_details(data: dict[str, Any]) -> dict[str, Any]:
     return details
 
 
-def _terminal_details_from_event(event: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _terminal_details_from_event(
+    event: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
     occurred_at = parse_db_timestamp(event.get("occurred_at"))
     received_at = parse_db_timestamp(event.get("received_at"))
     details: dict[str, Any] = {
@@ -4901,24 +5606,39 @@ def _terminal_details_from_event(event: dict[str, Any], payload: dict[str, Any])
         "state": str(payload.get("terminal_state") or "").strip() or None,
         "reason": str(payload.get("terminal_reason") or "").strip() or None,
         "ingest_lag_ms": None,
-        "observed_at_ms": int(occurred_at.timestamp() * 1000) if occurred_at is not None else None,
-        "received_at_ms": int(received_at.timestamp() * 1000) if received_at is not None else None,
+        "observed_at_ms": int(occurred_at.timestamp() * 1000)
+        if occurred_at is not None
+        else None,
+        "received_at_ms": int(received_at.timestamp() * 1000)
+        if received_at is not None
+        else None,
     }
     payload_source = str(payload.get("terminal_source") or "").strip()
     if payload_source:
         details["source"] = payload_source
     if occurred_at is not None and received_at is not None:
-        details["ingest_lag_ms"] = int((received_at - occurred_at).total_seconds() * 1000)
+        details["ingest_lag_ms"] = int(
+            (received_at - occurred_at).total_seconds() * 1000
+        )
     return details
 
 
 def _merge_terminal_details(details: dict[str, Any], candidate: dict[str, Any]) -> None:
-    for key in ("state", "reason", "source", "ingest_lag_ms", "observed_at_ms", "received_at_ms"):
+    for key in (
+        "state",
+        "reason",
+        "source",
+        "ingest_lag_ms",
+        "observed_at_ms",
+        "received_at_ms",
+    ):
         if details.get(key) is None and candidate.get(key) is not None:
             details[key] = candidate[key]
 
 
-def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:
+def transcript_ingest_details(
+    data: dict[str, Any], remote_clock_skew_ms: int | None
+) -> dict[str, Any]:
     details = {
         "ingest_lag_ms": None,
         "skew_adjusted_lag_ms": None,
@@ -4927,7 +5647,10 @@ def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | 
         if event.get("kind") != "progress_signal":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
-        if not isinstance(payload, dict) or payload.get("progress_kind") != "transcript_append":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("progress_kind") != "transcript_append"
+        ):
             continue
         occurred_at = parse_db_timestamp(event.get("occurred_at"))
         received_at = parse_db_timestamp(event.get("received_at"))
@@ -4951,7 +5674,10 @@ def bridge_live_details(
         if event.get("source") != "codex_bridge_live":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
-        if not isinstance(payload, dict) or payload.get("progress_kind") != "bridge_live_transcript_delta":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("progress_kind") != "bridge_live_transcript_delta"
+        ):
             continue
         live_events.append((int_or_none(event.get("id")) or 0, event, payload))
 
@@ -4980,12 +5706,17 @@ def bridge_live_details(
     return {}
 
 
-def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:
+def ship_trace_details(
+    data: dict[str, Any], remote_clock_skew_ms: int | None
+) -> dict[str, Any]:
     for event in data.get("runtime_observations") or []:
         if event.get("source") != "agents_ingest_trace":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
-        if not isinstance(payload, dict) or payload.get("progress_kind") != "ship_pipeline_trace":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("progress_kind") != "ship_pipeline_trace"
+        ):
             continue
         ship_trace = payload.get("ship_trace") or {}
         server_trace = payload.get("server_trace") or {}
@@ -5038,7 +5769,10 @@ def transcript_occurred_at(data: dict[str, Any]) -> datetime | None:
         if event.get("kind") != "progress_signal":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
-        if isinstance(payload, dict) and payload.get("progress_kind") == "transcript_append":
+        if (
+            isinstance(payload, dict)
+            and payload.get("progress_kind") == "transcript_append"
+        ):
             return parse_db_timestamp(event.get("occurred_at"))
     return None
 
@@ -5092,7 +5826,9 @@ def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
         "runtime_observations": (data.get("runtime_observations") or [])[:5],
         "client_render_observation_stats": data.get("client_render_observation_stats"),
         "client_render_observations": (
-            data.get("client_render_observations") or data.get("recent_client_render_observations") or []
+            data.get("client_render_observations")
+            or data.get("recent_client_render_observations")
+            or []
         )[:20],
     }
 
@@ -5101,7 +5837,11 @@ def state_render_beacon_metrics(
     data: dict[str, Any],
     browser_beacons: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    rows = data.get("client_render_observations") or data.get("recent_client_render_observations") or []
+    rows = (
+        data.get("client_render_observations")
+        or data.get("recent_client_render_observations")
+        or []
+    )
     by_surface: dict[str, list[int]] = {"web": [], "ios": []}
     source = "persisted"
     for row in rows:
@@ -5177,7 +5917,9 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                     "summary_title": (card.get("head") or {}).get("summary_title"),
                     "timeline_card": (card.get("head") or {}).get("timeline_card"),
                     "runtime_display": (card.get("head") or {}).get("runtime_display"),
-                    "transcript_preview": (card.get("head") or {}).get("transcript_preview"),
+                    "transcript_preview": (card.get("head") or {}).get(
+                        "transcript_preview"
+                    ),
                 },
             }
             for card in matches[:3]
@@ -5207,7 +5949,9 @@ def timeline_transcript_previews(data: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         for key in ("head", "detail", "root"):
             value = card.get(key)
-            if isinstance(value, dict) and isinstance(value.get("transcript_preview"), dict):
+            if isinstance(value, dict) and isinstance(
+                value.get("transcript_preview"), dict
+            ):
                 transcripts.append(value["transcript_preview"])
     return transcripts
 
@@ -5340,10 +6084,9 @@ def is_longhouse_codex_hook_candidate(hook: dict[str, Any]) -> bool:
 
 
 def is_expected_longhouse_codex_hook(hook: dict[str, Any]) -> bool:
-    return (
-        str(hook.get("command") or "") == str(CODEX_LONGHOUSE_HOOK_SCRIPT)
-        and str(hook.get("sourcePath") or "") == str(CODEX_HOOKS_JSON)
-    )
+    return str(hook.get("command") or "") == str(CODEX_LONGHOUSE_HOOK_SCRIPT) and str(
+        hook.get("sourcePath") or ""
+    ) == str(CODEX_HOOKS_JSON)
 
 
 def summarize_codex_hook_probe(result: dict[str, Any]) -> dict[str, Any]:
@@ -5358,8 +6101,12 @@ def summarize_codex_hook_probe(result: dict[str, Any]) -> dict[str, Any]:
             "expectedLonghouseHook": is_expected_longhouse_codex_hook(hook),
         }
 
-    before = [compact(hook) for hook in result.get("before") or [] if isinstance(hook, dict)]
-    after = [compact(hook) for hook in result.get("after") or [] if isinstance(hook, dict)]
+    before = [
+        compact(hook) for hook in result.get("before") or [] if isinstance(hook, dict)
+    ]
+    after = [
+        compact(hook) for hook in result.get("after") or [] if isinstance(hook, dict)
+    ]
     return {
         "trusted_requested": result.get("trusted_requested"),
         "trusted_written": result.get("trusted_written"),
@@ -5373,7 +6120,12 @@ def call_or_error(fn):
     try:
         return fn()
     except subprocess.TimeoutExpired as exc:
-        return {"error": f"timeout after {exc.timeout}s", "cmd": redact_cmd(list(exc.cmd)) if isinstance(exc.cmd, list) else str(exc.cmd)}
+        return {
+            "error": f"timeout after {exc.timeout}s",
+            "cmd": redact_cmd(list(exc.cmd))
+            if isinstance(exc.cmd, list)
+            else str(exc.cmd),
+        }
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -5391,9 +6143,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="baseline",
         help="Profiler scenario to run. warm-live measures an already-open timeline; cold-timeline opens the browser after session truth exists.",
     )
-    parser.add_argument("--provider", choices=["claude", "codex", "cursor"], default="codex")
-    parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
-    parser.add_argument("--subdomain", default=os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo"))
+    parser.add_argument(
+        "--provider", choices=["claude", "codex", "cursor", "opencode"], default="codex"
+    )
+    parser.add_argument(
+        "--ownership", choices=["managed", "unmanaged", "all"], default="all"
+    )
+    parser.add_argument(
+        "--subdomain", default=os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo")
+    )
     parser.add_argument("--container")
     parser.add_argument(
         "--ssh-target",
@@ -5416,7 +6174,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile-class",
-        choices=["cold_timeline", "warm_realtime", "durable_archive", "honest_degradation", "fidelity"],
+        choices=[
+            "cold_timeline",
+            "warm_realtime",
+            "durable_archive",
+            "honest_degradation",
+            "fidelity",
+        ],
         default=None,
         help="Observation profile class metadata. Narrow --profile modes will map to this in later slices.",
     )
@@ -5469,13 +6233,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--cursor-workspace",
         help="Isolated workspace for the native Cursor Helm canary. Defaults under ~/.longhouse/canaries/provider-live.",
     )
+    parser.add_argument(
+        "--opencode-workspace",
+        help="Isolated workspace for the native OpenCode Helm canary. Defaults under ~/.longhouse/canaries/provider-live.",
+    )
     return parser.parse_args(argv)
 
 
 def normalize_args(args: argparse.Namespace) -> None:
     if args.profile in {"cold-timeline", "warm-live"}:
         if args.skip_browser_ui:
-            raise SystemExit(f"--profile {args.profile} requires the browser UI observer")
+            raise SystemExit(
+                f"--profile {args.profile} requires the browser UI observer"
+            )
         args.ownership = "managed"
         args.skip_unmanaged = True
 
@@ -5500,7 +6270,9 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             "browser_transport": args.browser_transport,
             "profile_class": profiler.profile_class,
             "sla_case_id": profiler.sla_case.get("id") if profiler.sla_case else None,
-            "sla_status": profiler.sla_case.get("status") if profiler.sla_case else None,
+            "sla_status": profiler.sla_case.get("status")
+            if profiler.sla_case
+            else None,
             "sla_manifest": str(DEFAULT_MANIFEST_PATH),
             "sla_manifest_summary": manifest_summary(sla_manifest()),
         },
@@ -5508,16 +6280,36 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
     results: list[dict[str, Any]] = []
     errors: list[str] = []
     try:
-        if args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "codex":
+        if (
+            args.ownership in {"managed", "all"}
+            and not args.skip_managed
+            and args.provider == "codex"
+        ):
             results.append(profiler.run_managed_codex())
-        elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "claude":
+        elif (
+            args.ownership in {"managed", "all"}
+            and not args.skip_managed
+            and args.provider == "claude"
+        ):
             results.append(profiler.run_managed_claude())
-        elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "cursor":
+        elif (
+            args.ownership in {"managed", "all"}
+            and not args.skip_managed
+            and args.provider == "cursor"
+        ):
             results.append(profiler.run_managed_cursor())
+        elif (
+            args.ownership in {"managed", "all"}
+            and not args.skip_managed
+            and args.provider == "opencode"
+        ):
+            results.append(profiler.run_managed_opencode())
     except Exception as exc:
         errors.append(f"managed {args.provider} failed: {exc}")
         profiler.observe(
-            case_id={"codex": "B1", "claude": "C1", "cursor": "D1"}.get(args.provider, "run"),
+            case_id={"codex": "B1", "claude": "C1", "cursor": "D1"}.get(
+                args.provider, "run"
+            ),
             provider=args.provider,
             ownership="managed",
             source="harness",
@@ -5525,10 +6317,16 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             payload={"error": str(exc)},
         )
     try:
-        if args.ownership in {"unmanaged", "all"} and not args.skip_unmanaged and args.provider == "codex":
+        if (
+            args.ownership in {"unmanaged", "all"}
+            and not args.skip_unmanaged
+            and args.provider == "codex"
+        ):
             results.append(profiler.run_unmanaged_codex())
         elif args.ownership in {"unmanaged", "all"} and not args.skip_unmanaged:
-            raise RuntimeError(f"unmanaged {args.provider} profiling is not implemented")
+            raise RuntimeError(
+                f"unmanaged {args.provider} profiling is not implemented"
+            )
     except Exception as exc:
         errors.append(f"unmanaged {args.provider} failed: {exc}")
         profiler.observe(
@@ -5541,7 +6339,11 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
         )
     metrics = profiler.write_summary(results, errors)
     print(profiler.summary_path)
-    return single_exit_code(errors=errors, metrics=metrics, sla_status=(profiler.sla_case or {}).get("status")), profiler.summary_path
+    return single_exit_code(
+        errors=errors,
+        metrics=metrics,
+        sla_status=(profiler.sla_case or {}).get("status"),
+    ), profiler.summary_path
 
 
 def percentile(values: list[int], pct: float) -> int | None:
@@ -5554,7 +6356,9 @@ def percentile(values: list[int], pct: float) -> int | None:
 
 def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     def metric_stats(source_cases: list[dict[str, Any]], key: str) -> dict[str, Any]:
-        values = [value for case in source_cases if isinstance((value := case.get(key)), int)]
+        values = [
+            value for case in source_cases if isinstance((value := case.get(key)), int)
+        ]
         return {
             "count": len(values),
             "min": min(values) if values else None,
@@ -5567,7 +6371,9 @@ def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     metrics = {key: metric_stats(cases, key) for key in BATCH_METRIC_KEYS}
     clean_cases = [case for case in cases if batch_case_is_clean(case)]
     metrics["clean_observation_count"] = len(clean_cases)
-    metrics["clean_metrics"] = {key: metric_stats(clean_cases, key) for key in BATCH_METRIC_KEYS}
+    metrics["clean_metrics"] = {
+        key: metric_stats(clean_cases, key) for key in BATCH_METRIC_KEYS
+    }
     return metrics
 
 
@@ -5617,7 +6423,9 @@ def batch_exit_code(*, child_runs: list[dict[str, Any]], sla_status: str | None)
     return 0
 
 
-def single_exit_code(*, errors: list[str], metrics: list[dict[str, Any]], sla_status: str | None) -> int:
+def single_exit_code(
+    *, errors: list[str], metrics: list[dict[str, Any]], sla_status: str | None
+) -> int:
     if errors:
         if errors_contaminated(errors):
             return 2
@@ -5781,9 +6589,17 @@ def batch_local_health_preflight() -> dict[str, Any]:
     transport_health = data.get("transport_health") or {}
     outbox = data.get("outbox") or {}
     outbox_oldest_age = outbox.get("oldest_age_seconds")
-    outbox_stale = isinstance(outbox_oldest_age, (int, float)) and outbox_oldest_age > 10
-    current_transport_ok = local_transport_is_currently_healthy(data) and not outbox_stale
-    ok = completed.returncode == 0 and not outbox_stale and (health_state == "healthy" or current_transport_ok)
+    outbox_stale = (
+        isinstance(outbox_oldest_age, (int, float)) and outbox_oldest_age > 10
+    )
+    current_transport_ok = (
+        local_transport_is_currently_healthy(data) and not outbox_stale
+    )
+    ok = (
+        completed.returncode == 0
+        and not outbox_stale
+        and (health_state == "healthy" or current_transport_ok)
+    )
     return {
         "ok": ok,
         "reason": (
@@ -5812,7 +6628,10 @@ def batch_local_health_preflight_with_grace(
         last = batch_local_health_preflight()
         if last.get("ok"):
             return last
-        if attempt + 1 < attempts and last.get("reason") == "local_transport_currently_unhealthy":
+        if (
+            attempt + 1 < attempts
+            and last.get("reason") == "local_transport_currently_unhealthy"
+        ):
             time.sleep(retry_delay_seconds)
             continue
         return last
@@ -5890,7 +6709,9 @@ def run_batch(args: argparse.Namespace) -> int:
 
     aggregate = aggregate_batch_cases(cases)
     aggregate.update(summarize_batch_verdicts(child_runs))
-    exit_code = batch_exit_code(child_runs=child_runs, sla_status=(sla_case or {}).get("status"))
+    exit_code = batch_exit_code(
+        child_runs=child_runs, sla_status=(sla_case or {}).get("status")
+    )
     batch_metrics_path = batch_dir / "batch-metrics.json"
     batch_metrics_path.write_text(
         json.dumps(
@@ -5900,7 +6721,8 @@ def run_batch(args: argparse.Namespace) -> int:
                 "generated_at": utc_now(),
                 "profile": args.profile,
                 "profile_class": args.profile_class or profile_class_for(args.profile),
-                "sla_case_id": args.sla_case or default_sla_case_id(args.profile, args.provider),
+                "sla_case_id": args.sla_case
+                or default_sla_case_id(args.profile, args.provider),
                 "iterations": args.iterations,
                 "runs": child_runs,
                 "aggregate": aggregate,

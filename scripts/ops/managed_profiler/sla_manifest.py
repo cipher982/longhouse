@@ -15,7 +15,9 @@ ALLOWED_PROVIDERS = {"all", "claude", "codex", "cursor", "opencode"}
 IMPLEMENTED_PROFILER_DRIVERS = {
     "managed_codex_cold_timeline",
     "managed_codex_warm_live",
+    "managed_claude_channel",
     "managed_cursor_helm_warm_live",
+    "managed_opencode_helm_warm_live",
     "unmanaged_codex_baseline",
 }
 ALLOWED_PROFILE_CLASSES = {
@@ -26,7 +28,11 @@ ALLOWED_PROFILE_CLASSES = {
     "fidelity",
 }
 ALLOWED_CONTROL_PATHS = {"managed", "unmanaged"}
-ALLOWED_TOPOLOGIES = {"hosted_runtime_host", "local_runtime_host", "self_hosted_runtime_host"}
+ALLOWED_TOPOLOGIES = {
+    "hosted_runtime_host",
+    "local_runtime_host",
+    "self_hosted_runtime_host",
+}
 ALLOWED_LAYERS = {
     "browser_card",
     "hosted_api",
@@ -80,7 +86,9 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
             errors.append("metrics entries must be tables")
             continue
         metric_id = str(metric.get("id") or "")
-        _validate_profile_class(metric.get("profile_class"), f"metric {metric_id}", errors)
+        _validate_profile_class(
+            metric.get("profile_class"), f"metric {metric_id}", errors
+        )
         diagnostic = metric.get("diagnostic", False)
         if not isinstance(diagnostic, bool):
             errors.append(f"metric {metric_id} diagnostic must be a boolean")
@@ -90,12 +98,18 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
                 errors.append(f"metric {metric_id} {field} must be a positive integer")
         layer = metric.get("layer")
         if layer not in ALLOWED_LAYERS:
-            errors.append(f"metric {metric_id} layer must be one of {sorted(ALLOWED_LAYERS)}")
+            errors.append(
+                f"metric {metric_id} layer must be one of {sorted(ALLOWED_LAYERS)}"
+            )
         legacy_aliases = metric.get("legacy_aliases", [])
         if legacy_aliases is None:
             legacy_aliases = []
-        if not isinstance(legacy_aliases, list) or not all(isinstance(alias, str) for alias in legacy_aliases):
-            errors.append(f"metric {metric_id} legacy_aliases must be a list of strings")
+        if not isinstance(legacy_aliases, list) or not all(
+            isinstance(alias, str) for alias in legacy_aliases
+        ):
+            errors.append(
+                f"metric {metric_id} legacy_aliases must be a list of strings"
+            )
             continue
         for alias in legacy_aliases:
             if alias in metric_aliases:
@@ -114,37 +128,63 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
         case_id = str(case.get("id") or "")
         status = case.get("status")
         if status not in ALLOWED_STATUSES:
-            errors.append(f"case {case_id} status must be one of {sorted(ALLOWED_STATUSES)}")
+            errors.append(
+                f"case {case_id} status must be one of {sorted(ALLOWED_STATUSES)}"
+            )
         ci_mode = case.get("ci_mode")
         profiler_driver = case.get("profiler_driver")
         if status != "undefined":
             if ci_mode not in ALLOWED_CI_MODES:
-                errors.append(f"case {case_id} ci_mode must be one of {sorted(ALLOWED_CI_MODES)}")
+                errors.append(
+                    f"case {case_id} ci_mode must be one of {sorted(ALLOWED_CI_MODES)}"
+                )
             if not isinstance(profiler_driver, str) or not profiler_driver.strip():
-                errors.append(f"case {case_id} profiler_driver must be a non-empty string")
-            elif ci_mode in {"gate", "report"} and profiler_driver not in IMPLEMENTED_PROFILER_DRIVERS:
-                errors.append(f"case {case_id} profiler_driver {profiler_driver!r} is not implemented for ci_mode={ci_mode}")
+                errors.append(
+                    f"case {case_id} profiler_driver must be a non-empty string"
+                )
+            elif (
+                ci_mode in {"gate", "report"}
+                and profiler_driver not in IMPLEMENTED_PROFILER_DRIVERS
+            ):
+                errors.append(
+                    f"case {case_id} profiler_driver {profiler_driver!r} is not implemented for ci_mode={ci_mode}"
+                )
             if ci_mode == "blocked":
                 blocked_reason = case.get("blocked_reason")
                 if not isinstance(blocked_reason, str) or not blocked_reason.strip():
-                    errors.append(f"case {case_id} ci_mode=blocked requires blocked_reason")
+                    errors.append(
+                        f"case {case_id} ci_mode=blocked requires blocked_reason"
+                    )
         provider = case.get("provider")
         if provider not in ALLOWED_PROVIDERS:
-            errors.append(f"case {case_id} provider must be one of {sorted(ALLOWED_PROVIDERS)}")
+            errors.append(
+                f"case {case_id} provider must be one of {sorted(ALLOWED_PROVIDERS)}"
+            )
         control_path = case.get("control_path")
         if control_path not in ALLOWED_CONTROL_PATHS:
             errors.append(f"case {case_id} control_path must be managed or unmanaged")
         topology = case.get("topology")
         if topology not in ALLOWED_TOPOLOGIES:
-            errors.append(f"case {case_id} topology must be one of {sorted(ALLOWED_TOPOLOGIES)}")
+            errors.append(
+                f"case {case_id} topology must be one of {sorted(ALLOWED_TOPOLOGIES)}"
+            )
         _validate_profile_class(case.get("profile_class"), f"case {case_id}", errors)
-        for field in ("provider", "profile", "launch", "shutdown", "truth_source", "notes"):
+        for field in (
+            "provider",
+            "profile",
+            "launch",
+            "shutdown",
+            "truth_source",
+            "notes",
+        ):
             value = case.get(field)
             if not isinstance(value, str) or not value.strip():
                 errors.append(f"case {case_id} {field} must be a non-empty string")
         for field in ("required_observers", "metrics"):
             value = case.get(field)
-            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
                 errors.append(f"case {case_id} {field} must be a list of strings")
         for observer in case.get("required_observers") or []:
             if observer not in ALLOWED_OBSERVERS:
@@ -156,7 +196,9 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
             if len(case.get("metrics") or []) < 1:
                 errors.append(f"case {case_id} is required but has no metrics")
             if len(case.get("required_observers") or []) < 3:
-                errors.append(f"case {case_id} is required but has fewer than 3 observers")
+                errors.append(
+                    f"case {case_id} is required but has fewer than 3 observers"
+                )
             if case.get("truth_source") == "none":
                 errors.append(f"case {case_id} is required but has truth_source=none")
         if status == "undefined":
@@ -165,17 +207,25 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
             if case.get("required_observers"):
                 errors.append(f"case {case_id} is undefined but declares observers")
             if case.get("truth_source") != "none":
-                errors.append(f"case {case_id} is undefined but truth_source is not none")
+                errors.append(
+                    f"case {case_id} is undefined but truth_source is not none"
+                )
             if case.get("ci_mode") and case.get("ci_mode") != "blocked":
                 errors.append(f"case {case_id} is undefined but ci_mode is not blocked")
 
-    required_cases = [case for case in cases if isinstance(case, dict) and case.get("status") == "required"]
+    required_cases = [
+        case
+        for case in cases
+        if isinstance(case, dict) and case.get("status") == "required"
+    ]
     if not required_cases:
         errors.append("at least one case must be status=required")
     return errors
 
 
-def metric_target_ms(manifest: dict[str, Any], metric_id_or_alias: str, default: int | None = None) -> int | None:
+def metric_target_ms(
+    manifest: dict[str, Any], metric_id_or_alias: str, default: int | None = None
+) -> int | None:
     metric = metric_by_id_or_legacy_alias(manifest, metric_id_or_alias)
     if metric is None:
         return default
@@ -188,7 +238,9 @@ def metric_is_diagnostic(manifest: dict[str, Any], metric_id_or_alias: str) -> b
     return bool(metric and metric.get("diagnostic") is True)
 
 
-def metric_by_id_or_legacy_alias(manifest: dict[str, Any], metric_id_or_alias: str) -> dict[str, Any] | None:
+def metric_by_id_or_legacy_alias(
+    manifest: dict[str, Any], metric_id_or_alias: str
+) -> dict[str, Any] | None:
     for metric in manifest.get("metrics") or []:
         if not isinstance(metric, dict):
             continue
@@ -255,7 +307,9 @@ def format_case_inventory(manifest: dict[str, Any]) -> str:
 
 def _validate_profile_class(value: Any, label: str, errors: list[str]) -> None:
     if value not in ALLOWED_PROFILE_CLASSES:
-        errors.append(f"{label} profile_class must be one of {sorted(ALLOWED_PROFILE_CLASSES)}")
+        errors.append(
+            f"{label} profile_class must be one of {sorted(ALLOWED_PROFILE_CLASSES)}"
+        )
 
 
 def _unique_ids(items: list[Any], label: str, errors: list[str]) -> set[str]:

@@ -21,7 +21,7 @@ on:
         default: 'zerg'
         type: string
       include_experimental:
-        description: 'Also run report-only experimental Codex cases'
+        description: 'Also run report-only provider and secondary-path cases'
         required: false
         default: false
         type: boolean
@@ -59,6 +59,24 @@ jobs:
             case: managed_codex_durable_archive
             profile: warm-live
             provider: codex
+            ownership: managed
+            experimental: true
+          - name: managed-claude-warm-realtime
+            case: managed_claude_warm_live_graceful_close
+            profile: warm-live
+            provider: claude
+            ownership: managed
+            experimental: true
+          - name: managed-cursor-warm-realtime
+            case: managed_cursor_helm_content_promotion
+            profile: warm-live
+            provider: cursor
+            ownership: managed
+            experimental: true
+          - name: managed-opencode-warm-realtime
+            case: managed_opencode_warm_lifecycle
+            profile: warm-live
+            provider: opencode
             ownership: managed
             experimental: true
           - name: unmanaged-codex-baseline

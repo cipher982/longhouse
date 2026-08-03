@@ -250,8 +250,7 @@ topology = "hosted_runtime_host"
 profile = "warm-live"
 profile_class = "warm_realtime"
 profiler_driver = "managed_claude_channel"
-ci_mode = "blocked"
-blocked_reason = "Needs a deterministic non-interactive Claude channel process driver plus explicit auth/cost controls."
+ci_mode = "report"
 launch = "longhouse claude"
 shutdown = "provider-supported Claude exit path"
 truth_source = "claude_native_channel"
@@ -263,7 +262,7 @@ metrics = [
   "warm_close_local_to_db_ms",
   "durable_archive_local_to_hosted_ms",
 ]
-notes = "Needs a real channel-backed process profile; do not borrow Codex bridge assumptions."
+notes = "Real channel-backed Claude Helm turn. Local transcript truth and web paint are scored; forced process teardown remains an explicit close-path failure until Claude's stop hooks exit cleanly."
 
 [[cases]]
 id = "managed_opencode_warm_lifecycle"
@@ -271,17 +270,23 @@ status = "experimental"
 provider = "opencode"
 control_path = "managed"
 topology = "hosted_runtime_host"
-profile = "warm-close"
+profile = "warm-live"
 profile_class = "warm_realtime"
-profiler_driver = "managed_opencode_lifecycle"
-ci_mode = "blocked"
-blocked_reason = "Needs a deterministic OpenCode lifecycle profiler driver and explicit observer coverage before this can be scored."
+profiler_driver = "managed_opencode_helm_warm_live"
+ci_mode = "report"
 launch = "longhouse opencode"
 shutdown = "provider-supported OpenCode exit path"
-truth_source = "managed_process_scan"
-required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
-metrics = ["content_durable_to_timeline_card_paint_ms", "warm_close_local_to_paint_ms"]
-notes = "Terminal-originated OpenCode Helm send/interrupt/terminate exists; this SLA case stays blocked until profiler coverage can measure lifecycle propagation honestly."
+truth_source = "opencode_sqlite_and_server_bridge"
+required_observers = ["managed_sessions_snapshot", "provider_transcript", "timeline_sse", "browser_card", "client_render_beacon", "hosted_db"]
+metrics = [
+  "content_durable_to_timeline_card_paint_ms",
+  "warm_live_output_local_to_paint_ms",
+  "warm_live_output_sse_to_paint_ms",
+  "warm_close_local_to_paint_ms",
+  "warm_close_local_to_db_ms",
+  "durable_archive_local_to_hosted_ms",
+]
+notes = "Real attached OpenCode Helm turn. Provider/model time is diagnostic; the scored path starts when the assistant row appears in native OpenCode SQLite."
 
 [[cases]]
 id = "managed_cursor_helm_content_promotion"

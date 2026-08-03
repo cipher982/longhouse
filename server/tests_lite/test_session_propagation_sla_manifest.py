@@ -24,7 +24,7 @@ def test_session_propagation_sla_manifest_is_valid():
     assert summary["cases"]["undefined"] >= 3
     assert summary["ci_modes"]["gate"] == 1
     assert summary["ci_modes"]["report"] >= 3
-    assert summary["ci_modes"]["blocked"] >= 6
+    assert summary["ci_modes"]["blocked"] >= 5
     assert summary["metrics"] >= 10
 
 
@@ -70,11 +70,14 @@ def test_session_propagation_sla_tracks_provider_coverage_and_ci_readiness():
     manifest = sla_manifest.load_manifest()
 
     cases = {case["id"]: case for case in manifest["cases"]}
-    assert cases["managed_claude_warm_live_graceful_close"]["ci_mode"] == "blocked"
-    assert "blocked_reason" in cases["managed_claude_warm_live_graceful_close"]
+    assert cases["managed_claude_warm_live_graceful_close"]["ci_mode"] == "report"
     assert cases["unmanaged_codex_direct_graceful_close"]["ci_mode"] == "report"
     assert cases["unmanaged_codex_direct_graceful_close"]["profiler_driver"] == "unmanaged_codex_baseline"
-    assert cases["managed_opencode_warm_lifecycle"]["ci_mode"] == "blocked"
+    assert cases["managed_opencode_warm_lifecycle"]["ci_mode"] == "report"
+    assert (
+        cases["managed_opencode_warm_lifecycle"]["profiler_driver"]
+        == "managed_opencode_helm_warm_live"
+    )
 
     explicit_combos = {
         (case["provider"], case["control_path"])

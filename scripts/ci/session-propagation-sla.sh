@@ -39,7 +39,8 @@ summary="$OUTPUT_ROOT/summary.md"
 } > "$summary"
 
 missing=0
-for required_cmd in python3 bun longhouse longhouse-engine codex; do
+required_cmds=(python3 bun longhouse longhouse-engine "$PROVIDER")
+for required_cmd in "${required_cmds[@]}"; do
   if ! command -v "$required_cmd" >/dev/null 2>&1; then
     echo "Missing required command: $required_cmd" >&2
     missing=1
