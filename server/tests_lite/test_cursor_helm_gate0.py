@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 
@@ -12,6 +13,7 @@ from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
 from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
 from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
 from zerg.qa.cursor_helm_gate0 import _scrub_artifact_tree
+from zerg.qa.cursor_helm_gate0 import _ship_cursor_store
 from zerg.qa.cursor_helm_gate0 import _snapshot_native_evidence
 from zerg.qa.cursor_helm_gate0 import _storage_v2_capabilities_payload
 from zerg.qa.cursor_helm_gate0 import _storage_v2_receipt_payload
@@ -108,6 +110,52 @@ def test_gate0_artifact_scrubber_removes_exact_and_structured_provider_keys(monk
     retained = payload.read_bytes()
     assert b"fixture-token-that-is-not-prefix-shaped" not in retained
     assert b"crsr_secret123" not in retained
+
+
+def test_gate0_artifact_scrubber_preserves_sqlite_evidence(monkeypatch, tmp_path: Path) -> None:
+    secret = "fixture-token-that-is-not-prefix-shaped"
+    monkeypatch.setenv("CURSOR_API_KEY", secret)
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    database = artifact / "store.db"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE evidence (value TEXT NOT NULL)")
+    connection.execute("INSERT INTO evidence VALUES (?)", [secret])
+    connection.commit()
+    connection.close()
+    original_size = database.stat().st_size
+
+    _scrub_artifact_tree(artifact)
+
+    connection = sqlite3.connect(database)
+    try:
+        value = connection.execute("SELECT value FROM evidence").fetchone()[0]
+    finally:
+        connection.close()
+    assert value != secret
+    assert database.stat().st_size == original_size
+
+
+def test_gate0_artifact_scrubber_checkpoints_sqlite_wal_before_redaction(monkeypatch, tmp_path: Path) -> None:
+    secret = "fixture-token-that-is-not-prefix-shaped"
+    monkeypatch.setenv("CURSOR_API_KEY", secret)
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    database = artifact / "store.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA wal_autocheckpoint=100000")
+    connection.execute("CREATE TABLE evidence (value TEXT NOT NULL)")
+    connection.execute("INSERT INTO evidence VALUES (?)", [secret])
+    connection.commit()
+
+    _scrub_artifact_tree(artifact)
+    connection.close()
+
+    with sqlite3.connect(database) as retained:
+        value = retained.execute("SELECT value FROM evidence").fetchone()[0]
+    assert value != secret
+    assert not Path(f"{database}-wal").exists() or Path(f"{database}-wal").stat().st_size == 0
 
 
 def test_gate0_snapshots_native_cursor_store_and_hook_evidence(tmp_path: Path) -> None:
@@ -234,6 +282,61 @@ def test_storage_v2_gate_stub_returns_a_durable_receipt() -> None:
     assert receipt["envelope_id"] == envelope_id
     assert receipt["raw_state"] == "durable"
     assert receipt["render_state"] == "ready"
+
+
+def test_storage_v2_gate_receipt_is_explicitly_local_and_synthetic() -> None:
+    envelope_id = "a" * 64
+
+    receipt = _storage_v2_receipt_payload(json.dumps({"expected_envelope_id": envelope_id}).encode())
+
+    assert receipt["object_hash"] == "a" * 64
+    # The wire contract uses the durable state expected by the real engine, but
+    # this harness must not present its local receipt as hosted-ingest proof.
+    assert receipt["raw_state"] == "durable"
+
+
+def test_cursor_source_ship_result_labels_local_receipt_and_enforces_progress(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "zerg.qa.cursor_helm_gate0.subprocess.run",
+        lambda *_args, **_kwargs: CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 2}), ""
+        ),
+    )
+
+    result = _ship_cursor_store(
+        engine="/bin/longhouse-engine",
+        store=tmp_path / "store.db",
+        workspace=tmp_path,
+        events_path=tmp_path / "events.ndjson",
+        shipper_db=tmp_path / "artifact" / "longhouse-shipper.db",
+        registration_url="http://127.0.0.1:1",
+        timeout=1,
+    )
+
+    assert result["receipt_host"] == "gate0_local_contract_stub"
+    assert result["receipt_semantics"] == "synthetic_storage_v2_receipt"
+    assert result["external_ingest_verified"] is False
+    assert result["events_shipped"] == 2
+
+
+def test_cursor_source_ship_rejects_zero_shipped_events(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "zerg.qa.cursor_helm_gate0.subprocess.run",
+        lambda *_args, **_kwargs: CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 0}), ""
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="no shipped events"):
+        _ship_cursor_store(
+            engine="/bin/longhouse-engine",
+            store=tmp_path / "store.db",
+            workspace=tmp_path,
+            events_path=tmp_path / "events.ndjson",
+            shipper_db=tmp_path / "artifact" / "longhouse-shipper.db",
+            registration_url="http://127.0.0.1:1",
+            timeout=1,
+        )
 
 
 def test_storage_v2_gate_stub_rejects_an_invalid_envelope_id() -> None:

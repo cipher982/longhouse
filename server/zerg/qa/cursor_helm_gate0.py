@@ -52,10 +52,10 @@ _HOOK_EVENTS = (
 )
 
 _ARTIFACT_SECRET_PATTERNS = (
-    (re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"), b"sk-ant-<redacted>"),
-    (re.compile(rb"sk-or-v1-[A-Za-z0-9_-]+"), b"sk-or-v1-<redacted>"),
-    (re.compile(rb"crsr_[A-Za-z0-9]+"), b"crsr_<redacted>"),
-    (re.compile(rb"sk-[A-Za-z0-9_-]{20,}"), b"sk-<redacted>"),
+    re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"),
+    re.compile(rb"sk-or-v1-[A-Za-z0-9_-]+"),
+    re.compile(rb"crsr_[A-Za-z0-9]+"),
+    re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
 )
 
 
@@ -83,9 +83,45 @@ def _artifact_secret_values() -> tuple[bytes, ...]:
 
 
 def _scrub_artifact_tree(root: Path) -> None:
-    """Keep retained Gate 0 evidence free of provider credentials."""
+    """Keep retained evidence secret-free without corrupting binary stores.
+
+    Cursor's native stores and the shipper database are SQLite files. Redaction
+    must preserve byte length so SQLite pages, WAL offsets, and the retained
+    source hashes remain readable after the scrub pass.
+    """
 
     exact_values = _artifact_secret_values()
+
+    # A byte replacement in a WAL file invalidates its page checksums. Commit
+    # any pending WAL content first, then scrub the stable database pages.
+    for database in root.rglob("*"):
+        if not database.is_file() or database.is_symlink() or database.suffix not in {".db", ".sqlite", ".sqlite3"}:
+            continue
+        wal = Path(f"{database}-wal")
+        shm = Path(f"{database}-shm")
+        if not wal.exists() and not shm.exists():
+            continue
+        try:
+            header = database.read_bytes()[:16]
+        except OSError as exc:
+            raise RuntimeError(f"cannot inspect SQLite artifact before redaction: {database}") from exc
+        if header != b"SQLite format 3\x00":
+            # A provider may use a non-SQLite file whose name happens to have
+            # a -wal/-shm sibling. Do not open or mutate it as a database.
+            continue
+        try:
+            connection = sqlite3.connect(database, timeout=2.0)
+            try:
+                result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"cannot checkpoint SQLite artifact before redaction: {database}") from exc
+        if not result or result[0] != 0:
+            raise RuntimeError(f"SQLite WAL checkpoint was busy before redaction: {database}")
+        if wal.exists() and wal.stat().st_size:
+            raise RuntimeError(f"SQLite WAL remained non-empty after checkpoint: {database}")
+
     for path in root.rglob("*"):
         if not path.is_file() or path.is_symlink():
             continue
@@ -93,11 +129,15 @@ def _scrub_artifact_tree(root: Path) -> None:
             original = path.read_bytes()
         except OSError:
             continue
+        if path.name.endswith(("-wal", "-shm")):
+            if any(secret in original for secret in exact_values) or any(pattern.search(original) for pattern in _ARTIFACT_SECRET_PATTERNS):
+                raise RuntimeError(f"secret material remains in SQLite sidecar: {path}")
+            continue
         redacted = original
         for secret in exact_values:
-            redacted = redacted.replace(secret, b"<provider-secret-redacted>")
-        for pattern, replacement in _ARTIFACT_SECRET_PATTERNS:
-            redacted = pattern.sub(replacement, redacted)
+            redacted = redacted.replace(secret, b"_" * len(secret))
+        for pattern in _ARTIFACT_SECRET_PATTERNS:
+            redacted = pattern.sub(lambda match: b"_" * len(match.group(0)), redacted)
         if redacted != original:
             path.write_bytes(redacted)
 
@@ -964,12 +1004,14 @@ def _ship_cursor_store(
     store: Path,
     workspace: Path,
     events_path: Path,
+    shipper_db: Path,
     registration_url: str,
     timeout: float,
 ) -> dict[str, Any]:
     """Run the real engine ship path against Gate 0's local host contract."""
 
-    db_path = Path.home() / ".longhouse" / "agent" / "longhouse-shipper.db"
+    db_path = shipper_db.expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
             engine,
@@ -1004,12 +1046,20 @@ def _ship_cursor_store(
         raise RuntimeError("Longhouse Cursor source ship returned invalid JSON") from exc
     if not isinstance(summary, dict) or summary.get("status") != "ok":
         raise RuntimeError(f"Longhouse Cursor source ship returned an invalid result: {summary!r}")
+    events_shipped = summary.get("events_shipped")
+    if isinstance(events_shipped, bool) or not isinstance(events_shipped, int) or events_shipped <= 0:
+        raise RuntimeError(
+            "Longhouse Cursor source ship reported no shipped events; " f"the source-binding proof is incomplete: {summary!r}"
+        )
     return {
         "engine": engine,
         "store": str(store),
         "shipper_db": str(db_path),
         "protocol": summary.get("protocol"),
-        "events_shipped": summary.get("events_shipped"),
+        "events_shipped": events_shipped,
+        "receipt_host": "gate0_local_contract_stub",
+        "receipt_semantics": "synthetic_storage_v2_receipt",
+        "external_ingest_verified": False,
     }
 
 
@@ -1097,6 +1147,7 @@ def _managed_conversation_reset_scenario(
     )
     registration_thread.start()
     registration_url = f"http://127.0.0.1:{registration_server.server_address[1]}"
+    shipper_db = events_path.parent / "longhouse-shipper.db"
     argv = [
         "longhouse",
         "cursor",
@@ -1248,6 +1299,7 @@ def _managed_conversation_reset_scenario(
             store=old_store,
             workspace=workspace,
             events_path=events_path,
+            shipper_db=shipper_db,
             registration_url=registration_url,
             timeout=timeout,
         )
@@ -1256,6 +1308,7 @@ def _managed_conversation_reset_scenario(
             store=new_store,
             workspace=workspace,
             events_path=events_path,
+            shipper_db=shipper_db,
             registration_url=registration_url,
             timeout=timeout,
         )
@@ -1345,7 +1398,11 @@ def _managed_conversation_reset_scenario(
                 "source_ship_protocol": "storage-v2",
                 "old_source": old_ship,
                 "new_source": new_ship,
-                "source_binding_checked_in": "longhouse-shipper.db",
+                "source_binding_checked_in": "per_gate_run_shipper_db",
+                "shipper_db_scope": "per_gate_run_artifact",
+                "receipt_host": "gate0_local_contract_stub",
+                "receipt_semantics": "synthetic_storage_v2_receipt",
+                "external_ingest_verified": False,
             },
             "longhouse": {
                 "provider_alias_ids": list(aliases),
@@ -1729,7 +1786,7 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
                 payload = destination.read_bytes()
                 exact_secrets = _artifact_secret_values()
                 if any(secret in payload for secret in exact_secrets) or any(
-                    pattern.search(payload) for pattern, _replacement in _ARTIFACT_SECRET_PATTERNS
+                    pattern.search(payload) for pattern in _ARTIFACT_SECRET_PATTERNS
                 ):
                     raise RuntimeError("Cursor native store contains provider credential material")
                 try:

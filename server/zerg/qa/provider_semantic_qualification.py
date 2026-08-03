@@ -200,30 +200,31 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
         try:
             raw_path = Path(source["path"]).expanduser()
             path = (raw_path if raw_path.is_absolute() else root / raw_path).resolve(strict=True)
-            if path.is_relative_to(root) and path.is_file():
-                source_events = _native_jsonl_events(path) if source.get("kind") == "provider_jsonl_stream" else []
-                previous_event_digest = source.get("event_sha256")
-                selected_event = (
-                    _select_redacted_native_event(
-                        source_events,
-                        source_canary=source_canary,
-                        event_type=str(source.get("event_type") or ""),
-                        previous_digest=previous_event_digest if isinstance(previous_event_digest, str) else None,
-                    )
-                    if source_events and isinstance(source.get("event_type"), str)
-                    else None
+            if not path.is_relative_to(root) or not path.is_file():
+                raise identity.RequestError("native source artifact escapes the qualification bundle or is missing")
+            source_events = _native_jsonl_events(path) if source.get("kind") == "provider_jsonl_stream" else []
+            previous_event_digest = source.get("event_sha256")
+            selected_event = (
+                _select_redacted_native_event(
+                    source_events,
+                    source_canary=source_canary,
+                    event_type=str(source.get("event_type") or ""),
+                    previous_digest=previous_event_digest if isinstance(previous_event_digest, str) else None,
                 )
-                if selected_event is not None and isinstance(previous_event_digest, str):
-                    rewrites[previous_event_digest] = _native_event_digest(selected_event)
-                source = {
-                    **source,
-                    "path": path.relative_to(root).as_posix(),
-                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                }
-                if selected_event is not None:
-                    source["event_sha256"] = _native_event_digest(selected_event)
-        except (OSError, ValueError):
-            pass
+                if source_events and isinstance(source.get("event_type"), str)
+                else None
+            )
+            if selected_event is not None and isinstance(previous_event_digest, str):
+                rewrites[previous_event_digest] = _native_event_digest(selected_event)
+            source = {
+                **source,
+                "path": path.relative_to(root).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            if selected_event is not None:
+                source["event_sha256"] = _native_event_digest(selected_event)
+        except (OSError, ValueError) as exc:
+            raise identity.RequestError("native source artifact could not be finalized") from exc
         updated_sources.append(source)
     refreshed["source_artifacts"] = updated_sources
     result_event = refreshed.get("result_event")

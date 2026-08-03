@@ -324,6 +324,19 @@ run_refresh() {
     log "==> Installing Longhouse.app"
     rm -rf /Applications/Longhouse.app
     ditto "$app_bundle" /Applications/Longhouse.app
+
+    # Regenerate the launch agent too. Copying the bundle leaves the existing
+    # plist untouched, so a --health-exec recorded against a binary that has
+    # since been removed survives every refresh -- which is how the panel sat on
+    # an 11-day-old cache. `longhouse machine repair` does not cover this: it
+    # repairs the Machine Agent service and never reads this plist.
+    log "==> Reinstalling Longhouse.app launch agent"
+    (cd "$SERVER_PROJECT" && uv run python -c '
+import sys
+from zerg.services.desktop_app import install_desktop_app_service
+
+install_desktop_app_service(ui_url=sys.argv[1], claude_dir=sys.argv[2])
+' "$url" "$CLAUDE_DIR")
   fi
   local device_token
   device_token="$(read_trimmed_file "$LONGHOUSE_HOME/machine/device-token")"

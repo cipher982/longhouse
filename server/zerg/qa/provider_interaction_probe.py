@@ -50,6 +50,7 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _NEGATIVE_PROOF_QUIESCENCE_SECONDS = MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
+_OPENCODE_BARE_MODEL_VENDORS = frozenset({"deepseek", "~openai"})
 _PROVIDER_VERSION_PATTERNS = {
     "antigravity": antigravity_release_identity.VERSION_LINE,
     "claude": claude_release_identity.VERSION_LINE,
@@ -589,7 +590,11 @@ def _opencode_cli_model(model: str | None) -> str | None:
     value = str(model or "").strip()
     if not value:
         return None
-    return value if value.startswith("openrouter/") else f"openrouter/{value}"
+    bare_value = value.removeprefix("openrouter/")
+    vendor, separator, model_name = bare_value.partition("/")
+    if vendor not in _OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
+        raise ValueError("OpenCode qualification model must use openrouter/ or a supported " f"bare OpenRouter vendor; got {value!r}")
+    return f"openrouter/{bare_value}"
 
 
 def _opencode_native_interaction_capture(
@@ -1298,6 +1303,11 @@ def _cursor_model_probe_with_runtime_home(
                 }
             },
             "model": observed_model,
+            "auth": {
+                "credential_mode": "api_key",
+                "api_key_source": api_key_source,
+                "api_key_configured": bool(str(environment.get("CURSOR_API_KEY") or "").strip()),
+            },
             "result_event": cursor_result_event,
             "source_artifacts": source_artifacts,
         }

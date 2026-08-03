@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import sqlite3
 from types import ModuleType
+
+import pytest
 
 from zerg.qa.repo_root import default_repo_root
 
@@ -15,15 +19,72 @@ def _load_canary() -> ModuleType:
     return module
 
 
-def test_opencode_real_run_environment_passes_only_its_explicit_token(monkeypatch) -> None:
+def test_opencode_real_run_environment_passes_only_its_explicit_token(monkeypatch, tmp_path) -> None:
     canary = _load_canary()
     monkeypatch.setenv("OPENROUTER_API_KEY", "fixture-token")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-cross-boundary")
 
-    environment = canary._opencode_real_tool_env()  # noqa: SLF001
+    environment = canary._opencode_real_tool_env(tmp_path / "runtime")  # noqa: SLF001
 
     assert environment["OPENROUTER_API_KEY"] == "fixture-token"
     assert "UNRELATED_SECRET" not in environment
+    assert environment["HOME"] == str(tmp_path / "runtime" / "home")
+    assert environment["XDG_DATA_HOME"] == str(tmp_path / "runtime" / "data")
+
+
+def test_opencode_native_model_evidence_reads_the_selected_native_message(tmp_path) -> None:
+    canary = _load_canary()
+    runtime = tmp_path / "opencode-runtime"
+    database = runtime / "data" / "opencode" / "opencode.db"
+    database.parent.mkdir(parents=True)
+    record = {
+        "id": "message-1",
+        "sessionID": "session-1",
+        "role": "assistant",
+        "providerID": "openrouter",
+        "modelID": "deepseek/deepseek-v4-flash",
+    }
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            ("message-1", "session-1", 1, json.dumps(record)),
+        )
+
+    evidence = canary._opencode_native_model_evidence(runtime, session_ids=["session-1"])  # noqa: SLF001
+
+    assert evidence is not None
+    assert evidence["model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert evidence["session_id"] == "session-1"
+    assert evidence["path"] == "opencode-runtime/data/opencode/opencode.db"
+    assert len(evidence["sha256"]) == 64
+    assert len(evidence["record_sha256"]) == 64
+
+
+def test_opencode_native_model_evidence_rejects_conflicting_sqlite_session_bindings(tmp_path) -> None:
+    canary = _load_canary()
+    runtime = tmp_path / "opencode-runtime"
+    database = runtime / "data" / "opencode" / "opencode.db"
+    database.parent.mkdir(parents=True)
+    record = {
+        "id": "message-1",
+        "sessionID": "payload-session",
+        "role": "assistant",
+        "providerID": "openrouter",
+        "modelID": "deepseek/deepseek-v4-flash",
+    }
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)")
+        connection.execute(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            ("message-1", "database-session", 1, json.dumps(record)),
+        )
+
+    evidence = canary._opencode_native_model_evidence(runtime, session_ids=["payload-session"])  # noqa: SLF001
+
+    assert evidence is None
 
 
 def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> None:
@@ -31,8 +92,23 @@ def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> 
     monkeypatch.delenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", raising=False)
     assert canary._opencode_qualification_model() == "openrouter/~openai/gpt-mini-latest"  # noqa: SLF001
 
-    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/fixture/model")
-    assert canary._opencode_qualification_model() == "openrouter/fixture/model"  # noqa: SLF001
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash")
+    assert canary._opencode_qualification_model() == "openrouter/deepseek/deepseek-v4-flash"  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/deepseek/fixture-model")
+    assert canary._opencode_qualification_model() == "openrouter/deepseek/fixture-model"  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "anthropic/claude-sonnet")
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        canary._opencode_qualification_model()  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/")
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        canary._opencode_qualification_model()  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/anthropic/claude-sonnet")
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        canary._opencode_qualification_model()  # noqa: SLF001
 
 
 def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance() -> None:
@@ -69,6 +145,7 @@ def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance(
     assert result == {
         "type": "step_finish",
         "part_type": "step-finish",
+        "session_id": "ses_fixture",
         "native_event_sha256": "23b71ffdd9b8ac9b0cd95dfc94b3699ebcf33acfbfd649bb71a5540d0302517d",
         "session_id_present": True,
         "result_exact_match": True,

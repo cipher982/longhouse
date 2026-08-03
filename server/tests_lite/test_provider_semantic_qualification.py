@@ -84,6 +84,17 @@ def test_redacted_native_capture_refreshes_result_and_model_source_digests(tmp_p
     assert source["sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
 
 
+def test_native_source_digest_refresh_fails_closed_for_missing_artifact(tmp_path: Path) -> None:
+    observation = {
+        "live_model_evidence": {
+            "source_artifacts": [{"path": "missing.jsonl", "kind": "provider_jsonl_stream"}]
+        }
+    }
+
+    with pytest.raises(identity.RequestError, match="native source artifact"):
+        semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
+
+
 @pytest.fixture(autouse=True)
 def _stable_runner_and_no_live_authority(monkeypatch) -> None:
     monkeypatch.setattr(identity, "git_sha", lambda _root: TEST_SHA)
