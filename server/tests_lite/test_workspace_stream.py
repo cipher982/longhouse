@@ -1033,6 +1033,14 @@ def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
                     "delta": "g",
                     "live_text": "round trip working",
                     "turn_completed": False,
+                    "ship_trace": {
+                        "schema": "ship_trace.v1",
+                        "trace_id": "round-trip-trace",
+                        "observed_at_ms": 1,
+                        "enqueued_at_ms": 2,
+                        "job_started_at_ms": 3,
+                        "http_send_started_at_ms": 4,
+                    },
                 },
             }
         ]
@@ -1083,6 +1091,8 @@ def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
     assert preview["is_provisional"] is True
     assert preview["content_cursor"] == f"codex_bridge_live:{session_id}:thread-1:turn-1:7"
     assert changed["latest_event_id"] == -7
+    assert changed["ship_trace"]["trace_id"] == "round-trip-trace"
+    assert changed["server_trace"]["handler_entered_at_ms"] > 4
 
 
 def test_live_catalog_workspace_event_matches_ios_required_contract():

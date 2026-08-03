@@ -158,6 +158,12 @@ class RenderBeacon(BaseModel):
     state_commit_seq: int | None = Field(None, ge=0, description="Canonical catalog commit rendered by the client")
     state_phase: str | None = Field(None, max_length=64, description="Canonical activity state rendered by the client")
     state_observed_at_ms: int | None = Field(None, description="Canonical activity observed_at rendered by the client")
+    ship_trace_id: str | None = Field(None, max_length=512, description="Trace id for the live provider-to-pixel path")
+    provider_observed_at_ms: int | None = None
+    engine_enqueued_at_ms: int | None = None
+    engine_job_started_at_ms: int | None = None
+    engine_http_send_started_at_ms: int | None = None
+    server_handler_entered_at_ms: int | None = None
     webkit: WebKitRenderDiagnostics | None = None
 
 
@@ -208,6 +214,12 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         "state_commit_seq": beacon.state_commit_seq,
         "state_phase": beacon.state_phase,
         "state_observed_at_ms": beacon.state_observed_at_ms,
+        "ship_trace_id": beacon.ship_trace_id,
+        "provider_observed_at_ms": beacon.provider_observed_at_ms,
+        "engine_enqueued_at_ms": beacon.engine_enqueued_at_ms,
+        "engine_job_started_at_ms": beacon.engine_job_started_at_ms,
+        "engine_http_send_started_at_ms": beacon.engine_http_send_started_at_ms,
+        "server_handler_entered_at_ms": beacon.server_handler_entered_at_ms,
         "latency_ms": latency_ms,
     }
     if beacon.webkit is not None:
@@ -393,6 +405,12 @@ async def recent_client_render_beacons(
                 "state_commit_seq": payload.get("state_commit_seq"),
                 "state_phase": payload.get("state_phase"),
                 "state_observed_at_ms": payload.get("state_observed_at_ms"),
+                "ship_trace_id": payload.get("ship_trace_id"),
+                "provider_observed_at_ms": payload.get("provider_observed_at_ms"),
+                "engine_enqueued_at_ms": payload.get("engine_enqueued_at_ms"),
+                "engine_job_started_at_ms": payload.get("engine_job_started_at_ms"),
+                "engine_http_send_started_at_ms": payload.get("engine_http_send_started_at_ms"),
+                "server_handler_entered_at_ms": payload.get("server_handler_entered_at_ms"),
                 "webkit": payload.get("webkit"),
                 "observed_at": row.observed_at.isoformat() if row.observed_at else None,
                 "received_at": row.received_at.isoformat() if row.received_at else None,

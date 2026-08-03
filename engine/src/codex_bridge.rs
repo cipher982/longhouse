@@ -5374,6 +5374,7 @@ impl BridgeRuntimeSink {
 
     fn post_live_runtime_events_background(&self, events: Vec<Value>) {
         let mut events = events;
+        crate::outbox::stamp_live_runtime_events_enqueued(&mut events);
         if let Some(tx) = &self.live_runtime_tx {
             match tx.send(events) {
                 Ok(()) => return,
@@ -5404,12 +5405,14 @@ impl BridgeRuntimeSink {
         });
     }
 
-    async fn post_runtime_events_live(&self, events: Vec<Value>) {
+    async fn post_runtime_events_live(&self, mut events: Vec<Value>) {
+        crate::outbox::stamp_live_runtime_events_job_started(&mut events);
         let url = format!(
             "{}/api/agents/runtime/events/batch",
             self.api_url.trim_end_matches('/')
         );
         let started = Instant::now();
+        crate::outbox::stamp_live_runtime_events_http_send(&mut events);
         match self
             .http
             .post(&url)

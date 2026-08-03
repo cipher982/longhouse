@@ -110,7 +110,12 @@ async def ingest_runtime_observation_batch(
         # Observation age at ingest: occurred_at (engine) -> now (server receive).
         # Codex bridge runtime observations are always managed.
         now_utc = datetime.now(timezone.utc)
+        handler_entered_at_ms = int(now_utc.timestamp() * 1000)
         for ev in events:
+            if _is_bridge_live_transcript_event(ev):
+                ev.payload["server_trace"] = {
+                    "handler_entered_at_ms": handler_entered_at_ms,
+                }
             ev_ts = ev.occurred_at
             if ev_ts is None:
                 continue
@@ -703,6 +708,8 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
             provider=event.provider,
             source=event.source,
             transcript_preview=preview,
+            ship_trace=preview.get("ship_trace"),
+            server_trace=preview.get("server_trace"),
         )
         observed_at = event.occurred_at
         if observed_at is not None:
@@ -762,6 +769,8 @@ def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
         "content_cursor": f"{event.source}:{event.session_id}:{thread_id}:{turn_id}:{cursor_seq}",
         "is_stale": False,
         "stale_reason": None,
+        "ship_trace": payload.get("ship_trace") if isinstance(payload.get("ship_trace"), dict) else None,
+        "server_trace": payload.get("server_trace") if isinstance(payload.get("server_trace"), dict) else None,
     }
 
 

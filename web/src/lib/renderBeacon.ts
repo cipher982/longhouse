@@ -30,6 +30,12 @@ interface BeaconPayload {
   state_commit_seq?: number | null;
   state_phase?: string | null;
   state_observed_at_ms?: number | null;
+  ship_trace_id?: string | null;
+  provider_observed_at_ms?: number | null;
+  engine_enqueued_at_ms?: number | null;
+  engine_job_started_at_ms?: number | null;
+  engine_http_send_started_at_ms?: number | null;
+  server_handler_entered_at_ms?: number | null;
 }
 
 let _skewMs = 0;
@@ -139,6 +145,14 @@ export function emitRenderBeacon(params: {
   stateCommitSeq?: number | null;
   statePhase?: string | null;
   stateObservedAtMs?: number | null;
+  shipTrace?: {
+    trace_id?: string;
+    observed_at_ms?: number;
+    enqueued_at_ms?: number;
+    job_started_at_ms?: number;
+    http_send_started_at_ms?: number;
+  } | null;
+  serverTrace?: { handler_entered_at_ms?: number } | null;
 }): void {
   if (typeof window === "undefined") return;
   if (!params.latestEventEmittedAtMs) return;
@@ -165,6 +179,12 @@ export function emitRenderBeacon(params: {
       state_commit_seq: params.stateCommitSeq ?? null,
       state_phase: params.statePhase ?? null,
       state_observed_at_ms: params.stateObservedAtMs ?? null,
+      ship_trace_id: params.shipTrace?.trace_id ?? null,
+      provider_observed_at_ms: params.shipTrace?.observed_at_ms ?? null,
+      engine_enqueued_at_ms: params.shipTrace?.enqueued_at_ms ?? null,
+      engine_job_started_at_ms: params.shipTrace?.job_started_at_ms ?? null,
+      engine_http_send_started_at_ms: params.shipTrace?.http_send_started_at_ms ?? null,
+      server_handler_entered_at_ms: params.serverTrace?.handler_entered_at_ms ?? null,
     };
 
     try {

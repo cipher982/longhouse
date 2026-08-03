@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 235,
+  "file_count": 236,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -151,6 +151,13 @@
         "claude",
         "codex",
         "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/outbox.rs",
+      "providers": [
+        "claude",
         "opencode"
       ]
     },

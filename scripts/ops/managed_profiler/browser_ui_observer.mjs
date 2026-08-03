@@ -90,6 +90,12 @@ function clientRenderBeaconPayload(request) {
         state_commit_seq: value.state_commit_seq ?? null,
         state_phase: value.state_phase ?? null,
         state_observed_at_ms: value.state_observed_at_ms ?? null,
+        ship_trace_id: value.ship_trace_id ?? null,
+        provider_observed_at_ms: value.provider_observed_at_ms ?? null,
+        engine_enqueued_at_ms: value.engine_enqueued_at_ms ?? null,
+        engine_job_started_at_ms: value.engine_job_started_at_ms ?? null,
+        engine_http_send_started_at_ms: value.engine_http_send_started_at_ms ?? null,
+        server_handler_entered_at_ms: value.server_handler_entered_at_ms ?? null,
       }));
   } catch {
     return [];

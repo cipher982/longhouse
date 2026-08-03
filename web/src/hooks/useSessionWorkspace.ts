@@ -24,6 +24,8 @@ import {
   type AgentSessionProjectionResponse,
   type AgentSessionWorkspaceResponse,
   type SessionTranscriptPreview,
+  type PropagationServerTrace,
+  type PropagationShipTrace,
 } from "../services/api/agents";
 
 const INITIAL_EVENTS_PAGE_SIZE = 200;
@@ -70,6 +72,8 @@ interface PendingRenderBeacon {
   serverFanoutAtMs: number | null;
   clientReceivedAtMs: number | null;
   pubsubSeq: number | null;
+  shipTrace: PropagationShipTrace | null;
+  serverTrace: PropagationServerTrace | null;
 }
 
 interface PendingStateRenderBeacon {
@@ -313,6 +317,8 @@ export function useSessionWorkspace(
             serverFanoutAtMs: data.server_fanout_at_ms ?? null,
             clientReceivedAtMs: Date.now(),
             pubsubSeq: data.pubsub_seq ?? null,
+            shipTrace: data.ship_trace ?? null,
+            serverTrace: data.server_trace ?? null,
           };
           setPendingRenderBeaconVersion((version) => version + 1);
 
@@ -507,6 +513,8 @@ export function useSessionWorkspace(
       serverFanoutAtMs: pending.serverFanoutAtMs,
       clientReceivedAtMs: pending.clientReceivedAtMs,
       pubsubSeq: pending.pubsubSeq,
+      shipTrace: pending.shipTrace,
+      serverTrace: pending.serverTrace,
     });
     pendingRenderBeaconRef.current = null;
   }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession]);

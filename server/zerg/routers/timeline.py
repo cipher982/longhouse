@@ -1454,6 +1454,13 @@ def _workspace_change_kind(payload: dict | None) -> str | None:
     return str(kind) if isinstance(kind, str) and kind else None
 
 
+def _workspace_trace(payload: dict | None, key: str) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    return value if isinstance(value, dict) else None
+
+
 def _workspace_catalog_commit_seq(payload: dict | None) -> int | None:
     """Return the canonical catalog commit carried by a runtime wake, if any."""
     if not isinstance(payload, dict):
@@ -1648,6 +1655,8 @@ async def _session_workspace_stream(
                                 "server_now_ms": int(now.timestamp() * 1000),
                                 "pubsub_seq": consumed_seq,
                                 "transcript_preview": consumed_preview_payload,
+                                "ship_trace": _workspace_trace(consumed_payload, "ship_trace"),
+                                "server_trace": _workspace_trace(consumed_payload, "server_trace"),
                             }
                         ),
                     }
@@ -1724,6 +1733,8 @@ async def _session_workspace_stream(
                         "server_now_ms": int(now.timestamp() * 1000),
                         "pubsub_seq": consumed_seq,
                         "transcript_preview": transcript_preview_payload,
+                        "ship_trace": _workspace_trace(consumed_payload, "ship_trace"),
+                        "server_trace": _workspace_trace(consumed_payload, "server_trace"),
                     }
                 ),
             }
@@ -1848,6 +1859,8 @@ async def _live_catalog_workspace_stream(
                         "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
                         "pubsub_seq": message.seq,
                         "transcript_preview": preview,
+                        "ship_trace": _workspace_trace(message.payload, "ship_trace"),
+                        "server_trace": _workspace_trace(message.payload, "server_trace"),
                     }
                 ),
             }

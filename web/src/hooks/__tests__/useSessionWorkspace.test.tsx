@@ -795,6 +795,8 @@ describe("useSessionWorkspace", () => {
         serverFanoutAtMs: 1_779_220_000_150,
         clientReceivedAtMs: expect.any(Number),
         pubsubSeq: 7,
+        shipTrace: null,
+        serverTrace: null,
       });
     });
   });

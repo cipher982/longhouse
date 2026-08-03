@@ -159,6 +159,12 @@ describe("Timeline session stream", () => {
       server_now_ms: 1_779_482_800_000,
       catalog_commit_seq: 41,
       pubsub_seq: 7,
+      ship_trace: {
+        trace_id: "trace-1",
+        observed_at_ms: 1_779_482_799_700,
+        enqueued_at_ms: 1_779_482_799_710,
+      },
+      server_trace: { handler_entered_at_ms: 1_779_482_799_970 },
       transcript_preview: {
         event_id: 42,
         text: "hello profiler",
@@ -197,6 +203,8 @@ describe("Timeline session stream", () => {
         transcript_preview_event_id: 42,
         transcript_preview_origin: "live_provisional",
         transcript_preview_text_length: 14,
+        ship_trace: expect.objectContaining({ trace_id: "trace-1" }),
+        server_trace: { handler_entered_at_ms: 1_779_482_799_970 },
       }),
     );
 

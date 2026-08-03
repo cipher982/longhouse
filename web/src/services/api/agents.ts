@@ -146,6 +146,26 @@ export interface SessionTranscriptPreview {
   content_cursor?: string | null;
   is_stale: boolean;
   stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable" | null;
+  ship_trace?: PropagationShipTrace | null;
+  server_trace?: PropagationServerTrace | null;
+}
+
+export interface PropagationShipTrace {
+  schema?: string;
+  trace_id?: string;
+  provider?: string;
+  session_id?: string;
+  work_context?: string;
+  observation_source?: string;
+  observed_at_ms?: number;
+  enqueued_at_ms?: number;
+  job_started_at_ms?: number;
+  http_send_started_at_ms?: number;
+}
+
+export interface PropagationServerTrace {
+  handler_entered_at_ms?: number;
+  store_returned_at_ms?: number;
 }
 
 export type RuntimeTruthTier = components["schemas"]["TruthTier"];
@@ -841,6 +861,8 @@ export interface SessionWorkspaceStreamChange {
   catalog_commit_seq?: number | null;
   pubsub_seq?: number;
   transcript_preview?: SessionTranscriptPreview | null;
+  ship_trace?: PropagationShipTrace | null;
+  server_trace?: PropagationServerTrace | null;
 }
 
 export interface SessionWorkspaceStreamHandlers {
@@ -900,6 +922,8 @@ export function connectSessionWorkspaceStream(
         transcript_preview_event_id: data.transcript_preview?.event_id ?? null,
         transcript_preview_origin: data.transcript_preview?.event_origin ?? null,
         transcript_preview_text_length: data.transcript_preview?.text?.length ?? null,
+        ship_trace: data.ship_trace ?? null,
+        server_trace: data.server_trace ?? null,
       });
       handlers.onWorkspaceChanged?.(data);
     }

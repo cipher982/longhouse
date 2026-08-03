@@ -32,6 +32,18 @@ actor SessionWorkspaceStream {
     }
 
     struct WorkspaceChanged: Decodable, Sendable {
+        struct ShipTrace: Decodable, Sendable {
+            let trace_id: String?
+            let observed_at_ms: Int64?
+            let enqueued_at_ms: Int64?
+            let job_started_at_ms: Int64?
+            let http_send_started_at_ms: Int64?
+        }
+
+        struct ServerTrace: Decodable, Sendable {
+            let handler_entered_at_ms: Int64?
+        }
+
         struct TranscriptPreview: Decodable, Sendable {
             let event_id: Int
             let text: String
@@ -79,6 +91,8 @@ actor SessionWorkspaceStream {
         var catalog_commit_seq: Int64? = nil
         let pubsub_seq: Int?
         let transcript_preview: TranscriptPreview?
+        var ship_trace: ShipTrace? = nil
+        var server_trace: ServerTrace? = nil
     }
 
     struct ReplayGap: Decodable, Sendable {

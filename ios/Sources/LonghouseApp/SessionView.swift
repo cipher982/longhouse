@@ -1630,6 +1630,8 @@ final class SessionViewModel: ObservableObject {
         let clockSyncSampleCount: Int
         let catalogCommitSeq: Int64?
         let pubsubSeq: Int?
+        let shipTrace: SessionWorkspaceStream.WorkspaceChanged.ShipTrace?
+        let serverTrace: SessionWorkspaceStream.WorkspaceChanged.ServerTrace?
     }
 
     @Published var detail: SessionDetail?
@@ -2358,7 +2360,9 @@ final class SessionViewModel: ObservableObject {
                 clockSyncUncertaintyMs: calibration.uncertaintyMs,
                 clockSyncSampleCount: calibration.sampleCount,
                 catalogCommitSeq: change.catalog_commit_seq,
-                pubsubSeq: change.pubsub_seq
+                pubsubSeq: change.pubsub_seq,
+                shipTrace: change.ship_trace,
+                serverTrace: change.server_trace
             )
             if let seq = change.pubsub_seq {
                 lastPubsubSeq = seq
@@ -3042,6 +3046,12 @@ final class SessionViewModel: ObservableObject {
             statePhase: detail?.stateFacts.activityState,
             stateObservedAtMs: detail?.stateFacts.activityObservedAt.flatMap { LonghouseDateParser.parse($0) }
                 .map { Int64($0.timeIntervalSince1970 * 1000) },
+            shipTraceId: realtimeTelemetry?.shipTrace?.trace_id,
+            providerObservedAtMs: realtimeTelemetry?.shipTrace?.observed_at_ms,
+            engineEnqueuedAtMs: realtimeTelemetry?.shipTrace?.enqueued_at_ms,
+            engineJobStartedAtMs: realtimeTelemetry?.shipTrace?.job_started_at_ms,
+            engineHTTPSendStartedAtMs: realtimeTelemetry?.shipTrace?.http_send_started_at_ms,
+            serverHandlerEnteredAtMs: realtimeTelemetry?.serverTrace?.handler_entered_at_ms,
             webkit: webkitDiagnostics
         ) {
             await api.postRenderBeacon(payload)

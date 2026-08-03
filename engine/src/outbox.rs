@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::warn;
 
 use crate::shipping::client::ShipperClient;
@@ -101,7 +101,9 @@ pub struct PendingRuntimeEventPost {
 /// drain loop only after its complete JSON payload reaches disk.
 pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let bytes = serde_json::to_vec(event)?;
+    let mut event = event.clone();
+    stamp_live_runtime_event_enqueued(&mut event);
+    let bytes = serde_json::to_vec(&event)?;
     let nonce = uuid::Uuid::new_v4();
     let temporary = dir.join(format!(".{nonce}.tmp"));
     let ready = dir.join(format!("{nonce}.json"));
@@ -114,6 +116,76 @@ pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
     drop(file);
     std::fs::rename(&temporary, &ready)?;
     Ok(())
+}
+
+pub fn stamp_live_runtime_events_enqueued(events: &mut [Value]) {
+    for event in events {
+        stamp_live_runtime_event_enqueued(event);
+    }
+}
+
+pub fn stamp_live_runtime_events_job_started(events: &mut [Value]) {
+    let now_ms = Utc::now().timestamp_millis();
+    for event in events {
+        stamp_live_runtime_event_transport(event, "job_started_at_ms", now_ms);
+    }
+}
+
+pub fn stamp_live_runtime_events_http_send(events: &mut [Value]) {
+    let now_ms = Utc::now().timestamp_millis();
+    for event in events {
+        stamp_live_runtime_event_transport(event, "http_send_started_at_ms", now_ms);
+    }
+}
+
+fn stamp_live_runtime_event_enqueued(event: &mut Value) {
+    let now_ms = Utc::now().timestamp_millis();
+    let observed_at_ms = event
+        .get("occurred_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_millis())
+        .unwrap_or(now_ms);
+    let progress_kind = event
+        .pointer("/payload/progress_kind")
+        .and_then(Value::as_str);
+    if progress_kind != Some("bridge_live_transcript_delta") {
+        return;
+    }
+    let trace_id = event
+        .get("dedupe_key")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let provider = event.get("provider").cloned().unwrap_or(Value::Null);
+    let session_id = event.get("session_id").cloned().unwrap_or(Value::Null);
+    let source = event.get("source").cloned().unwrap_or(Value::Null);
+    let Some(payload) = event.get_mut("payload").and_then(Value::as_object_mut) else {
+        return;
+    };
+    payload.insert(
+        "ship_trace".to_string(),
+        json!({
+            "schema": "ship_trace.v1",
+            "trace_id": trace_id,
+            "provider": provider,
+            "session_id": session_id,
+            "work_context": "live_transcript",
+            "observation_source": source,
+            "observed_at_ms": observed_at_ms,
+            "enqueued_at_ms": now_ms,
+        }),
+    );
+}
+
+fn stamp_live_runtime_event_transport(event: &mut Value, key: &str, at_ms: i64) {
+    let Some(trace) = event
+        .pointer_mut("/payload/ship_trace")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    trace.insert(key.to_string(), json!(at_ms));
 }
 
 /// Drain all ready presence events from the outbox directory.
@@ -391,7 +463,19 @@ pub async fn post_pending_runtime_event_files(
     let mut sent = 0usize;
     let mut kept = 0usize;
     for chunk in posts.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
-        let events: Vec<Value> = chunk.iter().map(|post| post.event.clone()).collect();
+        let job_started_at_ms = Utc::now().timestamp_millis();
+        let mut events: Vec<Value> = chunk.iter().map(|post| post.event.clone()).collect();
+        for event in &mut events {
+            stamp_live_runtime_event_transport(event, "job_started_at_ms", job_started_at_ms);
+        }
+        let http_send_started_at_ms = Utc::now().timestamp_millis();
+        for event in &mut events {
+            stamp_live_runtime_event_transport(
+                event,
+                "http_send_started_at_ms",
+                http_send_started_at_ms,
+            );
+        }
         let body = match serde_json::to_vec(&serde_json::json!({ "events": events })) {
             Ok(value) => value,
             Err(_) => {
@@ -551,6 +635,35 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with('.')));
+    }
+
+    #[test]
+    fn live_runtime_event_carries_local_queue_and_transport_stamps() {
+        let dir = make_outbox();
+        let event = serde_json::json!({
+            "runtime_key":"opencode:session",
+            "session_id":"00000000-0000-0000-0000-000000000001",
+            "provider":"opencode",
+            "source":"opencode_bridge_live",
+            "kind":"progress_signal",
+            "occurred_at":"2026-08-03T01:00:00Z",
+            "dedupe_key":"opencode:live:session:message:part:1",
+            "payload":{"progress_kind":"bridge_live_transcript_delta","live_text":"reply"}
+        });
+
+        enqueue_runtime_event(dir.path(), &event).unwrap();
+        let mut posts = collect_runtime_event_outbox(dir.path());
+        let trace = posts[0].event.pointer("/payload/ship_trace").unwrap();
+        assert_eq!(trace["schema"], "ship_trace.v1");
+        assert_eq!(trace["observed_at_ms"], 1_785_718_800_000_i64);
+        assert!(trace["enqueued_at_ms"].as_i64().unwrap() >= 1_785_718_800_000);
+
+        let mut events = vec![posts.remove(0).event];
+        stamp_live_runtime_events_job_started(&mut events);
+        stamp_live_runtime_events_http_send(&mut events);
+        let trace = events[0].pointer("/payload/ship_trace").unwrap();
+        assert!(trace["job_started_at_ms"].is_i64());
+        assert!(trace["http_send_started_at_ms"].is_i64());
     }
 
     fn write_presence(dir: &Path, name: &str, session_id: &str, state: &str) -> PathBuf {

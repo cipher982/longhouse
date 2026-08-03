@@ -341,6 +341,53 @@ def test_provider_to_pixel_matrix_covers_every_launch_provider() -> None:
     )
 
 
+def test_live_render_beacon_builds_waterfall_without_archive_tables() -> None:
+    waterfall = profiler.select_live_beacon_waterfall(
+        [
+            {
+                "surface": "web",
+                "ship_trace_id": "trace-1",
+                "provider_observed_at_ms": 1_000,
+                "engine_enqueued_at_ms": 1_010,
+                "engine_job_started_at_ms": 1_050,
+                "engine_http_send_started_at_ms": 1_060,
+                "server_handler_entered_at_ms": 1_080,
+                "server_fanout_at_ms": 1_090,
+                "client_received_at_ms": 1_120,
+                "rendered_at_ms": 1_130,
+                "clock_skew_ms": 0,
+            }
+        ],
+        surface="web",
+    )
+
+    assert waterfall is not None
+    assert waterfall["total_provider_to_first_render_ms"] == 130
+    assert waterfall["stages"]["engine_enqueued_to_job_started"]["duration_ms"] == 40
+    assert waterfall["stages"]["server_fanout_to_client_received"]["duration_ms"] == 30
+    assert waterfall["bottleneck"]["key"] == "engine_enqueued_to_job_started"
+    assert waterfall["gaps"] == ["durable_store_is_not_on_live_preview_critical_path"]
+
+
+def test_single_provider_run_is_aggregated_for_smoke_matrix() -> None:
+    aggregate, cases = matrix_profiler.single_run_aggregate(
+        {
+            "cases": [
+                {
+                    "verdict": "slow",
+                    "warm_live_output_local_to_paint_ms": 321,
+                    "waterfall_total_provider_to_first_render_ms": 123,
+                }
+            ]
+        }
+    )
+
+    assert len(cases) == 1
+    assert aggregate["batch_verdict"] == "slow"
+    assert aggregate["clean_observation_count"] == 1
+    assert aggregate["clean_metrics"]["waterfall_total_provider_to_first_render_ms"]["p50"] == 123
+
+
 if __name__ == "__main__":
     for test in (
         test_empty_shell_and_promotion_boundary,

@@ -4056,12 +4056,18 @@ except Exception as exc:
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
         waterfall_report = self.hosted_latency_report(session_id) or {}
+        browser_render_beacons = self.browser_client_render_beacons(case_id, session_id)
         web_waterfall = select_propagation_waterfall(waterfall_report, surface="web")
+        if web_waterfall is None:
+            web_waterfall = select_live_beacon_waterfall(
+                browser_render_beacons,
+                surface="web",
+            )
         ios_waterfall = select_propagation_waterfall(waterfall_report, surface="ios")
         state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
         client_state = state_render_beacon_metrics(
             hosted,
-            self.browser_client_render_beacons(case_id, session_id),
+            browser_render_beacons,
         )
         contains = hosted_assistant_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
@@ -5371,6 +5377,88 @@ def select_propagation_waterfall(
             for stage in selected.get("stages") or []
             if isinstance(stage, dict) and stage.get("key") in WATERFALL_STAGE_KEYS
         },
+    }
+
+
+def select_live_beacon_waterfall(
+    beacons: list[dict[str, Any]], *, surface: str
+) -> dict[str, Any] | None:
+    """Build the live-overlay waterfall when archive observation tables are absent."""
+
+    candidates = [
+        beacon
+        for beacon in beacons
+        if beacon.get("surface") == surface
+        and beacon.get("ship_trace_id")
+        and isinstance(beacon.get("provider_observed_at_ms"), int)
+    ]
+    if not candidates:
+        return None
+    beacon = max(
+        candidates,
+        key=lambda value: int_or_none(value.get("rendered_at_ms")) or 0,
+    )
+    skew = int_or_none(beacon.get("clock_skew_ms")) or 0
+    provider_observed = int_or_none(beacon.get("provider_observed_at_ms"))
+    engine_enqueued = int_or_none(beacon.get("engine_enqueued_at_ms"))
+    job_started = int_or_none(beacon.get("engine_job_started_at_ms"))
+    http_send = int_or_none(beacon.get("engine_http_send_started_at_ms"))
+    server_handler = int_or_none(beacon.get("server_handler_entered_at_ms"))
+    server_fanout = int_or_none(beacon.get("server_fanout_at_ms"))
+    client_received_raw = int_or_none(beacon.get("client_received_at_ms"))
+    rendered_raw = int_or_none(beacon.get("rendered_at_ms"))
+    client_received = (
+        client_received_raw - skew if client_received_raw is not None else None
+    )
+    rendered = rendered_raw - skew if rendered_raw is not None else None
+
+    coordinates = {
+        "provider_to_engine_observed": (provider_observed, provider_observed),
+        "engine_observed_to_enqueued": (provider_observed, engine_enqueued),
+        "engine_enqueued_to_job_started": (engine_enqueued, job_started),
+        "engine_job_started_to_http_send": (job_started, http_send),
+        "http_send_to_server_handler": (http_send, server_handler),
+        "server_handler_to_store_returned": (None, None),
+        "server_store_to_fanout": (None, None),
+        "server_fanout_to_client_received": (server_fanout, client_received),
+        "client_received_to_rendered": (client_received, rendered),
+    }
+    stages = {}
+    for key, (started_at, ended_at) in coordinates.items():
+        duration = (
+            max(0, ended_at - started_at)
+            if started_at is not None and ended_at is not None
+            else None
+        )
+        stages[key] = {
+            "key": key,
+            "duration_ms": duration,
+            "confidence": "observed"
+            if key in {"engine_observed_to_enqueued", "engine_enqueued_to_job_started", "engine_job_started_to_http_send", "client_received_to_rendered"}
+            else "derived",
+            "source": "live_render_beacon",
+        }
+    measured = [
+        stage for stage in stages.values() if isinstance(stage.get("duration_ms"), int)
+    ]
+    bottleneck = max(measured, key=lambda stage: stage["duration_ms"]) if measured else None
+    total = (
+        max(0, rendered - provider_observed)
+        if rendered is not None and provider_observed is not None
+        else None
+    )
+    return {
+        "event_id": beacon.get("event_id"),
+        "surface": surface,
+        "trace_id": beacon.get("ship_trace_id"),
+        "total_provider_to_first_render_ms": total,
+        "measured_total_ms": sum(stage["duration_ms"] for stage in measured),
+        "unaccounted_ms": None,
+        "client_clock_skew_ms": skew,
+        "bottleneck": bottleneck,
+        "gaps": ["durable_store_is_not_on_live_preview_critical_path"],
+        "first_client_render": beacon,
+        "stages": stages,
     }
 
 

@@ -91,6 +91,12 @@ actor RenderBeaconReporter {
         let state_commit_seq: Int64?
         let state_phase: String?
         let state_observed_at_ms: Int64?
+        let ship_trace_id: String?
+        let provider_observed_at_ms: Int64?
+        let engine_enqueued_at_ms: Int64?
+        let engine_job_started_at_ms: Int64?
+        let engine_http_send_started_at_ms: Int64?
+        let server_handler_entered_at_ms: Int64?
         let webkit: WebKitDiagnostics?
     }
 
@@ -112,6 +118,12 @@ actor RenderBeaconReporter {
         stateCommitSeq: Int64? = nil,
         statePhase: String? = nil,
         stateObservedAtMs: Int64? = nil,
+        shipTraceId: String? = nil,
+        providerObservedAtMs: Int64? = nil,
+        engineEnqueuedAtMs: Int64? = nil,
+        engineJobStartedAtMs: Int64? = nil,
+        engineHTTPSendStartedAtMs: Int64? = nil,
+        serverHandlerEnteredAtMs: Int64? = nil,
         webkit: WebKitDiagnostics? = nil
     ) -> Payload? {
         let stage = webkit?.stage ?? "rendered"
@@ -136,6 +148,12 @@ actor RenderBeaconReporter {
             state_commit_seq: stateCommitSeq,
             state_phase: statePhase,
             state_observed_at_ms: stateObservedAtMs,
+            ship_trace_id: shipTraceId,
+            provider_observed_at_ms: providerObservedAtMs,
+            engine_enqueued_at_ms: engineEnqueuedAtMs,
+            engine_job_started_at_ms: engineJobStartedAtMs,
+            engine_http_send_started_at_ms: engineHTTPSendStartedAtMs,
+            server_handler_entered_at_ms: serverHandlerEnteredAtMs,
             webkit: webkit
         )
     }

@@ -322,6 +322,8 @@ def publish_session_transcript_preview_update(
     provider: str | None,
     source: str | None,
     transcript_preview: dict,
+    ship_trace: dict | None = None,
+    server_trace: dict | None = None,
 ) -> None:
     """Wake the focused session workspace with a live transcript preview.
 
@@ -336,4 +338,8 @@ def publish_session_transcript_preview_update(
         "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
         "transcript_preview": transcript_preview,
     }
+    if ship_trace is not None:
+        payload["ship_trace"] = ship_trace
+    if server_trace is not None:
+        payload["server_trace"] = server_trace
     get_pubsub().publish(topic_session(session_id), payload)
