@@ -1312,9 +1312,37 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
         assert without_snippets["results"][0]["content_snippet"] is None
         assert without_snippets["results"][0]["tool_output_snippet"] is None
 
+        archive = store.search(
+            owner_id="42",
+            query="needle",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=now_us - int(timedelta(days=365).total_seconds() * 1_000_000),
+            window_end_us=None,
+            limit=1,
+            include_snippets=False,
+        )
+        assert archive["search_scope"] == "published_archive"
+        assert archive["ranking_scope"] == "exact"
+        assert [row["search_event_id"] for row in archive["results"]] == [
+            row["search_event_id"] for row in exact["results"]
+        ]
+
         # A ceiling below the match count forces the honest bounded answer.
         monkeypatch.setattr("zerg.searchd.store._CANDIDATE_CEILING", 1)
         assert search()["ranking_scope"] == "recent_bounded"
+        assert store.search(
+            owner_id="42",
+            query="needle",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=now_us - int(timedelta(days=365).total_seconds() * 1_000_000),
+            window_end_us=None,
+            limit=1,
+            include_snippets=False,
+        )["ranking_scope"] == "recent_bounded"
     finally:
         connection.close()
 

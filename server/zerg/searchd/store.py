@@ -84,6 +84,93 @@ _ARCHIVE_SEARCH_WITHOUT_SNIPPETS_SQL = _ARCHIVE_SEARCH_SQL.replace(
     "NULL AS content_snippet,\n           NULL AS tool_output_snippet,",
 )
 
+# The archive FTS contains every retained generation so a full bm25 sort can
+# touch millions of matches before returning 125 rows. Keep the unbounded SQL
+# above as the correctness oracle, but serve interactive archive recall from a
+# recent candidate walk just like the published recent index. The response
+# reports when the walk saturated; callers never mistake a bounded ranking for
+# an exhaustive one.
+_ARCHIVE_BOUNDED_SEARCH_SQL = """
+    WITH candidates AS (
+        SELECT e.id AS search_event_id, bm25(events_fts) AS rank
+        FROM events_fts
+        JOIN events e ON e.id = events_fts.rowid
+        JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+        JOIN projection_membership m
+          ON m.session_id = e.session_id
+         AND m.generation_id = e.generation_id
+         AND m.desired_revision = s.indexed_through
+         AND m.object_id = e.source_object_id
+        WHERE events_fts MATCH ? AND s.owner_id = ?
+          AND (? IS NULL OR s.project = ?)
+          AND (? IS NULL OR s.provider = ?)
+          AND (? IS NULL OR s.environment = ?)
+          AND (? IS NULL OR e.order_time_us >= ?)
+          AND (? IS NULL OR e.order_time_us < ?)
+          AND (e.role != 'user' OR (e.title_eligible = 1
+               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
+        ORDER BY events_fts.rowid DESC
+        LIMIT ?
+    ), top AS (
+        SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
+        FROM candidates
+        ORDER BY rank ASC
+        LIMIT ?
+    )
+    SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
+           e.record_ordinal, e.event_id, e.order_time_us,
+           e.role, e.tool_name,
+           snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
+           snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+           s.project, s.provider, s.environment, s.indexed_through, s.event_count,
+           t.rank AS rank, t.candidate_count AS candidate_count
+    FROM top t
+    JOIN events e ON e.id = t.search_event_id
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    JOIN events_fts ON events_fts.rowid = t.search_event_id
+    WHERE events_fts MATCH ?
+    ORDER BY t.rank ASC
+"""
+
+_ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
+    WITH candidates AS (
+        SELECT e.id AS search_event_id, bm25(events_fts) AS rank
+        FROM events_fts
+        JOIN events e ON e.id = events_fts.rowid
+        JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+        JOIN projection_membership m
+          ON m.session_id = e.session_id
+         AND m.generation_id = e.generation_id
+         AND m.desired_revision = s.indexed_through
+         AND m.object_id = e.source_object_id
+        WHERE events_fts MATCH ? AND s.owner_id = ?
+          AND (? IS NULL OR s.project = ?)
+          AND (? IS NULL OR s.provider = ?)
+          AND (? IS NULL OR s.environment = ?)
+          AND (? IS NULL OR e.order_time_us >= ?)
+          AND (? IS NULL OR e.order_time_us < ?)
+          AND (e.role != 'user' OR (e.title_eligible = 1
+               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
+        ORDER BY events_fts.rowid DESC
+        LIMIT ?
+    ), top AS (
+        SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
+        FROM candidates
+        ORDER BY rank ASC
+        LIMIT ?
+    )
+    SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
+           e.record_ordinal, e.event_id, e.order_time_us,
+           e.role, e.tool_name,
+           NULL AS content_snippet, NULL AS tool_output_snippet,
+           s.project, s.provider, s.environment, s.indexed_through, s.event_count,
+           t.rank AS rank, t.candidate_count AS candidate_count
+    FROM top t
+    JOIN events e ON e.id = t.search_event_id
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    ORDER BY t.rank ASC
+"""
+
 # Ranking the whole match set costs time linear in matches, not in results: a
 # term matching 2.2M rows spent 3.4s scoring rows nobody would ever see. FTS5
 # walks a doclist in rowid order with early exit, and `source_event_id` is the
@@ -1344,14 +1431,13 @@ class SearchStore:
             window_end_us,
             window_end_us,
         )
+        candidate_ceiling = max(limit, _CANDIDATE_CEILING)
         if use_searchable_corpus:
-            candidate_ceiling = max(limit, _CANDIDATE_CEILING)
             sql = _SEARCHABLE_SEARCH_SQL if include_snippets else _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL
             params = filter_params + (candidate_ceiling, limit, fts_query)
         else:
-            candidate_ceiling = None
-            sql = _ARCHIVE_SEARCH_SQL if include_snippets else _ARCHIVE_SEARCH_WITHOUT_SNIPPETS_SQL
-            params = filter_params + (limit,)
+            sql = _ARCHIVE_BOUNDED_SEARCH_SQL if include_snippets else _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
+            params = filter_params + (candidate_ceiling, limit) + ((fts_query,) if include_snippets else ())
         rows = self.connection.execute(sql, params).fetchall()
 
         # The bounded walk saturates only when more matches existed than it was
