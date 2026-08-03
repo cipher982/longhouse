@@ -297,6 +297,26 @@ def test_cursor_source_ship_result_labels_local_receipt_and_enforces_progress(mo
     assert result["events_shipped"] == 2
 
 
+def test_cursor_source_ship_rejects_zero_shipped_events(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "zerg.qa.cursor_helm_gate0.subprocess.run",
+        lambda *_args, **_kwargs: CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 0}), ""
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="no shipped events"):
+        _ship_cursor_store(
+            engine="/bin/longhouse-engine",
+            store=tmp_path / "store.db",
+            workspace=tmp_path,
+            events_path=tmp_path / "events.ndjson",
+            shipper_db=tmp_path / "artifact" / "longhouse-shipper.db",
+            registration_url="http://127.0.0.1:1",
+            timeout=1,
+        )
+
+
 def test_storage_v2_gate_stub_rejects_an_invalid_envelope_id() -> None:
     with pytest.raises(ValueError, match="canonical expected envelope id"):
         _storage_v2_receipt_payload(b'{"expected_envelope_id":"not-a-hash"}')

@@ -36,14 +36,18 @@ def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> 
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash")
     assert canary._opencode_qualification_model() == "openrouter/deepseek/deepseek-v4-flash"  # noqa: SLF001
 
-    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/fixture/model")
-    assert canary._opencode_qualification_model() == "openrouter/fixture/model"  # noqa: SLF001
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/deepseek/fixture-model")
+    assert canary._opencode_qualification_model() == "openrouter/deepseek/fixture-model"  # noqa: SLF001
 
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "anthropic/claude-sonnet")
     with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
         canary._opencode_qualification_model()  # noqa: SLF001
 
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/")
+    with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
+        canary._opencode_qualification_model()  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/anthropic/claude-sonnet")
     with pytest.raises(ValueError, match="supported bare OpenRouter vendor"):
         canary._opencode_qualification_model()  # noqa: SLF001
 

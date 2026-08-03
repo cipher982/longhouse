@@ -590,12 +590,11 @@ def _opencode_cli_model(model: str | None) -> str | None:
     value = str(model or "").strip()
     if not value:
         return None
-    if value.startswith("openrouter/"):
-        return value
-    vendor, separator, model_name = value.partition("/")
+    bare_value = value.removeprefix("openrouter/")
+    vendor, separator, model_name = bare_value.partition("/")
     if vendor not in _OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
         raise ValueError("OpenCode qualification model must use openrouter/ or a supported " f"bare OpenRouter vendor; got {value!r}")
-    return f"openrouter/{value}"
+    return f"openrouter/{bare_value}"
 
 
 def _opencode_native_interaction_capture(

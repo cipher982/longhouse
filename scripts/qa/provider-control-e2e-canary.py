@@ -1240,15 +1240,14 @@ def _opencode_qualification_model() -> str:
     # value can be used in its auth policy and inventory. OpenCode's CLI model
     # identity is provider-qualified, however; keep this boundary explicit so
     # every real-run canary selects the same model as the interaction probe.
-    if configured.startswith("openrouter/"):
-        return configured
-    vendor, separator, model_name = configured.partition("/")
+    bare_value = configured.removeprefix("openrouter/")
+    vendor, separator, model_name = bare_value.partition("/")
     if vendor not in OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
         raise ValueError(
             "OpenCode qualification model must use openrouter/ or a supported "
             f"bare OpenRouter vendor; got {configured!r}"
         )
-    return f"openrouter/{configured}"
+    return f"openrouter/{bare_value}"
 
 
 def _event_session_id(event: dict[str, Any]) -> str:
