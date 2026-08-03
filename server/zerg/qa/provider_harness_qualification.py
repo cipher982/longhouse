@@ -1035,6 +1035,7 @@ def _cursor_observed_install_executor(
             "artifact_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
             "status": gate0_payload.get("status"),
             "failure_code": gate0_payload.get("failure_code"),
+            "native_evidence": gate0_payload.get("native_evidence"),
         }
     build_ref = _build_provider_build_ref(request, binary, output_root=evidence_root)
     harness_payload = run_harness(

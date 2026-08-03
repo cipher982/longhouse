@@ -1330,6 +1330,16 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
 
     def write_report() -> dict[str, Any]:
         report["finished_at"] = _now()
+        if report.get("scenarios"):
+            try:
+                report["native_evidence"] = _snapshot_native_evidence(report, artifact_root)
+            except (OSError, RuntimeError) as exc:
+                if report.get("status") == "passed":
+                    raise
+                report["native_evidence_failure"] = f"{type(exc).__name__}: {exc}"
+        output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _scrub_artifact_tree(artifact_root)
+        _refresh_native_evidence_receipts(report, artifact_root)
         output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         _scrub_artifact_tree(artifact_root)
         return json.loads(output_path.read_text(encoding="utf-8"))
@@ -1482,6 +1492,105 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> list[dict[str, Any]]:
+    """Copy provider-native Cursor stores into the retained Gate 0 artifact."""
+
+    native_root = artifact_root / "native-stores"
+    receipts: list[dict[str, Any]] = []
+    by_source: dict[str, dict[str, Any]] = {}
+    for scenario_name, scenario in report.get("scenarios", {}).items():
+        if not isinstance(scenario, dict):
+            continue
+        candidates: list[tuple[str, str | None]] = []
+        store_db = scenario.get("store_db")
+        if isinstance(store_db, str) and store_db.strip():
+            candidates.append((store_db, str(scenario.get("provider_conversation_id") or "").strip() or None))
+        raw_source_ids = scenario.get("raw_source_ids")
+        if isinstance(raw_source_ids, list):
+            candidates.extend((value, None) for value in raw_source_ids if isinstance(value, str) and value.strip())
+        for raw_source, expected_agent_id in candidates:
+            source = Path(raw_source).expanduser().resolve(strict=True)
+            if not source.is_file():
+                raise RuntimeError(f"Cursor native store is not a regular file: {source}")
+            source_key = str(source)
+            receipt = by_source.get(source_key)
+            if receipt is None:
+                native_root.mkdir(parents=True, exist_ok=True)
+                destination = native_root / f"store-{hashlib.sha256(source_key.encode()).hexdigest()[:20]}.db"
+                shutil.copy2(source, destination)
+                payload = destination.read_bytes()
+                exact_secrets = _artifact_secret_values()
+                if any(secret in payload for secret in exact_secrets) or any(
+                    pattern.search(payload) for pattern, _replacement in _ARTIFACT_SECRET_PATTERNS
+                ):
+                    raise RuntimeError("Cursor native store contains provider credential material")
+                try:
+                    connection = sqlite3.connect(f"file:{destination}?mode=ro", uri=True, timeout=1.0)
+                    try:
+                        blob_count = int(connection.execute("SELECT COUNT(*) FROM blobs").fetchone()[0])
+                    finally:
+                        connection.close()
+                except (sqlite3.Error, TypeError, ValueError) as exc:
+                    raise RuntimeError(f"Cursor native store is not a readable transcript store: {destination}") from exc
+                if blob_count < 1:
+                    raise RuntimeError(f"Cursor native store contains no transcript blobs: {destination}")
+                store_agent_id = _cursor_store_agent_id(destination)
+                if not store_agent_id:
+                    raise RuntimeError(f"Cursor native store has no provider session identity: {destination}")
+                receipt = {
+                    "kind": "cursor_store_db",
+                    "path": str(destination.relative_to(artifact_root)),
+                    "sha256": _file_sha256(destination),
+                    "size": destination.stat().st_size,
+                    "source_scenarios": [],
+                    "provider_session_ids": [store_agent_id],
+                    "native_blob_count": blob_count,
+                    "byte_exact": True,
+                }
+                by_source[source_key] = receipt
+                receipts.append(receipt)
+            if expected_agent_id and expected_agent_id not in receipt["provider_session_ids"]:
+                raise RuntimeError("Cursor native store identity does not match its Gate 0 scenario")
+            if scenario_name not in receipt["source_scenarios"]:
+                receipt["source_scenarios"].append(scenario_name)
+
+    events_path = artifact_root / "events.ndjson"
+    if events_path.is_file():
+        receipts.append(
+            {
+                "kind": "cursor_hook_events",
+                "path": str(events_path.relative_to(artifact_root)),
+                "sha256": _file_sha256(events_path),
+                "size": events_path.stat().st_size,
+                "byte_exact": True,
+            }
+        )
+    if not any(item.get("kind") == "cursor_store_db" for item in receipts):
+        raise RuntimeError("Cursor Gate 0 produced no retained native store evidence")
+    return receipts
+
+
+def _refresh_native_evidence_receipts(report: dict[str, Any], artifact_root: Path) -> None:
+    refreshed: list[dict[str, Any]] = []
+    for item in report.get("native_evidence", []):
+        if not isinstance(item, dict):
+            continue
+        relative = item.get("path")
+        if not isinstance(relative, str):
+            continue
+        path = (artifact_root / relative).resolve()
+        if not path.is_relative_to(artifact_root.resolve()) or not path.is_file():
+            raise RuntimeError(f"Cursor native evidence receipt is missing: {relative}")
+        refreshed.append(
+            {
+                **item,
+                "sha256": _file_sha256(path),
+                "size": path.stat().st_size,
+            }
+        )
+    report["native_evidence"] = refreshed
 
 
 def _git_commit() -> str | None:

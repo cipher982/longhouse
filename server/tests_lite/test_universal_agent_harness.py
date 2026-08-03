@@ -2178,7 +2178,18 @@ def _codex_helm_package(tmp_path: Path) -> tuple[Path, Path]:
         path.parent.mkdir(parents=True, exist_ok=True)
         if name == "bin/codex":
             path.write_text(
-                f"#!{sys.executable}\nimport sys\nprint('codex-cli 9.9.9' if sys.argv[1:] == ['--version'] else '')\n",
+                f"#!{sys.executable}\n"
+                "import json\n"
+                "import os\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "if sys.argv[1:] == ['--version']:\n"
+                "    print('codex-cli 9.9.9')\n"
+                "elif sys.argv[1:] == ['login', '--with-api-key']:\n"
+                "    auth_path = Path(os.environ['CODEX_HOME']) / 'auth.json'\n"
+                "    auth_path.write_text(json.dumps({'api_key': sys.stdin.read().strip()}))\n"
+                "else:\n"
+                "    raise SystemExit(2)\n",
                 encoding="utf-8",
             )
         else:

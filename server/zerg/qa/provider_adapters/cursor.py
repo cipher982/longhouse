@@ -54,6 +54,37 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             package.write_json(f"assertions/{scenario}.json", payload)
             return payload
 
+        native_evidence: list[dict[str, Any]] = []
+        native_evidence_root_value = artifact.get("artifact_root")
+        if isinstance(native_evidence_root_value, str) and native_evidence_root_value.strip():
+            native_evidence_root = Path(native_evidence_root_value).expanduser().resolve()
+            candidate_evidence = artifact.get("native_evidence")
+            if isinstance(candidate_evidence, list):
+                for item in candidate_evidence:
+                    if not isinstance(item, Mapping):
+                        continue
+                    relative = item.get("path")
+                    expected_sha = item.get("sha256")
+                    if not isinstance(relative, str) or Path(relative).is_absolute() or not isinstance(expected_sha, str):
+                        continue
+                    source_path = native_evidence_root / relative
+                    evidence_path = source_path.resolve()
+                    if source_path.is_symlink() or not evidence_path.is_relative_to(native_evidence_root) or not evidence_path.is_file():
+                        continue
+                    digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+                    if digest == expected_sha:
+                        native_evidence.append(
+                            {
+                                "kind": str(item.get("kind") or ""),
+                                "path": relative,
+                                "sha256": digest,
+                                "size": evidence_path.stat().st_size,
+                            }
+                        )
+        native_store = next((item for item in native_evidence if item["kind"] == "cursor_store_db"), None)
+        native_hooks = next((item for item in native_evidence if item["kind"] == "cursor_hook_events"), None)
+        native_evidence_passed = native_store is not None and native_hooks is not None
+
         probe = self.probe(package)
         probe_version = str(probe.get("version") or "").strip()
         gate_version = str(artifact.get("provider_version") or "").strip()
@@ -104,6 +135,7 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             and gate_identity == executable_identity
             and not failed_scenarios
             and input_binding_passed
+            and native_evidence_passed
         )
         evidence = {
             operation: {
@@ -126,6 +158,9 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
                 "source_canary": "cursor_helm_gate0",
                 "provider_version": gate_version,
                 "evidence_origin": "provider_live_canary",
+                "source_path": native_store["path"] if native_store is not None else None,
+                "source_sha256": native_store["sha256"] if native_store is not None else None,
+                "source_kind": "cursor_store_db" if native_store is not None else None,
                 **(
                     {
                         "submitted_input_sha256": effective_required_input_sha256,
@@ -153,6 +188,12 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             "required_gate0_scenarios": list(required_scenarios),
             "failed_gate0_scenarios": failed_scenarios,
             "input_binding": input_binding,
+            "native_evidence": native_evidence,
+            "native_evidence_binding": {
+                "status": STATUS_PASS if native_evidence_passed else STATUS_FAIL,
+                "required_kinds": ["cursor_store_db", "cursor_hook_events"],
+                "verified_receipt_count": len(native_evidence),
+            },
             "synthetic": False,
             "operation_evidence": evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
@@ -172,6 +213,9 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         elif not input_binding_passed:
             payload["failure_code"] = "cursor_gate0_input_binding_failed"
             payload["message"] = "Cursor Gate 0 did not prove the exact prompt supplied to send_receive."
+        elif not native_evidence_passed:
+            payload["failure_code"] = "cursor_native_evidence_missing"
+            payload["message"] = "Cursor Gate 0 did not bind a verified native store and hook-event receipt."
         elif db_ingest.get("status") != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "cursor_gate0_db_ingest_failed"
             payload["message"] = "Cursor Gate 0 evidence did not pass Longhouse DB ingest assertions."

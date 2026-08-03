@@ -521,6 +521,25 @@ def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(
     ]
 
 
+def test_full_column_gate_rejects_a_pass_claim_with_native_evidence_missing() -> None:
+    payload = _passing_full_column_payload()
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["status"] = "pass"
+    interaction["failure_code"] = "interaction_native_raw_evidence_missing"
+    interaction["data"] = {
+        "verification_scope": "provider_native",
+        "provider_status": "pass",
+        "evidence_class": "live_token",
+        "assertions": [{"probe_id": "provider_control", "status": "blocked"}],
+    }
+
+    gate = bridge._full_column_gate(payload, interaction_evidence_class="live_token")  # noqa: SLF001
+
+    assert gate["status"] == "fail"
+    assert gate["provider_status"] == "fail"
+    assert gate["unexpected_results"][0]["actual_failure_code"] == "interaction_native_raw_evidence_missing"
+
+
 def test_full_column_gate_rejects_one_regressed_scenario() -> None:
     payload = _passing_full_column_payload()
     row = next(result for result in payload["results"] if result["scenario"] == "timeline_projection")
