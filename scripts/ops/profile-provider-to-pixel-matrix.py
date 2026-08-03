@@ -212,6 +212,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output-dir")
     parser.add_argument("--subdomain", default="david010")
     parser.add_argument("--container")
+    parser.add_argument(
+        "--expected-hosted-commit",
+        help="Require this exact hosted Runtime Host commit before and after every provider run.",
+    )
     parser.add_argument("--ssh-target", default="zerg")
     parser.add_argument("--project", default="longhouse")
     parser.add_argument("--browser-ui-base-url")
@@ -245,6 +249,7 @@ def main(argv: list[str]) -> int:
         "iterations": args.iterations,
         "local_longhouse": command_json(["longhouse", "build-identity", "--json"]),
         "hosted": hosted_identity(args.subdomain),
+        "expected_hosted_commit": args.expected_hosted_commit,
         "provider_identities": {
             provider: provider_identity(provider) for provider in providers
         },
@@ -252,6 +257,24 @@ def main(argv: list[str]) -> int:
     }
     exit_code = 0
     for provider in providers:
+        hosted_before = hosted_identity(args.subdomain)
+        actual_before = str(((hosted_before or {}).get("build") or {}).get("commit") or "")
+        if args.expected_hosted_commit and actual_before != args.expected_hosted_commit:
+            payload["providers"].append(
+                {
+                    "provider": provider,
+                    "sla_case_id": PROVIDER_CASES[provider],
+                    "exit_code": 2,
+                    "artifact_dir": "",
+                    "aggregate": {},
+                    "runs": [],
+                    "hosted_before": hosted_before,
+                    "identity_stable": False,
+                    "reason": "hosted_build_drift",
+                }
+            )
+            exit_code = 2
+            break
         provider_run_id = f"{run_id}-{provider}"
         provider_dir = output_dir / provider
         command = [
@@ -283,6 +306,8 @@ def main(argv: list[str]) -> int:
             args.browser_transport,
             "--provider-to-pixel-only",
         ]
+        if args.expected_hosted_commit:
+            command.extend(["--expected-hosted-commit", args.expected_hosted_commit])
         if args.container:
             command.extend(["--container", args.container])
         if args.ios_device:
@@ -299,6 +324,9 @@ def main(argv: list[str]) -> int:
         if provider == "codex":
             command.extend(["--trust-longhouse-codex-hooks", "--codex-effort", "low"])
         completed = subprocess.run(command, cwd=ROOT, check=False)
+        hosted_after = hosted_identity(args.subdomain)
+        actual_after = str(((hosted_after or {}).get("build") or {}).get("commit") or "")
+        identity_stable = not args.expected_hosted_commit or actual_after == args.expected_hosted_commit
         batch = read_json(provider_dir / "batch-metrics.json")
         aggregate = batch.get("aggregate") or {}
         runs = batch.get("runs") or []
@@ -326,8 +354,16 @@ def main(argv: list[str]) -> int:
                 "artifact_dir": str(provider_dir),
                 "aggregate": aggregate,
                 "runs": runs,
+                "hosted_before": hosted_before,
+                "hosted_after": hosted_after,
+                "identity_stable": identity_stable,
             }
         )
+        if not identity_stable:
+            payload["providers"][-1]["exit_code"] = 2
+            payload["providers"][-1]["reason"] = "hosted_build_drift"
+            exit_code = 2
+            break
         if completed.returncode == 1:
             exit_code = 1
         elif completed.returncode != 0 and exit_code == 0:

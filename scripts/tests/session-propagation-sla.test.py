@@ -219,6 +219,26 @@ def test_batch_preflight_accepts_current_healthy_transport_schema() -> None:
     )
 
 
+def test_hosted_build_preflight_rejects_deployment_drift() -> None:
+    args = profiler.parse_args(
+        ["--subdomain", "david010", "--expected-hosted-commit", "expected-sha"]
+    )
+    original = profiler.run_cmd
+    try:
+        profiler.run_cmd = lambda *_args, **_kwargs: profiler.CommandResult(
+            cmd=["curl"],
+            returncode=0,
+            stdout='{"build":{"commit":"other-sha"}}',
+            stderr="",
+        )
+        result = profiler.hosted_build_preflight(args)
+    finally:
+        profiler.run_cmd = original
+    assert result["ok"] is False
+    assert result["expected_commit"] == "expected-sha"
+    assert result["actual_commit"] == "other-sha"
+
+
 def test_manifest_moves_legacy_metric_out_of_hard_targeting() -> None:
     manifest = profiler.sla_manifest()
     assert profiler.metric_is_diagnostic(
@@ -404,6 +424,7 @@ if __name__ == "__main__":
         test_empty_shell_and_promotion_boundary,
         test_empty_projection_proof_and_failed_empty_launch,
         test_promotion_delta_rejects_out_of_order_observation,
+        test_hosted_build_preflight_rejects_deployment_drift,
         test_manifest_moves_legacy_metric_out_of_hard_targeting,
         test_batch_clean_metrics_exclude_classified_failures,
         test_http_protocol_browser_error_is_transport_contamination,

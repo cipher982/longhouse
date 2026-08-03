@@ -6596,6 +6596,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--container")
     parser.add_argument(
+        "--expected-hosted-commit",
+        help="Mark the sample contaminated if the hosted Runtime Host is not this exact commit.",
+    )
+    parser.add_argument(
         "--ssh-target",
         default=os.environ.get("HOSTED_SESSION_DEBUG_SSH_TARGET", "zerg"),
         help="SSH host that runs the hosted Runtime Host and tenant containers.",
@@ -7085,6 +7089,25 @@ def batch_local_health_preflight() -> dict[str, Any]:
     }
 
 
+def hosted_build_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    expected = str(args.expected_hosted_commit or "").strip()
+    if not expected:
+        return {"ok": True, "expected_commit": None, "actual_commit": None}
+    completed = run_cmd(
+        ["curl", "-fsS", "--max-time", "15", f"https://{args.subdomain}.longhouse.ai/api/health"],
+        timeout=20,
+    )
+    body = safe_json_loads(completed.stdout)
+    build = body.get("build") if isinstance(body, dict) else None
+    actual = str(build.get("commit") or "").strip() if isinstance(build, dict) else ""
+    return {
+        "ok": completed.returncode == 0 and actual == expected,
+        "expected_commit": expected,
+        "actual_commit": actual or None,
+        "returncode": completed.returncode,
+    }
+
+
 def batch_local_health_preflight_with_grace(
     *, attempts: int = 6, retry_delay_seconds: float = 1.0
 ) -> dict[str, Any]:
@@ -7116,6 +7139,25 @@ def run_batch(args: argparse.Namespace) -> int:
     child_runs: list[dict[str, Any]] = []
     cases: list[dict[str, Any]] = []
     for index in range(args.iterations):
+        hosted = hosted_build_preflight(args)
+        if not hosted.get("ok"):
+            print(
+                f"[batch] aborting before iteration {index + 1}/{args.iterations}: hosted build drift "
+                f"expected={hosted.get('expected_commit')} actual={hosted.get('actual_commit')}",
+                file=sys.stderr,
+                flush=True,
+            )
+            child_runs.append(
+                {
+                    "run_id": f"{batch_id}-hosted-preflight-i{index + 1:02d}",
+                    "summary_path": "",
+                    "metrics_path": "",
+                    "exit_code": 2,
+                    "verdict": "contaminated",
+                    "reason": {"kind": "hosted_build_drift", **hosted},
+                }
+            )
+            break
         health = batch_local_health_preflight_with_grace()
         if not health.get("ok"):
             print(
@@ -7148,6 +7190,10 @@ def run_batch(args: argparse.Namespace) -> int:
         metrics_path = Path(child_args.output_dir) / "metrics.json"
         metrics = read_json(metrics_path) or {}
         case = next(iter(metrics.get("cases") or []), {})
+        hosted_after = hosted_build_preflight(args)
+        if not hosted_after.get("ok"):
+            code = 2
+            case = {}
         if case:
             cases.append(case)
         child_runs.append(
@@ -7159,6 +7205,9 @@ def run_batch(args: argparse.Namespace) -> int:
                 "verdict": case.get("verdict") if case else "error",
             }
         )
+        if not hosted_after.get("ok"):
+            child_runs[-1]["verdict"] = "contaminated"
+            child_runs[-1]["reason"] = {"kind": "hosted_build_drift", **hosted_after}
         print(
             f"[batch] completed iteration {index + 1}/{args.iterations}: "
             f"exit={code} verdict={child_runs[-1]['verdict']}",
@@ -7215,6 +7264,14 @@ def main(argv: list[str]) -> int:
         return 0
     if args.iterations > 1:
         return run_batch(args)
+    hosted = hosted_build_preflight(args)
+    if not hosted.get("ok"):
+        print(
+            "hosted build drift: "
+            f"expected={hosted.get('expected_commit')} actual={hosted.get('actual_commit')}",
+            file=sys.stderr,
+        )
+        return 2
     code, _summary_path = run_single(args)
     return code
 
