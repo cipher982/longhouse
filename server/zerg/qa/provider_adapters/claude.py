@@ -7,11 +7,13 @@ import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from typing import Mapping
 from uuid import NAMESPACE_URL
 from uuid import uuid5
 
+from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.universal_agent_harness import STATUS_BLOCKED
 from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
@@ -256,6 +258,71 @@ def claude_real_print_operation_evidence(canary: Mapping[str, Any]) -> dict[str,
         raw_failure_code=canary.get("failure_code"),
         seed=canary.get("operation_evidence"),
     )
+
+
+def _claude_model_source_event_digest(canary: Mapping[str, Any]) -> str | None:
+    """Recover the provider model event when Claude's result says ``<synthetic>``."""
+
+    stdout_path = canary.get("stdout_path")
+    if not isinstance(stdout_path, str) or not stdout_path.strip():
+        return None
+    try:
+        lines = Path(stdout_path).expanduser().read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        model = event.get("model")
+        if not isinstance(model, str) and isinstance(event.get("message"), Mapping):
+            model = event["message"].get("model")
+        if isinstance(model, str) and model.strip() and model != "<synthetic>":
+            return raw_event_digest(event)
+    return None
+
+
+def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return one canonical model-backed envelope for receipt derivation."""
+
+    result_event = canary.get("result_event")
+    if not isinstance(result_event, Mapping):
+        return None
+    result_event_payload = dict(result_event)
+    if result_event_payload.get("model") == "<synthetic>":
+        result_event_payload.pop("model")
+        result_event_payload.pop("model_source", None)
+        if model_source_event_digest := _claude_model_source_event_digest(canary):
+            result_event_payload["model_source_event_sha256"] = model_source_event_digest
+    model = _clean_optional_str(result_event_payload.get("model") or canary.get("model"))
+    if model and not result_event_payload.get("model"):
+        result_event_payload["model"] = model
+        result_event_payload["model_source"] = "provider_event" if result_event_payload.get("model_source_event_sha256") else "invocation"
+    elif model and not result_event_payload.get("model_source"):
+        result_event_payload["model_source"] = "provider_event"
+    source_artifacts = [
+        {
+            "path": canary[path_key],
+            "sha256": canary[digest_key],
+            "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
+            **({"event_type": result_event.get("type")} if path_key == "stdout_path" else {}),
+            **({"event_sha256": result_event_payload.get("native_event_sha256")} if path_key == "stdout_path" else {}),
+        }
+        for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
+        if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
+    ]
+    return {
+        "source_canary": "claude_real_print",
+        "operation_evidence": claude_real_print_operation_evidence(canary),
+        "model": model,
+        "result_event": result_event_payload,
+        "source_artifacts": source_artifacts,
+    }
 
 
 @register_adapter("claude")
@@ -818,6 +885,8 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
+        if model_evidence := claude_real_print_model_evidence(claude):
+            payload["live_model_evidence"] = model_evidence
         if verdict != "green" or live_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
             payload["failure_code"] = failure_code or "claude_live_token_streaming_failed"

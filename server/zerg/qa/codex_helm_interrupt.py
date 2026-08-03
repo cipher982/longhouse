@@ -16,6 +16,7 @@ from typing import Callable
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa import qualification_request
 from zerg.qa.codex_auth import CodexAuthError
 from zerg.qa.codex_auth import login_with_api_key
@@ -477,8 +478,17 @@ def emit_proof_bundle(
         "runner_git_sha": runner_sha,
         "engine_executable_identity": engine_identity,
     }
+    output_root.mkdir(parents=True, exist_ok=True)
     identity_bridge._atomic_json(output_root / "request.json", request)  # noqa: SLF001
     identity_bridge._atomic_json(output_root / "raw-evidence.json", observation)  # noqa: SLF001
+    semantic_observation = semantic._refresh_native_source_digests(  # noqa: SLF001
+        observation,
+        artifact_root=output_root.parent,
+    )
+    semantic_path = output_root / "semantic-evidence" / "semantic-observation.json"
+    semantic_path.parent.mkdir(parents=True, exist_ok=True)
+    identity_bridge._atomic_json(semantic_path, semantic_observation)  # noqa: SLF001
+    execution["semantic_evidence_digest"] = identity_bridge._sha256_file(semantic_path)  # noqa: SLF001
     identity_bridge._atomic_json(output_root / "execution-summary.json", execution)  # noqa: SLF001
     oracle_digest = identity_bridge._sha256(Path(__file__).read_bytes())  # noqa: SLF001
     store = ProviderCapabilityProofStore(output_root / "proof-store")

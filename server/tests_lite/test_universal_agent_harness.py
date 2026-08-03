@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -16,6 +17,7 @@ from zerg.qa.provider_adapters import claude as claude_adapter
 from zerg.qa.provider_adapters import opencode as opencode_adapter
 from zerg.qa.provider_build_store import ProviderBuildStoreError
 from zerg.qa.provider_build_store import materialize_generated_fake_builds
+from zerg.qa.provider_event_digest import raw_event_digest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -3016,6 +3018,9 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
                     "result_event": {
                         "result_exact_match": True,
                         "session_id_present": True,
+                        "model": "claude-haiku-test",
+                        "usage": {"input_tokens": 12, "output_tokens": 3},
+                        "total_cost_usd": 0.001,
                     },
                     "operation_evidence": {
                         "run_once": {
@@ -3055,6 +3060,8 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
     assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
     assert result["data"]["operation_evidence"]["run_once"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
+    assert result["data"]["live_model_evidence"]["model"] == "claude-haiku-test"
+    assert result["data"]["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
@@ -3067,6 +3074,35 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
     db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
     assert db_snapshot["ingest_result"]["events_inserted"] == 2
     assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_claude_model_evidence_binds_synthetic_result_to_native_model_event(tmp_path: Path) -> None:
+    model_event = {"type": "assistant", "message": {"model": "claude-real"}, "session_id": "session"}
+    result_event = {
+        "type": "result",
+        "model": "<synthetic>",
+        "native_event_sha256": raw_event_digest({"type": "result", "model": "<synthetic>"}),
+    }
+    stdout_path = tmp_path / "claude.jsonl"
+    stdout_path.write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in (model_event, result_event))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = claude_adapter.claude_real_print_model_evidence(
+        {
+            "model": "claude-real",
+            "result_event": result_event,
+            "stdout_path": str(stdout_path),
+            "stdout_sha256": hashlib.sha256(stdout_path.read_bytes()).hexdigest(),
+        }
+    )
+
+    assert evidence is not None
+    assert evidence["result_event"]["model"] == "claude-real"
+    assert evidence["result_event"]["model_source"] == "provider_event"
+    assert evidence["result_event"]["model_source_event_sha256"] == raw_event_digest(model_event)
 
 
 def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, monkeypatch) -> None:
@@ -3103,6 +3139,14 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
                     "matching_text_event": {
                         "sessionID": "fake-opencode-print-session",
                         "text_exact_match": True,
+                    },
+                    "model": "openrouter/deepseek/deepseek-v4-flash",
+                    "result_event": {
+                        "type": "step_finish",
+                        "model": "openrouter/deepseek/deepseek-v4-flash",
+                        "usage": {"input": 8, "output": 2},
+                        "total_cost_usd": 0.0002,
+                        "accounting_status": "provider_reported",
                     },
                     "operation_evidence": {
                         "run_once": {
@@ -3142,6 +3186,8 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
     assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
     assert result["data"]["operation_evidence"]["run_once"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
+    assert result["data"]["live_model_evidence"]["model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert result["data"]["live_model_evidence"]["result_event"]["usage"]["output"] == 2
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
@@ -3907,12 +3953,8 @@ def test_scenario_runner_does_not_branch_on_provider_names() -> None:
     ("native_status", "expected"),
     [("pass", "pass"), ("fail", "fail"), ("unsupported_gap", "unsupported_gap")],
 )
-def test_cold_resume_factory_requires_native_adapter_proof(
-    tmp_path: Path, monkeypatch, native_status: str, expected: str
-) -> None:
-    adapter = uah.UniversalProviderAdapter(
-        uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None)
-    )
+def test_cold_resume_factory_requires_native_adapter_proof(tmp_path: Path, monkeypatch, native_status: str, expected: str) -> None:
+    adapter = uah.UniversalProviderAdapter(uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None))
     monkeypatch.setattr(
         adapter,
         "cold_resume",

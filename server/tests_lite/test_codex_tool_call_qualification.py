@@ -198,6 +198,38 @@ def test_live_profile_pins_explicit_model_into_provider_command_and_receipt(
     assert raw_evidence["model"] == "gpt-5-codex-mini"
 
 
+def test_codex_result_event_preserves_usage_and_unreported_cost() -> None:
+    result = profile._compact_codex_result_event(  # noqa: SLF001
+        [
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 10609,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 11,
+                    "reasoning_output_tokens": 0,
+                },
+            }
+        ],
+        model="gpt-5.6-sol",
+    )
+
+    assert result == {
+        "type": "turn.completed",
+        "native_event_sha256": "3107a026f76078a1a8699ed9124f85a6e655663cb8bfe9967a800ef2bbf161d5",
+        "accounting_status": "provider_reported_usage_cost_unavailable",
+        "accounting_status_source": "producer_observation_classification",
+        "usage": {
+            "input_tokens": 10609,
+            "cached_input_tokens": 0,
+            "output_tokens": 11,
+            "reasoning_output_tokens": 0,
+        },
+        "model": "gpt-5.6-sol",
+        "model_source": "invocation",
+    }
+
+
 def test_missing_credential_is_blocked_without_process_execution(tmp_path: Path, monkeypatch) -> None:
     binary, identity, calls = _fake_codex(tmp_path)
     monkeypatch.delenv(profile.API_KEY_ENV, raising=False)

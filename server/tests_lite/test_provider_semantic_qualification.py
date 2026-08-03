@@ -15,6 +15,7 @@ from zerg.qa import opencode_server_qualification as opencode
 from zerg.qa import provider_qualification
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
+from zerg.qa import provider_semantic_qualification as semantic
 from zerg.services.managed_provider_contracts import contract_for_provider
 
 TEST_SHA = "b" * 40
@@ -23,6 +24,64 @@ PROFILE_INFO = {
     "opencode": (opencode.PROFILE, "1.17.20", "1.17.20"),
     "antigravity": (antigravity.PROFILE, "1.0.13", "1.0.13"),
 }
+
+
+def test_redacted_native_capture_refreshes_result_and_model_source_digests(tmp_path: Path) -> None:
+    source_path = tmp_path / "native.jsonl"
+    original_events = [
+        {"type": "system", "subtype": "init", "model": "grok-4.5", "detail": "provider-secret"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+            "detail": "provider-secret",
+        },
+    ]
+    original_lines = [json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in original_events]
+    source_path.write_text("\n".join(original_lines) + "\n", encoding="utf-8")
+    original_init_digest = semantic._native_event_digest(original_events[0])  # noqa: SLF001
+    original_result_digest = semantic._native_event_digest(original_events[1])  # noqa: SLF001
+
+    redacted_events = [
+        {**original_events[0], "detail": "[QUALIFICATION_SECRET_1]"},
+        {**original_events[1], "detail": "[QUALIFICATION_SECRET_1]"},
+    ]
+    source_path.write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in redacted_events) + "\n",
+        encoding="utf-8",
+    )
+    redacted_init_digest = semantic._native_event_digest(redacted_events[0])  # noqa: SLF001
+    redacted_result_digest = semantic._native_event_digest(redacted_events[1])  # noqa: SLF001
+    observation = {
+        "live_model_evidence": {
+            "source_canary": "cursor_model_probe",
+            "model": "grok-4.5",
+            "result_event": {
+                "type": "result",
+                "subtype": "success",
+                "native_event_sha256": original_result_digest,
+                "model_source_event_sha256": original_init_digest,
+            },
+            "source_artifacts": [
+                {
+                    "path": str(source_path.resolve()),
+                    "sha256": "old-file-digest",
+                    "kind": "provider_jsonl_stream",
+                    "event_type": "result",
+                    "event_sha256": original_result_digest,
+                }
+            ],
+        }
+    }
+
+    refreshed = semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
+    evidence = refreshed["live_model_evidence"]
+    source = evidence["source_artifacts"][0]
+    assert evidence["result_event"]["native_event_sha256"] == redacted_result_digest
+    assert evidence["result_event"]["model_source_event_sha256"] == redacted_init_digest
+    assert source["event_sha256"] == redacted_result_digest
+    assert source["path"] == "native.jsonl"
+    assert source["sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
 
 
 @pytest.fixture(autouse=True)
@@ -147,15 +206,16 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     def real_print(_args, root: Path):
         assert os.environ["LONGHOUSE_CLAUDE_BIN"] == str(binary)
         assert os.environ["ANTHROPIC_API_KEY"] == secret
-        root.joinpath("provider-stderr.log").write_text(secret, encoding="utf-8")
+        native_path = root / "provider-stderr.log"
+        native_path.write_text(secret, encoding="utf-8")
         return {
             "status": "pass",
             "canary": "claude_real_print",
             "model": "claude-haiku-test",
-            "operation_evidence": {
-                "live_token_behavior": {"status": "pass", "level": "live_token"}
-            },
+            "operation_evidence": {"live_token_behavior": {"status": "pass", "level": "live_token"}},
             "result_event": {"model": "claude-haiku-test", "total_cost_usd": 0.001},
+            "stderr_path": str(native_path),
+            "stderr_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
             "secret_echo": secret,
         }
 
@@ -175,6 +235,9 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     assert observation["live_model_evidence"]["source_canary"] == "real_print_canary"
     assert observation["live_model_evidence"]["model"] == "claude-haiku-test"
     assert observation["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
+    source = observation["live_model_evidence"]["source_artifacts"][0]
+    assert source["path"] == "output/semantic-evidence/live/provider-stderr.log"
+    assert source["sha256"] == hashlib.sha256((output / "semantic-evidence" / "live" / "provider-stderr.log").read_bytes()).hexdigest()
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained
     assert b"[QUALIFICATION_SECRET_1]" in retained

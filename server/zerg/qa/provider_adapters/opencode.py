@@ -231,6 +231,34 @@ def opencode_real_print_operation_evidence(artifact: Mapping[str, Any]) -> dict[
     )
 
 
+def opencode_real_print_model_evidence(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return one canonical model-backed envelope for receipt derivation."""
+
+    canary = _opencode_control_canary(artifact)
+    result_event = canary.get("result_event")
+    if not isinstance(result_event, Mapping):
+        return None
+    model = _clean_optional_str(result_event.get("model") or canary.get("model"))
+    source_artifacts = [
+        {
+            "path": canary[path_key],
+            "sha256": canary[digest_key],
+            "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
+            **({"event_type": result_event.get("type")} if path_key == "stdout_path" else {}),
+            **({"event_sha256": result_event.get("native_event_sha256")} if path_key == "stdout_path" else {}),
+        }
+        for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
+        if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
+    ]
+    return {
+        "source_canary": "opencode_real_print",
+        "operation_evidence": opencode_real_print_operation_evidence(artifact),
+        "model": model,
+        "result_event": dict(result_event),
+        "source_artifacts": source_artifacts,
+    }
+
+
 @register_adapter("opencode")
 class OpenCodeHarnessAdapter(UniversalProviderAdapter):
     """OpenCode concrete adapter for the universal Longhouse action contract.
@@ -611,6 +639,8 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
+        if model_evidence := opencode_real_print_model_evidence(control_artifact):
+            payload["live_model_evidence"] = model_evidence
         if verdict != "green" or live_status != STATUS_PASS or run_once_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or opencode.get("failure_code")
             payload["failure_code"] = failure_code or "opencode_live_token_streaming_failed"
