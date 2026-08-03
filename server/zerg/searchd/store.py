@@ -78,6 +78,12 @@ _ARCHIVE_SEARCH_SQL = """
     LIMIT ?
 """
 
+_ARCHIVE_SEARCH_WITHOUT_SNIPPETS_SQL = _ARCHIVE_SEARCH_SQL.replace(
+    "snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,\n"
+    "           snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,",
+    "NULL AS content_snippet,\n           NULL AS tool_output_snippet,",
+)
+
 # Ranking the whole match set costs time linear in matches, not in results: a
 # term matching 2.2M rows spent 3.4s scoring rows nobody would ever see. FTS5
 # walks a doclist in rowid order with early exit, and `source_event_id` is the
@@ -132,6 +138,12 @@ _SEARCHABLE_SEARCH_SQL = """
     WHERE searchable_fts MATCH ?
     ORDER BY t.rank ASC
 """
+
+_SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL.replace(
+    "snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,\n"
+    "           snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,",
+    "NULL AS content_snippet,\n           NULL AS tool_output_snippet,",
+)
 
 # Most recent matching events considered before ranking. Measured on a 5M-row
 # corpus, the worst case (a term matching 2.2M events) costs ~346ms against a
@@ -1312,6 +1324,7 @@ class SearchStore:
         window_start_us: int | None,
         window_end_us: int | None,
         limit: int,
+        include_snippets: bool = True,
     ) -> dict[str, object]:
         fts_query, query_token_count, compiled_token_count = self._compile_fts_query(query)
         if not fts_query:
@@ -1333,11 +1346,11 @@ class SearchStore:
         )
         if use_searchable_corpus:
             candidate_ceiling = max(limit, _CANDIDATE_CEILING)
-            sql = _SEARCHABLE_SEARCH_SQL
+            sql = _SEARCHABLE_SEARCH_SQL if include_snippets else _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL
             params = filter_params + (candidate_ceiling, limit, fts_query)
         else:
             candidate_ceiling = None
-            sql = _ARCHIVE_SEARCH_SQL
+            sql = _ARCHIVE_SEARCH_SQL if include_snippets else _ARCHIVE_SEARCH_WITHOUT_SNIPPETS_SQL
             params = filter_params + (limit,)
         rows = self.connection.execute(sql, params).fetchall()
 

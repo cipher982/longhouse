@@ -392,3 +392,33 @@ async def test_lexical_snippet_is_not_overwritten_by_the_anchor(monkeypatch):
     await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
 
     assert match.evidence == "the matched fts snippet"
+
+
+@pytest.mark.asyncio
+async def test_lexical_match_without_a_snippet_uses_its_exact_context_event(monkeypatch):
+    async def fake_context(**_kwargs):
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": [
+                _context_row("earlier neighbour", order_time_us=16),
+                _context_row("the exact lexical match", order_time_us=17),
+                _context_row("later neighbour", order_time_us=18),
+            ],
+            "total_events": 42,
+            "timing": _timing(),
+        }
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
+    match = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.05,
+        generation_id=str(uuid4()),
+        match_event_id=17,
+    )
+
+    await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
+
+    assert match.evidence == "the exact lexical match"
+    assert match.context_text == "the exact lexical match"

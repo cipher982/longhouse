@@ -78,6 +78,7 @@ def _search_params(query: str) -> dict:
         "window_start_us": None,
         "window_end_us": None,
         "limit": 10,
+        "include_snippets": True,
     }
 
 
@@ -1286,7 +1287,7 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
         started_at=datetime.now(UTC).isoformat(),
     )
 
-    def search():
+    def search(*, include_snippets=True):
         return store.search(
             owner_id="42",
             query="needle",
@@ -1296,6 +1297,7 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
             window_start_us=now_us - 60_000_000,
             window_end_us=None,
             limit=1,
+            include_snippets=include_snippets,
         )
 
     try:
@@ -1303,6 +1305,12 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
         assert exact["results"], "expected the published needle to match"
         assert exact["ranking_scope"] == "exact"
         assert "candidate_count" not in exact["results"][0], "internal bookkeeping must not leak to callers"
+        without_snippets = search(include_snippets=False)
+        assert [row["search_event_id"] for row in without_snippets["results"]] == [
+            row["search_event_id"] for row in exact["results"]
+        ]
+        assert without_snippets["results"][0]["content_snippet"] is None
+        assert without_snippets["results"][0]["tool_output_snippet"] is None
 
         # A ceiling below the match count forces the honest bounded answer.
         monkeypatch.setattr("zerg.searchd.store._CANDIDATE_CEILING", 1)

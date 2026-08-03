@@ -120,7 +120,10 @@ def test_storage_v2_machine_search_hydrates_hits_with_owner_scope(monkeypatch):
 
 
 def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
-    async def search_v2(**_kwargs):
+    observed = {}
+
+    async def search_v2(**kwargs):
+        observed.update(kwargs)
         return [
             {
                 "session_id": "11111111-1111-4111-8111-111111111111",
@@ -182,6 +185,7 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert response.matches[0].total_events == 12
     assert response.matches[0].context[0]["content_text"] == "please migrate"
     assert response.server_commit == "c" * 40
+    assert observed["include_snippets"] is False
 
 
 def test_recall_rejects_unknown_query_parameters_before_search():

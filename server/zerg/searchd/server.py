@@ -970,10 +970,13 @@ def _search_params(value: dict) -> dict:
             "window_start_us",
             "window_end_us",
             "limit",
+            "include_snippets",
         },
     )
     if type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("limit is invalid")
+    if type(value["include_snippets"]) is not bool:
+        raise ValueError("include_snippets is invalid")
     for field in ("window_start_us", "window_end_us"):
         item = value[field]
         if item is not None and (type(item) is not int or not -(1 << 63) <= item < 1 << 63):
@@ -993,6 +996,7 @@ def _search_params(value: dict) -> dict:
         "window_start_us": value["window_start_us"],
         "window_end_us": value["window_end_us"],
         "limit": value["limit"],
+        "include_snippets": value["include_snippets"],
     }
 
 

@@ -256,6 +256,7 @@ async def search_storage_v2_rows(
     days_back: int,
     limit: int,
     timeout_seconds: float | None = None,
+    include_snippets: bool = True,
 ) -> list[dict[str, object]]:
     """Search the disposable v2 index without opening the retired archive DB."""
 
@@ -276,6 +277,7 @@ async def search_storage_v2_rows(
             "window_start_us": int((now - timedelta(days=days_back)).timestamp() * 1_000_000),
             "window_end_us": None,
             "limit": min(200, max(1, limit)),
+            "include_snippets": include_snippets,
         }
         if timeout_seconds is None:
             result = await search.call("search.query.v2", params)
@@ -729,6 +731,7 @@ async def _lexical_recall_matches(
         days_back=since_days,
         limit=min(200, candidate_depth),
         timeout_seconds=timeout_seconds,
+        include_snippets=False,
     )
     matches: list[RecallMatch] = []
     seen: set[str] = set()
@@ -852,7 +855,17 @@ def _anchor_excerpt(match: RecallMatch) -> str | None:
     reading would skip a match whose evidence was sitting right next to it.
     """
 
-    if match.start_order_time_us is None or not match.context:
+    if not match.context:
+        return None
+    if match.match_event_id is not None:
+        for item in match.context:
+            if item.get("search_event_id") != match.match_event_id:
+                continue
+            text = str(item.get("content_text") or "").strip()
+            if text:
+                return text[:_ANCHOR_EXCERPT_MAX_CHARS]
+        return None
+    if match.start_order_time_us is None:
         return None
     for item in match.context:
         order_time = item.get("order_time_us")
