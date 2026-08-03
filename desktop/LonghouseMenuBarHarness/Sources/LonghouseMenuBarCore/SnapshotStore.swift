@@ -131,6 +131,16 @@ public final class SnapshotStore: ObservableObject {
         refreshState.trust(relativeTo: date, deadline: refreshDeadline)
     }
 
+    /// Whether a failure may still be presented as a quiet retry rather than a
+    /// visible problem.
+    ///
+    /// Bounded on purpose. A hung producer reports `.timedOut` on every attempt,
+    /// and `.timedOut` is transient, so gating the banner on `isRecovering`
+    /// alone would keep a permanently broken producer looking normal forever.
+    public var isBrieflyRecovering: Bool {
+        isRecovering && refreshState.isWithinTransientGrace
+    }
+
     /// Whether Runtime Host presentation and control may be shown as current.
     ///
     /// `.neverLoaded` is normal and benign here: a machine with no `realtime`
@@ -373,7 +383,7 @@ public final class SnapshotStore: ObservableObject {
             ) {
                 guard !Task.isCancelled, let self else { return }
                 switch event {
-                case .connected:
+                case .connected, .alive:
                     self.projectionState = self.projectionState.recordingSuccess(at: Date())
                 case let .failed(message):
                     self.projectionState = self.projectionState.recordingFailure(

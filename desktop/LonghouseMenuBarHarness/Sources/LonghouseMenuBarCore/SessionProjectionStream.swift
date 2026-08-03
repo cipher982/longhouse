@@ -67,8 +67,13 @@ struct SessionProjection: Sendable {
 enum SessionProjectionEvent: Sendable {
     case delta(SessionProjection)
     case remove(sessionId: String)
-    /// The stream reached the Runtime Host and bootstrapped successfully.
+    /// The SSE connection itself is established. Emitted from `drain` after the
+    /// 200, not after bootstrap, so it cannot claim authority the stream has not
+    /// actually acquired.
     case connected
+    /// Liveness evidence with no payload — an SSE keepalive or any other line.
+    /// Renews the projection lease so a healthy idle stream does not expire.
+    case alive
     /// The stream failed and is backing off. Emitted on every failed attempt so
     /// the store can stop presenting Runtime Host projection as current — the
     /// stream retries forever, so silence here is indistinguishable from health.
@@ -172,7 +177,6 @@ enum SessionProjectionStream {
                             sessionIds: sessionIds,
                             continuation: continuation
                         )
-                        continuation.yield(.connected)
                         try await drain(
                             connection: connection,
                             allowedSessionIds: allowedSessionIds,
@@ -229,12 +233,20 @@ enum SessionProjectionStream {
             throw URLError(.badServerResponse)
         }
         logger.info("Runtime Host session stream connected")
+        // Only now is the stream genuinely established. Emitting this after
+        // bootstrap alone would claim authority before the SSE connection was
+        // known to work.
+        continuation.yield(.connected)
 
         var eventName = ""
         var dataLines: [String] = []
         var lineDecoder = SSELineDecoder()
         for try await byte in bytes {
             guard let line = lineDecoder.append(byte) else { continue }
+            // Any line, including an SSE keepalive comment, is liveness
+            // evidence. Renewing the lease only on deltas would expire a healthy
+            // but idle stream and strip presentation from quiet sessions.
+            continuation.yield(.alive)
             if line.isEmpty {
                 if eventName == "session_delta", !dataLines.isEmpty {
                     let data = Data(dataLines.joined(separator: "\n").utf8)
@@ -300,6 +312,7 @@ enum SessionProjectionStream {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
 
+        var succeeded = 0
         await withTaskGroup(of: SessionProjection?.self) { group in
             for sessionId in sessionIds {
                 group.addTask {
@@ -326,9 +339,17 @@ enum SessionProjectionStream {
             }
             for await projection in group {
                 if let projection {
+                    succeeded += 1
                     continuation.yield(.delta(projection))
                 }
             }
+        }
+
+        // Per-session failures are individually tolerable, but if every session
+        // failed the Runtime Host is not answering and reporting success would
+        // hand stale projections a fresh authority lease.
+        if succeeded == 0 && !sessionIds.isEmpty {
+            throw URLError(.cannotConnectToHost)
         }
     }
 }

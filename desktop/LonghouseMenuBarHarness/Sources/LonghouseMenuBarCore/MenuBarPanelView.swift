@@ -235,6 +235,19 @@ public struct MenuBarPanelView: View {
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.panel)
     }
 
+    /// The subheadline ends with "updated Ns" derived from `collectedAt`, which
+    /// the engine-pulse projection keeps rewriting. Left alone it would claim a
+    /// fresh update directly above a banner saying the data is days old, so the
+    /// freshness clause is dropped whenever trust is not current.
+    private var headerSummaryText: String {
+        let subheadline = presentation.subheadline
+        guard !dataTrust.isCurrent else { return subheadline }
+        let parts = subheadline
+            .components(separatedBy: " · ")
+            .filter { !$0.hasPrefix("updated ") }
+        return parts.joined(separator: " · ")
+    }
+
     private var staleAccentOverride: Color? {
         switch dataTrust {
         case .current: return nil
@@ -354,7 +367,7 @@ public struct MenuBarPanelView: View {
                         identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
                     )
                 }
-                headerSummaryLabel(presentation.subheadline)
+                headerSummaryLabel(headerSummaryText)
             }
 
             if let updateChip = snapshot.updateAvailableChipLabel {

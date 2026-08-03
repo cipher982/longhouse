@@ -30,20 +30,42 @@ public struct ProducerRefreshState: Equatable, Sendable {
     public let lastSuccessAt: Date?
     /// The most recent failure, if the last completed attempt failed. Cleared on success.
     public let latestFailure: ProducerRefreshFailure?
+    /// Consecutive failed attempts since the last success.
+    ///
+    /// Exists so a transient failure can be masked briefly without that mask
+    /// becoming unbounded. A producer that times out forever reports every
+    /// attempt as transient, so "retrying" would otherwise look normal
+    /// indefinitely — the same silence the fail-loud work exists to remove.
+    public let consecutiveFailures: Int
 
-    public init(lastSuccessAt: Date? = nil, latestFailure: ProducerRefreshFailure? = nil) {
+    public init(
+        lastSuccessAt: Date? = nil,
+        latestFailure: ProducerRefreshFailure? = nil,
+        consecutiveFailures: Int = 0
+    ) {
         self.lastSuccessAt = lastSuccessAt
         self.latestFailure = latestFailure
+        self.consecutiveFailures = consecutiveFailures
     }
 
     public static let neverAttempted = ProducerRefreshState()
 
+    /// Whether a transient failure may still be presented as a quiet retry.
+    /// True only for the very first failure after a success.
+    public var isWithinTransientGrace: Bool {
+        consecutiveFailures <= 1
+    }
+
     func recordingSuccess(at date: Date) -> ProducerRefreshState {
-        ProducerRefreshState(lastSuccessAt: date, latestFailure: nil)
+        ProducerRefreshState(lastSuccessAt: date, latestFailure: nil, consecutiveFailures: 0)
     }
 
     func recordingFailure(_ failure: ProducerRefreshFailure) -> ProducerRefreshState {
-        ProducerRefreshState(lastSuccessAt: lastSuccessAt, latestFailure: failure)
+        ProducerRefreshState(
+            lastSuccessAt: lastSuccessAt,
+            latestFailure: failure,
+            consecutiveFailures: consecutiveFailures + 1
+        )
     }
 }
 

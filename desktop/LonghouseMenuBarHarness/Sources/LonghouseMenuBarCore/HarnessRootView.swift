@@ -39,7 +39,7 @@ public struct HarnessRootView: View {
                     headerSummaryVariant: headerSummaryVariant,
                     // Recomputed against presentationDate so the banner appears
                     // and its age advances while the panel stays open.
-                    dataTrust: store.isRecovering
+                    dataTrust: store.isBrieflyRecovering
                         ? .current
                         : store.dataTrust(relativeTo: store.presentationDate)
                 ) {

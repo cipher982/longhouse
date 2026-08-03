@@ -2473,6 +2473,57 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    @MainActor
+    func repeatedTransientTimeoutsStopCountingAsRecovering() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        // A hung producer reports .timedOut every attempt, and .timedOut is
+        // transient. Gating the banner on isRecovering alone would keep a
+        // permanently broken producer looking normal forever.
+        let store = SnapshotStore(
+            source: CLIHealthSnapshotSource(
+                launchPath: "/bin/zsh",
+                arguments: ["-lc", "sleep 5"],
+                commandTimeoutSeconds: 0.05
+            ),
+            cacheURL: tempDir.appendingPathComponent("last-good.json"),
+            transientRetryDelay: 0.01
+        )
+
+        for _ in 0..<300 where store.refreshState.consecutiveFailures < 2 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.refreshState.consecutiveFailures >= 2)
+        #expect(store.isRecovering)
+        // Still retrying, but no longer allowed to hide behind it.
+        #expect(store.isBrieflyRecovering == false)
+        #expect(store.dataTrust().isCurrent == false)
+    }
+
+    @Test
+    func transientGraceCoversOnlyTheFirstFailure() {
+        let failure = ProducerRefreshFailure(message: "timeout", command: nil, observedAt: Date())
+        var state = ProducerRefreshState.neverAttempted.recordingSuccess(at: Date())
+        #expect(state.isWithinTransientGrace)
+
+        state = state.recordingFailure(failure)
+        #expect(state.consecutiveFailures == 1)
+        #expect(state.isWithinTransientGrace)
+
+        state = state.recordingFailure(failure)
+        #expect(state.consecutiveFailures == 2)
+        #expect(state.isWithinTransientGrace == false)
+
+        // A success clears the streak.
+        state = state.recordingSuccess(at: Date())
+        #expect(state.consecutiveFailures == 0)
+        #expect(state.isWithinTransientGrace)
+    }
+
+    @Test
     func neverAttemptedProducerIsNeverCurrent() {
         let state = ProducerRefreshState.neverAttempted
         #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)
@@ -2541,9 +2592,14 @@ struct LonghouseMenuBarCoreTests {
         ].compactMap { $0 }
 
         guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            // No facade available (CI). Assert the contract shape instead of
-            // silently passing.
-            let snapshot = try HealthSnapshotDecoder.decode(data: Data(nativeDesktopContractFixture.utf8))
+            // No facade built (clean CI checkout). Decode the shared fixture
+            // instead. The Rust test `desktop_envelope_matches_the_swift_consumer_fixture`
+            // asserts the producer still emits every key this file records, so
+            // the two cannot drift apart silently.
+            let fixtureURL = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .appendingPathComponent("Fixtures/native-desktop-health.json")
+            let snapshot = try HealthSnapshotDecoder.decode(data: Data(contentsOf: fixtureURL))
             #expect(snapshot.severity == "green")
             #expect(snapshot.managedSessions?.count == 1)
             #expect(snapshot.realtime?.runtimeUrl != nil)
@@ -2654,64 +2710,3 @@ private func presentationSnapshot(
         activitySummary: nil, managedSessions: sessions, launchReadiness: nil
     )
 }
-
-/// Captured from `longhouse local-health --fast --json` on 2026-08-03.
-/// Regenerate whenever the native Desktop envelope changes.
-private let nativeDesktopContractFixture = """
-    {
-        "schema_version": 1,
-        "collection_tier": "native_fast",
-        "collected_at": "2026-08-03T16:00:00Z",
-        "health_state": "healthy",
-        "severity": "green",
-        "headline": "Longhouse native fast health is healthy",
-        "reasons": [],
-        "suggested_actions": [],
-        "engine_status": {
-            "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
-            "exists": true,
-            "fresh": true,
-            "age_seconds": 0,
-            "payload": {
-                "version": "test",
-                "daemon_pid": 1,
-                "last_updated": "2026-08-03T16:00:00Z"
-            }
-        },
-        "transport": {
-            "status": "healthy",
-            "status_reason": "healthy",
-            "status_summary": "Shipping healthy."
-        },
-        "spool": {
-            "pending_count": 0,
-            "dead_count": 0
-        },
-        "managed_sessions": [
-            {
-                "session_id": "0f3c6fdb-193e-4eb8-954f-aebb236fe90e",
-                "provider": "claude",
-                "workspace_label": "zerg",
-                "timeline_title": "example",
-                "first_user_message": "example",
-                "title_state": "pending",
-                "title_source": "prompt",
-                "state": "attached",
-                "bridge_status": "ready",
-                "bridge_heartbeat_at": "2026-08-03T15:24:54.536371+00:00",
-                "reason_codes": []
-            }
-        ],
-        "managed_summary": {
-            "attached_count": 1,
-            "detached_count": 0,
-            "degraded_count": 0,
-            "orphan_bridge_count": 0
-        },
-        "realtime": {
-            "runtime_url": "https://david010.longhouse.ai",
-            "machine_name": "cinder",
-            "token_path": "/Users/davidrose/.longhouse/machine/device-token"
-        }
-    }
-    """

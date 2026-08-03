@@ -82,9 +82,13 @@ final class MenuBarStatusController: NSObject {
             return
         }
 
-        let timer = Timer(timeInterval: refreshIntervalSeconds, repeats: true) { [weak store] _ in
+        let timer = Timer(timeInterval: refreshIntervalSeconds, repeats: true) { [weak store, weak self] _ in
             Task { @MainActor in
                 store?.refresh(reason: .background)
+                // Trust decays with wall-clock time, so a wedged refresh that
+                // never completes publishes no state change. Repaint on the tick
+                // itself or the icon stays normal past the deadline.
+                self?.refreshStatusItemAppearance()
             }
         }
         timer.tolerance = max(1.0, refreshIntervalSeconds * 0.2)
@@ -149,7 +153,7 @@ final class MenuBarStatusController: NSObject {
         // A failing producer must reach the icon whether or not a cached
         // snapshot is on screen. Gating this on `snapshot == nil` is what let a
         // stale cache hold the icon normal through eleven days of failures.
-        if !store.isRecovering {
+        if !store.isBrieflyRecovering {
             switch store.dataTrust() {
             case .neverLoaded:
                 return .systemRed
@@ -177,7 +181,7 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionLabel() -> String? {
-        if store.isRecovering {
+        if store.isBrieflyRecovering {
             return "Longhouse is catching up"
         }
         switch store.dataTrust() {

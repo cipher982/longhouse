@@ -163,7 +163,10 @@ struct NativeDesktopHealth {
     engine_status: NativeDesktopEngineStatus,
     transport: NativeTransportStatus,
     spool: NativeSpoolStatus,
-    managed_sessions: Vec<NativeDesktopSession>,
+    /// Absent when session evidence could not be read at all. An empty array
+    /// here is a positive claim that the engine reported no sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_sessions: Option<Vec<NativeDesktopSession>>,
     managed_summary: NativeDesktopManagedSummary,
     /// Required before the app will open the Runtime Host projection stream.
     /// Without it `presentation` and `activity` stay null forever and every
@@ -196,12 +199,19 @@ struct NativeDesktopRealtime {
     token_path: String,
 }
 
+/// Counts are emitted only when session evidence was actually read.
+///
+/// `orphan_bridge_count` is absent because this producer does not scan for
+/// orphaned bridges. Emitting `0` would assert "no orphans" on the strength of
+/// not having looked, which is the false-negative the Desktop contract forbids.
 #[derive(Debug, Clone, Serialize)]
 struct NativeDesktopManagedSummary {
-    attached_count: usize,
-    detached_count: usize,
-    degraded_count: usize,
-    orphan_bridge_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attached_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detached_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    degraded_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_activity_at: Option<String>,
 }
@@ -782,25 +792,25 @@ fn native_desktop_health_from_parts(
     token_path: Option<String>,
     now: String,
 ) -> NativeDesktopHealth {
-    let sessions: Vec<NativeDesktopSession> = engine_payload
+    // Distinguish "the engine reported no sessions" from "we could not read
+    // session evidence". The first is a fact; the second must not render as an
+    // empty, reassuring session list.
+    let session_rows: Option<Vec<NativeDesktopSession>> = engine_payload
         .as_ref()
         .and_then(|value| value.get("sessions"))
         .and_then(Value::as_array)
-        .map(|rows| rows.iter().map(native_desktop_session_from_row).collect())
-        .unwrap_or_default();
+        .map(|rows| rows.iter().map(native_desktop_session_from_row).collect());
 
-    let attached_count = sessions
-        .iter()
-        .filter(|session| session.state.as_deref() == Some("attached"))
-        .count();
-    let detached_count = sessions
-        .iter()
-        .filter(|session| session.state.as_deref() == Some("detached"))
-        .count();
-    let degraded_count = sessions
-        .iter()
-        .filter(|session| session.state.as_deref() == Some("degraded"))
-        .count();
+    let count_with_state = |state: &str| {
+        session_rows.as_ref().map(|rows| {
+            rows.iter()
+                .filter(|session| session.state.as_deref() == Some(state))
+                .count()
+        })
+    };
+    let attached_count = count_with_state("attached");
+    let detached_count = count_with_state("detached");
+    let degraded_count = count_with_state("degraded");
 
     let severity = match fast.health_state.as_str() {
         "healthy" => "green",
@@ -845,13 +855,9 @@ fn native_desktop_health_from_parts(
             attached_count,
             detached_count,
             degraded_count,
-            // Orphan-bridge detection is not ported. Zero here would be a false
-            // "no orphans" claim, so report the count we actually observed:
-            // none, because we did not look. Tracked in the spec's Part C.
-            orphan_bridge_count: 0,
             latest_activity_at: None,
         },
-        managed_sessions: sessions,
+        managed_sessions: session_rows,
         realtime,
         control_channel: fast.control_channel,
         build: fast.build,
@@ -3089,6 +3095,81 @@ mod tests {
         // session renders activity-unknown forever.
         assert_eq!(value["realtime"]["machine_name"], "cinder");
         assert_eq!(value["managed_summary"]["attached_count"], 1);
+        // Never claimed, because this producer does not look for orphan bridges.
+        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+    }
+
+    /// Golden check against the fixture the Swift consumer test decodes.
+    ///
+    /// Without this the fixture is hand-maintained and independent of what Rust
+    /// actually emits, so the producer could drop a required field while the
+    /// Swift test kept passing on a stale fixture — the same blind spot that let
+    /// an undecodable replacement ship in the first place.
+    #[test]
+    fn desktop_envelope_matches_the_swift_consumer_fixture() {
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("desktop/LonghouseMenuBarHarness/Tests/LonghouseMenuBarCoreTests/Fixtures/native-desktop-health.json");
+        let fixture: Value =
+            serde_json::from_str(&std::fs::read_to_string(&fixture_path).unwrap()).unwrap();
+
+        let engine_payload = serde_json::json!({
+            "version": "test",
+            "sessions": [{"session_id": "s1", "provider": "claude", "state": "attached"}],
+        });
+        let machine_state = serde_json::json!({
+            "runtime_url": "https://example.longhouse.ai",
+            "machine_name": "cinder",
+        });
+        let fast = native_fast_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(engine_payload.clone()),
+            None,
+        );
+        let emitted = serde_json::to_value(native_desktop_health_from_parts(
+            fast,
+            Some(engine_payload),
+            Some(&machine_state),
+            Some("/tmp/device-token".to_string()),
+            "2026-08-03T16:00:00Z".to_string(),
+        ))
+        .unwrap();
+
+        let keys = |value: &Value| -> Vec<String> {
+            let mut names: Vec<String> = value
+                .as_object()
+                .map(|object| object.keys().cloned().collect())
+                .unwrap_or_default();
+            names.sort();
+            names
+        };
+
+        // Every key the fixture records must still be emitted. Extra keys are
+        // fine; a missing one means the consumer fixture has gone stale.
+        for key in keys(&fixture) {
+            assert!(
+                emitted.get(&key).is_some(),
+                "native envelope no longer emits `{key}`; regenerate {}",
+                fixture_path.display()
+            );
+        }
+        for key in keys(&fixture["managed_summary"]) {
+            assert!(
+                emitted["managed_summary"].get(&key).is_some(),
+                "managed_summary no longer emits `{key}`"
+            );
+        }
+        for key in keys(&fixture["engine_status"]) {
+            assert!(
+                emitted["engine_status"].get(&key).is_some(),
+                "engine_status no longer emits `{key}`"
+            );
+        }
+        // The false-negative the Desktop contract forbids must stay absent.
+        assert!(fixture["managed_summary"].get("orphan_bridge_count").is_none());
     }
 
     #[test]
@@ -3112,7 +3193,14 @@ mod tests {
         // Advertising a stream the app cannot authenticate would fail on every
         // attempt; absent is the honest answer.
         assert!(value.get("realtime").is_none());
-        assert_eq!(value["managed_sessions"].as_array().unwrap().len(), 0);
+        // No session evidence was readable, so the field is absent rather than
+        // an empty array. An empty array asserts "the engine reported no
+        // sessions", which is a different and unearned claim.
+        assert!(value.get("managed_sessions").is_none());
+        assert!(value["managed_summary"].get("attached_count").is_none());
+        // And never a zero orphan-bridge count from a producer that does not
+        // scan for orphaned bridges.
+        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
     }
 
     #[test]

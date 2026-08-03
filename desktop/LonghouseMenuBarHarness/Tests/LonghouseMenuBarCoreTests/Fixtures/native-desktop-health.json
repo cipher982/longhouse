@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "collection_tier": "native_fast",
+  "collected_at": "2026-08-03T16:00:00Z",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse native fast health is healthy",
+  "reasons": [],
+  "suggested_actions": [],
+  "engine_status": {
+    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 0,
+    "payload": {
+      "version": "test",
+      "daemon_pid": 1,
+      "last_updated": "2026-08-03T16:00:00Z"
+    }
+  },
+  "transport": {
+    "status": "healthy",
+    "status_reason": "healthy",
+    "status_summary": "Shipping healthy."
+  },
+  "spool": {
+    "pending_count": 0,
+    "dead_count": 0
+  },
+  "managed_sessions": [
+    {
+      "session_id": "0f3c6fdb-193e-4eb8-954f-aebb236fe90e",
+      "provider": "claude",
+      "workspace_label": "zerg",
+      "timeline_title": "example",
+      "first_user_message": "example",
+      "title_state": "pending",
+      "title_source": "prompt",
+      "state": "attached",
+      "bridge_status": "ready",
+      "bridge_heartbeat_at": "2026-08-03T15:24:54.536371+00:00",
+      "reason_codes": []
+    }
+  ],
+  "managed_summary": {
+    "attached_count": 1,
+    "detached_count": 0,
+    "degraded_count": 0
+  },
+  "realtime": {
+    "runtime_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder",
+    "token_path": "/Users/davidrose/.longhouse/machine/device-token"
+  }
+}
