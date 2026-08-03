@@ -3,9 +3,12 @@
 //! Claude invokes this once per hook event. It must stay small: parse stdin,
 //! enqueue a presence record, seed a managed transcript binding, and exit 0.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -84,6 +87,9 @@ fn run_inner() -> anyhow::Result<()> {
             transcript_path.as_deref(),
             &input,
         ));
+        if let Some(transcript_path) = transcript_path.as_deref() {
+            wake_transcript_shipper(&session_id, provider_session_id.as_deref(), transcript_path);
+        }
     }
     if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
         println!(
@@ -92,6 +98,45 @@ fn run_inner() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn wake_transcript_shipper(
+    session_id: &str,
+    provider_session_id: Option<&str>,
+    transcript_path: &str,
+) {
+    let Ok(socket_path) = crate::config::get_agent_transcript_wake_socket_path() else {
+        return;
+    };
+    let Ok(mut stream) = UnixStream::connect(socket_path) else {
+        return;
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(75)));
+    let path = PathBuf::from(transcript_path);
+    let observed_at_ms = chrono::Utc::now().timestamp_millis();
+    let _ = stream.write_all(
+        json!({
+            "provider": "claude",
+            "path": path,
+            "phase": "idle",
+            "session_id": session_id,
+            "turn_id": provider_session_id,
+            "wake_reason": "turn_completed",
+            "observed_at_ms": observed_at_ms,
+            "file_len_hint": path.metadata().ok().map(|value| value.len()),
+        })
+        .to_string()
+        .as_bytes(),
+    );
+}
+
+#[cfg(not(unix))]
+fn wake_transcript_shipper(
+    _session_id: &str,
+    _provider_session_id: Option<&str>,
+    _transcript_path: &str,
+) {
 }
 
 fn claude_live_transcript_event(

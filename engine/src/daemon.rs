@@ -1028,6 +1028,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         archive_repair_is_paused(config.archive_repair_mode),
                     );
                 }
+                // Cursor, OpenCode, and Claude enqueue their live transcript
+                // event before sending this wake. Drain that tiny outbox now;
+                // waiting for the periodic hook timer put up to 100-200 ms in
+                // front of an otherwise ready provider-to-pixel update.
+                if outbox_collect_tasks.is_empty() {
+                    let outbox_dir = outbox_dir.clone();
+                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                    let db_path = config.shipper_config.db_path.clone();
+                    outbox_collect_tasks.spawn_blocking(move || {
+                        let started = Instant::now();
+                        let presence = outbox::collect_outbox_with_local_state_result(
+                            &outbox_dir,
+                            db_path.as_deref(),
+                        );
+                        let runtime_posts =
+                            outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
+                        OutboxCollectResult {
+                            presence,
+                            runtime_posts,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                        }
+                    });
+                }
             }
 
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
