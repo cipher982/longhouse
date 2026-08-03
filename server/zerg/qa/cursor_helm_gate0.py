@@ -1333,13 +1333,14 @@ def _managed_conversation_reset_scenario(
 
         wait_value(rotated_claim, "Longhouse did not preserve the Cursor conversation predecessor")
         bound_session_id = wait_value(
-            lambda: longhouse_source_binding("cursor", new_provider_id),
+            lambda: longhouse_source_binding("cursor", new_provider_id, shipper_db=shipper_db),
             "Longhouse did not bind the post-reset Cursor source to the managed session",
         )
         aliases = wait_value(
             lambda: (
                 values
-                if provider_id in (values := longhouse_provider_aliases("cursor", longhouse_session_id)) and new_provider_id in values
+                if provider_id in (values := longhouse_provider_aliases("cursor", longhouse_session_id, shipper_db=shipper_db))
+                and new_provider_id in values
                 else None
             ),
             "Longhouse did not retain both Cursor provider aliases",

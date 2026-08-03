@@ -63,8 +63,19 @@ def marker_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def longhouse_source_binding(provider: str, provider_session_id: str) -> str | None:
-    shipper_db = resolve_longhouse_home() / "agent" / "longhouse-shipper.db"
+def _shipper_database_path(shipper_db: Path | None) -> Path:
+    if shipper_db is not None:
+        return shipper_db.expanduser()
+    return resolve_longhouse_home() / "agent" / "longhouse-shipper.db"
+
+
+def longhouse_source_binding(
+    provider: str,
+    provider_session_id: str,
+    *,
+    shipper_db: Path | None = None,
+) -> str | None:
+    shipper_db = _shipper_database_path(shipper_db)
     if not shipper_db.is_file():
         return None
     try:
@@ -84,10 +95,15 @@ def longhouse_source_binding(provider: str, provider_session_id: str) -> str | N
     return str(row[0]).strip() if row and row[0] else None
 
 
-def longhouse_provider_aliases(provider: str, session_id: str) -> tuple[str, ...]:
+def longhouse_provider_aliases(
+    provider: str,
+    session_id: str,
+    *,
+    shipper_db: Path | None = None,
+) -> tuple[str, ...]:
     """Return provider identities durably bound to one local Longhouse session."""
 
-    shipper_db = resolve_longhouse_home() / "agent" / "longhouse-shipper.db"
+    shipper_db = _shipper_database_path(shipper_db)
     if not shipper_db.is_file():
         return ()
     try:

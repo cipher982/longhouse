@@ -247,6 +247,40 @@ def test_binding_queries_honor_longhouse_home(tmp_path: Path, monkeypatch) -> No
     assert longhouse_provider_aliases("opencode", "longhouse-1") == ("ses_a", "ses_b")
 
 
+def test_binding_queries_honor_explicit_shipper_database(tmp_path: Path, monkeypatch) -> None:
+    """A canary may use a retained per-run shipper DB instead of HOME state."""
+
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / "ambient-home"))
+    db = tmp_path / "retained-run" / "longhouse-shipper.db"
+    db.parent.mkdir()
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            CREATE TABLE source_epoch_registry (
+                source_epoch TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                provider_session_id TEXT,
+                bound_session_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO source_epoch_registry VALUES (?, 'cursor', ?, ?, ?, ?)",
+            (
+                "epoch-new",
+                "cursor-new",
+                "longhouse-session",
+                "2026-08-03T23:00:00Z",
+                "2026-08-03T23:00:00Z",
+            ),
+        )
+
+    assert longhouse_source_binding("cursor", "cursor-new", shipper_db=db) == "longhouse-session"
+    assert longhouse_provider_aliases("cursor", "longhouse-session", shipper_db=db) == ("cursor-new",)
+
+
 def test_live_producer_does_not_reuse_a_stale_observation(tmp_path: Path, monkeypatch) -> None:
     stale = tmp_path / "20260731T000000Z" / "conversation-reset-observation.json"
     stale.parent.mkdir()
