@@ -77,12 +77,30 @@ if [[ "$BOOTSTRAP_ENGINE" == "true" ]]; then
     exit 3
   fi
   runtime_url="https://${SUBDOMAIN}.longhouse.ai"
+  token_machine_id="$(python3 - "$runtime_url" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+request = urllib.request.Request(
+    f"{sys.argv[1]}/api/agents/storage/v2/capabilities",
+    headers={"X-Agents-Token": os.environ["LONGHOUSE_DEVICE_TOKEN"]},
+)
+with urllib.request.urlopen(request, timeout=15) as response:
+    print(json.load(response)["machine_id"])
+PY
+)"
   LONGHOUSE_DEVICE_TOKEN="$LONGHOUSE_DEVICE_TOKEN" \
-    longhouse auth --url "$runtime_url" --device "$MACHINE_NAME" >/dev/null
+    longhouse auth \
+      --url "$runtime_url" \
+      --device "$token_machine_id" \
+      --token "$LONGHOUSE_DEVICE_TOKEN" \
+      --force >/dev/null
   longhouse-engine connect \
     --url "$runtime_url" \
     --token "$LONGHOUSE_DEVICE_TOKEN" \
-    --machine-name "$MACHINE_NAME" \
+    --machine-name "$token_machine_id" \
     >"$OUTPUT_ROOT/machine-agent.log" 2>&1 &
   engine_pid=$!
   sleep 2
