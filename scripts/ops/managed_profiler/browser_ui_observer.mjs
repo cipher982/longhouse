@@ -452,7 +452,11 @@ async function waitForSessionIdFile(timeoutMs) {
 try {
   browser = await chromium.launch({
     headless: true,
-    ...(disableQuic ? { args: ["--disable-quic"] } : {}),
+    // Containerized CI runners have no user namespaces available, so the Chrome
+    // sandbox aborts the process before the first page and Playwright reports it
+    // as "Target page, context or browser has been closed". This observer only
+    // ever loads the first-party Longhouse UI, so the sandbox buys nothing here.
+    args: ["--no-sandbox", ...(disableQuic ? ["--disable-quic"] : [])],
   });
   emit("transport_mode", {
     mode: disableQuic ? "http_without_quic" : "default",
@@ -606,7 +610,14 @@ try {
     await waitForCard("close_painted", 420000);
   }
 } catch (error) {
-  emit("error", { error: String(error).slice(0, 1000) });
+  // A browser launch failure buries the actual cause at the end of Playwright's
+  // log dump, past the argv echo. Truncating at 1000 chars throws away the only
+  // line that says why, so keep the tail as well as the head.
+  const text = String(error);
+  emit("error", {
+    error: text.slice(0, 1000),
+    ...(text.length > 1000 ? { error_tail: text.slice(-1500) } : {}),
+  });
 } finally {
   observerClosing = true;
   if (browser) {
