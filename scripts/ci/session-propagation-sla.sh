@@ -82,20 +82,43 @@ if [[ "$BOOTSTRAP_ENGINE" == "true" ]]; then
     exit 3
   fi
   runtime_url="https://${SUBDOMAIN}.longhouse.ai"
-  token_machine_id="$(python3 - "$runtime_url" <<'PY'
+  # Resolve the durable machine identity this token owns. A bare traceback here
+  # tells you nothing about whether the runtime rejected the credential or an
+  # edge blocked the runner, so report the status, the edge ray id, and a body
+  # excerpt before failing.
+  if ! token_machine_id="$(python3 - "$runtime_url" <<'PY'
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
+url = f"{sys.argv[1]}/api/agents/storage/v2/capabilities"
 request = urllib.request.Request(
-    f"{sys.argv[1]}/api/agents/storage/v2/capabilities",
+    url,
     headers={"X-Agents-Token": os.environ["LONGHOUSE_DEVICE_TOKEN"]},
 )
-with urllib.request.urlopen(request, timeout=15) as response:
-    print(json.load(response)["machine_id"])
+try:
+    with urllib.request.urlopen(request, timeout=15) as response:
+        print(json.load(response)["machine_id"])
+except urllib.error.HTTPError as error:
+    body = error.read(600).decode("utf-8", "replace").replace("\n", " ")
+    print(
+        f"machine identity probe failed: HTTP {error.code} {error.reason} for {url}",
+        file=sys.stderr,
+    )
+    print(f"  server: {error.headers.get('server', 'unknown')}", file=sys.stderr)
+    print(f"  cf-ray: {error.headers.get('cf-ray', 'none')}", file=sys.stderr)
+    print(f"  body: {body}", file=sys.stderr)
+    raise SystemExit(1)
+except urllib.error.URLError as error:
+    print(f"machine identity probe could not reach {url}: {error.reason}", file=sys.stderr)
+    raise SystemExit(1)
 PY
-)"
+  )"; then
+    echo "| 0 | 3 | setup_error: machine identity probe rejected | \`$OUTPUT_ROOT\` |" >> "$summary"
+    exit 3
+  fi
   LONGHOUSE_DEVICE_TOKEN="$LONGHOUSE_DEVICE_TOKEN" \
     longhouse auth \
       --url "$runtime_url" \
