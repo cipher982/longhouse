@@ -49,6 +49,8 @@ def _live_request(tmp_path: Path) -> dict:
         "producer_version": "1",
         "run_reference": "test://run-1",
         "longhouse_git_sha": "c" * 40,
+        "factory_source_sha": "f" * 40,
+        "selection_input_digests": {"test-input": "sha256:" + "d" * 64},
         "trigger": "test",
     }
     request["semantic_digest"] = semantic_digest(request)
@@ -114,6 +116,8 @@ def test_qualification_request_policy_enables_live_probe(monkeypatch, tmp_path: 
         "producer_version": "1",
         "run_reference": "test://run-1",
         "longhouse_git_sha": "c" * 40,
+        "factory_source_sha": "f" * 40,
+        "selection_input_digests": {"test-input": "sha256:" + "d" * 64},
         "trigger": "test",
     }
     request["semantic_digest"] = semantic_digest(request)
@@ -263,6 +267,8 @@ def test_validated_hermetic_request_emits_explicit_synthetic_observation_for_a_r
         "producer_version": "1",
         "run_reference": "test://run-1",
         "longhouse_git_sha": "c" * 40,
+        "factory_source_sha": "f" * 40,
+        "selection_input_digests": {"test-input": "sha256:" + "d" * 64},
         "trigger": "test",
     }
     request["semantic_digest"] = semantic_digest(request)
@@ -309,6 +315,8 @@ def test_explicit_artifact_must_match_request_evidence(tmp_path: Path) -> None:
         "producer_version": "1",
         "run_reference": "test://run-1",
         "longhouse_git_sha": "c" * 40,
+        "factory_source_sha": "f" * 40,
+        "selection_input_digests": {"test-input": "sha256:" + "d" * 64},
         "trigger": "test",
     }
     request["semantic_digest"] = semantic_digest(request)
@@ -373,6 +381,8 @@ def test_generated_fake_cannot_claim_live_evidence_from_an_artifact(tmp_path: Pa
         "producer_version": "1",
         "run_reference": "test://run-1",
         "longhouse_git_sha": "c" * 40,
+        "factory_source_sha": "f" * 40,
+        "selection_input_digests": {"test-input": "sha256:" + "d" * 64},
         "trigger": "test",
     }
     request["semantic_digest"] = semantic_digest(request)
@@ -424,6 +434,8 @@ def test_explicit_live_artifact_rejects_synthetic_observation(tmp_path: Path) ->
         "producer_version": "1",
         "run_reference": "test://run-1",
         "longhouse_git_sha": "c" * 40,
+        "factory_source_sha": "f" * 40,
+        "selection_input_digests": {"test-input": "sha256:" + "d" * 64},
         "trigger": "test",
     }
     request["semantic_digest"] = semantic_digest(request)

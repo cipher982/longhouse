@@ -14,11 +14,12 @@ from zerg.services.provider_capability_schema import CapabilityAssertion
 
 
 def _assertion(
-    *, provider: str = "codex", assertion_id: str = "interrupt_terminal_cancelled", max_age_seconds: int = 3600
+    *, provider: str = "codex", assertion_id: str = "interrupt_terminal_cancelled", variant: str | None = None, max_age_seconds: int = 3600
 ) -> CapabilityAssertion:
     return CapabilityAssertion(
         scenario_id="interrupt_cancel",
         assertion_id=assertion_id,
+        variant=variant,
         provider=provider,
         capability="interrupt",
         oracle_source="codex_helm_interrupt",
@@ -152,3 +153,13 @@ def test_every_declared_assertion_produces_exactly_one_row():
     projections = project_capabilities(assertions, [_record(assertion_id="b")])
     assert {p.assertion_id for p in projections} == {"a", "b", "c"}
     assert len(projections) == 3
+
+
+def test_pre_v3_record_cannot_prove_a_variant_requirement():
+    assertion = _assertion(assertion_id="native_provider_resume_proven", variant="clean_exit")
+    record = _record(assertion_id="native_provider_resume_proven", evidence_class=EvidenceClass.LIVE_TOKEN)
+
+    projection = project_capabilities((assertion,), [record])[0]
+
+    assert projection.variant == "clean_exit"
+    assert projection.proof_status == UNACCEPTABLE_EVIDENCE

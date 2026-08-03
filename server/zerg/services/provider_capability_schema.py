@@ -66,6 +66,7 @@ def _schema_path_candidates() -> tuple[Path, ...]:
 class CapabilityAssertion:
     scenario_id: str
     assertion_id: str
+    variant: str | None
     provider: str
     capability: str
     oracle_source: str
@@ -108,6 +109,7 @@ def _load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
                     CapabilityAssertion(
                         scenario_id=assertion["scenario_id"],
                         assertion_id=assertion["id"],
+                        variant=assertion.get("variant"),
                         provider=provider,
                         capability=capability,
                         oracle_source=assertion["oracle_source"],

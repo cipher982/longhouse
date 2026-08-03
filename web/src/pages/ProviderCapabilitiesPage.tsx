@@ -16,6 +16,7 @@ interface ProviderCapabilityRow {
   provider: string;
   capability: string;
   assertion_id: string;
+  variant: string | null;
   scenario_id: string;
   declared: boolean;
   proof_status: string;
@@ -149,11 +150,11 @@ export default function ProviderCapabilitiesPage() {
             </Table.Header>
             <Table.Body>
               {rows.map((row) => (
-                <Table.Row key={`${row.provider}:${row.assertion_id}`}>
+                <Table.Row key={`${row.provider}:${row.assertion_id}:${row.variant ?? "default"}`}>
                   <Table.Cell>{toTitleCaseWords(row.provider)}</Table.Cell>
                   <Table.Cell>{row.capability}</Table.Cell>
                   <Table.Cell>
-                    <code>{row.assertion_id}</code>
+                    <code>{row.assertion_id}{row.variant ? `:${row.variant}` : ""}</code>
                   </Table.Cell>
                   <Table.Cell>
                     <Badge variant={proofStatusBadgeVariant(row.proof_status)}>{row.proof_status}</Badge>

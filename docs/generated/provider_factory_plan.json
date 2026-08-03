@@ -309,16 +309,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -407,11 +410,12 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary']",
+      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven', 'native_provider_resume_proven']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "claude_turn_boundary_quiescent"
+        "claude_turn_boundary_quiescent",
+        "helm_cold_resume"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
@@ -419,6 +423,24 @@
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
           "scenario_id": "claude_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
             "live_token"
           ],
@@ -561,16 +583,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -819,16 +844,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -917,12 +945,13 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction']",
+      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction', 'native_provider_resume_proven', 'native_provider_resume_proven']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
         "codex_coordination_awareness_post_compaction",
-        "codex_turn_boundary_quiescent"
+        "codex_turn_boundary_quiescent",
+        "helm_cold_resume"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
@@ -930,6 +959,24 @@
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
           "scenario_id": "codex_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1084,16 +1131,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -1295,16 +1345,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -1449,16 +1502,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -1625,16 +1681,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -1888,16 +1947,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
@@ -1986,10 +2048,11 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary']",
+      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven', 'native_provider_resume_proven']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
+        "helm_cold_resume",
         "opencode_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
@@ -1998,6 +2061,24 @@
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
           "scenario_id": "opencode_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2138,16 +2219,19 @@
           "assertion_id": "native_provider_resume_proven",
           "scenario_id": "helm_cold_resume",
           "acceptable_evidence": [
-            "hermetic",
-            "live_no_token",
             "live_token"
           ],
-          "producible_evidence": [
-            "hermetic",
-            "live_no_token",
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
             "live_token"
           ],
-          "satisfiable": true
+          "producible_evidence": [],
+          "satisfiable": false
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",

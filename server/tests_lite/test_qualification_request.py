@@ -27,6 +27,8 @@ def _request() -> dict:
         "expected_executable_identity": "sha256:" + "a" * 64,
         "expected_provider_build_identity": "sha256:" + "b" * 64,
         "expected_provider_build_granularity": "single_asset",
+        "factory_source_sha": "d" * 40,
+        "selection_input_digests": {"schemas/managed_providers.yml": "sha256:" + "e" * 64},
         "provider_bin": "/tmp/provider",
         "invocation_id": "run-1",
         "producer_class": "release_factory",

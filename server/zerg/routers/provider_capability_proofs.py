@@ -199,6 +199,7 @@ def build_capability_projection_payload() -> dict[str, Any]:
                 "provider": p.provider,
                 "capability": p.capability,
                 "assertion_id": p.assertion_id,
+                "variant": p.variant,
                 "scenario_id": p.scenario_id,
                 "declared": p.declared,
                 "proof_status": p.proof_status,
