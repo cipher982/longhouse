@@ -208,6 +208,20 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return refreshed.replacingManagedSessions(sessions)
     }
 
+    /// Drop Runtime Host presentation and control once the projection stream has
+    /// lost its authority lease.
+    ///
+    /// `preservingRealtimeProjection` deliberately carries this data across
+    /// refreshes so an ordinary poll does not erase phase and control truth. But
+    /// the stream retries forever without surfacing failure, so without an
+    /// expiry those fields render as current indefinitely while the Runtime Host
+    /// is unreachable. Local machine-preview rows stay visible; only the fields
+    /// the Runtime Host owns become unavailable.
+    func markingRuntimeHostProjectionUnavailable() -> HealthSnapshot {
+        let sessions = managedSessions?.map { $0.clearingRuntimeHostProjection() }
+        return replacingManagedSessions(sessions)
+    }
+
     private func replacingManagedSessions(
         _ sessions: [ManagedSessionSnapshot]?,
         replacementEngineStatus: EngineStatusSnapshot? = nil,
@@ -1735,6 +1749,29 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             authority: authority, stateContractVersion: stateContractVersion,
             presentationPolicyVersion: presentationPolicyVersion, commitSeq: commitSeq,
             mode: mode, presentation: presentation, activity: activity, control: control
+        )
+    }
+
+    /// Strip the fields the Runtime Host owns, leaving local evidence intact.
+    /// `menuBarAttentionKind` renders a nil presentation as phase-unavailable,
+    /// which is the honest state when the projection stream has gone dark.
+    func clearingRuntimeHostProjection() -> ManagedSessionSnapshot {
+        guard authority == "runtime_host" else { return self }
+        return ManagedSessionSnapshot(
+            sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
+            timelineTitle: timelineTitle, summaryTitle: summaryTitle,
+            firstUserMessage: firstUserMessage, titleState: titleState,
+            titleSource: titleSource, titleProvenance: titleProvenance,
+            branch: branch, state: state,
+            phase: nil, rawPhase: nil, phaseProvenance: nil, phaseObservedAt: nil,
+            lastActivityAt: lastActivityAt,
+            bridgeStatus: bridgeStatus, bridgePid: bridgePid,
+            bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode,
+            uiAttached: uiAttached, uiPresence: uiPresence, reasonCodes: reasonCodes,
+            authority: nil, stateContractVersion: stateContractVersion,
+            presentationPolicyVersion: presentationPolicyVersion,
+            commitSeq: commitSeq, mode: mode,
+            presentation: nil, activity: nil, control: nil
         )
     }
 

@@ -2478,6 +2478,60 @@ struct LonghouseMenuBarCoreTests {
         #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)
     }
 
+    @Test
+    func expiredProjectionClearsRuntimeHostFieldsButKeepsLocalRows() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "s1", provider: "codex", workspaceLabel: "longhouse",
+            branch: "main", state: "attached", phase: "thinking",
+            lastActivityAt: "2026-08-03T12:00:00Z", bridgeStatus: "ready",
+            bridgePid: 42, bridgeHeartbeatAt: "2026-08-03T12:00:00Z",
+            reasonCodes: [], authority: "runtime_host",
+            presentation: SessionPresentationSnapshot(
+                primary: SessionPresentationLabelSnapshot(
+                    key: "thinking", label: "Thinking", tone: "active"
+                ),
+                access: nil
+            ),
+            activity: SessionActivitySnapshot(
+                state: "active", rawKind: nil, tool: nil, observedAt: nil
+            ),
+            control: SessionControlSnapshot(
+                ownership: "runtime_host", connection: "connected",
+                actions: SessionControlActionsSnapshot(terminate: nil, reattach: nil)
+            )
+        )
+        let snapshot = makeHealthySnapshot(sessions: [session])
+
+        let cleared = snapshot.markingRuntimeHostProjectionUnavailable()
+        let clearedSession = try? #require(cleared.managedSessions?.first)
+
+        // Runtime Host authority is gone...
+        #expect(clearedSession?.presentation == nil)
+        #expect(clearedSession?.activity == nil)
+        #expect(clearedSession?.control == nil)
+        #expect(clearedSession?.authority == nil)
+        // ...but the session itself is still visible as local evidence.
+        #expect(clearedSession?.sessionId == "s1")
+        #expect(clearedSession?.state == "attached")
+        #expect(clearedSession?.bridgePid == 42)
+    }
+
+    @Test
+    func projectionWithoutRuntimeHostAuthorityIsLeftAlone() {
+        let localOnly = ManagedSessionSnapshot(
+            sessionId: "s2", provider: "claude", workspaceLabel: "longhouse",
+            branch: "main", state: "attached", phase: nil,
+            lastActivityAt: nil, bridgeStatus: nil, bridgePid: nil,
+            bridgeHeartbeatAt: nil, reasonCodes: []
+        )
+        let snapshot = makeHealthySnapshot(sessions: [localOnly])
+
+        let cleared = snapshot.markingRuntimeHostProjectionUnavailable()
+
+        #expect(cleared.managedSessions?.first?.sessionId == "s2")
+        #expect(cleared.managedSessions?.first?.state == "attached")
+    }
+
 }
 
 @MainActor
@@ -2487,7 +2541,10 @@ private func writeCachedSnapshot(headline: String, to url: URL) throws {
     try encoder.encode(makeHealthySnapshot(headline: headline)).write(to: url)
 }
 
-private func makeHealthySnapshot(headline: String = "Longhouse shipping healthy") -> HealthSnapshot {
+private func makeHealthySnapshot(
+    headline: String = "Longhouse shipping healthy",
+    sessions: [ManagedSessionSnapshot]? = nil
+) -> HealthSnapshot {
     HealthSnapshot(
         schemaVersion: 1,
         collectedAt: "2026-05-05T12:00:00Z",
@@ -2500,6 +2557,7 @@ private func makeHealthySnapshot(headline: String = "Longhouse shipping healthy"
         engineStatus: nil,
         outbox: nil,
         activitySummary: nil,
+        managedSessions: sessions,
         launchReadiness: nil
     )
 }

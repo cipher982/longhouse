@@ -16,6 +16,9 @@ public final class SnapshotStore: ObservableObject {
     /// The primary mechanism is the outcome of the last completed attempt; this
     /// only catches a wedged refresh that never completes at all.
     public static let defaultRefreshDeadlineSeconds: TimeInterval = 120
+    /// How long Runtime Host presentation and control stay authoritative after
+    /// the projection stream last succeeded.
+    public static let defaultProjectionDeadlineSeconds: TimeInterval = 300
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
@@ -23,6 +26,13 @@ public final class SnapshotStore: ObservableObject {
     /// How the configured producer command has been behaving. The only clock
     /// permitted to decide whether displayed data is current.
     @Published public private(set) var refreshState: ProducerRefreshState
+    /// How the Runtime Host session projection stream has been behaving.
+    ///
+    /// Tracked separately because it is an independent authority with an
+    /// independent failure mode: the stream retries forever without surfacing
+    /// anything, so a healthy producer can coexist with hours-old presentation
+    /// and control data.
+    @Published public private(set) var projectionState: ProducerRefreshState
     @Published public private(set) var isInitialLoading: Bool
     @Published public private(set) var isManualRefreshActive: Bool
     @Published public private(set) var isBooting: Bool
@@ -46,6 +56,9 @@ public final class SnapshotStore: ObservableObject {
     private let cacheURL: URL?
     private let transientRetryDelay: TimeInterval
     private let refreshDeadline: TimeInterval
+    /// The stream is long-lived and mostly idle, so its authority lease is more
+    /// generous than the producer's polling deadline.
+    private let projectionDeadline: TimeInterval
     private static let historyRetentionSeconds: TimeInterval = Double(historyRetentionMinutes * 60)
     private static let maxHistorySamples = 180
 
@@ -53,13 +66,16 @@ public final class SnapshotStore: ObservableObject {
         source: any HealthSnapshotSource,
         cacheURL: URL? = nil,
         transientRetryDelay: TimeInterval = 2,
-        refreshDeadline: TimeInterval = SnapshotStore.defaultRefreshDeadlineSeconds
+        refreshDeadline: TimeInterval = SnapshotStore.defaultRefreshDeadlineSeconds,
+        projectionDeadline: TimeInterval = SnapshotStore.defaultProjectionDeadlineSeconds
     ) {
         self.source = source
         self.cacheURL = cacheURL ?? Self.defaultCacheURL(for: source)
         self.transientRetryDelay = transientRetryDelay
         self.refreshDeadline = refreshDeadline
+        self.projectionDeadline = projectionDeadline
         self.refreshState = .neverAttempted
+        self.projectionState = .neverAttempted
         self.history = []
         self.isInitialLoading = false
         self.isManualRefreshActive = false
@@ -113,6 +129,15 @@ public final class SnapshotStore: ObservableObject {
     /// stale between refreshes.
     public func dataTrust(relativeTo date: Date = Date()) -> DataTrust {
         refreshState.trust(relativeTo: date, deadline: refreshDeadline)
+    }
+
+    /// Whether Runtime Host presentation and control may be shown as current.
+    ///
+    /// `.neverLoaded` is normal and benign here: a machine with no `realtime`
+    /// block, or no managed sessions, never opens a stream. Only `.lastKnown`
+    /// means the stream had authority and lost it.
+    public func projectionTrust(relativeTo date: Date = Date()) -> DataTrust {
+        projectionState.trust(relativeTo: date, deadline: projectionDeadline)
     }
 
     deinit {
@@ -235,7 +260,13 @@ public final class SnapshotStore: ObservableObject {
                 self.transientRetryTask?.cancel()
                 self.transientRetryTask = nil
                 self.isRecovering = false
-                let snapshot = loadedSnapshot.preservingRealtimeProjection(from: self.snapshot)
+                var snapshot = loadedSnapshot.preservingRealtimeProjection(from: self.snapshot)
+                // Only `.lastKnown` means the stream held authority and lost it.
+                // `.neverLoaded` is the ordinary case for a machine that never
+                // opens a stream at all, and must not strip anything.
+                if case .lastKnown = self.projectionTrust() {
+                    snapshot = snapshot.markingRuntimeHostProjectionUnavailable()
+                }
                 self.snapshot = snapshot
                 self.connectRealtimeIfNeeded(
                     snapshot.realtime,
@@ -340,13 +371,28 @@ public final class SnapshotStore: ObservableObject {
                 connection: connection,
                 sessionIds: normalizedSessionIds
             ) {
-                guard !Task.isCancelled, let self, let snapshot = self.snapshot else { return }
+                guard !Task.isCancelled, let self else { return }
                 switch event {
+                case .connected:
+                    self.projectionState = self.projectionState.recordingSuccess(at: Date())
+                case let .failed(message):
+                    self.projectionState = self.projectionState.recordingFailure(
+                        ProducerRefreshFailure(
+                            message: message,
+                            command: "Runtime Host session projection",
+                            observedAt: Date()
+                        )
+                    )
                 case let .delta(projection):
+                    guard let snapshot = self.snapshot else { return }
+                    // A delta is itself proof the stream is alive.
+                    self.projectionState = self.projectionState.recordingSuccess(at: Date())
                     let updated = snapshot.applying(projection)
                     self.snapshot = updated
                     self.persistCachedSnapshot(updated)
                 case let .remove(sessionId):
+                    guard let snapshot = self.snapshot else { return }
+                    self.projectionState = self.projectionState.recordingSuccess(at: Date())
                     let updated = snapshot.removingSession(sessionId)
                     self.snapshot = updated
                     self.persistCachedSnapshot(updated)

@@ -67,6 +67,12 @@ struct SessionProjection: Sendable {
 enum SessionProjectionEvent: Sendable {
     case delta(SessionProjection)
     case remove(sessionId: String)
+    /// The stream reached the Runtime Host and bootstrapped successfully.
+    case connected
+    /// The stream failed and is backing off. Emitted on every failed attempt so
+    /// the store can stop presenting Runtime Host projection as current — the
+    /// stream retries forever, so silence here is indistinguishable from health.
+    case failed(String)
 }
 
 enum SessionProjectionStream {
@@ -166,6 +172,7 @@ enum SessionProjectionStream {
                             sessionIds: sessionIds,
                             continuation: continuation
                         )
+                        continuation.yield(.connected)
                         try await drain(
                             connection: connection,
                             allowedSessionIds: allowedSessionIds,
@@ -175,7 +182,9 @@ enum SessionProjectionStream {
                     } catch is CancellationError {
                         break
                     } catch {
-                        logger.error("Runtime Host session stream failed: \(String(describing: error), privacy: .public)")
+                        let description = String(describing: error)
+                        logger.error("Runtime Host session stream failed: \(description, privacy: .public)")
+                        continuation.yield(.failed(description))
                         try? await Task.sleep(for: backoff)
                         backoff = min(backoff * 2, .seconds(10))
                     }
