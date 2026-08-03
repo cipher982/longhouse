@@ -645,13 +645,20 @@ def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_p
             assert row.status == INPUT_STATUS_DELIVERED
             assert row.client_request_id == "ios-link-1"
             assert row.delivery_request_id
+            input_id = row.id
+            delivery_request_id = row.delivery_request_id
 
-            turn = (
-                db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id).one()
-            )
-            assert turn.session_input_id == row.id
-            assert turn.user_event_id is not None
+        turn = _wait_for_turn_input_link(
+            session_local,
+            session_id=session_id,
+            request_id=delivery_request_id,
+            timeout_secs=2.0,
+        )
+        assert turn is not None
+        assert turn.session_input_id == input_id
+        assert turn.user_event_id is not None
 
+        with session_local() as db:
             event = db.query(AgentEvent).filter(AgentEvent.id == turn.user_event_id).one()
             assert event.content_text == "linked from ios"
     finally:
