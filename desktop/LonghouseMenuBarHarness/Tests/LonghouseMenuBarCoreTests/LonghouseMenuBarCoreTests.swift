@@ -2516,6 +2516,52 @@ struct LonghouseMenuBarCoreTests {
         #expect(clearedSession?.bridgePid == 42)
     }
 
+    /// The consumer-contract test.
+    ///
+    /// Nothing decoded real producer output into the real consumer type, which
+    /// is how a native replacement that `HealthSnapshot` cannot parse stayed
+    /// marked `available`. Point this at a built facade to check it for real;
+    /// without one it verifies the recorded contract shape so CI still fails on
+    /// a schema regression.
+    @Test
+    func nativeProducerOutputDecodesIntoHealthSnapshot() throws {
+        // Deliberately does not consider ~/.local/bin/longhouse. That is the
+        // user's installed binary, not the code under test, and letting it
+        // decide this result would make the check pass or fail on machine state.
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // LonghouseMenuBarCoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // LonghouseMenuBarHarness
+            .deletingLastPathComponent()  // desktop
+            .deletingLastPathComponent()  // repo root
+        let candidates = [
+            ProcessInfo.processInfo.environment["LONGHOUSE_HEALTH_BIN"],
+            repoRoot.appendingPathComponent("engine/target/debug/longhouse").path as String,
+            repoRoot.appendingPathComponent("engine/target/release/longhouse").path as String,
+        ].compactMap { $0 }
+
+        guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            // No facade available (CI). Assert the contract shape instead of
+            // silently passing.
+            let snapshot = try HealthSnapshotDecoder.decode(data: Data(nativeDesktopContractFixture.utf8))
+            #expect(snapshot.severity == "green")
+            #expect(snapshot.managedSessions?.count == 1)
+            #expect(snapshot.realtime?.runtimeUrl != nil)
+            #expect(snapshot.engineStatus?.payload != nil)
+            return
+        }
+
+        let source = CLIHealthSnapshotSource(
+            launchPath: binary,
+            arguments: ["local-health", "--fast", "--json"],
+            commandTimeoutSeconds: 10
+        )
+        // The assertion is simply that this does not throw. A producer whose
+        // output the app cannot decode fails here instead of in the menu bar.
+        let snapshot = try source.load()
+        #expect(snapshot.severity.isEmpty == false)
+    }
+
     @Test
     func projectionWithoutRuntimeHostAuthorityIsLeftAlone() {
         let localOnly = ManagedSessionSnapshot(
@@ -2608,3 +2654,64 @@ private func presentationSnapshot(
         activitySummary: nil, managedSessions: sessions, launchReadiness: nil
     )
 }
+
+/// Captured from `longhouse local-health --fast --json` on 2026-08-03.
+/// Regenerate whenever the native Desktop envelope changes.
+private let nativeDesktopContractFixture = """
+    {
+        "schema_version": 1,
+        "collection_tier": "native_fast",
+        "collected_at": "2026-08-03T16:00:00Z",
+        "health_state": "healthy",
+        "severity": "green",
+        "headline": "Longhouse native fast health is healthy",
+        "reasons": [],
+        "suggested_actions": [],
+        "engine_status": {
+            "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+            "exists": true,
+            "fresh": true,
+            "age_seconds": 0,
+            "payload": {
+                "version": "test",
+                "daemon_pid": 1,
+                "last_updated": "2026-08-03T16:00:00Z"
+            }
+        },
+        "transport": {
+            "status": "healthy",
+            "status_reason": "healthy",
+            "status_summary": "Shipping healthy."
+        },
+        "spool": {
+            "pending_count": 0,
+            "dead_count": 0
+        },
+        "managed_sessions": [
+            {
+                "session_id": "0f3c6fdb-193e-4eb8-954f-aebb236fe90e",
+                "provider": "claude",
+                "workspace_label": "zerg",
+                "timeline_title": "example",
+                "first_user_message": "example",
+                "title_state": "pending",
+                "title_source": "prompt",
+                "state": "attached",
+                "bridge_status": "ready",
+                "bridge_heartbeat_at": "2026-08-03T15:24:54.536371+00:00",
+                "reason_codes": []
+            }
+        ],
+        "managed_summary": {
+            "attached_count": 1,
+            "detached_count": 0,
+            "degraded_count": 0,
+            "orphan_bridge_count": 0
+        },
+        "realtime": {
+            "runtime_url": "https://david010.longhouse.ai",
+            "machine_name": "cinder",
+            "token_path": "/Users/davidrose/.longhouse/machine/device-token"
+        }
+    }
+    """
