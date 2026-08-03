@@ -84,6 +84,17 @@ enum SessionProjectionEvent: Sendable {
     case failed(String)
 }
 
+/// Records whether a single stream connection ever carried traffic, so an
+/// ordinary server-initiated close can be told apart from a connection that
+/// never worked.
+actor LivenessFlag {
+    private(set) var observed = false
+
+    func markObserved() {
+        observed = true
+    }
+}
+
 enum SessionProjectionStream {
     private static let logger = Logger(
         subsystem: "ai.longhouse.desktop",
@@ -174,7 +185,12 @@ enum SessionProjectionStream {
             let task = Task.detached(priority: .userInitiated) {
                 var backoff = Duration.milliseconds(250)
                 let allowedSessionIds = Set(sessionIds)
+                // A stream that has proved it works earns one quiet reconnect.
+                // Servers close long-lived SSE connections routinely, and every
+                // such close would otherwise surface as a user-visible failure.
+                var reconnectGrace = 0
                 while !Task.isCancelled {
+                    let liveness = LivenessFlag()
                     do {
                         try await bootstrap(
                             connection: connection,
@@ -184,15 +200,31 @@ enum SessionProjectionStream {
                         try await drain(
                             connection: connection,
                             allowedSessionIds: allowedSessionIds,
-                            continuation: continuation
+                            continuation: continuation,
+                            liveness: liveness
                         )
-                        backoff = .milliseconds(250)
                     } catch is CancellationError {
                         break
                     } catch {
                         let description = String(describing: error)
                         logger.error("Runtime Host session stream failed: \(description, privacy: .public)")
-                        continuation.yield(.failed(description))
+
+                        if await liveness.observed {
+                            // This connection carried traffic, so the close is
+                            // ordinary. Reset the backoff that would otherwise
+                            // never recover, and spend the grace instead of
+                            // reporting a failure.
+                            backoff = .milliseconds(250)
+                            reconnectGrace = 1
+                        }
+
+                        if reconnectGrace > 0 {
+                            reconnectGrace -= 1
+                        } else {
+                            // Either the stream never carried traffic, or the
+                            // quiet reconnect also failed.
+                            continuation.yield(.failed(description))
+                        }
                         try? await Task.sleep(for: backoff)
                         backoff = min(backoff * 2, .seconds(10))
                     }
@@ -206,7 +238,8 @@ enum SessionProjectionStream {
     private static func drain(
         connection: RealtimeConnectionSnapshot,
         allowedSessionIds: Set<String>,
-        continuation: AsyncStream<SessionProjectionEvent>.Continuation
+        continuation: AsyncStream<SessionProjectionEvent>.Continuation,
+        liveness: LivenessFlag
     ) async throws {
         guard let rawURL = connection.runtimeUrl,
               let baseURL = URL(string: rawURL),
@@ -250,6 +283,7 @@ enum SessionProjectionStream {
             // Any line, including an SSE keepalive comment, is liveness
             // evidence. Renewing the lease only on deltas would expire a healthy
             // but idle stream and strip presentation from quiet sessions.
+            await liveness.markObserved()
             continuation.yield(.alive)
             if line.isEmpty {
                 if eventName == "session_delta", !dataLines.isEmpty {

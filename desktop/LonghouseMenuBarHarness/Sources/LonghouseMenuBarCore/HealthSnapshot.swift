@@ -660,7 +660,27 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var orphanBridgeCount: Int {
-        managedSummary?.orphanBridgeCount ?? currentOrphanBridges.count
+        observedOrphanBridgeCount ?? 0
+    }
+
+    /// Nil when no producer reported orphan-bridge evidence at all.
+    ///
+    /// The native producer does not scan for orphaned bridges, so collapsing
+    /// that silence to zero would assert "no cleanup needed" on the strength of
+    /// not having looked, and would silently suppress the cleanup warning.
+    public var observedOrphanBridgeCount: Int? {
+        if let summarised = managedSummary?.orphanBridgeCount {
+            return summarised
+        }
+        if let bridges = orphanBridges {
+            return bridges.count
+        }
+        return nil
+    }
+
+    /// True when nothing in this snapshot can speak to orphaned bridges.
+    public var orphanBridgeEvidenceMissing: Bool {
+        observedOrphanBridgeCount == nil
     }
 
     public var hasManagedRuntimeTruth: Bool {

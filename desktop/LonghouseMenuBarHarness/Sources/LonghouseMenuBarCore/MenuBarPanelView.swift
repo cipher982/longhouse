@@ -512,6 +512,18 @@ public struct MenuBarPanelView: View {
                 }
             }
 
+            if backgroundBridgeEntries.isEmpty && snapshot.orphanBridgeEvidenceMissing {
+                sectionDivider.padding(.horizontal, 4)
+
+                // Absence of entries here is not evidence of a clean machine
+                // when nothing scanned for orphaned bridges.
+                PanelSection(title: "Cleanup") {
+                    Text("Orphaned bridge evidence is unavailable on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+
             if !backgroundBridgeEntries.isEmpty {
                 sectionDivider.padding(.horizontal, 4)
 

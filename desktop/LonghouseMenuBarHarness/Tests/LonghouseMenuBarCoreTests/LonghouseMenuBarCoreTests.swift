@@ -2579,6 +2579,31 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func missingOrphanEvidenceIsNotZero() {
+        // The native producer does not scan for orphaned bridges. Collapsing
+        // that silence to zero would claim "no cleanup needed" without looking,
+        // and silently drop the cleanup section.
+        let blind = makeHealthySnapshot(sessions: [])
+        #expect(blind.observedOrphanBridgeCount == nil)
+        #expect(blind.orphanBridgeEvidenceMissing)
+
+        let observed = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-03T16:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Longhouse",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil,
+            managedSummary: ManagedSummarySnapshot(
+                attachedCount: 1, detachedCount: 0, degradedCount: 0,
+                orphanBridgeCount: 0, latestActivityAt: nil
+            ),
+            launchReadiness: nil
+        )
+        // A producer that looked and found none is a real zero.
+        #expect(observed.observedOrphanBridgeCount == 0)
+        #expect(observed.orphanBridgeEvidenceMissing == false)
+    }
+
+    @Test
     func neverAttemptedProducerIsNeverCurrent() {
         let state = ProducerRefreshState.neverAttempted
         #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)
