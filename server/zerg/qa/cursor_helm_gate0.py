@@ -1188,14 +1188,6 @@ def _managed_conversation_reset_scenario(
             timeout=timeout,
         )
         old_store = wait_for_store(provider_id, timeout=timeout)
-        old_ship = _ship_cursor_store(
-            engine=engine,
-            store=old_store,
-            workspace=workspace,
-            events_path=events_path,
-            registration_url=registration_url,
-            timeout=timeout,
-        )
         reset_start = len(read_hook_events(events_path))
         session.submit_idle("/clear")
         eager_deadline = time.monotonic() + min(3.0, timeout)
@@ -1247,6 +1239,18 @@ def _managed_conversation_reset_scenario(
             timeout=timeout,
         )
         new_store = wait_for_store(new_provider_id, timeout=timeout)
+        # Finish both provider turns before running the real Machine Agent
+        # source ship path.  Shipping is still ordered old -> new below so the
+        # shipper DB records the native predecessor, but the archive operation
+        # cannot perturb Cursor while its managed reset is in flight.
+        old_ship = _ship_cursor_store(
+            engine=engine,
+            store=old_store,
+            workspace=workspace,
+            events_path=events_path,
+            registration_url=registration_url,
+            timeout=timeout,
+        )
         new_ship = _ship_cursor_store(
             engine=engine,
             store=new_store,
