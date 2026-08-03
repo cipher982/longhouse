@@ -17,6 +17,8 @@ from typing import Callable
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import qualification_request
+from zerg.qa.codex_auth import CodexAuthError
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -299,6 +301,7 @@ def run_isolated_codex_operation(
     canary_root.mkdir(parents=True, exist_ok=True)
     result: Any = None
     error: str | None = None
+    auth_receipt: dict[str, str] | None = None
     with _ENV_ISOLATION_LOCK, tempfile.TemporaryDirectory(prefix="longhouse-helm-qualification-") as runtime:
         runtime_root = Path(runtime)
         codex_home = runtime_root / "codex-home"
@@ -318,11 +321,23 @@ def run_isolated_codex_operation(
             AGENTS_TOKEN_ENV: agents_token,
             PROVIDER_TOKEN_ENV: provider_token,
         }
+        if model := os.environ.get("CODEX_MODEL"):
+            strict_env["CODEX_MODEL"] = model
         original_env = os.environ.copy()
         try:
             os.environ.clear()
             os.environ.update(strict_env)
+            auth_receipt = login_with_api_key(
+                provider_bin,
+                api_key=provider_token,
+                environment=os.environ,
+                cwd=canary_root,
+                timeout=30,
+            )
             result = operation(canary_root, provider_bin)
+        except CodexAuthError as exc:
+            result = None
+            error = str(exc)
         except Exception as exc:  # noqa: BLE001 - preserve infrastructure outcome as evidence
             result = None
             error = f"{type(exc).__name__}: {exc}"
@@ -333,6 +348,8 @@ def run_isolated_codex_operation(
     result = _redact_value(result, secrets)
     error = _redact_text(error, secrets) if error else None
     stop = _stop_evidence(canary_root)
+    if auth_receipt is not None:
+        mcp_bootstrap = {**mcp_bootstrap, "provider_auth": auth_receipt}
     return result, error, stop, mcp_bootstrap
 
 
@@ -357,7 +374,7 @@ def run_isolated_managed_live_interrupt(
             repo_root=repo_root,
             api_url=api_url,
             agents_token=agents_token,
-            model=None,
+            model=os.environ.get("CODEX_MODEL"),
             bridge_start_timeout_secs=30,
             live_interrupt_timeout_secs=45,
         )

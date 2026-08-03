@@ -4,10 +4,14 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
 from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
-from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
 from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
+from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
+from zerg.qa.cursor_helm_gate0 import _scrub_artifact_tree
+from zerg.qa.cursor_helm_gate0 import _snapshot_native_evidence
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
 
@@ -48,6 +52,102 @@ def test_project_hooks_cover_identity_transcript_and_control_events(tmp_path: Pa
         "beforeShellExecution",
         "stop",
     }
+
+
+def test_gate0_artifact_scrubber_removes_exact_and_structured_provider_keys(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CURSOR_API_KEY", "fixture-token-that-is-not-prefix-shaped")
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    payload = artifact / "terminal.raw"
+    payload.write_bytes(b"fixture-token-that-is-not-prefix-shaped crsr_secret123")
+
+    _scrub_artifact_tree(artifact)
+
+    retained = payload.read_bytes()
+    assert b"fixture-token-that-is-not-prefix-shaped" not in retained
+    assert b"crsr_secret123" not in retained
+
+
+def test_gate0_snapshots_native_cursor_store_and_hook_evidence(tmp_path: Path) -> None:
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    events = artifact / "events.ndjson"
+    events.write_text('{"event":"sessionStart"}\n', encoding="utf-8")
+    source_store = tmp_path / "runtime" / "store.db"
+    source_store.parent.mkdir()
+    connection = sqlite3.connect(source_store)
+    connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    connection.execute("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)")
+    connection.execute("INSERT INTO meta VALUES ('0', ?)", [json.dumps({"agentId": "cursor-session"})])
+    connection.execute("INSERT INTO blobs VALUES ('fixture', ?)", [b'{"role":"user"}'])
+    connection.commit()
+    connection.close()
+
+    receipts = _snapshot_native_evidence(
+        {
+            "scenarios": {
+                "create_chat_resume": {
+                    "provider_conversation_id": "cursor-session",
+                    "store_db": str(source_store),
+                }
+            }
+        },
+        artifact,
+    )
+
+    assert {item["kind"] for item in receipts} == {"cursor_store_db", "cursor_hook_events"}
+    store_receipt = next(item for item in receipts if item["kind"] == "cursor_store_db")
+    retained_store = artifact / store_receipt["path"]
+    assert retained_store.read_bytes() == source_store.read_bytes()
+    assert store_receipt["source_sha256"] == store_receipt["sha256"]
+    assert store_receipt["byte_exact"] is True
+
+
+def test_gate0_binds_raw_source_ids_to_nested_provider_identity(tmp_path: Path) -> None:
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    source_store = tmp_path / "runtime" / "store.db"
+    source_store.parent.mkdir()
+    connection = sqlite3.connect(source_store)
+    connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    connection.execute("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)")
+    connection.execute("INSERT INTO meta VALUES ('0', ?)", [json.dumps({"agentId": "cursor-before"})])
+    connection.execute("INSERT INTO blobs VALUES ('fixture', ?)", [b'{"role":"user"}'])
+    connection.commit()
+    connection.close()
+
+    receipts = _snapshot_native_evidence(
+        {
+            "scenarios": {
+                "conversation_reset": {
+                    "before": {
+                        "provider_session_id": "cursor-before",
+                        "raw_source_ids": [str(source_store)],
+                    }
+                }
+            }
+        },
+        artifact,
+    )
+
+    store_receipt = next(item for item in receipts if item["kind"] == "cursor_store_db")
+    assert store_receipt["provider_session_ids"] == ["cursor-before"]
+    assert store_receipt["source_scenarios"] == ["conversation_reset"]
+
+    with pytest.raises(RuntimeError, match="does not match"):
+        _snapshot_native_evidence(
+            {
+                "scenarios": {
+                    "conversation_reset": {
+                        "before": {
+                            "provider_session_id": "wrong-id",
+                            "raw_source_ids": [str(source_store)],
+                        }
+                    }
+                }
+            },
+            tmp_path / "mismatch-artifact",
+        )
 
 
 def test_hook_event_reader_ignores_partial_or_invalid_lines(tmp_path: Path) -> None:

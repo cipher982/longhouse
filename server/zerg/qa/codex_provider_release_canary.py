@@ -1623,6 +1623,7 @@ def _coerce_args(args: argparse.Namespace | Mapping[str, Any]) -> argparse.Names
         args.artifact = Path(args.artifact).expanduser().resolve()
     args.api_url = args.api_url or os.getenv(CODEX_API_URL_ENV)
     args.agents_token = args.agents_token or os.getenv(CODEX_AGENTS_TOKEN_ENV)
+    args.model = args.model or os.getenv("CODEX_MODEL")
     return args
 
 
@@ -1707,6 +1708,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         "provider_version": provider_version,
         "codex_version": provider_version,
         "codex_bin": canaries["binary_identity"].get("path"),
+        "model": args.model,
         "longhouse_commit": _git_commit(args.repo_root),
         "verdict": verdict,
         "failure_code": failure_code,

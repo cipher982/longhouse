@@ -792,11 +792,24 @@ def _provider_real_run_env(*, extra_keys: tuple[str, ...] = ()) -> dict[str, str
     return env
 
 
+def _flatten_numeric_usage(value: Any, *, prefix: str = "") -> dict[str, int | float]:
+    if not isinstance(value, dict):
+        return {}
+    usage: dict[str, int | float] = {}
+    for key, item in value.items():
+        name = f"{prefix}{key}"
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            usage[name] = item
+        elif isinstance(item, dict):
+            usage.update(_flatten_numeric_usage(item, prefix=f"{name}."))
+    return usage
+
+
 def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -> dict[str, Any] | None:
     if event is None:
         return None
     result_text = str(event.get("result") or "")
-    return {
+    compact = {
         "type": event.get("type"),
         "subtype": event.get("subtype"),
         "session_id_present": bool(event.get("session_id")),
@@ -807,6 +820,37 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
         "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
         "result_exact_match": result_text.strip() == marker,
     }
+    model = event.get("model")
+    if isinstance(model, str) and model.strip():
+        compact["model"] = model.strip()
+    aggregate_usage = _flatten_numeric_usage(event.get("usage"))
+    model_usage = _flatten_numeric_usage(event.get("modelUsage"))
+    if aggregate_usage and model_usage:
+        compact["usage"] = {
+            **aggregate_usage,
+            **{f"modelUsage.{key}": value for key, value in model_usage.items()},
+        }
+        compact["usage_source"] = "usage+modelUsage"
+    elif aggregate_usage:
+        compact["usage"] = aggregate_usage
+        compact["usage_source"] = "usage"
+    elif model_usage:
+        compact["usage"] = model_usage
+        compact["usage_source"] = "modelUsage"
+    total_cost = event.get("total_cost_usd")
+    if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+        compact["total_cost_usd"] = total_cost
+    return compact
+
+
+def _claude_observed_model(events: list[dict[str, Any]]) -> str | None:
+    for event in events:
+        model = event.get("model")
+        if not isinstance(model, str) and isinstance(event.get("message"), dict):
+            model = event["message"].get("model")
+        if isinstance(model, str) and model.strip() and model != "<synthetic>":
+            return model.strip()
+    return None
 
 
 def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> dict[str, Any]:
@@ -950,6 +994,9 @@ def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[s
     result_events = [event for event in events if event.get("type") == "result"]
     result_event = result_events[-1] if result_events else None
     compact_result = _compact_claude_result_event(result_event, marker=marker)
+    observed_model = _claude_observed_model(events)
+    if compact_result is not None and "model" not in compact_result and observed_model is not None:
+        compact_result["model"] = observed_model
     session_ids = sorted({str(event.get("session_id") or "").strip() for event in events if str(event.get("session_id") or "").strip()})
     evidence = {
         "provider_version": version,
@@ -973,6 +1020,7 @@ def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[s
         "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "result_event": compact_result,
+        "model": observed_model,
     }
     if parse_error:
         return _claude_real_print_failure(

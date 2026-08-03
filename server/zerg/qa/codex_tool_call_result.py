@@ -18,6 +18,8 @@ from typing import Any
 
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import qualification_request
+from zerg.qa.codex_auth import CodexAuthError
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -379,6 +381,7 @@ def run_codex_real_tool_command(
     namespace cannot initialize against the outer sandbox's read-only `/proc`.
     """
     command = f"{shlex.quote(sys.executable)} -c 'import secrets; print(secrets.token_hex(16))'"
+    model = os.environ.get("CODEX_MODEL") or None
     prompt = (
         "Use the shell tool exactly once to run exactly this one command: "
         f"{command}\nThen reply with only the command output, copied exactly."
@@ -428,8 +431,10 @@ def run_codex_real_tool_command(
             "never",
             "-C",
             str(workspace),
-            prompt,
         ]
+        if model:
+            argv.extend(["--model", model])
+        argv.append(prompt)
         env = {
             "PATH": os.environ.get("PATH", ""),
             API_KEY_ENV: api_key,
@@ -479,6 +484,7 @@ def run_codex_real_tool_command(
         "stdout": _redact(tool_stdout, api_key, managed_package_root),
         "stderr": _redact(tool_stderr, api_key, managed_package_root),
         "sandbox_helper": sandbox_helper_evidence,
+        "model": model,
     }
 
 
@@ -488,6 +494,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     managed_package_resources = _managed_package_resources()
     managed_package_root = managed_package_resources[0] if managed_package_resources else None
     codex_sandbox, outer_sandbox_profile = _codex_sandbox_mode()
+    model = os.environ.get("CODEX_MODEL") or None
     repo_root = Path(__file__).resolve().parents[3]
     binary, actual_identity, runner_sha = identity_bridge._preflight(request, output_root, repo_root)  # noqa: SLF001
     generated_at = identity_bridge._now()  # noqa: SLF001
@@ -505,6 +512,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "reported_version": None,
         "version_probe": None,
         "tool_run": None,
+        "model": model,
     }
     if not api_key:
         outcomes = {assertion: AssertionOutcome.BLOCKED for assertion in ASSERTIONS}
@@ -632,11 +640,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 "never",
                 "-C",
                 str(workspace),
-                prompt,
             ]
+            if model:
+                argv.extend(["--model", model])
+            argv.append(prompt)
             tool_env = {
                 **version_env,
-                API_KEY_ENV: api_key,
                 "HOME": str(runtime_root),
                 "CODEX_HOME": str(codex_home),
             }
@@ -649,13 +658,23 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             tool_stderr = ""
             tool_error: str | None = None
             tool_timed_out = False
+            auth_observation: dict[str, str] | None = None
             try:
+                auth_observation = login_with_api_key(
+                    binary,
+                    api_key=api_key,
+                    environment=tool_env,
+                    cwd=workspace,
+                    timeout=30,
+                )
                 tool_result = _run_process_group(
                     argv,
                     cwd=workspace,
                     env=tool_env,
                     timeout=TIMEOUT_SECONDS,
                 )
+            except CodexAuthError as exc:
+                tool_error = str(exc)
             except subprocess.TimeoutExpired as exc:
                 tool_timed_out = True
                 tool_error = "timeout"
@@ -694,6 +713,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.INFRASTRUCTURE_ERROR
             execution_status = "infrastructure_error"
         tool_observation = {
+            "status": "completed" if tool_result is not None else "infrastructure_error",
             "argv": argv,
             "returncode": tool_result.returncode if tool_result else None,
             "timed_out": tool_timed_out,
@@ -713,6 +733,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 if oracle_result.final_agent_message_text is not None
                 else None
             ),
+            "model": model,
+            "authentication": auth_observation,
         }
 
     try:

@@ -51,6 +51,13 @@ with calls.open("a", encoding="utf-8") as handle:
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
     raise SystemExit(0)
+if sys.argv[1:] == ["login", "--with-api-key"]:
+    if not sys.stdin.read().strip():
+        raise SystemExit(4)
+    auth_path = Path(os.environ["CODEX_HOME"]) / "auth.json"
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    auth_path.write_text("{{}}", encoding="utf-8")
+    raise SystemExit(0)
 prompt = sys.argv[-1]
 command = prompt.split("exactly this one command: ", 1)[1].split("\\nThen", 1)[0]
 behavior = {behavior!r}
@@ -157,10 +164,11 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     assert invocations[0]["argv"] == ["--version"]
     assert invocations[0]["has_api_key"] is False
     assert invocations[0]["managed_package_root"] is None
-    assert invocations[1]["has_api_key"] is True
-    assert invocations[1]["managed_package_root"] is None
-    assert invocations[1]["sandbox_helper"] is None
-    live = invocations[1]["argv"]
+    assert invocations[1]["argv"] == ["login", "--with-api-key"]
+    assert invocations[1]["has_api_key"] is False
+    assert invocations[2]["managed_package_root"] is None
+    assert invocations[2]["sandbox_helper"] is None
+    live = invocations[2]["argv"]
     assert "--sandbox" in live and live[live.index("--sandbox") + 1] == "workspace-write"
     assert 'approval_policy="never"' in live
     assert "--ephemeral" in live
@@ -174,6 +182,20 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     assert tool_run["observed_output"] not in tool_run["argv"][-1]
     assert tool_run["final_agent_message"] == tool_run["observed_output"]
     assert {record["mode"] for record in bundle["records"]} == {None}
+
+
+def test_live_profile_pins_explicit_model_into_provider_command_and_receipt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5-codex-mini")
+    result, output, calls = _run(tmp_path, monkeypatch)
+
+    assert result["execution_status"] == "completed"
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    live = invocations[2]["argv"]
+    assert live[live.index("--model") + 1] == "gpt-5-codex-mini"
+    raw_evidence = json.loads((output / "raw-evidence.json").read_text())
+    assert raw_evidence["model"] == "gpt-5-codex-mini"
 
 
 def test_missing_credential_is_blocked_without_process_execution(tmp_path: Path, monkeypatch) -> None:
@@ -272,7 +294,8 @@ def test_secret_is_never_serialized_even_when_provider_echoes_it(tmp_path: Path,
 
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained
-    assert b"[CODEX_API_KEY]" in retained
+    raw = json.loads((output / "raw-evidence.json").read_text())
+    assert raw["tool_run"]["authentication"]["environment_key_used"] == "none"
 
 
 def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path, monkeypatch) -> None:
@@ -284,13 +307,13 @@ def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
     assert invocations[0]["managed_package_root"] is None
     assert "helper-bin" not in invocations[0]["path"]
-    assert invocations[1]["managed_package_root"] == str(package_root)
-    assert invocations[1]["sandbox_helper_source"] == str((tmp_path / "codex").resolve())
-    assert invocations[1]["sandbox_helper_source"] != str(helper)
-    shim = Path(invocations[1]["sandbox_helper"])
+    assert invocations[2]["managed_package_root"] == str(package_root)
+    assert invocations[2]["sandbox_helper_source"] == str((tmp_path / "codex").resolve())
+    assert invocations[2]["sandbox_helper_source"] != str(helper)
+    shim = Path(invocations[2]["sandbox_helper"])
     assert shim.name == "codex-linux-sandbox"
     assert shim.parent.name == "helper-bin"
-    assert invocations[1]["path"].split(":", 1)[0] == str(shim.parent)
+    assert invocations[2]["path"].split(":", 1)[0] == str(shim.parent)
     assert not shim.exists()
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert b"[CODEX_MANAGED_PACKAGE_ROOT]" in retained
@@ -316,7 +339,7 @@ def test_outer_qualification_sandbox_disables_only_nested_codex_sandbox(tmp_path
     _, output, calls = _run(tmp_path, monkeypatch)
 
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
-    tool_invocation = invocations[1]
+    tool_invocation = invocations[2]
     sandbox_index = tool_invocation["argv"].index("--sandbox")
     assert tool_invocation["argv"][sandbox_index + 1] == "danger-full-access"
     assert tool_invocation["sandbox_helper"] is None

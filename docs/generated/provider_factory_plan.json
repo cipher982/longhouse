@@ -18,8 +18,8 @@
     "weekly_cron",
     "manual"
   ],
-  "never_run_count": 45,
-  "runs_count": 15,
+  "never_run_count": 46,
+  "runs_count": 14,
   "cells": [
     {
       "provider": "antigravity",
@@ -57,7 +57,7 @@
       "build_provenance": "generated_fake",
       "trigger": "release_poll",
       "status": "never_run",
-      "reason": "the release lane only runs against staged upstream releases",
+      "reason": "Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -69,36 +69,12 @@
       "provider": "antigravity",
       "build_provenance": "generated_fake",
       "trigger": "weekly_cron",
-      "status": "runs",
-      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "status": "never_run",
+      "reason": "antigravity is not weekly_unconditional in config/provider-release-schedule.yml",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
-      "harness_scenarios": [
-        "probe_identity",
-        "adapter_conformance",
-        "collect_raw_evidence",
-        "action_matrix",
-        "control_surface",
-        "baseline_compare",
-        "old_new_release_diff",
-        "full_action_suite",
-        "parse_ingest_project",
-        "db_ingest_project",
-        "interaction_semantics",
-        "session_projection",
-        "timeline_projection",
-        "run_prompt_once",
-        "launch_managed_session",
-        "send_receive",
-        "pause_request_detect",
-        "tail_output",
-        "runtime_phase",
-        "transcript_binding",
-        "multi_turn_continuity",
-        "crash_timeout_cleanup",
-        "managed_session_e2e"
-      ],
+      "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": []
     },
@@ -155,7 +131,7 @@
       "build_provenance": "observed_install",
       "trigger": "release_poll",
       "status": "never_run",
-      "reason": "the release lane only runs against staged upstream releases",
+      "reason": "Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -206,63 +182,14 @@
       "provider": "antigravity",
       "build_provenance": "staged_release",
       "trigger": "release_poll",
-      "status": "runs",
-      "reason": "deployed release-lane profiles for antigravity",
-      "qualification_profile": "antigravity_hook_inbox_v1",
-      "qualification_profiles": [
-        "antigravity_hook_inbox_v1"
-      ],
-      "scenario_ids": [
-        "antigravity_hook_inbox"
-      ],
-      "harness_scenarios": [
-        "probe_identity",
-        "adapter_conformance",
-        "collect_raw_evidence",
-        "action_matrix",
-        "control_surface",
-        "baseline_compare",
-        "old_new_release_diff",
-        "full_action_suite",
-        "parse_ingest_project",
-        "db_ingest_project",
-        "interaction_semantics",
-        "session_projection",
-        "timeline_projection",
-        "run_prompt_once",
-        "launch_managed_session",
-        "send_receive",
-        "pause_request_detect",
-        "tail_output",
-        "runtime_phase",
-        "transcript_binding",
-        "multi_turn_continuity",
-        "crash_timeout_cleanup",
-        "managed_session_e2e"
-      ],
+      "status": "never_run",
+      "reason": "Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "hook_inbox_contract_preserved",
-          "scenario_id": "antigravity_hook_inbox",
-          "acceptable_evidence": [
-            "live_no_token"
-          ],
-          "producible_evidence": [
-            "live_no_token"
-          ],
-          "satisfiable": true
-        },
-        {
-          "assertion_id": "real_print_injection_observed",
-          "scenario_id": "antigravity_hook_inbox",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "antigravity",
@@ -832,7 +759,7 @@
       "build_provenance": "generated_fake",
       "trigger": "release_poll",
       "status": "never_run",
-      "reason": "the release lane only runs against staged upstream releases",
+      "reason": "Cursor's release lane only runs against its pinned observed install",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -931,13 +858,46 @@
       "provider": "cursor",
       "build_provenance": "observed_install",
       "trigger": "release_poll",
-      "status": "never_run",
-      "reason": "the release lane only runs against staged upstream releases",
-      "qualification_profile": null,
-      "qualification_profiles": [],
-      "scenario_ids": [],
-      "harness_scenarios": [],
-      "credential_requirement": [],
+      "status": "runs",
+      "reason": "deployed release-lane profiles for cursor",
+      "qualification_profile": "cursor_observed_install_v1",
+      "qualification_profiles": [
+        "cursor_observed_install_v1"
+      ],
+      "scenario_ids": [
+        "cursor_observed_install"
+      ],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "interaction_semantics",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [
+        "CURSOR_API_KEY",
+        "CURSOR_MODEL",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_ENGINE_BIN"
+      ],
       "assertion_status": []
     },
     {
@@ -984,7 +944,7 @@
       "build_provenance": "staged_release",
       "trigger": "release_poll",
       "status": "never_run",
-      "reason": "cursor has no registered release lane (no *_lane() in provider_factory/registry.py)",
+      "reason": "Cursor's release lane only runs against its pinned observed install",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],

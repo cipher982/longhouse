@@ -1082,7 +1082,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "opencode"
       ]
     },
     {
@@ -1154,7 +1155,6 @@
     {
       "path": "server/tests_lite/test_render_provider_factory_status.py",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
         "cursor",

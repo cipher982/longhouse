@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,6 @@ PROFILE = "claude_real_print_v1"
 SCENARIO_ID = "claude_real_print"
 ASSERTIONS = semantic_oracles.assertions_for(SCENARIO_ID)
 LIVE_ENABLE_ENV = "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE"
-USE_DEFAULT_HOME_ENV = "LONGHOUSE_CLAUDE_QUALIFICATION_USE_DEFAULT_HOME"
 EXPLICIT_CREDENTIAL_ENV = (
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -97,13 +97,8 @@ def _execute(binary: Path, evidence_root: Path):
         str(no_token.get("verdict") or "red").replace("green", "pass").replace("yellow", "warn").replace("red", "fail")
     )
     credentials = {key: value for key in EXPLICIT_CREDENTIAL_ENV if (value := str(os.environ.get(key) or "").strip())}
-    default_home = str(os.environ.get("HOME") or "").strip()
-    use_default_home = os.environ.get(USE_DEFAULT_HOME_ENV) == "1" and bool(default_home)
-    if use_default_home:
-        credentials.pop("CLAUDE_CONFIG_DIR", None)
     explicit_authority = bool(
-        use_default_home
-        or credentials.get("CLAUDE_CONFIG_DIR")
+        credentials.get("CLAUDE_CONFIG_DIR")
         or credentials.get("CLAUDE_CODE_OAUTH_TOKEN")
         or credentials.get("ANTHROPIC_API_KEY")
         or credentials.get("CLAUDE_CODE_USE_BEDROCK", "").lower() in {"1", "true", "yes"}
@@ -115,14 +110,16 @@ def _execute(binary: Path, evidence_root: Path):
         live_root = evidence_root / "live"
         live_root.mkdir(parents=True, exist_ok=True)
         env: dict[str, str | None] = {"LONGHOUSE_CLAUDE_BIN": str(binary), **credentials}
-        if use_default_home:
-            env.update(HOME=default_home, CLAUDE_CONFIG_DIR=None)
-        elif "CLAUDE_CONFIG_DIR" not in credentials and not credentials.get("CLAUDE_CODE_USE_BEDROCK"):
-            isolated_home = live_root / "home"
+        # Provider runtime state is disposable execution machinery, not
+        # retained evidence. In particular, a profile-authenticated Claude
+        # run can materialize credential-bearing files below HOME even when
+        # the final JSON/log scrubber knows the configured token value.
+        with tempfile.TemporaryDirectory(prefix="longhouse-claude-runtime-") as runtime_root:
+            isolated_home = Path(runtime_root) / "home"
             isolated_home.mkdir(mode=0o700)
             env["HOME"] = str(isolated_home)
-        with semantic.temporary_environment(env):
-            live = module.run_claude_real_print_canary(argparse.Namespace(claude_print_timeout_secs=180), live_root)
+            with semantic.temporary_environment(env):
+                live = module.run_claude_real_print_canary(argparse.Namespace(claude_print_timeout_secs=180), live_root)
     else:
         live = {
             "status": "blocked",
@@ -132,7 +129,6 @@ def _execute(binary: Path, evidence_root: Path):
                 else "claude_no_token_contract_not_proven"
             ),
             "required_enable_env": LIVE_ENABLE_ENV,
-            "default_home_enable_env": USE_DEFAULT_HOME_ENV,
             "accepted_credential_env": list(EXPLICIT_CREDENTIAL_ENV),
         }
     assertions = claude_real_print_oracle(
@@ -146,8 +142,21 @@ def _execute(binary: Path, evidence_root: Path):
         overall = "fail"
     elif AssertionOutcome.BLOCKED in {no_token_outcome, live_outcome}:
         overall = "blocked"
+    live_model_evidence = None
+    if isinstance(live, dict):
+        live_model_evidence = {
+            "source_canary": "real_print_canary",
+            "operation_evidence": live.get("operation_evidence"),
+            "model": live.get("model"),
+            "result_event": live.get("result_event"),
+        }
     return (
-        {"status": overall, "no_token_canary": no_token, "real_print_canary": live},
+        {
+            "status": overall,
+            "no_token_canary": no_token,
+            "real_print_canary": live,
+            "live_model_evidence": live_model_evidence,
+        },
         assertions,
         tuple(credentials[key] for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY") if key in credentials),
     )

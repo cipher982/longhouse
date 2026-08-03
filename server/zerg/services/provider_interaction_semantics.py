@@ -540,6 +540,9 @@ def classify_provider_interaction(
         elif kind == INTERACTION_LOCAL_CONTROL_OUTPUT:
             changes_provider_state = False
             starts_model_turn = False
+        elif kind == INTERACTION_PROVIDER_SYSTEM:
+            changes_provider_state = False
+            starts_model_turn = False
 
     if parser_changes_provider_state is not None:
         changes_provider_state = bool(parser_changes_provider_state)

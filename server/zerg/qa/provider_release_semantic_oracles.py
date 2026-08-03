@@ -15,6 +15,7 @@ ASSERTIONS_BY_SCENARIO = {
         "hook_inbox_contract_preserved",
         "real_print_injection_observed",
     ),
+    "cursor_observed_install": ("cursor_observed_install_contract_preserved",),
     **{
         f"{provider}_conversation_reset": (
             "provider_conversation_reset_observed",

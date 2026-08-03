@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=("full_installed_tree", "single_asset"),
         required=True,
     )
+    parser.add_argument(
+        "--artifact-provenance",
+        choices=("staged_release", "observed_install"),
+        default="staged_release",
+    )
     args = parser.parse_args(argv)
     try:
         build = materialize_staged_provider_build(
@@ -40,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             platform_name=args.platform,
             architecture=args.architecture,
             closure_granularity=args.closure_granularity,
+            artifact_provenance=args.artifact_provenance,
         )
     except ProviderBuildStoreError as exc:
         parser.error(str(exc))

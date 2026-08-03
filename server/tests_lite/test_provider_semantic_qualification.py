@@ -148,7 +148,16 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
         assert os.environ["LONGHOUSE_CLAUDE_BIN"] == str(binary)
         assert os.environ["ANTHROPIC_API_KEY"] == secret
         root.joinpath("provider-stderr.log").write_text(secret, encoding="utf-8")
-        return {"status": "pass", "canary": "claude_real_print", "secret_echo": secret}
+        return {
+            "status": "pass",
+            "canary": "claude_real_print",
+            "model": "claude-haiku-test",
+            "operation_evidence": {
+                "live_token_behavior": {"status": "pass", "level": "live_token"}
+            },
+            "result_event": {"model": "claude-haiku-test", "total_cost_usd": 0.001},
+            "secret_echo": secret,
+        }
 
     monkeypatch.setattr(
         claude.semantic,
@@ -162,12 +171,16 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     record = _records_by_assertion(output)[claude.ASSERTIONS[1]]
     assert record["outcome"] == "pass"
     assert record["evidence_class"] == "live_token"
+    observation = json.loads((output / "semantic-evidence" / "semantic-observation.json").read_text())
+    assert observation["live_model_evidence"]["source_canary"] == "real_print_canary"
+    assert observation["live_model_evidence"]["model"] == "claude-haiku-test"
+    assert observation["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained
     assert b"[QUALIFICATION_SECRET_1]" in retained
 
 
-def test_claude_explicit_default_home_runs_without_config_dir(tmp_path: Path, monkeypatch) -> None:
+def test_claude_live_probe_keeps_an_isolated_home_even_with_default_home_flag(tmp_path: Path, monkeypatch) -> None:
     binary, executable_identity = _fake_binary(tmp_path, "claude")
     default_home = tmp_path / "default-home"
     default_home.mkdir()
@@ -175,7 +188,7 @@ def test_claude_explicit_default_home_runs_without_config_dir(tmp_path: Path, mo
     monkeypatch.setenv("HOME", str(default_home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "wrong-credential-namespace"))
     monkeypatch.setenv(claude.LIVE_ENABLE_ENV, "1")
-    monkeypatch.setenv(claude.USE_DEFAULT_HOME_ENV, "1")
+    monkeypatch.setenv("LONGHOUSE_CLAUDE_QUALIFICATION_USE_DEFAULT_HOME", "1")
 
     def no_token_canary(_args):
         assert Path(os.environ["HOME"]) != default_home
@@ -183,8 +196,8 @@ def test_claude_explicit_default_home_runs_without_config_dir(tmp_path: Path, mo
         return _claude_no_token_artifact()
 
     def real_print(_args, _root):
-        assert os.environ["HOME"] == str(default_home)
-        assert "CLAUDE_CONFIG_DIR" not in os.environ
+        assert os.environ["HOME"] != str(default_home)
+        assert os.environ["CLAUDE_CONFIG_DIR"] == str(tmp_path / "wrong-credential-namespace")
         return {"status": "pass", "canary": "claude_real_print"}
 
     monkeypatch.setattr(claude, "run_provider_live_canary", no_token_canary)

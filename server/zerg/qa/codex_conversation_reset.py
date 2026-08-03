@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import UTC
 from datetime import datetime
@@ -18,6 +19,7 @@ from zerg.qa.claude_conversation_reset import _read_json
 from zerg.qa.claude_conversation_reset import _sha256
 from zerg.qa.claude_conversation_reset import _tail
 from zerg.qa.claude_conversation_reset import _wait
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import execution_summary
 from zerg.qa.conversation_reset import longhouse_provider_aliases
@@ -30,8 +32,7 @@ from zerg.qa.pty_session import wait_for_terminal_quiescence
 
 
 def _rollout_paths(codex_home: Path) -> list[Path]:
-    roots = {codex_home / "sessions", Path.home() / ".codex" / "sessions"}
-    return [path for root in roots for path in root.glob("**/*.jsonl")]
+    return list((codex_home / "sessions").glob("**/*.jsonl"))
 
 
 def _assistant_marker_path(marker: str, *, started_at: float, codex_home: Path) -> Path | None:
@@ -98,16 +99,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     output_root.mkdir(parents=True)
     workspace = Path(args.cwd).expanduser().resolve(strict=True)
     terminal_path = output_root / "terminal.raw"
-    codex_home = output_root / "codex-home"
-    codex_home.mkdir()
-    auth_link = codex_home / "auth.json"
-    source_auth = Path.home() / ".codex" / "auth.json"
-    if not source_auth.is_file():
-        raise RuntimeError("Codex auth.json is required for the isolated qualification home")
-    auth_link.symlink_to(source_auth)
+    api_key = os.environ.get("CODEX_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("CODEX_API_KEY is required; the conversation-reset canary never copies the daily Codex profile")
     engine_bin = shutil.which("longhouse-engine")
     if not engine_bin:
         raise RuntimeError("longhouse-engine is required for the isolated Codex coordination MCP")
+    runtime_root = Path(tempfile.mkdtemp(prefix="longhouse-codex-reset-"))
+    codex_home = runtime_root / "codex-home"
+    codex_home.mkdir(mode=0o700)
+    isolated_home = runtime_root / "home"
+    isolated_home.mkdir(mode=0o700)
     (codex_home / "config.toml").write_text(
         f'[mcp_servers.longhouse]\ncommand = {json.dumps(engine_bin)}\nargs = ["claude-channel", "serve"]\n',
         encoding="utf-8",
@@ -117,9 +119,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     marker_b = f"LONGHOUSE_RESET_CODEX_B_{invocation}"
     started_at = time.time()
     env = os.environ.copy()
+    env["HOME"] = str(isolated_home)
     env["LONGHOUSE_CODEX_BIN"] = str(provider_bin)
     env["LONGHOUSE_CODEX_TUI_HOME"] = str(codex_home)
     env["CODEX_HOME"] = str(codex_home)
+    try:
+        auth_receipt = login_with_api_key(
+            provider_bin,
+            api_key=api_key,
+            environment=env,
+            cwd=workspace,
+        )
+    except Exception:
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise
+    env.pop("CODEX_API_KEY", None)
     argv = [
         "longhouse",
         "codex",
@@ -134,16 +148,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ]
     if args.model:
         argv.extend(("--model", args.model))
-    session = ProviderPtySession.start(
-        argv=argv,
-        cwd=workspace,
-        env=env,
-        terminal_path=terminal_path,
-        thread_name="codex-conversation-reset-terminal-drain",
-    )
+    session: ProviderPtySession | None = None
     observation: dict[str, Any] | None = None
     try:
-        state_root = Path.home() / ".longhouse" / "managed-local" / "codex-bridge"
+        session = ProviderPtySession.start(
+            argv=argv,
+            cwd=workspace,
+            env=env,
+            terminal_path=terminal_path,
+            thread_name="codex-conversation-reset-terminal-drain",
+        )
+        state_root = isolated_home / ".longhouse" / "managed-local" / "codex-bridge"
 
         def launched_state():
             if not session.alive():
@@ -224,6 +239,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "provider_version": version,
             "provider_executable_identity": f"sha256:{_sha256(provider_bin)}",
+            "authentication": auth_receipt,
             "reset_command": "/clear",
             "reset_command_accepted": provider_alias == after_provider_id
             and Path(str(final_state.get("thread_path") or "")) == after_path
@@ -275,8 +291,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         session.submit_line("/exit")
         return observation
     finally:
-        session.close()
-        auth_link.unlink(missing_ok=True)
+        if session is not None:
+            session.close()
         (output_root / "summary.json").write_text(
             json.dumps(
                 execution_summary(
@@ -289,6 +305,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             + "\n",
             encoding="utf-8",
         )
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -24,6 +24,7 @@ and live-token behavior.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -37,11 +38,13 @@ from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
+from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_interaction_semantics as interaction_semantics
 from zerg.qa import provider_release_identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.provider_build_store import OBSERVED_INSTALL_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import materialize_staged_provider_build
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
@@ -123,7 +126,10 @@ _FULL_COLUMN_LIMITS = {
 
 _LIVE_INTERACTION_ALLOWED_BLOCKED_CODES = frozenset(
     {
+        "interaction_acknowledgement_missing",
         "interaction_live_probe_setup_failed",
+        "interaction_native_raw_evidence_missing",
+        "interaction_probe_setup_failed",
         "interaction_semantics_assertion_failed",
         "missing_isolated_auth",
     }
@@ -199,6 +205,9 @@ def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, ou
         entrypoint_relative = provider_bin.name
         if tuple(path.name for path in source_root.iterdir()) != (provider_bin.name,):
             raise RequestError(f"{provider} single-asset staged build must contain exactly its provider entrypoint")
+    elif provider == "cursor" and granularity == "full_installed_tree":
+        source_root = provider_bin.parent
+        entrypoint_relative = provider_bin.name
     else:
         raise RequestError(f"unsupported staged build shape for harness qualification: provider={provider!r}, granularity={granularity!r}")
     store_root = output_root / "provider-build-store"
@@ -209,6 +218,7 @@ def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, ou
         entrypoint_relative=entrypoint_relative,
         store_root=store_root,
         closure_granularity=granularity,
+        artifact_provenance=(OBSERVED_INSTALL_PROVENANCE if provider == "cursor" else "staged_release"),
     )
     expected_identity = request["expected_provider_build_identity"]
     if expected_identity != f"sha256:{build_ref.closure_digest}":
@@ -371,7 +381,7 @@ def _full_column_gate(
             data = result.get("data")
             assertions = data.get("assertions") if isinstance(data, Mapping) else None
             probe_assertions = (
-                [row for row in assertions if isinstance(row, Mapping) and row.get("probe_id") != "shared_title_boundary"]
+                [row for row in assertions if isinstance(row, Mapping) and row.get("status") != "not_applicable"]
                 if isinstance(assertions, list)
                 else []
             )
@@ -381,6 +391,7 @@ def _full_column_gate(
                 and data.get("provider_status") == "pass"
                 and data.get("evidence_class") in {"live_no_token", "live_token"}
                 and bool(probe_assertions)
+                and any(row.get("probe_id") == "shared_title_boundary" for row in probe_assertions)
                 and all(row.get("status") == "pass" for row in probe_assertions)
                 and _validated_live_interaction_artifacts(provider, data)
             )
@@ -992,6 +1003,120 @@ def run_antigravity_hook_inbox(request_path: Path, output_root: Path) -> dict[st
     )
 
 
+def _cursor_observed_install_executor(
+    binary: Path,
+    evidence_root: Path,
+    *,
+    request: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[semantic.SemanticAssertion, ...], tuple[str, ...]]:
+    """Run Cursor's full universal column against the immutable install tree.
+
+    Cursor has no public release feed that can supply a staged release asset.
+    The private factory therefore acquires an explicit official install tree,
+    runs Gate 0, and hands this bridge the exact tree plus its Gate 0 artifact.
+    The bridge still re-materializes that tree into the public build store and
+    binds every harness result to the same qualification request.
+    """
+    gate0_path = str(os.environ.get("LONGHOUSE_CURSOR_GATE0_ARTIFACT") or "").strip()
+    gate0 = None
+    if gate0_path:
+        candidate = Path(gate0_path).expanduser().resolve()
+        run_root = evidence_root.resolve().parents[1]
+        if not candidate.is_relative_to(run_root) or candidate.name != "gate0.json":
+            raise RequestError("Cursor Gate 0 artifact is outside the qualification invocation")
+        try:
+            gate0_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RequestError(f"Cursor Gate 0 artifact is unreadable: {exc}") from exc
+        if not isinstance(gate0_payload, dict):
+            raise RequestError("Cursor Gate 0 artifact is not an object")
+        gate0 = {
+            "artifact_path": str(candidate.relative_to(run_root)),
+            "artifact_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+            "status": gate0_payload.get("status"),
+            "failure_code": gate0_payload.get("failure_code"),
+            "native_evidence": gate0_payload.get("native_evidence"),
+        }
+    build_ref = _build_provider_build_ref(request, binary, output_root=evidence_root)
+    harness_payload = run_harness(
+        HarnessOptions(
+            providers=("cursor",),
+            scenarios=(*DEFAULT_HARNESS_SCENARIOS, LIVE_TOKEN_HARNESS_SCENARIO),
+            evidence_root=evidence_root / "harness-evidence",
+            provider_bins={"cursor": binary},
+            provider_builds={"cursor": build_ref},
+            qualification_request=request,
+        )
+    )
+    full_column_gate = _full_column_gate(
+        harness_payload,
+        provider="cursor",
+        qualification_request_digest=request.get("semantic_digest"),
+        interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+    )
+    live_result = _scenario_result(
+        harness_payload,
+        provider="cursor",
+        scenario=LIVE_TOKEN_HARNESS_SCENARIO,
+    )
+    gate_status = full_column_gate.get("status")
+    provider_status = full_column_gate.get("provider_status")
+    gate0_passed = gate0 is not None and gate0.get("status") == "passed"
+    if not gate0_passed or gate_status != "pass" or provider_status in {"fail", "blocked"} or live_result.get("status") != "pass":
+        assertion_outcome = (
+            AssertionOutcome.BLOCKED
+            if provider_status == "blocked" or live_result.get("status") == "blocked"
+            else AssertionOutcome.INFRASTRUCTURE_ERROR
+        )
+        status = "blocked" if assertion_outcome == AssertionOutcome.BLOCKED else "infrastructure_error"
+    else:
+        assertion_outcome = AssertionOutcome.PASS
+        status = "pass"
+    interaction_evidence_class = str((request.get("scenario_evidence") or {}).get("interaction_semantics") or "live_token")
+    evidence_class = {
+        "hermetic": EvidenceClass.HERMETIC,
+        "live_no_token": EvidenceClass.LIVE_NO_TOKEN,
+        "live_token": EvidenceClass.LIVE_TOKEN,
+    }.get(interaction_evidence_class, EvidenceClass.LIVE_TOKEN)
+    assertion = semantic.SemanticAssertion(
+        "cursor_observed_install_contract_preserved",
+        assertion_outcome,
+        evidence_class,
+    )
+    observation = {
+        "status": status,
+        "provider_bin": str(binary),
+        "provider_build": build_ref.to_evidence(),
+        "full_column_gate": full_column_gate,
+        LIVE_TOKEN_HARNESS_SCENARIO: live_result,
+        "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
+        "cursor_gate0": gate0,
+    }
+    secrets = tuple(value for name in ("CURSOR_API_KEY",) if (value := str(os.environ.get(name) or "").strip()))
+    return observation, (assertion,), secrets
+
+
+def run_cursor_observed_install(request_path: Path, output_root: Path) -> dict[str, Any]:
+    request = provider_release_identity.load_request(
+        request_path,
+        provider="cursor",
+        profile=cursor_release_identity.OBSERVED_INSTALL_PROFILE,
+        version_grammar=cursor_release_identity._OBSERVED_INSTALL_PROFILE.version_grammar,  # noqa: SLF001
+    )
+
+    def execute(binary: Path, evidence_root: Path):
+        return _cursor_observed_install_executor(binary, evidence_root, request=request)
+
+    return semantic.run_semantic_profile(
+        request_path,
+        output_root,
+        profile=cursor_release_identity._OBSERVED_INSTALL_PROFILE,  # noqa: SLF001
+        assertion_ids=cursor_release_identity.OBSERVED_INSTALL_ASSERTIONS,
+        executor=execute,
+        oracle_source=Path(semantic_oracles.__file__),
+    )
+
+
 # Deliberately only these provider/profile pairs. This is not a fallback for
 # arbitrary release profiles; every admission carries provider-specific proof
 # mapping and fail-closed limits.
@@ -1001,6 +1126,7 @@ _PROFILES = {
     ("claude", claude_real_print_qualification.PROFILE): run_claude_real_print,
     ("opencode", opencode_server_qualification.PROFILE): run_opencode_server_contract,
     ("antigravity", antigravity_hook_qualification.PROFILE): run_antigravity_hook_inbox,
+    ("cursor", cursor_release_identity.OBSERVED_INSTALL_PROFILE): run_cursor_observed_install,
 }
 
 

@@ -106,6 +106,7 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
         "claude_real_print_v1",
         "opencode_server_contract_v1",
         "antigravity_hook_inbox_v1",
+        "cursor_observed_install_v1",
     }
 )
 
@@ -123,13 +124,12 @@ ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor")
 # has two profiles: the tool-result lane owns the complete universal column,
 # while the Helm lane supplies the strict managed-interrupt proof. The singular
 # mapping remains the primary/default profile for older generated consumers.
-# Cursor has no entry: registered_lane("cursor") raises ValueError, there is no
-# cursor_lane().
 DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
     "codex": ("codex_tool_call_result_v1", "codex_helm_interrupt_v1"),
     "claude": ("claude_real_print_v1",),
     "opencode": ("opencode_server_contract_v1",),
     "antigravity": ("antigravity_hook_inbox_v1",),
+    "cursor": ("cursor_observed_install_v1",),
 }
 DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provider, profiles in DEPLOYED_RELEASE_LANE_PROFILES.items()}
 
@@ -214,6 +214,7 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "codex_helm_interrupt_v1": ("CODEX_AGENTS_TOKEN", "CODEX_API_KEY", "CODEX_API_URL", "LONGHOUSE_ENGINE_BIN"),
     "claude_real_print_v1": ("ANTHROPIC_API_KEY", "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE", "LONGHOUSE_ENGINE_BIN"),
     "opencode_server_contract_v1": ("OPENROUTER_API_KEY",),
+    "cursor_observed_install_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
 }
 
 
@@ -308,6 +309,9 @@ def _release_lane_scenario_id(provider: str, profile: str) -> str:
     from zerg.qa.provider_qualification import _PROFILES as release_lane_profiles
 
     run_fn = release_lane_profiles[(provider, profile)]
+    scenario_id = getattr(run_fn, "SCENARIO_ID", None)
+    if isinstance(scenario_id, str):
+        return scenario_id
     module = sys.modules[run_fn.__module__]
     return module.SCENARIO_ID
 
@@ -336,13 +340,26 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
     Trigger(trigger)
 
     if trigger == Trigger.RELEASE_POLL:
-        if build_provenance != BuildProvenance.STAGED_RELEASE:
+        if provider == "antigravity":
             return PlanCell(
                 provider=provider,
                 build_provenance=build_provenance,
                 trigger=trigger,
                 status="never_run",
-                reason="the release lane only runs against staged upstream releases",
+                reason="Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
+            )
+        expected_provenance = BuildProvenance.OBSERVED_INSTALL if provider == "cursor" else BuildProvenance.STAGED_RELEASE
+        if build_provenance != expected_provenance:
+            return PlanCell(
+                provider=provider,
+                build_provenance=build_provenance,
+                trigger=trigger,
+                status="never_run",
+                reason=(
+                    "Cursor's release lane only runs against its pinned observed install"
+                    if provider == "cursor"
+                    else "the release lane only runs against staged upstream releases"
+                ),
             )
         profiles = DEPLOYED_RELEASE_LANE_PROFILES.get(provider)
         if profiles is None:

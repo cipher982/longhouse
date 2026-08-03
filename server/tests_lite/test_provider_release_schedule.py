@@ -15,12 +15,22 @@ from zerg.qa.provider_release_schedule import load_provider_release_schedule
 from zerg.services.managed_provider_contracts import managed_provider_names
 
 
-def test_schedule_covers_the_contract_and_keeps_live_tokens_manual() -> None:
+def test_schedule_covers_the_contract_and_declares_private_live_token_ownership() -> None:
     schedule = load_provider_release_schedule()
 
     assert {row.provider for row in schedule.providers} == managed_provider_names()
-    assert {entry["provider"] for entry in schedule.matrix()["include"]} == managed_provider_names()
+    assert {entry["provider"] for entry in schedule.matrix()["include"]} == managed_provider_names() - {"antigravity"}
     assert schedule.scheduled_evidence == "generated_fake_unconditional_full_column"
+
+
+def test_schedule_rejects_a_scheduled_live_token_executor_that_is_not_private_factory(tmp_path: Path) -> None:
+    payload = yaml.safe_load(DEFAULT_SCHEDULE_PATH.read_text(encoding="utf-8"))
+    payload["live_token"]["executor"] = "github_actions"
+    path = tmp_path / "schedule.yml"
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    with pytest.raises(ProviderReleaseScheduleError, match="private factory"):
+        load_provider_release_schedule(path)
 
 
 def test_weekly_workflow_uses_the_declared_cron_and_independent_cells() -> None:
@@ -40,7 +50,7 @@ def test_schedule_rejects_a_missing_contract_provider(tmp_path: Path) -> None:
     path = tmp_path / "schedule.yml"
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
-    with pytest.raises(ProviderReleaseScheduleError, match="missing=\['codex'\]"):
+    with pytest.raises(ProviderReleaseScheduleError, match=r"missing=\['codex'\]"):
         load_provider_release_schedule(path)
 
 

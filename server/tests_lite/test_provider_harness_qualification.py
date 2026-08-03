@@ -15,6 +15,7 @@ from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
+from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_harness_qualification as bridge
 from zerg.qa import provider_interaction_semantics as interaction_semantics
@@ -55,9 +56,17 @@ import json
 import os
 import shlex
 import sys
+from pathlib import Path
 
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
+    raise SystemExit(0)
+if sys.argv[1:] == ["login", "--with-api-key"]:
+    if not sys.stdin.read().strip():
+        raise SystemExit(4)
+    auth_path = Path(os.environ["CODEX_HOME"]) / "auth.json"
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    auth_path.write_text("{{}}", encoding="utf-8")
     raise SystemExit(0)
 prompt = sys.argv[-1]
 command = prompt.split("exactly this one command: ", 1)[1].split("\\nThen", 1)[0]
@@ -513,6 +522,25 @@ def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(
     ]
 
 
+def test_full_column_gate_rejects_a_pass_claim_with_native_evidence_missing() -> None:
+    payload = _passing_full_column_payload()
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["status"] = "pass"
+    interaction["failure_code"] = "interaction_native_raw_evidence_missing"
+    interaction["data"] = {
+        "verification_scope": "provider_native",
+        "provider_status": "pass",
+        "evidence_class": "live_token",
+        "assertions": [{"probe_id": "provider_control", "status": "blocked"}],
+    }
+
+    gate = bridge._full_column_gate(payload, interaction_evidence_class="live_token")  # noqa: SLF001
+
+    assert gate["status"] == "fail"
+    assert gate["provider_status"] == "fail"
+    assert gate["unexpected_results"][0]["actual_failure_code"] == "interaction_native_raw_evidence_missing"
+
+
 def test_full_column_gate_rejects_one_regressed_scenario() -> None:
     payload = _passing_full_column_payload()
     row = next(result for result in payload["results"] if result["scenario"] == "timeline_projection")
@@ -617,6 +645,73 @@ def test_cursor_full_column_gate_accepts_live_gate0_limits() -> None:
     gate = bridge._full_column_gate(payload, provider="cursor")  # noqa: SLF001
 
     assert gate["status"] == "pass"
+
+
+def test_cursor_observed_install_executor_demotes_blocked_live_provider_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "cursor-install"
+    root.mkdir()
+    binary = root / "cursor-agent"
+    binary.write_text("cursor fixture\n", encoding="utf-8")
+    binary.chmod(0o700)
+    build_identity = f"sha256:{_closure_digest(root)}"
+    request = _request(
+        tmp_path,
+        profile=cursor_release_identity.OBSERVED_INSTALL_PROFILE,
+        binary=binary,
+        identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
+        build_identity=build_identity,
+        provider="cursor",
+        version="2026.07.23-test",
+        granularity="full_installed_tree",
+        scenario_evidence={"interaction_semantics": "live_token"},
+    )
+    evidence_root = tmp_path / "output" / "evidence"
+    gate0 = tmp_path / "gate0.json"
+    gate0.write_text(json.dumps({"status": "passed", "provider": "cursor"}), encoding="utf-8")
+    monkeypatch.setenv("LONGHOUSE_CURSOR_GATE0_ARTIFACT", str(gate0))
+
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_CURSOR_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row: dict[str, object] = {"provider": "cursor", "scenario": scenario, "status": status}
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+    interaction = next(row for row in results if row["scenario"] == "interaction_semantics")
+    interaction.update(status="blocked", failure_code="interaction_native_raw_evidence_missing")
+    results.append(
+        {
+            "provider": "cursor",
+            "scenario": LIVE_TOKEN_HARNESS_SCENARIO,
+            "status": "pass",
+        }
+    )
+    monkeypatch.setattr(
+        bridge,
+        "run_harness",
+        lambda _options: {
+            "results": results,
+            "provider_execution_coverage_matrix": {
+                "provider_coverage_gap_kind_counts": {"cursor": {"passed": 29}},
+                "missing_provider_actions": [],
+            },
+        },
+    )
+
+    observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        evidence_root,
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert observation["status"] == "blocked"
+    assert observation["full_column_gate"]["provider_status"] == "blocked"
+    assert assertions[0].outcome.value == "blocked"
 
 
 def test_claude_profile_runs_one_full_column_and_reuses_live_print_result(

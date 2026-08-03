@@ -4,6 +4,8 @@ from subprocess import CompletedProcess
 import pytest
 
 from zerg.qa import provider_interaction_probe
+from zerg.qa import provider_interaction_semantics
+from zerg.qa.provider_interaction_semantics import evaluate_observation
 
 
 @pytest.mark.parametrize(
@@ -73,6 +75,7 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LONGHOUSE_PROVIDER_INTERACTION_LIVE", "1")
     monkeypatch.setenv("LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT", "/tmp/fixture.json")
+    monkeypatch.setenv("LONGHOUSE_CURSOR_GATE0_ARTIFACT", "/tmp/gate0.json")
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/model")
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-model")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://example.invalid")
@@ -82,6 +85,7 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
 
     assert "LONGHOUSE_PROVIDER_INTERACTION_LIVE" not in environment
     assert "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT" not in environment
+    assert "LONGHOUSE_CURSOR_GATE0_ARTIFACT" not in environment
     assert "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL" not in environment
     assert "ANTHROPIC_MODEL" not in environment
     assert "ANTHROPIC_BASE_URL" not in environment
@@ -89,9 +93,141 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
     assert environment["AWS_EC2_METADATA_DISABLED"] == "true"
 
 
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    (
+        ("deepseek/deepseek-v4-flash", "openrouter/deepseek/deepseek-v4-flash"),
+        ("openrouter/deepseek/deepseek-v4-flash", "openrouter/deepseek/deepseek-v4-flash"),
+        ("", None),
+    ),
+)
+def test_opencode_model_argument_is_explicit_and_provider_qualified(configured: str, expected: str | None) -> None:
+    assert provider_interaction_probe._opencode_cli_model(configured) == expected  # noqa: SLF001
+
+
 def test_provider_auth_prompt_detection_does_not_match_bare_status_or_help_text() -> None:
     assert provider_interaction_probe._looks_like_provider_auth_prompt("HTTP 401 retry; API key examples") is False  # noqa: SLF001
     assert provider_interaction_probe._looks_like_provider_auth_prompt("API key required to continue") is True  # noqa: SLF001
+
+
+def test_cursor_stream_json_parser_keeps_native_init_and_result_records() -> None:
+    events = provider_interaction_probe._cursor_stream_json_events(  # noqa: SLF001
+        "\n".join(
+            [
+                '{"type":"system","subtype":"init","model":"grok-4.5","apiKeySource":"apiKey","session_id":"s"}',
+                '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"ok","usage":{"input_tokens":12,"output_tokens":3}}',
+                "terminal text that is not a native event",
+            ]
+        )
+    )
+
+    assert [event["type"] for event in events] == ["system", "result"]
+    assert events[0]["apiKeySource"] == "apiKey"
+    assert events[1]["request_id"] == "r"
+
+
+@pytest.mark.parametrize(
+    ("requested", "observed"),
+    (("cursor-grok-4.5-high", "Cursor Grok 4.5 High"), ("gpt-5.6-sol", "gpt-5.6-sol")),
+)
+def test_cursor_model_identity_accepts_cli_alias_and_display_name(requested: str, observed: str) -> None:
+    assert provider_interaction_probe._cursor_model_identity(requested) == provider_interaction_probe._cursor_model_identity(observed)  # noqa: SLF001
+
+
+def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monkeypatch, tmp_path: Path) -> None:
+    binary = tmp_path / "cursor-agent"
+    binary.write_text("fixture", encoding="utf-8")
+    runtime_homes: list[Path] = []
+    stdout = "\n".join(
+        [
+            '{"type":"system","subtype":"init","model":"grok-4.5","apiKeySource":"apiKey","session_id":"s"}',
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"s"}',
+            '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"fixture-token","usage":{"input_tokens":12,"output_tokens":3}}',
+        ]
+    )
+
+    def fake_run(*_args, **kwargs):
+        runtime_homes.append(Path(kwargs["env"]["HOME"]))
+        return CompletedProcess([], 0, stdout, "")
+
+    monkeypatch.setattr(
+        provider_interaction_probe.subprocess,
+        "run",
+        fake_run,
+    )
+
+    artifact_root = tmp_path / "artifacts"
+    rows, _source_rows = provider_interaction_probe._cursor_model_probe(  # noqa: SLF001
+        binary=binary,
+        artifact_root=artifact_root,
+        timeout=1,
+        environment={"CURSOR_API_KEY": "fixture-token", "CURSOR_MODEL": "grok-4.5"},
+    )
+    row = rows[0]
+
+    assert row["status"] == "observed"
+    assert row["capture_receipt"]["completion_signal"] == "process_exit"
+    assert row["capture_receipt"]["completion_status"] == 0
+    assert len(row["native_source_rows"]) == len(row["raw_events"]) == 3
+    assert all(source["source_binding"] == "file_bytes_at_offset" for source in row["native_source_rows"])
+
+    observation = {
+        "schema_version": 1,
+        "artifact_kind": "provider_interaction_semantics_observation",
+        "provider": "cursor",
+        "evidence_class": "live_token",
+        "synthetic": False,
+        "probes": rows,
+        "raw_events": row["raw_events"],
+        "native_source_root": str(artifact_root),
+        "semantic_boundary": provider_interaction_semantics.semantic_boundary_fixture("cursor"),
+    }
+    evaluation = evaluate_observation("cursor", observation)
+
+    assert evaluation["status"] == "pass"
+    assert evaluation["provider_status"] == "pass"
+    assert evaluation["verification_scope"] == "provider_native"
+    assert evaluation["assertions"][-1]["probe_id"] == "shared_title_boundary"
+    assert row["live_model_evidence"]["result_event"]["usage"]["input_tokens"] == 12
+    assert runtime_homes and not runtime_homes[0].exists()
+    assert all(b"fixture-token" not in path.read_bytes() for path in artifact_root.rglob("*") if path.is_file())
+
+
+def test_codex_model_probe_keeps_provider_auth_outside_the_artifact_root(monkeypatch, tmp_path: Path) -> None:
+    binary = tmp_path / "codex"
+    binary.write_text("fixture", encoding="utf-8")
+    artifact_root = tmp_path / "artifacts"
+    runtime_homes: list[Path] = []
+
+    def fake_login(_binary, *, environment, **_kwargs):
+        codex_home = Path(environment["CODEX_HOME"])
+        runtime_homes.append(codex_home)
+        (codex_home / "auth.json").write_text("provider secret", encoding="utf-8")
+        return {"method": "codex_login_with_api_key_stdin", "auth_path": "isolated_codex_home/auth.json"}
+
+    def fake_probe(**kwargs):
+        assert not Path(kwargs["native_root"]).is_relative_to(artifact_root)
+        return {
+            "probe_id": "codex_model_picker",
+            "status": "observed",
+            "raw_events": [],
+            "native_source_rows": [],
+        }
+
+    monkeypatch.setattr(provider_interaction_probe, "login_with_api_key", fake_login)
+    monkeypatch.setattr(provider_interaction_probe, "_run_terminal_interaction_probe", fake_probe)
+
+    rows, source_rows = provider_interaction_probe._codex_model_probe(  # noqa: SLF001
+        binary=binary,
+        artifact_root=artifact_root,
+        timeout=1,
+        environment={"CODEX_API_KEY": "fixture-token"},
+    )
+
+    assert rows[0]["authentication"]["auth_path"] == "isolated_codex_home/auth.json"
+    assert source_rows == []
+    assert runtime_homes and not runtime_homes[0].exists()
+    assert not list(artifact_root.rglob("auth.json"))
 
 
 def test_terminal_acknowledgement_uses_post_submit_delta(tmp_path: Path) -> None:
@@ -104,6 +240,40 @@ def test_terminal_acknowledgement_uses_post_submit_delta(tmp_path: Path) -> None
     delta = provider_interaction_probe._normalized_terminal_delta(terminal, offset)  # noqa: SLF001
 
     assert delta == "/model model picker"
+
+
+def test_claude_command_window_discards_startup_rows_but_keeps_later_model_turn() -> None:
+    rows = [
+        {"type": "system", "content": "startup metadata"},
+        {"type": "user", "content": "<local-command-caveat>"},
+        {"type": "user", "content": "<command-name>/effort</command-name>"},
+        {"type": "user", "content": "<local-command-stdout>Set effort</local-command-stdout>"},
+        {"type": "assistant", "content": "unexpected model turn"},
+    ]
+    sources = [{"source_offset": index} for index in range(len(rows))]
+
+    retained_rows, retained_sources = provider_interaction_probe._claude_command_window(  # noqa: SLF001
+        rows,
+        sources,
+        command="/effort",
+    )
+
+    assert retained_rows == rows[1:]
+    assert retained_sources == sources[1:]
+
+
+def test_claude_command_window_requires_the_native_command_marker() -> None:
+    rows = [{"type": "system", "content": "startup metadata"}]
+    sources = [{"source_offset": 0}]
+
+    retained_rows, retained_sources = provider_interaction_probe._claude_command_window(  # noqa: SLF001
+        rows,
+        sources,
+        command="/effort",
+    )
+
+    assert retained_rows == []
+    assert retained_sources == []
 
 
 def test_transcript_file_signature_tracks_a_growing_partial_record(tmp_path: Path) -> None:
