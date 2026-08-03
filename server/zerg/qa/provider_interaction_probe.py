@@ -1246,6 +1246,7 @@ def _cursor_model_probe_with_runtime_home(
             if key in result_event:
                 cursor_result_event[key] = result_event[key]
         cursor_result_event["accounting_status"] = "subscription_aggregate_unreported"
+        cursor_result_event["accounting_status_source"] = "factory_policy_classification"
         row = _probe_status_row(
             probe,
             status="observed",
@@ -1262,6 +1263,13 @@ def _cursor_model_probe_with_runtime_home(
         row["native_source_root"] = str(artifact_root.resolve())
         row["provider_model"] = observed_model
         row["api_key_source"] = api_key_source
+        source_artifacts = [
+            {
+                "path": str(capture_path.resolve()),
+                "sha256": _sha256(capture_path),
+                "kind": "provider_jsonl_stream",
+            }
+        ]
         row["live_model_evidence"] = {
             "source_canary": "cursor_model_probe",
             "operation_evidence": {
@@ -1272,6 +1280,7 @@ def _cursor_model_probe_with_runtime_home(
             },
             "model": observed_model,
             "result_event": cursor_result_event,
+            "source_artifacts": source_artifacts,
         }
     elif (
         stream_events

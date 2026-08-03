@@ -265,11 +265,17 @@ def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any
     if not isinstance(result_event, Mapping):
         return None
     model = _clean_optional_str(result_event.get("model") or canary.get("model"))
+    source_artifacts = [
+        {"path": canary[path_key], "sha256": canary[digest_key], "kind": "provider_jsonl_stream"}
+        for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
+        if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
+    ]
     return {
         "source_canary": "claude_real_print",
         "operation_evidence": claude_real_print_operation_evidence(canary),
         "model": model,
         "result_event": dict(result_event),
+        "source_artifacts": source_artifacts,
     }
 
 

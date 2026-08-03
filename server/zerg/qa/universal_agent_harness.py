@@ -6099,9 +6099,23 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
         return payload
 
     observation = run_codex_real_tool_command(binary, api_key=api_key)
+    redacted_events = observation.get("redacted_events")
+    source_artifacts: list[dict[str, Any]] = []
+    if isinstance(redacted_events, list):
+        native_path = package.write_text(
+            "raw/codex-tool-call-result-strict-events.jsonl",
+            "".join(json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n" for event in redacted_events),
+        )
+        source_artifacts.append(
+            {
+                "path": str(native_path.resolve()),
+                "sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
+                "kind": "provider_jsonl_stream",
+            }
+        )
     package.write_json(
         "raw/codex-tool-call-result-strict.json",
-        {key: value for key, value in observation.items() if key != "events"},
+        {key: value for key, value in observation.items() if key not in {"events", "redacted_events"}},
     )
     infrastructure_error = observation["returncode"] is None or observation["returncode"] != 0
     if infrastructure_error:
@@ -6143,6 +6157,7 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
             },
             "model": result_event.get("model"),
             "result_event": result_event,
+            "source_artifacts": source_artifacts,
         }
     if not passed:
         payload["failure_code"] = (

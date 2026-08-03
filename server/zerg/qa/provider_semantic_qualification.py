@@ -92,6 +92,34 @@ def _scrub_tree(root: Path, secrets: tuple[str, ...]) -> None:
             path.write_bytes(redacted)
 
 
+def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
+    """Refresh source references after redaction changed retained bytes."""
+
+    if isinstance(value, list):
+        return [_refresh_native_source_digests(item, artifact_root=artifact_root) for item in value]
+    if not isinstance(value, dict):
+        return value
+    refreshed = {key: _refresh_native_source_digests(item, artifact_root=artifact_root) for key, item in value.items()}
+    source_artifacts = refreshed.get("source_artifacts")
+    if not isinstance(source_artifacts, list):
+        return refreshed
+    updated_sources: list[Any] = []
+    root = artifact_root.resolve()
+    for source in source_artifacts:
+        if not isinstance(source, dict) or not isinstance(source.get("path"), str):
+            updated_sources.append(source)
+            continue
+        try:
+            path = Path(source["path"]).expanduser().resolve(strict=True)
+            if path.is_relative_to(root) and path.is_file():
+                source = {**source, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        except (OSError, ValueError):
+            pass
+        updated_sources.append(source)
+    refreshed["source_artifacts"] = updated_sources
+    return refreshed
+
+
 def _identity_records(output_root: Path) -> list[ProviderCapabilityProofRecord]:
     payload = json.loads((output_root / "proof-bundle.json").read_text(encoding="utf-8"))
     return [proof_record_from_mapping(item) for item in payload.get("records") or []]
@@ -182,6 +210,7 @@ def run_semantic_profile(
     evidence_root.mkdir(parents=True, exist_ok=True)
     observation = _redact_value(observation, secrets)
     _scrub_tree(evidence_root, secrets)
+    observation = _refresh_native_source_digests(observation, artifact_root=evidence_root)
     semantic_path = evidence_root / "semantic-observation.json"
     identity.atomic_json(semantic_path, observation)
     raw_digest = identity.sha256(semantic_path.read_bytes())

@@ -72,6 +72,7 @@ def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance(
         "session_id_present": True,
         "result_exact_match": True,
         "accounting_status": "provider_reported",
+        "accounting_status_source": "factory_policy_classification",
         "model": "openrouter/deepseek/deepseek-v4-flash",
         "model_source": "invocation",
         "usage": {
@@ -84,3 +85,23 @@ def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance(
         },
         "total_cost_usd": 0.001029392,
     }
+
+
+def test_opencode_result_event_marks_missing_cost_without_calling_it_free() -> None:
+    canary = _load_canary()
+    result = canary._compact_opencode_result_event(  # noqa: SLF001
+        [
+            {
+                "type": "step_finish",
+                "sessionID": "ses_fixture",
+                "part": {"type": "step-finish", "tokens": {"input": 12, "output": 3}},
+            }
+        ],
+        marker="UNUSED",
+        requested_model="openrouter/deepseek/deepseek-v4-flash",
+    )
+
+    assert result is not None
+    assert result["accounting_status"] == "provider_reported_usage_cost_unavailable"
+    assert result["accounting_status_source"] == "factory_policy_classification"
+    assert "total_cost_usd" not in result

@@ -127,6 +127,7 @@ def _compact_codex_result_event(events: list[dict[str, Any]], *, model: str | No
     compact: dict[str, Any] = {
         "type": event.get("type"),
         "accounting_status": "provider_reported_usage_cost_unavailable",
+        "accounting_status_source": "factory_policy_classification",
     }
     usage = _flatten_numeric_usage(event.get("usage"))
     if usage:
@@ -508,11 +509,13 @@ def run_codex_real_tool_command(
         if shim_path := sandbox_helper_evidence.get("shim_path"):
             sandbox_helper_evidence["shim_removed"] = not Path(shim_path).exists()
     events, invalid_lines = _jsonl_events(tool_stdout)
+    redacted_events, _ = _jsonl_events(_redact(tool_stdout, api_key, managed_package_root))
     result_event = _compact_codex_result_event(events, model=model)
     return {
         "command": command,
         "prompt": prompt,
         "events": events,
+        "redacted_events": redacted_events,
         "invalid_lines": invalid_lines,
         "returncode": tool_result.returncode if tool_result is not None else None,
         "timed_out": tool_timed_out,

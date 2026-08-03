@@ -1253,6 +1253,8 @@ def _compact_opencode_result_event(
         return None
     part = _event_part(finish_event)
     usage = _flatten_numeric_usage(part.get("tokens"))
+    cost = part.get("cost")
+    has_cost = isinstance(cost, (int, float)) and not isinstance(cost, bool)
     compact: dict[str, Any] = {
         "type": finish_event.get("type"),
         "part_type": part.get("type"),
@@ -1264,7 +1266,14 @@ def _compact_opencode_result_event(
             and str(_event_part(event).get("text") or "").strip() == marker
             for event in events
         ),
-        "accounting_status": "provider_reported",
+        "accounting_status": (
+            "provider_reported"
+            if usage and has_cost
+            else "provider_reported_usage_cost_unavailable"
+            if usage
+            else "not_observed"
+        ),
+        "accounting_status_source": "factory_policy_classification",
     }
     provider_model = part.get("modelID") or part.get("model")
     if isinstance(provider_model, str) and provider_model.strip():
@@ -1277,8 +1286,7 @@ def _compact_opencode_result_event(
         compact["model_source"] = "invocation"
     if usage:
         compact["usage"] = usage
-    cost = part.get("cost")
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+    if has_cost:
         compact["total_cost_usd"] = cost
     return compact
 

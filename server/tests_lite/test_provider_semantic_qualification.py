@@ -147,7 +147,8 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     def real_print(_args, root: Path):
         assert os.environ["LONGHOUSE_CLAUDE_BIN"] == str(binary)
         assert os.environ["ANTHROPIC_API_KEY"] == secret
-        root.joinpath("provider-stderr.log").write_text(secret, encoding="utf-8")
+        native_path = root / "provider-stderr.log"
+        native_path.write_text(secret, encoding="utf-8")
         return {
             "status": "pass",
             "canary": "claude_real_print",
@@ -156,6 +157,8 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
                 "live_token_behavior": {"status": "pass", "level": "live_token"}
             },
             "result_event": {"model": "claude-haiku-test", "total_cost_usd": 0.001},
+            "stderr_path": str(native_path),
+            "stderr_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
             "secret_echo": secret,
         }
 
@@ -175,6 +178,8 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     assert observation["live_model_evidence"]["source_canary"] == "real_print_canary"
     assert observation["live_model_evidence"]["model"] == "claude-haiku-test"
     assert observation["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
+    source = observation["live_model_evidence"]["source_artifacts"][0]
+    assert source["sha256"] == hashlib.sha256((output / "semantic-evidence" / "live" / "provider-stderr.log").read_bytes()).hexdigest()
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained
     assert b"[QUALIFICATION_SECRET_1]" in retained
