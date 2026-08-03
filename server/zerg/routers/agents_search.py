@@ -40,7 +40,10 @@ from zerg.utils.server_timing import ServerTimingRecorder
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
-RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
+# Mixed-load query p99 is 87.4ms on the adopted microbatch. Two seconds keeps
+# the explicit 1s hydration reserve plus a wide local discovery margin while
+# no longer carrying the obsolete remote-provider tail budget.
+RECALL_ROUTE_TIMEOUT_SECONDS = 2.0
 
 _catalog_db_dependency = catalog_db_dependency()
 
