@@ -146,7 +146,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.LONGHOUSE_CI_CURSOR_API_KEY }}
       OPENCODE_CONFIG_CONTENT: '{"model":"openrouter/openai/gpt-5.2-codex"}'
       SESSION_PROPAGATION_BOOTSTRAP_ENGINE: 'true'
       SESSION_PROPAGATION_MACHINE_NAME: gha-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.provider }}
