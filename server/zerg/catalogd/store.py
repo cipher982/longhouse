@@ -7475,7 +7475,7 @@ class CatalogStore:
                 eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
             if projector == EMBEDDING_PROJECTOR_ID:
                 search_state = table.alias("search_state")
-                published = (
+                eligible = (
                     connection.execute(
                         select(table)
                         .join(
@@ -7483,8 +7483,7 @@ class CatalogStore:
                             and_(
                                 search_state.c.projector == "search-v2",
                                 search_state.c.session_id == table.c.session_id,
-                                search_state.c.completed_revision >= search_state.c.desired_revision,
-                                search_state.c.desired_revision == table.c.desired_revision,
+                                search_state.c.completed_revision >= table.c.desired_revision,
                             ),
                         )
                         .where(*eligible_predicates)
@@ -7494,19 +7493,6 @@ class CatalogStore:
                     .mappings()
                     .all()
                 )
-                selected_session_ids = [str(row["session_id"]) for row in published]
-                remaining = limit - len(published)
-                fallback_predicates = [*eligible_predicates]
-                if selected_session_ids:
-                    fallback_predicates.append(table.c.session_id.notin_(selected_session_ids))
-                fallback = (
-                    connection.execute(select(table).where(*fallback_predicates).order_by(table.c.session_id.asc()).limit(remaining))
-                    .mappings()
-                    .all()
-                    if remaining > 0
-                    else []
-                )
-                eligible = [*published, *fallback]
             else:
                 claim_order = (
                     (table.c.desired_revision.desc(), table.c.session_id.asc())
@@ -8137,10 +8123,25 @@ class CatalogStore:
                             )
                         )
                     else:
+                        values = {
+                            "desired_revision": commit_seq,
+                            "commit_seq": commit_seq,
+                            "updated_at": completed_at,
+                        }
+                        if projector_row["status"] == "quarantined":
+                            values.update(
+                                {
+                                    "status": "idle",
+                                    "failure_count": 0,
+                                    "last_error_code": None,
+                                    "last_error_message": None,
+                                    "retry_at": None,
+                                }
+                            )
                         connection.execute(
                             update(projector)
                             .where(projector.c.projector == projector_name, projector.c.session_id == session_key)
-                            .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=completed_at)
+                            .values(**values)
                         )
             connection.execute(
                 update(rows)

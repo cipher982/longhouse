@@ -22,6 +22,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import ArchiveChunk
+from zerg.models.user import User  # noqa: F401 - registers the users table for Base.metadata
 from zerg.services.archive_primary import insert_archive_chunk_manifests
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
@@ -599,6 +600,19 @@ async def test_inventory_freezes_rowid_high_watermark_and_registers_exact_counts
         "migration.session.register.batch.v2",
     ]
 
+    targeted_catalog = FakeCatalog()
+    with legacy_db() as db:
+        targeted = await create_inventory_run(
+            db,
+            targeted_catalog,
+            run_id=uuid4(),
+            watermark=watermark,
+            session_ids=[first.id],
+        )
+    assert targeted["expected_session_count"] == 1
+    registration = targeted_catalog.calls[1][1]
+    assert registration["sessions"] == [{"session_id": str(first.id), "source_expected": 1, "media_expected": 0}]
+
 
 @pytest.mark.asyncio
 async def test_converter_prefers_exact_source_lines_and_is_deterministic(legacy_db, tmp_path: Path):
@@ -1152,6 +1166,41 @@ async def test_render_failure_stays_hidden_and_repair_can_publish_later(legacy_d
         assert hidden["session"]["current_render_generation"] is None
 
         await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": "search-v2",
+                "session_id": str(session.id),
+                "desired_revision": 1,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        quarantine_token = str(uuid4())
+        await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": quarantine_token,
+                "now": datetime.now(UTC).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        quarantined = await client.call(
+            "projector.state.fail.v2",
+            {
+                "projector": "search-v2",
+                "session_id": str(session.id),
+                "claim_token": quarantine_token,
+                "error_code": "semantic_recovery_permanent",
+                "error_message": "old generation cannot be recovered",
+                "failed_at": datetime.now(UTC).isoformat(),
+                "retry_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        assert quarantined["state"]["status"] == "quarantined"
+
+        await client.call(
             "migration.render.repair.v2",
             {
                 "run_id": str(run_id),
@@ -1216,13 +1265,22 @@ async def test_render_failure_stays_hidden_and_repair_can_publish_later(legacy_d
                 session.id,
                 watermark,
                 replace_existing_epochs=True,
+                replacement_key=str(run_id),
             )
         assert repaired.parity_matches is True
         assert repaired.degradation_code is None
+        assert repaired.render_generation_id != failed.render_generation_id
         await converter._complete(run_id, third_claim, repaired)
         published = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
         assert published["session"]["current_render_generation"] == str(repaired.render_generation_id)
         assert published["session"]["render_state"] == "ready"
+        lag = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": "search-v2", "after_session_id": None, "limit": 10},
+        )
+        repaired_state = next(row for row in lag["states"] if row["session_id"] == str(session.id))
+        assert repaired_state["status"] == "idle"
+        assert repaired_state["last_error_code"] is None
     finally:
         await client.close()
         await daemon.close()

@@ -1828,12 +1828,13 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
         committed = await client.call("storage.raw_object.commit.v2", raw)
         revision = committed["receipt"]["commit_seq"]
 
+        search_token = str(uuid4())
         search_claim = await client.call(
             "projector.state.claim.v2",
             {
                 "projector": "search-v2",
                 "worker_id": "search-worker",
-                "claim_token": str(uuid4()),
+                "claim_token": search_token,
                 "now": (now + timedelta(seconds=1)).isoformat(),
                 "lease_seconds": 60,
                 "limit": 10,
@@ -1841,6 +1842,16 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
         )
         assert search_claim["claimed"][0]["session_id"] == str(session_id)
         assert search_claim["claimed"][0]["claimed_revision"] == revision
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": "search-v2",
+                "session_id": str(session_id),
+                "claim_token": search_token,
+                "completed_revision": int(revision),
+                "completed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
 
         embeddings_claim = await client.call(
             "projector.state.claim.v2",

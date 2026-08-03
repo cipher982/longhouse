@@ -18,12 +18,14 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Protocol
+from typing import Sequence
 from uuid import NAMESPACE_URL
 from uuid import UUID
 from uuid import uuid4
 from uuid import uuid5
 
 from sqlalchemy import and_
+from sqlalchemy import bindparam
 from sqlalchemy import or_
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -211,16 +213,38 @@ def freeze_high_watermark(db: Session) -> LegacyHighWatermark:
     return LegacyHighWatermark(*(int(value) for value in values))
 
 
-def inventory_rows(db: Session, watermark: LegacyHighWatermark) -> list[InventoryRow]:
-    session_ids = [
-        UUID(str(value))
-        for value in db.execute(
-            text("SELECT id FROM sessions WHERE rowid <= :high ORDER BY rowid"),
-            {"high": watermark.session_rowid},
-        ).scalars()
-    ]
+def inventory_rows(
+    db: Session,
+    watermark: LegacyHighWatermark,
+    *,
+    session_ids: Sequence[UUID] | None = None,
+) -> list[InventoryRow]:
+    if session_ids is None:
+        selected = [
+            UUID(str(value))
+            for value in db.execute(
+                text("SELECT id FROM sessions WHERE rowid <= :high ORDER BY rowid"),
+                {"high": watermark.session_rowid},
+            ).scalars()
+        ]
+    else:
+        selected = list(dict.fromkeys(session_ids))
+        if not 1 <= len(selected) <= 100:
+            raise ValueError("targeted inventory requires 1 to 100 unique sessions")
+        found = {
+            UUID(str(value))
+            for value in db.execute(
+                text("SELECT id FROM sessions WHERE rowid <= :high AND id IN :session_ids").bindparams(
+                    bindparam("session_ids", expanding=True)
+                ),
+                {"high": watermark.session_rowid, "session_ids": [str(value) for value in selected]},
+            ).scalars()
+        }
+        missing = [str(value) for value in selected if value not in found]
+        if missing:
+            raise ValueError(f"targeted inventory sessions are outside the frozen corpus: {', '.join(missing)}")
     rows: list[InventoryRow] = []
-    for session_id in session_ids:
+    for session_id in selected:
         source_count = int(
             db.execute(
                 text("SELECT COUNT(*) FROM source_lines WHERE session_id = :sid AND id <= :high"),
@@ -250,9 +274,11 @@ async def create_inventory_run(
     *,
     run_id: UUID | None = None,
     created_at: datetime | None = None,
+    watermark: LegacyHighWatermark | None = None,
+    session_ids: Sequence[UUID] | None = None,
 ) -> dict[str, Any]:
-    watermark = freeze_high_watermark(db)
-    inventory = inventory_rows(db, watermark)
+    watermark = watermark or freeze_high_watermark(db)
+    inventory = inventory_rows(db, watermark, session_ids=session_ids)
     run_id = run_id or uuid4()
     created_at = created_at or datetime.now(UTC)
     await catalog.call(
@@ -308,6 +334,7 @@ class LegacyCorpusConverter:
         workers: int = 2,
         claim_limit: int = 1,
         worker_prefix: str = "legacy-migration",
+        replace_existing_epochs: bool = False,
     ) -> dict[str, Any]:
         if not 1 <= workers <= 32:
             raise ValueError("workers must be between 1 and 32")
@@ -343,7 +370,8 @@ class LegacyCorpusConverter:
                                 UUID(str(row["session_id"])),
                                 watermark,
                                 source_expected=int(row["source_expected"]),
-                                replace_existing_epochs=int(row["attempts"]) > 1,
+                                replace_existing_epochs=replace_existing_epochs or int(row["attempts"]) > 1,
+                                replacement_key=str(run_id) if replace_existing_epochs else None,
                             )
                         await self._complete(run_id, claim_token, result)
                     except Exception as exc:
@@ -373,6 +401,7 @@ class LegacyCorpusConverter:
         *,
         source_expected: int | None = None,
         replace_existing_epochs: bool = False,
+        replacement_key: str | None = None,
     ) -> MigrationResult:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         if source_expected is not None and source_expected >= STREAMING_SOURCE_THRESHOLD:
@@ -382,6 +411,7 @@ class LegacyCorpusConverter:
                 watermark,
                 source_expected=source_expected,
                 replace_existing_epochs=replace_existing_epochs,
+                replacement_key=replacement_key,
             )
         events = (
             db.query(AgentEvent)
@@ -431,7 +461,11 @@ class LegacyCorpusConverter:
         batches = _source_batches(sources, event_groups)
         if not batches and not events and source_missing == 0:
             batches = [_SourceBatch("empty", "legacy_source_lines", 0, ())]
-        generation = _stable_uuid("render", str(session_id), watermark.encode())
+        generation = _render_generation_id(
+            session_id,
+            watermark,
+            replacement_key=replacement_key if replace_existing_epochs else None,
+        )
         envelope_ids: list[str] = []
         output_parts: list[str] = []
         head_branch_id = (
@@ -583,12 +617,17 @@ class LegacyCorpusConverter:
         *,
         source_expected: int,
         replace_existing_epochs: bool,
+        replacement_key: str | None,
     ) -> MigrationResult:
         """Convert an all-slim giant session one archive/event page at a time."""
 
         session_id = UUID(str(session.id))
         owner_id = await self._active_owner_id()
-        generation = _stable_uuid("render", str(session_id), watermark.encode())
+        generation = _render_generation_id(
+            session_id,
+            watermark,
+            replacement_key=replacement_key if replace_existing_epochs else None,
+        )
         head_branch_id = _head_branch_id(db, session_id)
         output_proof = _IncrementalProof("output", str(session_id))
         expected_events = _EventParityProof(session_id)
@@ -1862,6 +1901,23 @@ def _legacy_source_epoch(
     watermark: LegacyHighWatermark,
 ) -> UUID:
     return _stable_uuid("source", str(session_id), source_path, provenance_kind, watermark.encode())
+
+
+def _render_generation_id(
+    session_id: UUID,
+    watermark: LegacyHighWatermark,
+    *,
+    replacement_key: str | None,
+) -> UUID:
+    if replacement_key is None:
+        return _stable_uuid("render", str(session_id), watermark.encode())
+    return _stable_uuid(
+        "render-replacement",
+        MIGRATION_LAYOUT_REVISION,
+        replacement_key,
+        str(session_id),
+        watermark.encode(),
+    )
 
 
 def _opaque_source_id(session_id: UUID, source_path: str, provenance: str) -> str:

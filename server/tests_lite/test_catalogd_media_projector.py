@@ -348,7 +348,7 @@ async def test_search_projector_claims_newest_revision_first_without_changing_ot
 
 
 @pytest.mark.asyncio
-async def test_embedding_projector_claims_search_published_sessions_first(daemon_paths):
+async def test_embedding_projector_claims_only_search_published_sessions(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     inactive_session = str(uuid4())
@@ -375,7 +375,7 @@ async def test_embedding_projector_claims_search_published_sessions_first(daemon
             {
                 "projector": "search-v2",
                 "session_id": published_session,
-                "desired_revision": 1,
+                "desired_revision": 2,
                 "observed_at": (now + timedelta(seconds=1)).isoformat(),
             },
         )
@@ -397,7 +397,7 @@ async def test_embedding_projector_claims_search_published_sessions_first(daemon
                 "projector": "search-v2",
                 "session_id": published_session,
                 "claim_token": search_token,
-                "completed_revision": 1,
+                "completed_revision": 2,
                 "completed_at": (now + timedelta(seconds=3)).isoformat(),
             },
         )
@@ -425,7 +425,7 @@ async def test_embedding_projector_claims_search_published_sessions_first(daemon
             },
         )
 
-        assert [row["session_id"] for row in embedding_claim["claimed"]] == [published_session, inactive_session]
+        assert [row["session_id"] for row in embedding_claim["claimed"]] == [published_session]
         assert render_claim["claimed"][0]["session_id"] == inactive_session
     finally:
         await client.close()
