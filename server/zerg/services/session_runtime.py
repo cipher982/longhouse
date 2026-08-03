@@ -638,15 +638,15 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     )
     cursor_live = (
         (event.provider or "").strip().lower() == "cursor"
-        and (event.source or "").strip().lower() == "cursor_print"
+        and (event.source or "").strip().lower() in {"cursor_hook_live", "cursor_print"}
         and event.kind == "progress_signal"
-        and payload.get("progress_kind") == "cursor_print_stream"
+        and payload.get("progress_kind") in {"bridge_live_transcript_delta", "cursor_print_stream"}
     )
     opencode_live = (
         (event.provider or "").strip().lower() == "opencode"
-        and (event.source or "").strip().lower() == "opencode_run"
+        and (event.source or "").strip().lower() in {"opencode_bridge_live", "opencode_run"}
         and event.kind == "progress_signal"
-        and payload.get("progress_kind") == "opencode_run_stream"
+        and payload.get("progress_kind") in {"bridge_live_transcript_delta", "opencode_run_stream"}
     )
     return codex_live or cursor_live or opencode_live
 

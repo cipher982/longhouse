@@ -205,6 +205,14 @@ pub fn lifecycle(event: &str) {
         &event_path,
         &json!({"event":event,"observed_at":now,"session_id":session_id,"conversation_id":conversation,"payload":payload}),
     );
+    if event == "afterAgentResponse" {
+        enqueue_live_transcript_event(cursor_live_transcript_event(
+            &session_id,
+            conversation,
+            &payload,
+            &now,
+        ));
+    }
     if let Some(phase) = phase {
         let _ = write(
             root.join(format!("{session_id}.phase.json")),
@@ -226,6 +234,50 @@ pub fn lifecycle(event: &str) {
         wake_transcript(&session_id, conversation, payload.get("generation_id"));
     }
     println!("{{}}");
+}
+
+fn cursor_live_transcript_event(
+    session_id: &str,
+    conversation_id: &str,
+    payload: &Value,
+    observed_at: &str,
+) -> Option<Value> {
+    let generation_id = payload.get("generation_id")?.as_str()?.trim();
+    let text = payload.get("text")?.as_str()?.trim();
+    if generation_id.is_empty() || text.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "runtime_key": format!("cursor:{session_id}"),
+        "session_id": session_id,
+        "provider": "cursor",
+        "source": "cursor_hook_live",
+        "kind": "progress_signal",
+        "occurred_at": observed_at,
+        "dedupe_key": format!("cursor:hook-live:{session_id}:{conversation_id}:{generation_id}"),
+        "payload": {
+            "progress_kind": "bridge_live_transcript_delta",
+            "managed_transport": "cursor_helm_native_hooks",
+            "thread_id": conversation_id,
+            "turn_id": generation_id,
+            "item_id": generation_id,
+            "seq": 1,
+            "item_seq": 1,
+            "live_text": text,
+            "turn_completed": true,
+        }
+    }))
+}
+
+fn enqueue_live_transcript_event(event: Option<Value>) {
+    let (Some(event), Ok(outbox_dir)) =
+        (event, crate::config::get_agent_runtime_events_outbox_dir())
+    else {
+        return;
+    };
+    if let Err(error) = crate::outbox::enqueue_runtime_event(&outbox_dir, &event) {
+        tracing::warn!(error = %error, "failed to enqueue Cursor live transcript event");
+    }
 }
 
 fn is_foreground_conversation_rollover(event: &str, payload: &Value) -> bool {
@@ -558,6 +610,22 @@ fn remote_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_hook_builds_completed_live_transcript_event() {
+        let event = cursor_live_transcript_event(
+            "00000000-0000-0000-0000-000000000001",
+            "conversation",
+            &json!({"generation_id":"generation","text":"live reply"}),
+            "2026-08-03T01:00:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(event["source"], "cursor_hook_live");
+        assert_eq!(event["occurred_at"], "2026-08-03T01:00:00Z");
+        assert_eq!(event["payload"]["live_text"], "live reply");
+        assert_eq!(event["payload"]["turn_completed"], true);
+    }
 
     #[test]
     fn conversation_rotation_preserves_history_and_updates_active_state() {

@@ -51,6 +51,8 @@ def _bridge_event(
     thread_id: str = "thread-1",
     turn_id: str = "turn-1",
     turn_completed: bool = False,
+    provider: str = "codex",
+    source: str = "codex_bridge_live",
 ) -> RuntimeEventIngest:
     payload = {
         "progress_kind": "bridge_live_transcript_delta",
@@ -65,16 +67,52 @@ def _bridge_event(
     if item_seq is not None:
         payload["item_seq"] = item_seq
     return RuntimeEventIngest(
-        runtime_key=f"codex:{session_id}",
+        runtime_key=f"{provider}:{session_id}",
         session_id=session_id,
-        provider="codex",
+        provider=provider,
         device_id="cinder",
-        source="codex_bridge_live",
+        source=source,
         kind="progress_signal",
         occurred_at=occurred_at,
         dedupe_key=f"bridge:live:{session_id}:{thread_id}:{turn_id}:{item_id or 'legacy'}:{seq}:{live_text}",
         payload=payload,
     )
+
+
+def test_provider_bridges_share_live_preview_path(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provider_bridge_live_preview.db")
+    now = datetime(2026, 8, 3, 1, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        cursor = _seed_session(db, started_at=now - timedelta(minutes=1), provider="cursor")
+        opencode = _seed_session(db, started_at=now - timedelta(minutes=1), provider="opencode")
+        result = ingest_runtime_events(
+            db,
+            [
+                _bridge_event(
+                    session_id=cursor.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="Cursor reply",
+                    provider="cursor",
+                    source="cursor_hook_live",
+                ),
+                _bridge_event(
+                    session_id=opencode.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="OpenCode reply",
+                    provider="opencode",
+                    source="opencode_bridge_live",
+                ),
+            ],
+        )
+        db.commit()
+        previews = load_session_live_preview_map(db, [cursor.id, opencode.id])
+
+    assert result.accepted == 2
+    assert previews[str(cursor.id)].text == "Cursor reply"
+    assert previews[str(opencode.id)].text == "OpenCode reply"
 
 
 def test_runtime_ingest_materializes_latest_live_preview_projection(tmp_path):

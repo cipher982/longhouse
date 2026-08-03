@@ -17,7 +17,14 @@ from zerg.services.provisional_events import build_provisional_cursor
 from zerg.services.provisional_events import build_provisional_key
 from zerg.utils.time import normalize_utc
 
-LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live", "cursor_print", "opencode_run"}
+LIVE_PREVIEW_SOURCES = {
+    "codex_bridge_live",
+    "codex_console_live",
+    "cursor_hook_live",
+    "cursor_print",
+    "opencode_bridge_live",
+    "opencode_run",
+}
 
 
 @dataclass(frozen=True)
