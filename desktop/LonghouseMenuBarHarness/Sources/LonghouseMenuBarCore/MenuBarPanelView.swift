@@ -459,9 +459,28 @@ public struct MenuBarPanelView: View {
         return "Current local evidence shows a broken product promise. Open Logs for the exact failing fact."
     }
 
+    /// The freshness fact is computed from the payload clock, which the local
+    /// projection keeps rewriting to `fresh, 0s` off the engine pulse. Left
+    /// alone it renders a green "Fresh · 21s" directly under a banner saying the
+    /// status cannot be read — the same claim the header drops when trust is not
+    /// current, one section lower.
+    var displayedFacts: [MenuBarSystemFact] {
+        guard !dataTrust.isCurrent else { return presentation.facts }
+        return presentation.facts.map { fact in
+            guard fact.id == "freshness" else { return fact }
+            return MenuBarSystemFact(
+                id: fact.id,
+                label: fact.label,
+                value: "Unknown",
+                detail: "status command is not running",
+                promotion: .unavailable
+            )
+        }
+    }
+
     private var systemFactsSection: some View {
         PanelSection(title: "System facts") {
-            TelemetryTable(entries: presentation.facts.map { fact in
+            TelemetryTable(entries: displayedFacts.map { fact in
                 PanelTelemetryEntry(
                     id: fact.id,
                     label: fact.label,

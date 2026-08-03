@@ -2425,6 +2425,54 @@ struct LonghouseMenuBarCoreTests {
         #expect(failure?.command?.contains("longhouse-local-health") == true)
     }
 
+    /// The freshness fact is derived from the payload clock, which the local
+    /// projection rewrites to `fresh, 0s` off the engine pulse. It has to stop
+    /// claiming recency when the producer is broken, or the panel renders a
+    /// green "Fresh · 21s" directly beneath a banner saying it cannot read this
+    /// Mac's status.
+    @Test
+    @MainActor
+    func freshnessFactStopsClaimingRecencyWhenTrustIsNotCurrent() {
+        func facts(trust: DataTrust) -> [MenuBarSystemFact] {
+            MenuBarPanelView(
+                snapshot: makeHealthySnapshot(),
+                history: [],
+                presentationDate: Date(timeIntervalSince1970: 0),
+                feedback: nil,
+                setFeedback: { _ in },
+                actionSink: SpyHealthActionSink(logURL: nil, uiURL: nil),
+                isManualRefreshing: false,
+                dataTrust: trust,
+                refresh: {}
+            ).displayedFacts
+        }
+
+        let current = facts(trust: .current)
+        let currentFreshness = current.first { $0.id == "freshness" }
+        #expect(currentFreshness != nil)
+
+        for trust in [
+            DataTrust.neverLoaded(failure: nil),
+            DataTrust.lastKnown(LastKnownContext(lastSuccessAt: Date(timeIntervalSince1970: 0), failure: nil)),
+        ] {
+            guard let freshness = facts(trust: trust).first(where: { $0.id == "freshness" }) else {
+                Issue.record("freshness fact missing for \(trust)")
+                continue
+            }
+            #expect(freshness.value == "Unknown")
+            #expect(freshness.promotion == .unavailable)
+            #expect(freshness.value.hasPrefix("Fresh") == false)
+        }
+
+        // Every other fact is untouched: the banner already labels them
+        // last-known, and blanking them would leave nothing to act on.
+        let degraded = facts(trust: .neverLoaded(failure: nil))
+        #expect(degraded.count == current.count)
+        for (before, after) in zip(current, degraded) where before.id != "freshness" {
+            #expect(before == after)
+        }
+    }
+
     @Test
     @MainActor
     func producerSuccessThenFailureDegradesToLastKnown() async throws {
