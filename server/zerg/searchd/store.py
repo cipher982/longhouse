@@ -893,6 +893,7 @@ class SearchStore:
                     # while the current generation's vectors were absent.
                     provenance_matches = (
                         str(existing["generation_id"]) == generation_id
+                        and int(existing["revision"]) == revision
                         and str(existing["owner_id"]) == owner_id
                         and existing["start_order_time_us"] == episode.get("start_order_time_us")
                     )
@@ -990,10 +991,18 @@ class SearchStore:
         return {"written": written, "skipped": skipped}
 
     def read_episode_embedding_hashes(self, *, session_id: str, model: str, dims: int | None = None) -> dict[str, object]:
-        sql = "SELECT episode_ordinal, content_hash FROM episode_embeddings WHERE session_id = ? AND model = ?"
+        sql = """
+            SELECT e.episode_ordinal, e.content_hash
+            FROM episode_embeddings e
+            JOIN session_index s
+              ON s.session_id = e.session_id
+             AND s.generation_id = e.generation_id
+             AND s.desired_revision = e.revision
+            WHERE e.session_id = ? AND e.model = ?
+        """
         params: tuple[object, ...] = (session_id, model)
         if dims is not None:
-            sql += " AND dims = ?"
+            sql += " AND e.dims = ?"
             params += (dims,)
         rows = self.connection.execute(sql, params).fetchall()
         published = self.connection.execute(
