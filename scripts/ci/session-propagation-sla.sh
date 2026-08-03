@@ -96,7 +96,14 @@ import urllib.request
 url = f"{sys.argv[1]}/api/agents/storage/v2/capabilities"
 request = urllib.request.Request(
     url,
-    headers={"X-Agents-Token": os.environ["LONGHOUSE_DEVICE_TOKEN"]},
+    headers={
+        "X-Agents-Token": os.environ["LONGHOUSE_DEVICE_TOKEN"],
+        # Cloudflare's browser integrity check rejects the default
+        # `Python-urllib/*` signature with error 1010 before the request ever
+        # reaches the runtime, which reads as an auth failure. Every other
+        # Longhouse client sends a real product user agent; so must this.
+        "User-Agent": "longhouse-ci-profiler/1.0",
+    },
 )
 try:
     with urllib.request.urlopen(request, timeout=15) as response:
