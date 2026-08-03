@@ -7689,6 +7689,60 @@ export interface components {
             note?: string | null;
         };
         /**
+         * RecallCoverage
+         * @description Complete-corpus certificate observed by a successful dense request.
+         */
+        RecallCoverage: {
+            /**
+             * Ready
+             * @constant
+             */
+            ready: true;
+            /** Projector */
+            projector: string;
+            /**
+             * Catalog Lag Count
+             * @constant
+             */
+            catalog_lag_count: 0;
+            /** Catalog Indexed Through */
+            catalog_indexed_through: string;
+            /** Catalog Commit Seq */
+            catalog_commit_seq: string;
+            /** Catalog Observed At */
+            catalog_observed_at: string;
+            /** Expected Sessions */
+            expected_sessions: number;
+            /** Published Sessions */
+            published_sessions: number;
+            /** Expected Episodes */
+            expected_episodes: number;
+            /** Current Episodes */
+            current_episodes: number;
+            /**
+             * Invalid Vectors
+             * @constant
+             */
+            invalid_vectors: 0;
+            /**
+             * Unnormalized Vectors
+             * @constant
+             */
+            unnormalized_vectors: 0;
+            /**
+             * Unlocatable Episodes
+             * @constant
+             */
+            unlocatable_episodes: 0;
+            /**
+             * Episode Count Mismatches
+             * @constant
+             */
+            episode_count_mismatches: 0;
+            /** Missing Session Ids */
+            missing_session_ids?: string[];
+        };
+        /**
          * RecallMatch
          * @description A single recall match with context.
          */
@@ -7773,6 +7827,7 @@ export interface components {
             embedding_dims?: number | null;
             /** Embedding Revision */
             embedding_revision?: string | null;
+            coverage?: components["schemas"]["RecallCoverage"] | null;
         };
         /**
          * ResetType

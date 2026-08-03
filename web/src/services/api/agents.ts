@@ -1218,6 +1218,25 @@ export interface RecallResponse {
   embedding_model: string | null;
   embedding_dims: number | null;
   embedding_revision: string | null;
+  coverage: RecallCoverage | null;
+}
+
+export interface RecallCoverage {
+  ready: true;
+  projector: string;
+  catalog_lag_count: 0;
+  catalog_indexed_through: string;
+  catalog_commit_seq: string;
+  catalog_observed_at: string;
+  expected_sessions: number;
+  published_sessions: number;
+  expected_episodes: number;
+  current_episodes: number;
+  invalid_vectors: 0;
+  unnormalized_vectors: 0;
+  unlocatable_episodes: 0;
+  episode_count_mismatches: 0;
+  missing_session_ids: [];
 }
 
 export interface RecallFilters {

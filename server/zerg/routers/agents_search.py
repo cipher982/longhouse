@@ -4,6 +4,7 @@ import asyncio
 import base64
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -32,6 +33,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_views import MachineSessionsListResponse
+from zerg.services.session_views import RecallCoverage
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SessionResponse
@@ -77,6 +79,30 @@ class _DenseQueryPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     results: list[_DenseEpisodeHit]
+    coverage: "_EmbeddingCoveragePayload"
+
+
+class _EmbeddingCoveragePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ready: Literal[True]
+    expected_sessions: int = Field(ge=0)
+    published_sessions: int = Field(ge=0)
+    expected_episodes: int = Field(ge=0)
+    current_episodes: int = Field(ge=0)
+    invalid_vectors: Literal[0]
+    unnormalized_vectors: Literal[0]
+    unlocatable_episodes: Literal[0]
+    episode_count_mismatches: Literal[0]
+    missing_session_ids: list[str] = Field(default_factory=list, max_length=0)
+
+    @model_validator(mode="after")
+    def validate_complete_coverage(self) -> "_EmbeddingCoveragePayload":
+        if self.expected_sessions != self.published_sessions:
+            raise ValueError("resident coverage is missing session publications")
+        if self.expected_episodes != self.current_episodes:
+            raise ValueError("resident coverage is missing episodes")
+        return self
 
 
 class _SearchReadTiming(BaseModel):
@@ -121,7 +147,7 @@ class _ProjectorLagPayload(BaseModel):
     observed_at: str = Field(min_length=1)
 
 
-async def _require_complete_projection_coverage(*, timeout_seconds: float) -> None:
+async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _ProjectorLagPayload:
     """Reject a corpus behind catalog truth for the active embedding space.
 
     searchd's resident gate validates every row it knows about. Catalogd owns
@@ -184,6 +210,13 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> No
                 },
             },
         )
+    return embedding_lag
+
+
+@dataclass(frozen=True)
+class _DenseRecallResult:
+    matches: list[RecallMatch]
+    coverage: RecallCoverage
 
 
 def _catalog_owner_id(auth: object) -> int:
@@ -314,7 +347,7 @@ async def search_storage_v2_episode_embeddings(
     exclude_environments: list[str] | None = None,
     since_iso: str | None = None,
     environment: str | None = None,
-) -> list[_DenseEpisodeHit]:
+) -> _DenseQueryPayload:
     """Query the derived dense index through searchd, never its SQLite file.
 
     Scoping is a SQL predicate against searchd's own session_index (owner,
@@ -343,7 +376,7 @@ async def search_storage_v2_episode_embeddings(
         },
         timeout_seconds=timeout_seconds,
     )
-    return _DenseQueryPayload.model_validate(result).results
+    return _DenseQueryPayload.model_validate(result)
 
 
 async def search_storage_v2_sessions(
@@ -406,7 +439,7 @@ async def search_storage_v2_sessions(
     return sessions
 
 
-async def _semantic_recall_matches(
+async def _semantic_recall(
     *,
     query: str,
     project: Optional[str],
@@ -418,7 +451,7 @@ async def _semantic_recall_matches(
     timeout_seconds: float,
     owner_id: int | None = None,
     environment: Optional[str] = None,
-) -> list[RecallMatch]:
+) -> _DenseRecallResult:
     """Dense recall over episode-level embeddings via searchd's episode_embeddings.
 
     The query is embedded in-process. It used to be a live third-party call
@@ -430,6 +463,7 @@ async def _semantic_recall_matches(
     the caller can run real reciprocal rank fusion: a session found by both
     lanes should get credit from both, not just whichever ran first.
     """
+    from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
     from zerg.models_config import get_embedding_space_config
     from zerg.services.local_embedder import LocalEmbedderUnavailable
     from zerg.services.local_embedder import embed_query
@@ -447,8 +481,8 @@ async def _semantic_recall_matches(
 
     config = get_embedding_space_config()
 
-    async def _run() -> list[RecallMatch]:
-        query_vec, _coverage = await asyncio.gather(
+    async def _run() -> _DenseRecallResult:
+        query_vec, catalog_coverage = await asyncio.gather(
             embed_query(query),
             _require_complete_projection_coverage(timeout_seconds=timeout_seconds),
         )
@@ -467,7 +501,7 @@ async def _semantic_recall_matches(
         if not include_automation:
             exclude_environments.append("automation")
         since_iso = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
-        rows = await search_storage_v2_episode_embeddings(
+        dense_payload = await search_storage_v2_episode_embeddings(
             model=config.model,
             owner_id=owner_id,
             dims=config.dims,
@@ -482,7 +516,7 @@ async def _semantic_recall_matches(
         )
         matches: list[RecallMatch] = []
         seen: set[str] = set()
-        for raw_row in rows:
+        for raw_row in dense_payload.results:
             row = _DenseEpisodeHit.model_validate(raw_row)
             session_id = row.session_id
             if not session_id or session_id in seen:
@@ -504,7 +538,25 @@ async def _semantic_recall_matches(
             )
             if len(matches) >= max_results:
                 break
-        return matches
+        resident = dense_payload.coverage
+        coverage = RecallCoverage(
+            ready=True,
+            projector=EMBEDDING_PROJECTOR_ID,
+            catalog_lag_count=0,
+            catalog_indexed_through=catalog_coverage.indexed_through,
+            catalog_commit_seq=catalog_coverage.commit_seq,
+            catalog_observed_at=catalog_coverage.observed_at,
+            expected_sessions=resident.expected_sessions,
+            published_sessions=resident.published_sessions,
+            expected_episodes=resident.expected_episodes,
+            current_episodes=resident.current_episodes,
+            invalid_vectors=resident.invalid_vectors,
+            unnormalized_vectors=resident.unnormalized_vectors,
+            unlocatable_episodes=resident.unlocatable_episodes,
+            episode_count_mismatches=resident.episode_count_mismatches,
+            missing_session_ids=resident.missing_session_ids,
+        )
+        return _DenseRecallResult(matches=matches, coverage=coverage)
 
     try:
         return await asyncio.wait_for(_run(), timeout=timeout_seconds)
@@ -529,6 +581,34 @@ async def _semantic_recall_matches(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "dense_timed_out", "message": "Dense recall exceeded its execution budget."},
         ) from None
+
+
+async def _semantic_recall_matches(
+    *,
+    query: str,
+    project: Optional[str],
+    provider: Optional[str],
+    since_days: int,
+    include_test: bool,
+    include_automation: bool,
+    max_results: int,
+    timeout_seconds: float,
+    owner_id: int | None = None,
+    environment: Optional[str] = None,
+) -> list[RecallMatch]:
+    result = await _semantic_recall(
+        query=query,
+        project=project,
+        provider=provider,
+        since_days=since_days,
+        include_test=include_test,
+        include_automation=include_automation,
+        max_results=max_results,
+        timeout_seconds=timeout_seconds,
+        owner_id=owner_id,
+        environment=environment,
+    )
+    return result.matches
 
 
 async def search_storage_v2_semantic_sessions(
@@ -946,9 +1026,9 @@ async def recall_sessions(
                 timeout_seconds=discovery_deadline,
             )
 
-    async def dense() -> list[RecallMatch]:
+    async def dense() -> _DenseRecallResult:
         with timing.span("dense"):
-            return await _semantic_recall_matches(
+            return await _semantic_recall(
                 query=query,
                 project=project,
                 provider=provider,
@@ -966,12 +1046,14 @@ async def recall_sessions(
     if mode == "lexical":
         matches = _rank_single_lane(await lexical(), limit=max_results, lane="lexical")
         lanes = ("lexical",)
+        dense_result = None
     elif mode == "semantic":
-        matches = _rank_single_lane(await dense(), limit=max_results, lane="dense")
+        dense_result = await dense()
+        matches = _rank_single_lane(dense_result.matches, limit=max_results, lane="dense")
         lanes = ("dense",)
     else:
-        lexical_matches, dense_matches = await asyncio.gather(lexical(), dense())
-        matches = _rrf_merge_recall_matches(lexical_matches, dense_matches, limit=max_results)
+        lexical_matches, dense_result = await asyncio.gather(lexical(), dense())
+        matches = _rrf_merge_recall_matches(lexical_matches, dense_result.matches, limit=max_results)
         lanes = ("lexical", "dense")
 
     # Hydrate after fusion, not before. Hydrating the lexical list first meant
@@ -1005,5 +1087,6 @@ async def recall_sessions(
             embedding_model=ACTIVE_EMBEDDING_MODEL,
             embedding_dims=ACTIVE_EMBEDDING_DIMS,
             embedding_revision=EMBEDDING_ARTIFACT_REVISION,
+            coverage=dense_result.coverage,
         )
     return RecallResponse(matches=matches, total=len(matches), lanes=list(lanes))

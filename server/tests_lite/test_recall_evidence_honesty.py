@@ -30,6 +30,26 @@ def _timing() -> dict[str, float | int]:
     return {"admit_ms": 0.0, "sql_ms": 0.1, "active_readers": 1, "queued_readers": 0}
 
 
+def _coverage() -> dict[str, object]:
+    return {
+        "ready": True,
+        "projector": "embeddings-test-256d-p2",
+        "catalog_lag_count": 0,
+        "catalog_indexed_through": "10",
+        "catalog_commit_seq": "10",
+        "catalog_observed_at": "2026-08-02T00:00:00+00:00",
+        "expected_sessions": 1,
+        "published_sessions": 1,
+        "expected_episodes": 1,
+        "current_episodes": 1,
+        "invalid_vectors": 0,
+        "unnormalized_vectors": 0,
+        "unlocatable_episodes": 0,
+        "episode_count_mismatches": 0,
+        "missing_session_ids": [],
+    }
+
+
 def _context_row(content: str, *, order_time_us: int = 100, role: str = "assistant") -> dict[str, object]:
     return {
         "search_event_id": order_time_us,
@@ -139,6 +159,7 @@ def test_recall_response_enforces_lane_space_and_evidence_consistency():
         embedding_model="google/embeddinggemma-300m",
         embedding_dims=256,
         embedding_revision="a" * 40,
+        coverage=_coverage(),
     )
     assert response.total == 1
 
@@ -152,6 +173,7 @@ def test_recall_response_enforces_lane_space_and_evidence_consistency():
             embedding_model="google/embeddinggemma-300m",
             embedding_dims=256,
             embedding_revision="a" * 40,
+            coverage=_coverage(),
         )
     with pytest.raises(ValueError, match="complete recall evidence"):
         RecallResponse(
@@ -161,7 +183,21 @@ def test_recall_response_enforces_lane_space_and_evidence_consistency():
             embedding_model="google/embeddinggemma-300m",
             embedding_dims=256,
             embedding_revision="a" * 40,
+            coverage=_coverage(),
         )
+    stale_coverage = {**_coverage(), "catalog_indexed_through": "9"}
+    with pytest.raises(ValueError, match="current catalog watermark"):
+        RecallResponse(
+            matches=[valid_match],
+            total=1,
+            lanes=["dense"],
+            embedding_model="google/embeddinggemma-300m",
+            embedding_dims=256,
+            embedding_revision="a" * 40,
+            coverage=stale_coverage,
+        )
+    with pytest.raises(ValueError, match="lexical-only recall must not claim dense corpus coverage"):
+        RecallResponse(matches=[], total=0, lanes=["lexical"], coverage=_coverage())
 
 
 @pytest.mark.asyncio

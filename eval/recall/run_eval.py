@@ -63,6 +63,7 @@ class Result:
     embedding_model: str | None = None
     embedding_dims: int | None = None
     embedding_revision: str | None = None
+    coverage: dict[str, object] | None = None
 
     def gold_rank(self) -> int | None:
         """1-based rank of the first gold session, or None if absent.
@@ -151,10 +152,14 @@ class Report:
         failures = []
         if self.errors():
             failures.append(f"{len(self.errors())} query(s) errored")
+        spaces = self._embedding_spaces()
+        if self.strategy != "lexical" and len(spaces) != 1:
+            failures.append(f"evaluation observed {len(spaces)} embedding spaces instead of one")
+        projectors = {str(coverage["projector"]) for coverage in self._coverage_snapshots()}
+        if self.strategy != "lexical" and len(projectors) != 1:
+            failures.append(f"evaluation observed {len(projectors)} corpus projectors instead of one")
         if self.false_negative_rate() > max_false_negative_rate:
-            failures.append(
-                f"false_negative_rate {self.false_negative_rate():.3f} exceeds {max_false_negative_rate:.3f}"
-            )
+            failures.append(f"false_negative_rate {self.false_negative_rate():.3f} exceeds {max_false_negative_rate:.3f}")
         if self.recall_at(5) < min_recall_at_5:
             failures.append(f"recall_at_5 {self.recall_at(5):.3f} is below {min_recall_at_5:.3f}")
         category_results = self.by_category(25)
@@ -164,18 +169,62 @@ class Report:
                 failures.append(f"{category}_hits_at_25 {hits}/{total} is below {minimum}")
         return failures
 
-    def embedding_metadata(self) -> dict[str, object] | None:
-        values = {
+    def _embedding_spaces(self) -> set[tuple[str | None, int | None, str | None]]:
+        return {
             (result.embedding_model, result.embedding_dims, result.embedding_revision)
             for result in self.results
             if result.embedding_model is not None
         }
+
+    def embedding_metadata(self) -> dict[str, object] | None:
+        values = self._embedding_spaces()
         if not values:
             return None
-        if len(values) != 1:
-            raise ValueError(f"evaluation observed multiple embedding spaces: {sorted(values)}")
-        model, dims, revision = values.pop()
-        return {"model": model, "dims": dims, "revision": revision}
+        observed = [{"model": model, "dims": dims, "revision": revision} for model, dims, revision in sorted(values, key=str)]
+        if len(observed) == 1:
+            return {"consistent": True, **observed[0]}
+        return {"consistent": False, "observed": observed}
+
+    def _coverage_snapshots(self) -> list[dict[str, object]]:
+        return [result.coverage for result in self.results if result.coverage is not None]
+
+    def corpus_coverage_metadata(self) -> dict[str, object] | None:
+        snapshots = self._coverage_snapshots()
+        if not snapshots:
+            return None
+
+        def numeric_range(field_name: str) -> dict[str, int]:
+            values = [int(snapshot[field_name]) for snapshot in snapshots]
+            return {"min": min(values), "max": max(values)}
+
+        projectors = sorted({str(snapshot["projector"]) for snapshot in snapshots})
+        unique_snapshots = {
+            (
+                str(snapshot["catalog_commit_seq"]),
+                int(snapshot["expected_sessions"]),
+                int(snapshot["expected_episodes"]),
+            )
+            for snapshot in snapshots
+        }
+        observed_at = sorted(str(snapshot["catalog_observed_at"]) for snapshot in snapshots)
+        return {
+            "status": "complete",
+            "consistent_projector": len(projectors) == 1,
+            "projectors": projectors,
+            "response_count": len(snapshots),
+            "snapshot_count": len(unique_snapshots),
+            "catalog_commit_seq": numeric_range("catalog_commit_seq"),
+            "expected_sessions": numeric_range("expected_sessions"),
+            "expected_episodes": numeric_range("expected_episodes"),
+            "observed_at": {"first": observed_at[0], "last": observed_at[-1]},
+            "resident_defects": {
+                "invalid_vectors": 0,
+                "unnormalized_vectors": 0,
+                "unlocatable_episodes": 0,
+                "episode_count_mismatches": 0,
+                "missing_sessions": 0,
+            },
+        }
 
 
 def load_queries() -> tuple[list[Query], set[str]]:
@@ -202,9 +251,7 @@ def load_queries() -> tuple[list[Query], set[str]]:
 
 
 def search_recall(query: str, *, base_url: str, token: str, limit: int, days: int, mode: str) -> dict:
-    params = urllib.parse.urlencode(
-        {"query": query, "max_results": limit, "since_days": days, "context_turns": 0, "mode": mode}
-    )
+    params = urllib.parse.urlencode({"query": query, "max_results": limit, "since_days": days, "context_turns": 0, "mode": mode})
     request = urllib.request.Request(
         f"{base_url}/api/agents/recall?{params}",
         # An explicit User-Agent is required, not cosmetic: the default
@@ -221,6 +268,50 @@ def search_recall(query: str, *, base_url: str, token: str, limit: int, days: in
     matches = payload.get("matches")
     if not isinstance(matches, list) or any(not isinstance(match, dict) for match in matches):
         raise ValueError("recall returned malformed matches")
+    coverage = payload.get("coverage")
+    if mode == "lexical":
+        if coverage is not None:
+            raise ValueError("lexical recall claimed dense corpus coverage")
+    else:
+        if not isinstance(coverage, dict):
+            raise ValueError("dense recall omitted corpus coverage")
+        required = {
+            "ready",
+            "projector",
+            "catalog_lag_count",
+            "catalog_indexed_through",
+            "catalog_commit_seq",
+            "catalog_observed_at",
+            "expected_sessions",
+            "published_sessions",
+            "expected_episodes",
+            "current_episodes",
+            "invalid_vectors",
+            "unnormalized_vectors",
+            "unlocatable_episodes",
+            "episode_count_mismatches",
+            "missing_session_ids",
+        }
+        if set(coverage) != required:
+            raise ValueError("dense recall returned malformed corpus coverage")
+        if (
+            coverage["ready"] is not True
+            or coverage["catalog_lag_count"] != 0
+            or coverage["catalog_indexed_through"] != coverage["catalog_commit_seq"]
+            or coverage["expected_sessions"] != coverage["published_sessions"]
+            or coverage["expected_episodes"] != coverage["current_episodes"]
+            or any(
+                coverage[field_name] != 0
+                for field_name in (
+                    "invalid_vectors",
+                    "unnormalized_vectors",
+                    "unlocatable_episodes",
+                    "episode_count_mismatches",
+                )
+            )
+            or coverage["missing_session_ids"] != []
+        ):
+            raise ValueError("dense recall corpus coverage is incomplete")
     return payload
 
 
@@ -252,9 +343,7 @@ def main() -> int:
     args = parser.parse_args()
 
     base_url = os.environ.get("LONGHOUSE_EVAL_URL", DEFAULT_URL).rstrip("/")
-    token = os.environ.get("LONGHOUSE_EVAL_TOKEN") or (
-        TOKEN_PATH.read_text().strip() if TOKEN_PATH.exists() else ""
-    )
+    token = os.environ.get("LONGHOUSE_EVAL_TOKEN") or (TOKEN_PATH.read_text().strip() if TOKEN_PATH.exists() else "")
     if not token:
         print(f"No device token. Set LONGHOUSE_EVAL_TOKEN or create {TOKEN_PATH}.")
         return 2
@@ -269,9 +358,7 @@ def main() -> int:
     for query in queries:
         started = time.monotonic()
         try:
-            payload = search(
-                query.query, base_url=base_url, token=token, limit=args.limit, days=args.days
-            )
+            payload = search(query.query, base_url=base_url, token=token, limit=args.limit, days=args.days)
             returned = [str(match.get("session_id") or "") for match in payload["matches"]]
             # Sessions that produced this work discuss retrieval itself and would
             # match every query about retrieval.
@@ -285,6 +372,7 @@ def main() -> int:
                     embedding_model=payload.get("embedding_model"),
                     embedding_dims=payload.get("embedding_dims"),
                     embedding_revision=payload.get("embedding_revision"),
+                    coverage=payload.get("coverage"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - report, never abort the sweep
@@ -315,10 +403,10 @@ def main() -> int:
         "query_count": len(report.results),
         "limit": args.limit,
         "days": args.days,
-        "expected_lanes": {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[
-            args.strategy
-        ],
+        "expected_lanes": {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[args.strategy],
         "embedding_space": report.embedding_metadata(),
+        "corpus_coverage": report.corpus_coverage_metadata(),
+        "error_count": len(report.errors()),
         "thresholds": {
             "max_false_negative_rate": args.max_false_negative_rate,
             "min_recall_at_5": args.min_recall_at_5,
@@ -339,6 +427,14 @@ def main() -> int:
                     "by_category_at_5": report.by_category(5),
                     "by_category_at_25": report.by_category(25),
                     "errors": len(report.errors()),
+                    "error_details": [
+                        {
+                            "query_id": result.query.id,
+                            "category": result.query.category,
+                            "error": result.error,
+                        }
+                        for result in report.errors()
+                    ],
                     "gate": "pass" if not gate_failures else "fail",
                     "gate_failures": gate_failures,
                     "metadata": metadata,

@@ -67,6 +67,10 @@ baseline, or a regression against the full-corpus Qwen3-8B @256d category floors
 at k=25 (exact 11, paraphrase 16, causal 7, supersession 6). JSON output includes
 the exact endpoint, git SHA, query-set digest, thresholds, lane contract, and
 embedding model/revision observed from the live response.
+For dense strategies it also requires a complete corpus certificate on every
+response and records the projector, catalog watermark range, session/episode
+count ranges, zero-defect resident invariants, and per-query error details. A
+missing/incomplete certificate or mixed embedding space/projector fails the run.
 
 ## Rules
 

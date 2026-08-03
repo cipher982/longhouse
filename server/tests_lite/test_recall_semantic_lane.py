@@ -23,12 +23,34 @@ _REAL_COVERAGE_CHECK = agents_search._require_complete_projection_coverage
 def _complete_catalog_projection(monkeypatch):
     async def complete(*, timeout_seconds):
         assert timeout_seconds > 0
+        return agents_search._ProjectorLagPayload(
+            states=[],
+            lag_count=0,
+            indexed_through="10",
+            commit_seq="10",
+            observed_at="2026-08-02T00:00:00+00:00",
+        )
 
     monkeypatch.setattr(agents_search, "_require_complete_projection_coverage", complete)
 
 
 def _match(session_id: str, score: float) -> RecallMatch:
     return RecallMatch(session_id=session_id, chunk_index=0, score=score)
+
+
+def _resident_coverage() -> agents_search._EmbeddingCoveragePayload:
+    return agents_search._EmbeddingCoveragePayload(
+        ready=True,
+        expected_sessions=1,
+        published_sessions=1,
+        expected_episodes=1,
+        current_episodes=1,
+        invalid_vectors=0,
+        unnormalized_vectors=0,
+        unlocatable_episodes=0,
+        episode_count_mismatches=0,
+        missing_session_ids=[],
+    )
 
 
 def test_rrf_merge_credits_both_lanes_for_agreeing_session():
@@ -240,7 +262,7 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypatch):
+async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch):
     """Scoping is a SQL predicate (owner/project/provider/environment/recency)
     against searchd's session_index, not an enumerated session id list.
 
@@ -264,23 +286,26 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
 
     async def fake_query(**kwargs):
         seen.update(kwargs)
-        return [
-            {
-                "session_id": candidate_session_id,
-                "episode_ordinal": 3,
-                "score": 0.9,
-                "event_index_start": 4,
-                "event_index_end": 5,
-                "generation_id": str(uuid4()),
-                "start_order_time_us": 123,
-            }
-        ]
+        return agents_search._DenseQueryPayload(
+            results=[
+                {
+                    "session_id": candidate_session_id,
+                    "episode_ordinal": 3,
+                    "score": 0.9,
+                    "event_index_start": 4,
+                    "event_index_end": 5,
+                    "generation_id": str(uuid4()),
+                    "start_order_time_us": 123,
+                }
+            ],
+            coverage=_resident_coverage(),
+        )
 
     import zerg.services.local_embedder as local_embedder_module
 
     monkeypatch.setattr(local_embedder_module, "embed_query", fake_generate_embedding)
     monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
-    result = await agents_search._semantic_recall_matches(
+    result = await agents_search._semantic_recall(
         query="important answer",
         project=None,
         provider=None,
@@ -291,7 +316,10 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
         timeout_seconds=5.0,
         owner_id=42,
     )
-    assert [match.chunk_index for match in result] == [3]
+    assert [match.chunk_index for match in result.matches] == [3]
+    assert result.coverage.ready is True
+    assert result.coverage.catalog_commit_seq == "10"
+    assert result.coverage.expected_episodes == 1
     assert seen["model"] == "test-model"
     assert seen["owner_id"] == 42
     assert seen["environment"] is None

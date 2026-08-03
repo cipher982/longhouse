@@ -23,6 +23,26 @@ def _fail_legacy_factory():
     raise AssertionError("storage-v2 machine search must not open DATABASE_URL")
 
 
+def _coverage() -> dict[str, object]:
+    return {
+        "ready": True,
+        "projector": "embeddings-test-256d-p2",
+        "catalog_lag_count": 0,
+        "catalog_indexed_through": "10",
+        "catalog_commit_seq": "10",
+        "catalog_observed_at": "2026-08-02T00:00:00+00:00",
+        "expected_sessions": 1,
+        "published_sessions": 1,
+        "expected_episodes": 1,
+        "current_episodes": 1,
+        "invalid_vectors": 0,
+        "unnormalized_vectors": 0,
+        "unlocatable_episodes": 0,
+        "episode_count_mismatches": 0,
+        "missing_session_ids": [],
+    }
+
+
 def test_recall_contract_accepts_evaluator_depth():
     app = FastAPI()
     app.include_router(agents_search.router)
@@ -203,6 +223,7 @@ def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
             embedding_model="google/embeddinggemma-300m",
             embedding_dims=256,
             embedding_revision="a" * 40,
+            coverage=_coverage(),
         )
 
     monkeypatch.setattr(timeline._search_router, "recall_sessions", canonical_recall)

@@ -1818,6 +1818,38 @@ class RecallMatch(BaseModel):
     start_order_time_us: Optional[int] = Field(default=None, exclude=True)
 
 
+class RecallCoverage(BaseModel):
+    """Complete-corpus certificate observed by a successful dense request."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ready: Literal[True]
+    projector: str = Field(min_length=1)
+    catalog_lag_count: Literal[0]
+    catalog_indexed_through: str = Field(pattern=r"^[0-9]+$")
+    catalog_commit_seq: str = Field(pattern=r"^[0-9]+$")
+    catalog_observed_at: str = Field(min_length=1)
+    expected_sessions: int = Field(ge=0)
+    published_sessions: int = Field(ge=0)
+    expected_episodes: int = Field(ge=0)
+    current_episodes: int = Field(ge=0)
+    invalid_vectors: Literal[0]
+    unnormalized_vectors: Literal[0]
+    unlocatable_episodes: Literal[0]
+    episode_count_mismatches: Literal[0]
+    missing_session_ids: List[str] = Field(default_factory=list, max_length=0)
+
+    @model_validator(mode="after")
+    def validate_complete_coverage(self) -> "RecallCoverage":
+        if self.catalog_indexed_through != self.catalog_commit_seq:
+            raise ValueError("complete recall coverage requires the current catalog watermark")
+        if self.expected_sessions != self.published_sessions:
+            raise ValueError("complete recall coverage requires every expected session publication")
+        if self.expected_episodes != self.current_episodes:
+            raise ValueError("complete recall coverage requires every expected episode")
+        return self
+
+
 class RecallResponse(BaseModel):
     """Response for recall endpoint."""
 
@@ -1836,6 +1868,7 @@ class RecallResponse(BaseModel):
     embedding_model: Optional[str] = None
     embedding_dims: Optional[int] = None
     embedding_revision: Optional[str] = None
+    coverage: Optional[RecallCoverage] = None
 
     @model_validator(mode="after")
     def validate_recall_contract(self) -> "RecallResponse":
@@ -1857,8 +1890,12 @@ class RecallResponse(BaseModel):
                 or any(char not in "0123456789abcdef" for char in self.embedding_revision)
             ):
                 raise ValueError("dense recall embedding-space identity is invalid")
+            if self.coverage is None:
+                raise ValueError("dense recall requires a complete corpus-coverage certificate")
         elif any(value is not None for value in embedding_identity):
             raise ValueError("lexical-only recall must not claim an embedding-space identity")
+        elif self.coverage is not None:
+            raise ValueError("lexical-only recall must not claim dense corpus coverage")
 
         for match in self.matches:
             match_lanes = match.retrieval_lanes

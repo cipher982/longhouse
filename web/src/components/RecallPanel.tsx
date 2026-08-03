@@ -200,6 +200,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
             <div className="recall-results-header" role="status">
               {total} match{total !== 1 ? "es" : ""}
               {project && ` in ${project}`}
+              {data?.coverage && ` · Complete corpus: ${data.coverage.expected_episodes.toLocaleString()} episodes`}
             </div>
             <div className="recall-results-list" data-testid="recall-results">
               {matches.map((match) => (

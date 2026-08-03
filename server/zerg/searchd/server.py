@@ -316,7 +316,10 @@ class SearchDaemon:
                 params.pop("dims", None)
                 return self._result(
                     request,
-                    {"results": self._dense_index.search(query, **params)},
+                    {
+                        "results": self._dense_index.search(query, **params),
+                        "coverage": self._dense_index.coverage.as_dict(),
+                    },
                 )
             if request.method == "search.query.v2":
                 params = _search_params(request.params)

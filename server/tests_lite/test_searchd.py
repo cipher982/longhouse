@@ -847,11 +847,26 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
         assert hashes_mismatch.value.code == "embedding_space_mismatch"
 
         await client.call("search.embedding.write.v2", write_params)
-        results = (await client.call("search.embedding.query.v2", query_params))["results"]
-        assert [row["session_id"] for row in results] == [session_id]
+        query_result = await client.call("search.embedding.query.v2", query_params)
+        assert [row["session_id"] for row in query_result["results"]] == [session_id]
+        assert query_result["coverage"] == {
+            "ready": True,
+            "expected_sessions": 1,
+            "published_sessions": 1,
+            "expected_episodes": 1,
+            "current_episodes": 1,
+            "invalid_vectors": 0,
+            "unnormalized_vectors": 0,
+            "unlocatable_episodes": 0,
+            "episode_count_mismatches": 0,
+            "missing_session_ids": [],
+        }
 
         await client.call("search.session.delete.v2", {"session_id": session_id})
-        assert (await client.call("search.embedding.query.v2", query_params))["results"] == []
+        deleted_result = await client.call("search.embedding.query.v2", query_params)
+        assert deleted_result["results"] == []
+        assert deleted_result["coverage"]["ready"] is True
+        assert deleted_result["coverage"]["expected_sessions"] == 0
     finally:
         await client.close()
         await daemon.close()
