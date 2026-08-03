@@ -2604,6 +2604,67 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func flappingStreamCannotSuppressFailureIndefinitely() {
+        // The bug this pins: replenishing the grace inside the same drop that
+        // consumes it. A stream that emits one line and closes, over and over,
+        // would forgive itself forever and never report.
+        var policy = ProjectionRetryPolicy()
+
+        let first = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(first.outcome == .retryQuietly)
+        #expect(first.resetBackoff)
+
+        let second = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(second.outcome == .reportFailure)
+
+        let third = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(third.outcome == .reportFailure)
+    }
+
+    @Test
+    func healthyLongLivedStreamClosesQuietlyEveryTime() {
+        var policy = ProjectionRetryPolicy()
+        let long = ProjectionRetryPolicy.healthySessionSeconds + 1
+
+        // Servers rotate long-lived SSE connections. Each ordinary close must
+        // stay silent, not accumulate toward a reported failure.
+        for _ in 0..<5 {
+            let decision = policy.recordDrop(carriedTraffic: true, duration: long)
+            #expect(decision.outcome == .retryQuietly)
+            #expect(decision.resetBackoff)
+        }
+        #expect(policy.consecutiveFailures == 0)
+    }
+
+    @Test
+    func streamThatNeverCarriedTrafficReportsImmediately() {
+        var policy = ProjectionRetryPolicy()
+
+        // An immediate 200-then-EOF, or a connection that never opened, gets no
+        // grace at all.
+        #expect(policy.recordDrop(carriedTraffic: false, duration: 0).outcome == .reportFailure)
+        #expect(policy.recordDrop(carriedTraffic: false, duration: 0).outcome == .reportFailure)
+    }
+
+    @Test
+    func healthySessionClearsAnEarlierFlapStreak() {
+        var policy = ProjectionRetryPolicy()
+        _ = policy.recordDrop(carriedTraffic: true, duration: 2)
+        _ = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(policy.consecutiveFailures == 2)
+
+        // Recovering into a genuinely healthy session resets the streak, so a
+        // later isolated blip is forgiven again.
+        let recovered = policy.recordDrop(
+            carriedTraffic: true,
+            duration: ProjectionRetryPolicy.healthySessionSeconds + 1
+        )
+        #expect(recovered.outcome == .retryQuietly)
+        #expect(policy.consecutiveFailures == 0)
+        #expect(policy.recordDrop(carriedTraffic: true, duration: 2).outcome == .retryQuietly)
+    }
+
+    @Test
     func neverAttemptedProducerIsNeverCurrent() {
         let state = ProducerRefreshState.neverAttempted
         #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)

@@ -95,6 +95,52 @@ actor LivenessFlag {
     }
 }
 
+/// Decides whether a dropped stream connection should be reported to the user.
+///
+/// Pulled out of the retry loop so the sequence can be tested without a network.
+/// The subtlety it exists to get right: a grace that is replenished by the same
+/// connection it forgives is not a grace at all — a stream that emits one line
+/// and closes, over and over, would suppress its own failures forever.
+struct ProjectionRetryPolicy {
+    /// A connection that carried traffic for at least this long is a healthy
+    /// session whose close is ordinary rather than evidence of a problem.
+    static let healthySessionSeconds: TimeInterval = 30
+
+    private(set) var consecutiveFailures = 0
+
+    enum Outcome: Equatable {
+        /// Ordinary close of a working stream. Stay quiet, retry promptly.
+        case retryQuietly
+        /// Report the failure; the stream is not working.
+        case reportFailure
+    }
+
+    /// - Parameters:
+    ///   - carriedTraffic: whether this connection ever delivered a line.
+    ///   - duration: how long the connection lasted before it dropped.
+    /// - Returns: whether to surface the drop, and whether to reset the backoff.
+    mutating func recordDrop(
+        carriedTraffic: Bool,
+        duration: TimeInterval
+    ) -> (outcome: Outcome, resetBackoff: Bool) {
+        if carriedTraffic && duration >= Self.healthySessionSeconds {
+            // A stream that ran for a while and then closed is doing what
+            // long-lived SSE connections normally do.
+            consecutiveFailures = 0
+            return (.retryQuietly, true)
+        }
+
+        consecutiveFailures += 1
+        // One forgiven drop per streak, and only if the connection worked at
+        // all. The counter is never reset here, so a flapping stream reports on
+        // its second consecutive drop.
+        if carriedTraffic && consecutiveFailures == 1 {
+            return (.retryQuietly, true)
+        }
+        return (.reportFailure, false)
+    }
+}
+
 enum SessionProjectionStream {
     private static let logger = Logger(
         subsystem: "ai.longhouse.desktop",
@@ -185,12 +231,10 @@ enum SessionProjectionStream {
             let task = Task.detached(priority: .userInitiated) {
                 var backoff = Duration.milliseconds(250)
                 let allowedSessionIds = Set(sessionIds)
-                // A stream that has proved it works earns one quiet reconnect.
-                // Servers close long-lived SSE connections routinely, and every
-                // such close would otherwise surface as a user-visible failure.
-                var reconnectGrace = 0
+                var retryPolicy = ProjectionRetryPolicy()
                 while !Task.isCancelled {
                     let liveness = LivenessFlag()
+                    let connectionStartedAt = Date()
                     do {
                         try await bootstrap(
                             connection: connection,
@@ -209,20 +253,14 @@ enum SessionProjectionStream {
                         let description = String(describing: error)
                         logger.error("Runtime Host session stream failed: \(description, privacy: .public)")
 
-                        if await liveness.observed {
-                            // This connection carried traffic, so the close is
-                            // ordinary. Reset the backoff that would otherwise
-                            // never recover, and spend the grace instead of
-                            // reporting a failure.
+                        let decision = retryPolicy.recordDrop(
+                            carriedTraffic: await liveness.observed,
+                            duration: Date().timeIntervalSince(connectionStartedAt)
+                        )
+                        if decision.resetBackoff {
                             backoff = .milliseconds(250)
-                            reconnectGrace = 1
                         }
-
-                        if reconnectGrace > 0 {
-                            reconnectGrace -= 1
-                        } else {
-                            // Either the stream never carried traffic, or the
-                            // quiet reconnect also failed.
+                        if decision.outcome == .reportFailure {
                             continuation.yield(.failed(description))
                         }
                         try? await Task.sleep(for: backoff)
