@@ -134,10 +134,11 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
         raise RuntimeError("recorded bridge process identity is not live")
     if not _pid_alive(app_server_pid) or codex_bin.name not in app_server_command:
         raise RuntimeError("recorded Codex app-server process identity is not live")
-    os.kill(app_server_pid, signal.SIGKILL)
-    app_server_dead = _wait_dead(app_server_pid)
     os.kill(bridge_pid, signal.SIGKILL)
+    if _pid_alive(app_server_pid):
+        os.kill(app_server_pid, signal.SIGKILL)
     bridge_dead = _wait_dead(bridge_pid)
+    app_server_dead = _wait_dead(app_server_pid)
     if not app_server_dead or not bridge_dead:
         raise RuntimeError("process-loss injection did not terminate the exact recorded owners")
     return {

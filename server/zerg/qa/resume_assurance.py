@@ -191,6 +191,15 @@ def _producer_supports_cell(
     if census.get("architecture") not in registration.get("architectures", []):
         failures.append("architecture")
     artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
+    for field in ("provider", "version", "executable_identity", "build_identity", "entrypoint", "build_root"):
+        if not isinstance(artifact.get(field), str) or not artifact.get(field):
+            failures.append(f"provider_artifact_{field}")
+    if artifact.get("provider") != cell.get("provider"):
+        failures.append("provider_artifact_provider")
+    for field in ("executable_identity", "build_identity"):
+        value = artifact.get(field)
+        if not isinstance(value, str) or not value.startswith("sha256:") or len(value) != 71:
+            failures.append(f"provider_artifact_{field}_digest")
     if artifact.get("acquisition_method") not in registration.get("acquisition_methods", []):
         failures.append("acquisition_method")
     available_bindings = set(census.get("credential_binding_ids", []))

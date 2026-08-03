@@ -85,6 +85,8 @@ def _inputs() -> dict:
                 "executable_identity": "sha256:" + "9" * 64,
                 "build_identity": "sha256:" + "8" * 64,
                 "acquisition_method": "staged_release",
+                "entrypoint": "/provider-builds/codex/0.999.0/provider",
+                "build_root": "/provider-builds/codex/0.999.0",
             },
         },
         "scheduling": {"requested_cells": copy.deepcopy(selected)},
@@ -221,7 +223,7 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
         Path("/build/provider"),
     )
 
-    assert [pid for pid, _ in killed] == [202, 101]
+    assert [pid for pid, _ in killed] == [101, 202]
     assert receipt["bridge"]["dead"] is True
     assert receipt["app_server"]["dead"] is True
 
