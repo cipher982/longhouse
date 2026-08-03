@@ -296,6 +296,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         verification = final_cleanup.get("verification") or {}
         remaining_old = sorted(pid for pid in old_pids if _pid_alive(pid))
         resumed_pids = {int(value) for value in (resumed_state.get("pid"), resumed_state.get("app_server_pid")) if value}
+        for pid in resumed_pids:
+            _wait_dead(pid)
         remaining_resumed = sorted(pid for pid in resumed_pids if _pid_alive(pid))
         orphan_count = len(set(remaining_old + remaining_resumed))
         final_cleanup.update(
