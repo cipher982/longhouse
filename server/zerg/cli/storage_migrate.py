@@ -180,6 +180,33 @@ def reconcile_relinked_legacy(
         raise typer.Exit(code=1)
 
 
+@app.command("restore-generation")
+def restore_generation(
+    session_id: UUID = typer.Option(..., "--session-id"),
+    generation_id: UUID = typer.Option(..., "--generation-id"),
+) -> None:
+    """Restore a complete generation when the selected generation lost its raw source."""
+
+    _, socket_path = catalogd_paths()
+    catalog = CatalogClient(socket_path)
+
+    async def execute() -> dict:
+        try:
+            return await catalog.call(
+                "storage.session.render_generation.restore.v2",
+                {
+                    "session_id": str(session_id),
+                    "generation_id": str(generation_id),
+                    "observed_at": datetime.now(UTC).isoformat(),
+                },
+                timeout_seconds=30.0,
+            )
+        finally:
+            await catalog.close()
+
+    _print(asyncio.run(execute()))
+
+
 @app.command("repair-render")
 def repair_render(
     run_id: UUID = typer.Option(..., "--run-id"),

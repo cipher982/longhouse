@@ -6548,6 +6548,177 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def restore_storage_render_generation(
+        self,
+        *,
+        session_id: UUID,
+        generation_id: UUID,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Restore one complete generation when the selected generation lost its raw source."""
+
+        session_key = str(session_id)
+        generation_key = str(generation_id)
+        sessions = StorageSession.__table__
+        raw = LiveRawObject.__table__
+        render_objects = RenderObject.__table__
+        generations = RenderGeneration.__table__
+        projector_state = ProjectorState.__table__
+        tombstones = LiveSessionTombstone.__table__
+        with _write_transaction(self.engine) as connection:
+            session = connection.execute(select(sessions).where(sessions.c.session_id == session_key)).mappings().first()
+            if session is None:
+                return {"session_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id == session_key)).first() is not None:
+                return {"proof_conflict": "session_tombstoned", "commit_seq": str(_current_commit_seq(connection))}
+            if session["current_render_generation"] == generation_key and session["render_state"] == "ready":
+                return {
+                    "changed": False,
+                    "already_current": True,
+                    "session_id": session_key,
+                    "generation_id": generation_key,
+                    "commit_seq": str(session["commit_seq"]),
+                }
+            target = (
+                connection.execute(
+                    select(generations).where(
+                        generations.c.generation_id == generation_key,
+                        generations.c.session_id == session_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if target is None:
+                return {"generation_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if target["state"] != "superseded":
+                return {"proof_conflict": "target_generation_not_superseded", "commit_seq": str(_current_commit_seq(connection))}
+            current_generation = session["current_render_generation"]
+            if current_generation is None:
+                return {"proof_conflict": "current_generation_missing", "commit_seq": str(_current_commit_seq(connection))}
+            current_rows = list(
+                connection.execute(
+                    select(render_objects.c.retired_at, raw.c.envelope_id, raw.c.retired_at.label("raw_retired_at"))
+                    .select_from(render_objects.outerjoin(raw, raw.c.envelope_id == render_objects.c.source_envelope_id))
+                    .where(
+                        render_objects.c.session_id == session_key,
+                        render_objects.c.generation_id == current_generation,
+                    )
+                ).mappings()
+            )
+            if not current_rows or any(
+                row["retired_at"] is None or row["envelope_id"] is None or row["raw_retired_at"] is None for row in current_rows
+            ):
+                return {"proof_conflict": "current_generation_still_durable", "commit_seq": str(_current_commit_seq(connection))}
+            target_rows = list(
+                connection.execute(
+                    select(
+                        render_objects.c.object_id,
+                        render_objects.c.event_count,
+                        render_objects.c.retired_at,
+                        raw.c.envelope_id,
+                        raw.c.session_id.label("raw_session_id"),
+                        raw.c.retired_at.label("raw_retired_at"),
+                    )
+                    .select_from(render_objects.outerjoin(raw, raw.c.envelope_id == render_objects.c.source_envelope_id))
+                    .where(
+                        render_objects.c.session_id == session_key,
+                        render_objects.c.generation_id == generation_key,
+                    )
+                    .order_by(render_objects.c.object_id)
+                ).mappings()
+            )
+            if not target_rows:
+                return {"proof_conflict": "target_generation_empty", "commit_seq": str(_current_commit_seq(connection))}
+            if any(
+                row["retired_at"] is not None
+                or row["envelope_id"] is None
+                or row["raw_retired_at"] is not None
+                or row["raw_session_id"] != session_key
+                for row in target_rows
+            ):
+                return {"proof_conflict": "target_generation_not_durable", "commit_seq": str(_current_commit_seq(connection))}
+            if len(target_rows) != int(target["object_count"]) or sum(int(row["event_count"]) for row in target_rows) != int(
+                target["event_count"]
+            ):
+                return {"proof_conflict": "target_generation_projection_mismatch", "commit_seq": str(_current_commit_seq(connection))}
+
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            connection.execute(
+                update(generations)
+                .where(
+                    generations.c.session_id == session_key,
+                    generations.c.generation_id != generation_key,
+                    generations.c.state == "current",
+                )
+                .values(state="superseded", superseded_at=observed_at, commit_seq=commit_seq, updated_at=observed_at)
+            )
+            _recompute_render_generation_projection(
+                connection,
+                session_id=session_key,
+                generation_id=generation_key,
+                commit_seq=commit_seq,
+                commit_time=observed_at,
+            )
+            connection.execute(
+                update(sessions)
+                .where(sessions.c.session_id == session_key)
+                .values(render_state="ready", commit_seq=commit_seq, updated_at=observed_at)
+            )
+            for projector_name in KNOWN_PROJECTORS:
+                state = (
+                    connection.execute(
+                        select(projector_state).where(
+                            projector_state.c.projector == projector_name,
+                            projector_state.c.session_id == session_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                values = {
+                    "desired_revision": commit_seq,
+                    "claimed_revision": None,
+                    "claim_token": None,
+                    "worker_id": None,
+                    "claim_expires_at": None,
+                    "status": "idle",
+                    "failure_count": 0,
+                    "last_error_code": None,
+                    "last_error_message": None,
+                    "retry_at": None,
+                    "commit_seq": commit_seq,
+                    "updated_at": observed_at,
+                }
+                if state is None:
+                    connection.execute(
+                        insert(projector_state).values(
+                            projector=projector_name,
+                            session_id=session_key,
+                            completed_revision=0,
+                            created_at=observed_at,
+                            **values,
+                        )
+                    )
+                else:
+                    connection.execute(
+                        update(projector_state)
+                        .where(
+                            projector_state.c.projector == projector_name,
+                            projector_state.c.session_id == session_key,
+                        )
+                        .values(**values)
+                    )
+            return {
+                "changed": True,
+                "session_id": session_key,
+                "generation_id": generation_key,
+                "object_count": len(target_rows),
+                "event_count": sum(int(row["event_count"]) for row in target_rows),
+                "source_envelope_ids": [str(row["envelope_id"]) for row in target_rows],
+                "commit_seq": str(commit_seq),
+            }
+
     def read_storage_session(self, *, session_id: UUID) -> dict[str, Any]:
         table = StorageSession.__table__
         tombstone = LiveSessionTombstone.__table__

@@ -681,6 +681,108 @@ async def test_storage_semantics_replays_current_raw_in_order(tmp_path, command_
 
 
 @pytest.mark.asyncio
+async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence_candidates(tmp_path):
+    session_id = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    source_epoch = UUID("018f0c3a-7b2d-7f10-8a11-323456789abc")
+    current = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=session_id,
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=source_epoch,
+        range_kind="record_ordinal",
+        range_start=0,
+        range_end=1,
+        records=(RawRecord(source_position=0, data=b'{"type":"user","message":{"role":"user","content":"hello"}}'),),
+    )
+    unrelated = replace(
+        current,
+        range_start=1,
+        range_end=2,
+        records=(
+            RawRecord(
+                source_position=1,
+                data=b'{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>x</local-command-caveat>"}}',
+            ),
+        ),
+    )
+    current_sealed = seal_raw_object(tmp_path, current)
+    unrelated_sealed = seal_raw_object(tmp_path, unrelated)
+    render = RenderObjectSpec(
+        session_id=session_id,
+        render_generation=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"),
+        parser_revision="engine-parser-v2",
+        ordering_revision="semantic-order-v2",
+        machine_id="cinder",
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=source_epoch,
+        source_envelope_id=current_sealed.envelope_id,
+        records=(
+            RenderRecord(
+                event_id="message",
+                order_time_us=1,
+                source_position=0,
+                event_subordinal=0,
+                role="user",
+                content_text="hello",
+                interaction_kind="durable_user_message",
+                raw_record_ordinal=0,
+            ),
+        ),
+    )
+
+    class Catalog:
+        async def call(self, method, params):
+            assert method == "storage.session.raw_manifest.v2"
+            return {
+                "found": True,
+                "objects": [
+                    {
+                        "envelope_id": sealed.envelope_id,
+                        "machine_id": "cinder",
+                        "provider": "claude",
+                        "opaque_source_id": "history.jsonl",
+                        "source_epoch": str(source_epoch),
+                        "range_start": start,
+                        "range_end": end,
+                        "object_path": sealed.object_path,
+                        "object_hash": sealed.object_hash,
+                        "tenant_id": "tenant-a",
+                    }
+                    for sealed, start, end in ((current_sealed, 0, 1), (unrelated_sealed, 1, 2))
+                ],
+                "objects_truncated": False,
+            }
+
+    class RawReader:
+        reads = 0
+
+        async def read(self, object_path, object_hash, tenant_id):
+            self.reads += 1
+            assert object_path == current_sealed.object_path
+            return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
+
+    reader = RawReader()
+    recovered = await recover_render_interaction_kinds(
+        catalog=Catalog(),
+        raw_workers=reader,
+        session_id=str(session_id),
+        owner_id="42",
+        provider="claude",
+        records=render.records,
+        source_envelope_id=current_sealed.envelope_id,
+        manifest_cache={},
+        sequence_context_cache={},
+        reclassify_sequence_controls=True,
+    )
+
+    assert reader.reads == 1
+    assert recovered == {0: "durable_user_message"}
+
+
+@pytest.mark.asyncio
 async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat_is_in_later_envelope(tmp_path):
     """A later immutable caveat must repair an earlier durable-looking command."""
 

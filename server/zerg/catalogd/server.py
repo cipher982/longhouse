@@ -370,6 +370,8 @@ class CatalogDaemon:
             return await self._delete_storage_session(request)
         if request.method == "storage.session.relinked_legacy.reconcile.v2":
             return await self._reconcile_relinked_legacy_session(request)
+        if request.method == "storage.session.render_generation.restore.v2":
+            return await self._restore_storage_render_generation(request)
         if request.method == "storage.session.timeline.list.v2":
             return await self._list_storage_sessions(request)
         if request.method == "storage.health.v2":
@@ -2210,6 +2212,37 @@ class CatalogDaemon:
                 request,
                 "conflict",
                 "session does not satisfy relinked legacy duplicate proof",
+                details={"reason": result["proof_conflict"]},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _restore_storage_render_generation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "generation_id", "observed_at"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "storage.session.render_generation.restore.v2 has invalid parameters",
+            )
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            generation_id = _canonical_uuid(request.params["generation_id"], "generation_id")
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.restore_storage_render_generation,
+            session_id=session_id,
+            generation_id=generation_id,
+            observed_at=observed_at,
+        )
+        if result.get("session_missing") or result.get("generation_missing"):
+            return self._error(request, "not_found", "storage session or render generation does not exist")
+        if result.get("proof_conflict"):
+            return self._error(
+                request,
+                "conflict",
+                "render generation does not satisfy restore proof",
                 details={"reason": result["proof_conflict"]},
             )
         return CatalogRpcResponse(id=request.id, result=result)

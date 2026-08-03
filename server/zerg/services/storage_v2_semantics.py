@@ -100,7 +100,10 @@ async def recover_render_interaction_kinds(
         raise StorageV2SemanticRecoveryError("raw companion envelope identity does not match render object")
 
     raw_records = decoded.spec.records
-    if reclassify_sequence_controls:
+    if reclassify_sequence_controls and _render_records_need_claude_sequence_context(
+        raw_records=raw_records,
+        records=records,
+    ):
         sequence_context = await _seed_sequence_context_from_all_raw(
             raw_workers=raw_workers,
             session_id=session_id,
@@ -110,6 +113,8 @@ async def recover_render_interaction_kinds(
             manifests=manifests,
             sequence_context_cache=sequence_context_cache,
         )
+    elif reclassify_sequence_controls:
+        sequence_context = {}
     else:
         sequence_context = await _seed_sequence_context_from_prior_raw(
             catalog=catalog,
@@ -129,6 +134,22 @@ async def recover_render_interaction_kinds(
         sequence_context=sequence_context,
         source_surface="storage-v2-replay",
     )
+
+
+def _render_records_need_claude_sequence_context(*, raw_records: tuple[object, ...], records: tuple[object, ...]) -> bool:
+    """Return whether any projected row needs caveat evidence from another envelope."""
+
+    for record in records:
+        raw_ordinal = int(getattr(record, "raw_record_ordinal", 0))
+        if raw_ordinal < 0 or raw_ordinal >= len(raw_records):
+            raise StorageV2SemanticRecoveryError("render record raw locator is outside its raw companion")
+        raw_text = raw_records[raw_ordinal].data.decode("utf-8", errors="replace")
+        if claude_sequence_dependent_control_candidate(
+            content_text=getattr(record, "content_text", None),
+            raw_json=raw_text,
+        ):
+            return True
+    return False
 
 
 async def enrich_render_interaction_kinds(

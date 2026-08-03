@@ -2136,3 +2136,110 @@ async def test_relinked_legacy_reconciliation_requires_duplicate_proof_and_retir
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_restore_generation_requires_retired_current_and_durable_target(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id, replacement_session = uuid4(), uuid4()
+    legacy_epoch, native_epoch, replacement_epoch = uuid4(), uuid4(), uuid4()
+    legacy_generation, native_generation = uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        legacy = _raw_params(
+            epoch=legacy_epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"legacy\n",),
+            sealed_at=now,
+            opaque_source_id="legacy-source-lines",
+        )
+        legacy.update(
+            provenance_kind="legacy_source_lines",
+            render_state="ready",
+            render_manifest=_render_manifest(
+                legacy_generation,
+                seed=b"legacy-render",
+                opaque_source_id="legacy-source-lines",
+                source_epoch=legacy_epoch,
+            ),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        legacy["render_manifest"]["parser_revision"] = "legacy-normalized-v1"
+        await client.call("storage.raw_object.commit.v2", legacy)
+
+        native = _raw_params(
+            epoch=native_epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"native\n",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        native.update(
+            render_state="ready",
+            render_manifest=_render_manifest(native_generation, seed=b"native-render", source_epoch=native_epoch),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        await client.call("storage.raw_object.commit.v2", native)
+
+        replacement = _raw_params(
+            epoch=replacement_epoch,
+            predecessor=native_epoch,
+            session_id=replacement_session,
+            start=0,
+            end=6,
+            records=(b"native\n",),
+            sealed_at=now + timedelta(seconds=2),
+        )
+        replacement.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"replacement-render", source_epoch=replacement_epoch),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        await client.call("storage.raw_object.commit.v2", replacement)
+
+        restored = await client.call(
+            "storage.session.render_generation.restore.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(legacy_generation),
+                "observed_at": (now + timedelta(seconds=3)).isoformat(),
+            },
+        )
+        assert restored["changed"] is True
+        assert restored["object_count"] == 1
+        assert restored["event_count"] == 1
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["current_render_generation"] == str(legacy_generation)
+        assert session["session"]["render_state"] == "ready"
+        replay = await client.call(
+            "storage.session.render_generation.restore.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(legacy_generation),
+                "observed_at": (now + timedelta(seconds=4)).isoformat(),
+            },
+        )
+        assert replay["changed"] is False
+        assert replay["already_current"] is True
+
+        with pytest.raises(CatalogRemoteError) as retired_target:
+            await client.call(
+                "storage.session.render_generation.restore.v2",
+                {
+                    "session_id": str(session_id),
+                    "generation_id": str(native_generation),
+                    "observed_at": (now + timedelta(seconds=4)).isoformat(),
+                },
+            )
+        assert retired_target.value.code == "conflict"
+        assert retired_target.value.details == {"reason": "current_generation_still_durable"}
+    finally:
+        await client.close()
+        await daemon.close()
