@@ -76,6 +76,11 @@ if [[ "$BOOTSTRAP_ENGINE" == "true" ]]; then
     echo "| 0 | 3 | setup_error: missing Machine Agent credential | \`$OUTPUT_ROOT\` |" >> "$summary"
     exit 3
   fi
+  if [[ "$LONGHOUSE_DEVICE_TOKEN" != zdt_* ]]; then
+    echo "LONGHOUSE_DEVICE_TOKEN must be a durable Machine Agent device token (zdt_), not a managed-session token" >&2
+    echo "| 0 | 3 | setup_error: invalid Machine Agent credential type | \`$OUTPUT_ROOT\` |" >> "$summary"
+    exit 3
+  fi
   runtime_url="https://${SUBDOMAIN}.longhouse.ai"
   token_machine_id="$(python3 - "$runtime_url" <<'PY'
 import json
@@ -95,8 +100,7 @@ PY
     longhouse auth \
       --url "$runtime_url" \
       --device "$token_machine_id" \
-      --token "$LONGHOUSE_DEVICE_TOKEN" \
-      --force >/dev/null
+      --token-env LONGHOUSE_DEVICE_TOKEN >/dev/null
   longhouse-engine connect \
     --url "$runtime_url" \
     --token "$LONGHOUSE_DEVICE_TOKEN" \
