@@ -344,6 +344,14 @@ struct BridgeStartResponse {
 struct BridgeState {
     cwd: String,
     codex_bin: String,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    bridge_process_start_time: Option<String>,
+    #[serde(default)]
+    app_server_pid: Option<u32>,
+    #[serde(default)]
+    app_server_process_start_time: Option<String>,
     ws_url: Option<String>,
     status: Option<String>,
     thread_id: Option<String>,
@@ -1740,7 +1748,7 @@ struct CodexResumeTarget {
     model: Option<String>,
     model_reasoning_effort: Option<String>,
     bypass: bool,
-    recovery_state: Vec<u8>,
+    retained_state: Vec<u8>,
 }
 
 fn stop_and_restore_failed_codex_resume(
@@ -1766,11 +1774,11 @@ fn stop_and_restore_failed_codex_resume(
         return;
     };
     let temporary = state_path.with_extension(format!("json.restore.{}", std::process::id()));
-    if let Err(error) = std::fs::write(&temporary, &target.recovery_state)
+    if let Err(error) = std::fs::write(&temporary, &target.retained_state)
         .and_then(|()| std::fs::rename(&temporary, &state_path))
     {
         let _ = std::fs::remove_file(&temporary);
-        eprintln!("Longhouse warning: could not restore resumable crash evidence: {error}");
+        eprintln!("Longhouse warning: could not restore resumable session evidence: {error}");
     }
 }
 
@@ -1781,19 +1789,40 @@ fn validate_codex_resume_target(
     codex_bin: &str,
 ) -> anyhow::Result<CodexResumeTarget> {
     let state_path = codex_bridge_state_path(session_id)?;
-    let recovery_state =
+    let retained_state =
         std::fs::read(&state_path).with_context(|| format!("read {}", state_path.display()))?;
-    let state: BridgeState = serde_json::from_slice(&recovery_state)
+    let state: BridgeState = serde_json::from_slice(&retained_state)
         .with_context(|| format!("parse {}", state_path.display()))?;
-    if state.status.as_deref() != Some("stopped")
+    if !state
+        .status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("stopped"))
         || state.stopped_at.is_none()
-        || state.terminal_state.as_deref() != Some("process_gone")
+        || !matches!(
+            state.terminal_state.as_deref(),
+            Some("session_ended" | "process_gone")
+        )
         || !matches!(
             state.terminal_reason.as_deref(),
-            Some("provider_exit" | "process_gone" | "provider_signal")
+            Some(
+                "user_closed"
+                    | "bridge_stop"
+                    | "owner_gone"
+                    | "provider_exit"
+                    | "process_gone"
+                    | "provider_signal"
+            )
         )
     {
-        anyhow::bail!("managed Codex session has no recoverable provider-exit fact");
+        anyhow::bail!("managed Codex session has no resumable terminal fact");
+    }
+    if recorded_process_exists(state.pid, state.bridge_process_start_time.as_deref())
+        || recorded_process_exists(
+            state.app_server_pid,
+            state.app_server_process_start_time.as_deref(),
+        )
+    {
+        anyhow::bail!("managed Codex session is still shutting down; retry shortly");
     }
     let thread_id = state
         .thread_id
@@ -1878,8 +1907,31 @@ fn validate_codex_resume_target(
         model: retained_model,
         model_reasoning_effort: retained_effort,
         bypass: retained_bypass,
-        recovery_state,
+        retained_state,
     })
+}
+
+fn recorded_process_exists(pid: Option<u32>, recorded_start: Option<&str>) -> bool {
+    let Some((pid, recorded_start)) = pid.zip(
+        recorded_start
+            .map(str::trim)
+            .filter(|recorded| !recorded.is_empty()),
+    ) else {
+        return false;
+    };
+    process_start_identity(pid).as_deref() == Some(recorded_start)
+}
+
+fn process_start_identity(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 fn run_codex_tui(
@@ -2336,7 +2388,10 @@ fn run_foreground_command_after_spawn(
 #[derive(Debug)]
 enum TeardownOutcome {
     /// The bridge committed a terminal state. Normal close.
-    Committed { terminal_reason: Option<String> },
+    Committed {
+        terminal_reason: Option<String>,
+        resumable_thread: bool,
+    },
     /// No durable stop record. Nothing local can reconstruct the terminal
     /// event, so this is reported honestly rather than as a clean close — but
     /// it does not fail the user's exit, because the bridge is already gone
@@ -2460,8 +2515,32 @@ fn classify_codex_teardown(
             detail: format!("{detail}; bridge state has no durable terminal record"),
         };
     }
+    let resumable_terminal = matches!(
+        state.terminal_state.as_deref(),
+        Some("session_ended" | "process_gone")
+    ) && matches!(
+        state.terminal_reason.as_deref(),
+        Some(
+            "user_closed"
+                | "bridge_stop"
+                | "owner_gone"
+                | "provider_exit"
+                | "process_gone"
+                | "provider_signal"
+        )
+    );
     TeardownOutcome::Committed {
         terminal_reason: state.terminal_reason,
+        resumable_thread: resumable_terminal
+            && state
+                .thread_id
+                .as_deref()
+                .is_some_and(|thread| !thread.trim().is_empty())
+            && state
+                .thread_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path).is_file())
+            && Path::new(&state.cwd).is_dir(),
     }
 }
 
@@ -2481,14 +2560,21 @@ fn finish_codex_teardown(
     provider_exit: i32,
 ) -> anyhow::Result<i32> {
     match outcome {
-        TeardownOutcome::Committed { terminal_reason } => {
-            let recoverable_provider_exit = matches!(
+        TeardownOutcome::Committed {
+            terminal_reason,
+            resumable_thread,
+        } => {
+            let unexpected_provider_exit = matches!(
                 terminal_reason.as_deref(),
                 Some("provider_exit" | "process_gone" | "provider_signal")
             );
-            if recoverable_provider_exit {
+            if resumable_thread && unexpected_provider_exit {
                 eprintln!(
                     "Longhouse notice: Codex exited unexpectedly. Resume the same thread with `longhouse codex --resume-session {session_id}`."
+                );
+            } else if resumable_thread {
+                eprintln!(
+                    "Longhouse notice: Resume this thread with `longhouse codex --resume-session {session_id}`."
                 );
             } else {
                 remove_codex_contract_best_effort(session_id);
@@ -2886,7 +2972,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_resume_requires_matching_contract_and_provider_exit_fact() {
+    fn codex_resume_accepts_crash_and_clean_exit_with_matching_contract() {
         let temp = tempfile::tempdir().unwrap();
         let cwd = temp.path().join("workspace");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -2952,6 +3038,36 @@ mod tests {
                 assert_eq!(target.model_reasoning_effort.as_deref(), Some("high"));
                 assert!(target.bypass);
 
+                for terminal_reason in ["user_closed", "bridge_stop", "owner_gone"] {
+                    std::fs::write(
+                        &state_path,
+                        serde_json::to_vec(&json!({
+                            "cwd": cwd,
+                            "codex_bin": codex,
+                            "status": "stopped",
+                            "thread_id": "33333333-3333-4333-8333-333333333333",
+                            "thread_path": rollout,
+                            "run_id": "44444444-4444-4444-8444-444444444444",
+                            "stopped_at": "2026-08-02T00:00:00Z",
+                            "terminal_state": "session_ended",
+                            "terminal_reason": terminal_reason
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    let clean_target = validate_codex_resume_target(
+                        &args,
+                        session_id,
+                        &cwd,
+                        codex.to_str().unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        clean_target.thread_id,
+                        "33333333-3333-4333-8333-333333333333"
+                    );
+                }
+
                 let other_cwd = temp.path().join("other");
                 std::fs::create_dir_all(&other_cwd).unwrap();
                 let error = validate_codex_resume_target(
@@ -2963,6 +3079,114 @@ mod tests {
                 .err()
                 .unwrap();
                 assert!(format!("{error:#}").contains("cwd differs"));
+
+                let write_terminal =
+                    |terminal_reason: &str,
+                     bridge_pid: Option<u32>,
+                     app_server_pid: Option<u32>,
+                     process_start: Option<&str>| {
+                    std::fs::write(
+                        &state_path,
+                        serde_json::to_vec(&json!({
+                            "cwd": cwd,
+                            "codex_bin": codex,
+                            "pid": bridge_pid,
+                            "bridge_process_start_time": process_start,
+                            "app_server_pid": app_server_pid,
+                            "app_server_process_start_time": process_start,
+                            "status": "stopped",
+                            "thread_id": "33333333-3333-4333-8333-333333333333",
+                            "thread_path": rollout,
+                            "run_id": "44444444-4444-4444-8444-444444444444",
+                            "stopped_at": "2026-08-02T00:00:00Z",
+                            "terminal_state": "session_ended",
+                            "terminal_reason": terminal_reason
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap();
+                };
+                write_terminal("unknown", None, None, None);
+                let error = validate_codex_resume_target(
+                    &args,
+                    session_id,
+                    &cwd,
+                    codex.to_str().unwrap(),
+                )
+                .err()
+                .unwrap();
+                assert!(format!("{error:#}").contains("no resumable terminal fact"));
+
+                let current_start = process_start_identity(std::process::id()).unwrap();
+                write_terminal(
+                    "user_closed",
+                    Some(std::process::id()),
+                    None,
+                    Some(&current_start),
+                );
+                let error = validate_codex_resume_target(
+                    &args,
+                    session_id,
+                    &cwd,
+                    codex.to_str().unwrap(),
+                )
+                .err()
+                .unwrap();
+                assert!(format!("{error:#}").contains("still shutting down"));
+
+                write_terminal(
+                    "user_closed",
+                    None,
+                    Some(std::process::id()),
+                    Some(&current_start),
+                );
+                let error = validate_codex_resume_target(
+                    &args,
+                    session_id,
+                    &cwd,
+                    codex.to_str().unwrap(),
+                )
+                .err()
+                .unwrap();
+                assert!(format!("{error:#}").contains("still shutting down"));
+            },
+        );
+    }
+
+    #[test]
+    fn clean_codex_teardown_retains_contract_only_for_a_resumable_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "55555555-5555-4555-8555-555555555555";
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let contract_path = codex_contract_path(session_id).unwrap();
+                std::fs::create_dir_all(contract_path.parent().unwrap()).unwrap();
+                std::fs::write(&contract_path, b"{}").unwrap();
+                finish_codex_teardown(
+                    TeardownOutcome::Committed {
+                        terminal_reason: Some("user_closed".to_string()),
+                        resumable_thread: true,
+                    },
+                    session_id,
+                    None,
+                    0,
+                )
+                .unwrap();
+                assert!(contract_path.is_file());
+
+                finish_codex_teardown(
+                    TeardownOutcome::Committed {
+                        terminal_reason: Some("user_closed".to_string()),
+                        resumable_thread: false,
+                    },
+                    session_id,
+                    None,
+                    0,
+                )
+                .unwrap();
+                assert!(!contract_path.exists());
             },
         );
     }

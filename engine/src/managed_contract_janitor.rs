@@ -1,9 +1,10 @@
 //! Sweep orphaned managed-session contract files.
 //!
 //! Contracts under `~/.longhouse/managed-local/contracts/<provider>/` are
-//! written at launch and removed at teardown. Any teardown path that exits
-//! early leaves one behind, and abrupt process death always does. They
-//! accumulate indefinitely and feed later liveness and reattach reasoning.
+//! written at launch. Callers retain contracts that still describe either a
+//! live session or a durable provider thread that the product can resume. Any
+//! other contract left by an early teardown path is an orphan and can feed
+//! incorrect later liveness or control reasoning.
 //!
 //! Provider-neutral on purpose: the leak is not Codex-specific. Codex leaked
 //! through an error path that skipped cleanup; Claude leaks through abrupt
@@ -20,15 +21,16 @@ use std::time::{Duration, SystemTime};
 /// so a young contract with no observation yet is normal, not garbage.
 const ORPHAN_GRACE: Duration = Duration::from_secs(3600);
 
-/// Remove contracts in `contract_dir` whose session is not live and whose file
-/// is older than the grace period.
+/// Remove contracts in `contract_dir` whose session is not retained and whose
+/// file is older than the grace period.
 ///
-/// `live_session_ids` must be the sessions currently observed as alive. A
-/// caller that cannot enumerate them should not call this — an empty set means
-/// "nothing is live", which is a real state, not a missing-evidence state.
+/// `retained_session_ids` must include sessions currently observed as alive and
+/// any ended session whose durable provider state remains resumable. A caller
+/// that cannot enumerate them should not call this — an empty set means
+/// "retain nothing", which is a real state, not a missing-evidence state.
 pub fn sweep_orphan_contracts(
     contract_dir: &Path,
-    live_session_ids: &HashSet<String>,
+    retained_session_ids: &HashSet<String>,
     now: SystemTime,
 ) -> usize {
     let entries = match std::fs::read_dir(contract_dir) {
@@ -45,7 +47,7 @@ pub fn sweep_orphan_contracts(
             continue;
         }
         let session_id = file_name.trim_end_matches(".json");
-        if live_session_ids.contains(session_id) {
+        if retained_session_ids.contains(session_id) {
             continue;
         }
         let old_enough = entry
@@ -88,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_contract_for_live_session() {
+    fn keeps_contract_for_retained_session() {
         let dir = tempfile::tempdir().unwrap();
         write_contract(dir.path(), "alive");
         let live = HashSet::from(["alive".to_string()]);

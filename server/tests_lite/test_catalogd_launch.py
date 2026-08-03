@@ -95,7 +95,13 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
 
 
 @pytest.mark.asyncio
-async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_paths):
+@pytest.mark.parametrize(
+    ("terminal_state", "terminal_reason"),
+    [("process_gone", "provider_exit"), ("session_ended", "user_closed")],
+)
+async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(
+    daemon_paths, terminal_state, terminal_reason
+):
     database_path, socket_path = daemon_paths
     session_id = uuid4()
     provider_thread_id = str(uuid4())
@@ -131,8 +137,8 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
                         "freshness_ms": 60_000,
                         "dedupe_key": f"provider-exit:{initial['run_id']}",
                         "payload": {
-                            "terminal_state": "process_gone",
-                            "terminal_reason": "provider_exit",
+                            "terminal_state": terminal_state,
+                            "terminal_reason": terminal_reason,
                         },
                     }
                 ]

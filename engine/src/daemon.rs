@@ -3169,6 +3169,43 @@ fn managed_process_pids_from_observations(
     pids
 }
 
+fn codex_contract_must_be_retained(
+    observation: &managed_bridge_scan::CodexBridgeObservation,
+) -> bool {
+    observation.bridge_alive
+        || observation.app_server_alive
+        || observation.has_tui_attachment
+        || (observation.status.eq_ignore_ascii_case("stopped")
+            && observation.stopped_at.is_some()
+            && matches!(
+                observation.terminal_state.as_deref(),
+                Some("session_ended" | "process_gone")
+            )
+            && matches!(
+                observation.terminal_reason.as_deref(),
+                Some(
+                    "user_closed"
+                        | "bridge_stop"
+                        | "owner_gone"
+                        | "provider_exit"
+                        | "process_gone"
+                        | "provider_signal"
+                )
+            )
+            && observation
+                .thread_id
+                .as_deref()
+                .is_some_and(|thread| !thread.trim().is_empty())
+            && observation
+                .thread_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path).is_file())
+            && observation
+                .cwd
+                .as_deref()
+                .is_some_and(|cwd| Path::new(cwd).is_dir()))
+}
+
 fn maybe_start_managed_observation_scan(
     scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
     reason: &'static str,
@@ -3356,17 +3393,13 @@ fn maybe_start_managed_observation_scan(
         // every running session older than the grace period.
         if full_reconciliation && process_inventory_valid {
             if let Ok(home) = crate::config::get_longhouse_home() {
-                // Liveness is the union of every signal that says something is
-                // still there. A bridge can be gone while its app-server still
-                // listens, and a Claude session can be alive with its bridge
-                // down; neither is an orphaned contract.
-                let live_codex = codex_observations
+                // Codex launch provenance remains useful after a run ends: a
+                // stopped session with a durable thread can be resumed later.
+                // Live processes and resumable stopped state therefore both
+                // protect the contract from the orphan sweep.
+                let retained_codex = codex_observations
                     .iter()
-                    .filter(|observation| {
-                        observation.bridge_alive
-                            || observation.app_server_alive
-                            || observation.has_tui_attachment
-                    })
+                    .filter(|observation| codex_contract_must_be_retained(observation))
                     .map(|observation| observation.session_id.clone())
                     .collect::<std::collections::HashSet<_>>();
                 let live_claude = claude_observations
@@ -3377,7 +3410,7 @@ fn maybe_start_managed_observation_scan(
                 let now = std::time::SystemTime::now();
                 let swept = crate::managed_contract_janitor::sweep_orphan_contracts(
                     &home.join("managed-local/contracts/codex"),
-                    &live_codex,
+                    &retained_codex,
                     now,
                 ) + crate::managed_contract_janitor::sweep_orphan_contracts(
                     &home.join("managed-local/contracts/claude"),
@@ -5247,6 +5280,9 @@ mod tests {
             last_turn_status: last_turn_status.map(str::to_string),
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
+            stopped_at: None,
+            terminal_state: None,
+            terminal_reason: None,
             bridge_pid: 12344,
             bridge_process_start_time: Some("Mon May  5 11:58:00 2026".to_string()),
             app_server_pid: None,
@@ -5257,6 +5293,59 @@ mod tests {
             has_tui_attachment: false,
             app_server_alive: false,
         }
+    }
+
+    #[test]
+    fn codex_contract_retention_includes_stopped_resumable_threads() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout = temp.path().join("rollout.jsonl");
+        std::fs::write(&rollout, b"{}\n").unwrap();
+        let mut observation = codex_bridge_observation(
+            &rollout,
+            None,
+            Some("completed"),
+            "2026-08-02T00:00:00Z",
+            false,
+        );
+        observation.status = "stopped".to_string();
+        observation.stopped_at = Some("2026-08-02T00:00:01Z".to_string());
+        observation.terminal_state = Some("session_ended".to_string());
+        observation.terminal_reason = Some("user_closed".to_string());
+        assert!(codex_contract_must_be_retained(&observation));
+
+        let contract_dir = temp.path().join("contracts");
+        std::fs::create_dir(&contract_dir).unwrap();
+        let contract_path = contract_dir.join(format!("{}.json", observation.session_id));
+        std::fs::write(&contract_path, b"{}").unwrap();
+        let retained = HashSet::from([observation.session_id.clone()]);
+        assert_eq!(
+            crate::managed_contract_janitor::sweep_orphan_contracts(
+                &contract_dir,
+                &retained,
+                std::time::SystemTime::now() + Duration::from_secs(7200),
+            ),
+            0
+        );
+        assert!(contract_path.is_file());
+
+        std::fs::remove_file(&rollout).unwrap();
+        assert!(!codex_contract_must_be_retained(&observation));
+        assert_eq!(
+            crate::managed_contract_janitor::sweep_orphan_contracts(
+                &contract_dir,
+                &HashSet::new(),
+                std::time::SystemTime::now() + Duration::from_secs(7200),
+            ),
+            1
+        );
+        assert!(!contract_path.exists());
+
+        std::fs::write(&rollout, b"{}\n").unwrap();
+        observation.terminal_reason = Some("unknown".to_string());
+        assert!(!codex_contract_must_be_retained(&observation));
+
+        observation.bridge_alive = true;
+        assert!(codex_contract_must_be_retained(&observation));
     }
 
     #[test]
