@@ -292,6 +292,9 @@ class RealtimePropagationClientRenderResponse(UTCBaseModel):
     emitted_at_ms: int | None = None
     rendered_at_ms: int | None = None
     clock_skew_ms: int | None = None
+    clock_sync_rtt_ms: int | None = None
+    clock_sync_uncertainty_ms: int | None = None
+    clock_sync_sample_count: int | None = None
     server_fanout_at_ms: int | None = None
     client_received_at_ms: int | None = None
     pubsub_seq: int | None = None

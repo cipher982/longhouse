@@ -6,6 +6,21 @@ struct SessionWorkspaceStreamSource: Sendable {
     let start: @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>
     let stop: @Sendable () async -> Void
     let clockSkewMs: @Sendable () async -> Int64
+    let clockCalibration: @Sendable () async -> SessionWorkspaceStream.ClockCalibration
+
+    init(
+        start: @escaping @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>,
+        stop: @escaping @Sendable () async -> Void,
+        clockSkewMs: @escaping @Sendable () async -> Int64,
+        clockCalibration: @escaping @Sendable () async -> SessionWorkspaceStream.ClockCalibration = {
+            SessionWorkspaceStream.ClockCalibration(skewMs: 0, rttMs: nil, uncertaintyMs: nil, sampleCount: 0)
+        }
+    ) {
+        self.start = start
+        self.stop = stop
+        self.clockSkewMs = clockSkewMs
+        self.clockCalibration = clockCalibration
+    }
 
     static func live(
         baseURL: URL,
@@ -22,7 +37,8 @@ struct SessionWorkspaceStreamSource: Sendable {
         return SessionWorkspaceStreamSource(
             start: { await stream.start() },
             stop: { await stream.stop() },
-            clockSkewMs: { await stream.clockSkewMs() }
+            clockSkewMs: { await stream.clockSkewMs() },
+            clockCalibration: { await stream.clockCalibration() }
         )
     }
 }
@@ -1609,6 +1625,9 @@ final class SessionViewModel: ObservableObject {
         let serverFanoutAtMs: Int64?
         let clientReceivedAtMs: Int64
         let clockSkewMs: Int
+        let clockSyncRttMs: Int?
+        let clockSyncUncertaintyMs: Int?
+        let clockSyncSampleCount: Int
         let catalogCommitSeq: Int64?
         let pubsubSeq: Int?
     }
@@ -2328,12 +2347,16 @@ final class SessionViewModel: ObservableObject {
         case .changed(let change):
             // Push wake -> refetch the compact tail and emit render beacon.
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-            let clockSkewMs = Int(clamping: await stream?.clockSkewMs() ?? 0)
+            let calibration = await stream?.clockCalibration()
+                ?? SessionWorkspaceStream.ClockCalibration(skewMs: 0, rttMs: nil, uncertaintyMs: nil, sampleCount: 0)
             pendingRealtimeTelemetry = PendingRealtimeTelemetry(
                 latestEventId: change.latest_event_id,
                 serverFanoutAtMs: change.server_fanout_at_ms,
                 clientReceivedAtMs: nowMs,
-                clockSkewMs: clockSkewMs,
+                clockSkewMs: Int(clamping: calibration.skewMs),
+                clockSyncRttMs: calibration.rttMs,
+                clockSyncUncertaintyMs: calibration.uncertaintyMs,
+                clockSyncSampleCount: calibration.sampleCount,
                 catalogCommitSeq: change.catalog_commit_seq,
                 pubsubSeq: change.pubsub_seq
             )
@@ -3009,6 +3032,9 @@ final class SessionViewModel: ObservableObject {
             emittedAt: emittedAt,
             managed: managed,
             clockSkewMs: realtimeTelemetry?.clockSkewMs ?? 0,
+            clockSyncRttMs: realtimeTelemetry?.clockSyncRttMs,
+            clockSyncUncertaintyMs: realtimeTelemetry?.clockSyncUncertaintyMs,
+            clockSyncSampleCount: realtimeTelemetry?.clockSyncSampleCount,
             serverFanoutAtMs: realtimeTelemetry?.serverFanoutAtMs,
             clientReceivedAtMs: realtimeTelemetry?.clientReceivedAtMs,
             pubsubSeq: realtimeTelemetry?.pubsubSeq,
@@ -3044,6 +3070,9 @@ final class SessionViewModel: ObservableObject {
             emittedAt: Date(timeIntervalSince1970: TimeInterval(serverFanoutAtMs) / 1000),
             managed: managed,
             clockSkewMs: pendingTelemetry.clockSkewMs,
+            clockSyncRttMs: pendingTelemetry.clockSyncRttMs,
+            clockSyncUncertaintyMs: pendingTelemetry.clockSyncUncertaintyMs,
+            clockSyncSampleCount: pendingTelemetry.clockSyncSampleCount,
             serverFanoutAtMs: serverFanoutAtMs,
             clientReceivedAtMs: pendingTelemetry.clientReceivedAtMs,
             pubsubSeq: pendingTelemetry.pubsubSeq,

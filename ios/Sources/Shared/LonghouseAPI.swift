@@ -82,6 +82,9 @@ actor RenderBeaconReporter {
         let emitted_at_ms: Int64
         let rendered_at_ms: Int64
         let clock_skew_ms: Int
+        let clock_sync_rtt_ms: Int?
+        let clock_sync_uncertainty_ms: Int?
+        let clock_sync_sample_count: Int?
         let server_fanout_at_ms: Int64?
         let client_received_at_ms: Int64?
         let pubsub_seq: Int?
@@ -99,6 +102,9 @@ actor RenderBeaconReporter {
         emittedAt: Date,
         managed: Bool,
         clockSkewMs: Int = 0,
+        clockSyncRttMs: Int? = nil,
+        clockSyncUncertaintyMs: Int? = nil,
+        clockSyncSampleCount: Int? = nil,
         serverFanoutAtMs: Int64? = nil,
         clientReceivedAtMs: Int64? = nil,
         pubsubSeq: Int? = nil,
@@ -121,6 +127,9 @@ actor RenderBeaconReporter {
             emitted_at_ms: Int64(emittedAt.timeIntervalSince1970 * 1000),
             rendered_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
             clock_skew_ms: clockSkewMs,
+            clock_sync_rtt_ms: clockSyncRttMs,
+            clock_sync_uncertainty_ms: clockSyncUncertaintyMs,
+            clock_sync_sample_count: clockSyncSampleCount,
             server_fanout_at_ms: serverFanoutAtMs,
             client_received_at_ms: clientReceivedAtMs,
             pubsub_seq: pubsubSeq,

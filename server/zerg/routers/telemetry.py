@@ -131,6 +131,24 @@ class RenderBeacon(BaseModel):
     emitted_at_ms: int = Field(..., description="Server-stamped emitted_at for the event, in ms epoch")
     rendered_at_ms: int = Field(..., description="Client wall-clock render time, in ms epoch")
     clock_skew_ms: int = Field(0, description="Client-measured skew vs server (positive: client ahead)")
+    clock_sync_rtt_ms: int | None = Field(
+        None,
+        ge=0,
+        le=60_000,
+        description="Best observed clock-sync round-trip time after subtracting server handling time",
+    )
+    clock_sync_uncertainty_ms: int | None = Field(
+        None,
+        ge=0,
+        le=30_000,
+        description="Half-round-trip upper bound on the client/server clock estimate",
+    )
+    clock_sync_sample_count: int | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="Clock-sync samples considered by the client",
+    )
     server_fanout_at_ms: int | None = Field(None, description="Server fanout timestamp from the SSE frame, in ms epoch")
     client_received_at_ms: int | None = Field(
         None,
@@ -180,6 +198,9 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         "emitted_at_ms": beacon.emitted_at_ms,
         "rendered_at_ms": beacon.rendered_at_ms,
         "clock_skew_ms": beacon.clock_skew_ms,
+        "clock_sync_rtt_ms": beacon.clock_sync_rtt_ms,
+        "clock_sync_uncertainty_ms": beacon.clock_sync_uncertainty_ms,
+        "clock_sync_sample_count": beacon.clock_sync_sample_count,
         "server_fanout_at_ms": beacon.server_fanout_at_ms,
         "client_received_at_ms": beacon.client_received_at_ms,
         "pubsub_seq": beacon.pubsub_seq,
@@ -308,6 +329,18 @@ async def client_render_beacon(
     return {"accepted": accepted, "dropped_skew": dropped_skew, "dropped_range": dropped_range}
 
 
+@beacon_router.get("/clock", include_in_schema=False)
+async def clock_sync() -> dict[str, int]:
+    """Return the server stamps needed for an NTP-style clock sample."""
+
+    received_at_ms = time.time_ns() // 1_000_000
+    sent_at_ms = time.time_ns() // 1_000_000
+    return {
+        "server_received_at_ms": received_at_ms,
+        "server_sent_at_ms": sent_at_ms,
+    }
+
+
 @admin_router.get("/client-render/recent", include_in_schema=False)
 async def recent_client_render_beacons(
     session_id: str | None = None,
@@ -350,6 +383,9 @@ async def recent_client_render_beacons(
                 "emitted_at_ms": payload.get("emitted_at_ms"),
                 "rendered_at_ms": payload.get("rendered_at_ms"),
                 "clock_skew_ms": payload.get("clock_skew_ms"),
+                "clock_sync_rtt_ms": payload.get("clock_sync_rtt_ms"),
+                "clock_sync_uncertainty_ms": payload.get("clock_sync_uncertainty_ms"),
+                "clock_sync_sample_count": payload.get("clock_sync_sample_count"),
                 "server_fanout_at_ms": payload.get("server_fanout_at_ms"),
                 "client_received_at_ms": payload.get("client_received_at_ms"),
                 "pubsub_seq": payload.get("pubsub_seq"),

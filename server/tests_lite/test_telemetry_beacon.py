@@ -84,6 +84,17 @@ def test_beacon_accepts_single_and_batch():
     assert resp.json()["accepted"] == 2
 
 
+def test_clock_sync_exposes_ordered_server_stamps():
+    c, _factory = _client()
+
+    resp = c.get("/telemetry/clock")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["server_received_at_ms"] > 0
+    assert body["server_sent_at_ms"] >= body["server_received_at_ms"]
+
+
 def test_state_beacon_uses_catalog_fanout_as_emission_coordinate():
     c, _factory = _client()
     now = int(time.time() * 1000)
@@ -342,6 +353,9 @@ def test_beacon_persists_queryable_render_observation():
             event_id="123",
             emitted_at_ms=now - 250,
             rendered_at_ms=now,
+            clock_sync_rtt_ms=74,
+            clock_sync_uncertainty_ms=37,
+            clock_sync_sample_count=5,
         ),
     )
     assert resp.status_code == 200
@@ -370,6 +384,9 @@ def test_beacon_persists_queryable_render_observation():
             "emitted_at_ms": now - 250,
             "rendered_at_ms": now,
             "clock_skew_ms": 0,
+            "clock_sync_rtt_ms": 74,
+            "clock_sync_uncertainty_ms": 37,
+            "clock_sync_sample_count": 5,
             "server_fanout_at_ms": None,
             "client_received_at_ms": None,
             "pubsub_seq": None,

@@ -14,6 +14,18 @@ import OSLog
 /// Background URLSession is not used; SSE over URLSession.shared is
 /// foreground-only by Apple's contract.
 actor SessionWorkspaceStream {
+    struct ClockCalibration: Sendable {
+        let skewMs: Int64
+        let rttMs: Int?
+        let uncertaintyMs: Int?
+        let sampleCount: Int
+    }
+
+    private struct ClockSyncResponse: Decodable {
+        let server_received_at_ms: Int64
+        let server_sent_at_ms: Int64
+    }
+
     struct Connected: Decodable, Sendable {
         let session_id: String
         let server_now_ms: Int64?
@@ -106,6 +118,10 @@ actor SessionWorkspaceStream {
     /// replays from where the last one left off instead of cold.
     private var lastEventId: Int = 0
     private var serverClockSkewMs: Int64 = 0
+    private var clockSyncRttMs: Int?
+    private var clockSyncUncertaintyMs: Int?
+    private var clockSyncSampleCount = 0
+    private var clockCalibrationTask: Task<Void, Never>?
     private var continuation: AsyncStream<Event>.Continuation?
 
     init(
@@ -147,6 +163,15 @@ actor SessionWorkspaceStream {
 
     func clockSkewMs() -> Int64 { serverClockSkewMs }
 
+    func clockCalibration() -> ClockCalibration {
+        ClockCalibration(
+            skewMs: serverClockSkewMs,
+            rttMs: clockSyncRttMs,
+            uncertaintyMs: clockSyncUncertaintyMs,
+            sampleCount: clockSyncSampleCount
+        )
+    }
+
     /// Starts the stream and returns an AsyncStream for events. Must be
     /// called at most once per instance. Subsequent calls return an empty
     /// stream so early events cannot be lost to a continuation-attach race.
@@ -156,6 +181,9 @@ actor SessionWorkspaceStream {
         }
         return AsyncStream { continuation in
             self.continuation = continuation
+            self.clockCalibrationTask = Task { [weak self] in
+                await self?.calibrateClock()
+            }
             self.task = Task { [weak self] in
                 guard let self else { return }
                 var backoffMs: UInt64 = 500
@@ -190,6 +218,8 @@ actor SessionWorkspaceStream {
     func stop() {
         task?.cancel()
         task = nil
+        clockCalibrationTask?.cancel()
+        clockCalibrationTask = nil
         continuation?.finish()
         continuation = nil
     }
@@ -208,8 +238,50 @@ actor SessionWorkspaceStream {
 
     private func setSkew(_ serverNowMs: Int64?) {
         guard let serverNowMs else { return }
+        guard clockSyncRttMs == nil else { return }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         serverClockSkewMs = nowMs - serverNowMs
+    }
+
+    private func calibrateClock(rounds: Int = 5) async {
+        let url = baseURL.appendingPathComponent("/api/telemetry/clock")
+        for _ in 0..<rounds {
+            if Task.isCancelled { return }
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            let clientSentAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let clientReceivedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { continue }
+                let sample = try JSONDecoder().decode(ClockSyncResponse.self, from: data)
+                recordClockSample(
+                    clientSentAtMs: clientSentAtMs,
+                    serverReceivedAtMs: sample.server_received_at_ms,
+                    serverSentAtMs: sample.server_sent_at_ms,
+                    clientReceivedAtMs: clientReceivedAtMs
+                )
+            } catch {
+                continue
+            }
+        }
+    }
+
+    private func recordClockSample(
+        clientSentAtMs t0: Int64,
+        serverReceivedAtMs t1: Int64,
+        serverSentAtMs t2: Int64,
+        clientReceivedAtMs t3: Int64
+    ) {
+        guard t3 >= t0, t2 >= t1 else { return }
+        let rttMs = Int(max(0, t3 - t0 - (t2 - t1)))
+        let clientAheadMs = ((t0 - t1) + (t3 - t2)) / 2
+        clockSyncSampleCount += 1
+        if clockSyncRttMs == nil || rttMs < clockSyncRttMs! {
+            clockSyncRttMs = rttMs
+            clockSyncUncertaintyMs = (rttMs + 1) / 2
+            serverClockSkewMs = clientAheadMs
+        }
     }
 
     private func openAndDrain() async throws {

@@ -6542,6 +6542,16 @@ export interface components {
              * @description Optional client-minted session UUID for Degraded Helm. Retries and later convergence must reuse this identity instead of minting a replacement.
              */
             session_id?: string | null;
+            /**
+             * Resume Attempt Id
+             * @description Idempotency identity for an explicit managed-session resume
+             */
+            resume_attempt_id?: string | null;
+            /**
+             * Provider Thread Id
+             * @description Provider thread identity that the resumed run must retain
+             */
+            provider_thread_id?: string | null;
         };
         /** ManagedSessionLeaseIn */
         ManagedSessionLeaseIn: {
@@ -7458,6 +7468,12 @@ export interface components {
             rendered_at_ms?: number | null;
             /** Clock Skew Ms */
             clock_skew_ms?: number | null;
+            /** Clock Sync Rtt Ms */
+            clock_sync_rtt_ms?: number | null;
+            /** Clock Sync Uncertainty Ms */
+            clock_sync_uncertainty_ms?: number | null;
+            /** Clock Sync Sample Count */
+            clock_sync_sample_count?: number | null;
             /** Server Fanout At Ms */
             server_fanout_at_ms?: number | null;
             /** Client Received At Ms */

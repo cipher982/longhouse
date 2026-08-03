@@ -447,6 +447,10 @@ def _build_stages(
     )
     client_rendered = normalize_utc(first_render.observation.row.observed_at) if first_render else None
     clock_skew_ms = _int_or_none(first_render.observation.payload.get("clock_skew_ms")) if first_render else None
+    clock_uncertainty_ms = _int_or_none(first_render.observation.payload.get("clock_sync_uncertainty_ms")) if first_render else None
+    cross_clock_note = _CROSS_CLOCK_NOTE
+    if clock_uncertainty_ms is not None:
+        cross_clock_note = f"NTP-style client clock estimate has ±{clock_uncertainty_ms}ms uncertainty."
     render_note = "Includes server fanout, client receive, API refresh, and render until those probes are split."
     if clock_skew_ms not in (None, 0):
         render_note = f"{render_note} Client render time is corrected by clock_skew_ms={clock_skew_ms}."
@@ -515,7 +519,8 @@ def _build_stages(
                     server_fanout_at,
                     client_received_at,
                     source="server_fanout + client_render",
-                    confidence="derived" if clock_skew_ms not in (None, 0) else "observed",
+                    confidence="derived",
+                    note=cross_clock_note,
                 ),
                 _stage(
                     "client_received_to_rendered",
@@ -523,7 +528,7 @@ def _build_stages(
                     client_received_at,
                     client_rendered,
                     source="client_render",
-                    confidence="derived" if clock_skew_ms not in (None, 0) else "observed",
+                    confidence="observed",
                 ),
             ]
         )
@@ -683,6 +688,9 @@ def _build_client_render_response(match: _RenderMatch) -> RealtimePropagationCli
         emitted_at_ms=_int_or_none(payload.get("emitted_at_ms")),
         rendered_at_ms=_int_or_none(payload.get("rendered_at_ms")),
         clock_skew_ms=_int_or_none(payload.get("clock_skew_ms")),
+        clock_sync_rtt_ms=_int_or_none(payload.get("clock_sync_rtt_ms")),
+        clock_sync_uncertainty_ms=_int_or_none(payload.get("clock_sync_uncertainty_ms")),
+        clock_sync_sample_count=_int_or_none(payload.get("clock_sync_sample_count")),
         server_fanout_at_ms=_int_or_none(payload.get("server_fanout_at_ms")),
         client_received_at_ms=_int_or_none(payload.get("client_received_at_ms")),
         pubsub_seq=_int_or_none(payload.get("pubsub_seq")),
