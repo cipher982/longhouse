@@ -6368,6 +6368,186 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def reconcile_relinked_legacy_session(
+        self,
+        *,
+        session_id: UUID,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Retire one proven duplicate left behind by legacy/source relinking."""
+
+        session_key = str(session_id)
+        sessions = StorageSession.__table__
+        raw = LiveRawObject.__table__
+        render_objects = RenderObject.__table__
+        generations = RenderGeneration.__table__
+        projector_state = ProjectorState.__table__
+        tombstones = LiveSessionTombstone.__table__
+        with _write_transaction(self.engine) as connection:
+            session = connection.execute(select(sessions).where(sessions.c.session_id == session_key)).mappings().first()
+            if session is None:
+                return {"session_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id == session_key)).first() is not None:
+                return {"proof_conflict": "session_tombstoned", "commit_seq": str(_current_commit_seq(connection))}
+            generation_id = session["current_render_generation"]
+            if generation_id is None:
+                return {"proof_conflict": "current_generation_missing", "commit_seq": str(_current_commit_seq(connection))}
+
+            current_objects = list(
+                connection.execute(
+                    select(
+                        render_objects.c.object_id,
+                        render_objects.c.retired_at.label("render_retired_at"),
+                        raw.c.envelope_id,
+                        raw.c.tenant_id,
+                        raw.c.machine_id,
+                        raw.c.provider,
+                        raw.c.opaque_source_id,
+                        raw.c.range_kind,
+                        raw.c.range_start,
+                        raw.c.range_end,
+                        raw.c.record_hashes_hash,
+                        raw.c.session_id.label("raw_session_id"),
+                        raw.c.retired_at.label("raw_retired_at"),
+                    )
+                    .select_from(render_objects.outerjoin(raw, raw.c.envelope_id == render_objects.c.source_envelope_id))
+                    .where(
+                        render_objects.c.session_id == session_key,
+                        render_objects.c.generation_id == generation_id,
+                    )
+                    .order_by(render_objects.c.object_id)
+                ).mappings()
+            )
+            if not current_objects:
+                return {"proof_conflict": "current_generation_empty", "commit_seq": str(_current_commit_seq(connection))}
+            if any(
+                row["render_retired_at"] is None or row["envelope_id"] is None or row["raw_retired_at"] is None for row in current_objects
+            ):
+                return {"proof_conflict": "current_generation_not_retired", "commit_seq": str(_current_commit_seq(connection))}
+            replacement_proofs = []
+            for row in current_objects:
+                replacement = connection.execute(
+                    select(raw.c.envelope_id, raw.c.session_id).where(
+                        raw.c.tenant_id == row["tenant_id"],
+                        raw.c.machine_id == row["machine_id"],
+                        raw.c.provider == row["provider"],
+                        raw.c.opaque_source_id == row["opaque_source_id"],
+                        raw.c.range_kind == row["range_kind"],
+                        raw.c.range_start == row["range_start"],
+                        raw.c.range_end == row["range_end"],
+                        raw.c.record_hashes_hash == row["record_hashes_hash"],
+                        raw.c.session_id != row["raw_session_id"],
+                        raw.c.retired_at.is_(None),
+                    )
+                ).first()
+                if replacement is None:
+                    return {"proof_conflict": "exact_active_replacement_missing", "commit_seq": str(_current_commit_seq(connection))}
+                replacement_proofs.append(
+                    {
+                        "retired_envelope_id": str(row["envelope_id"]),
+                        "replacement_envelope_id": str(replacement.envelope_id),
+                        "replacement_session_id": str(replacement.session_id),
+                    }
+                )
+
+            active_owned = list(
+                connection.execute(
+                    select(raw.c.envelope_id, raw.c.provenance_kind).where(
+                        raw.c.session_id == session_key,
+                        raw.c.retired_at.is_(None),
+                    )
+                ).mappings()
+            )
+            if not active_owned:
+                return {"proof_conflict": "active_legacy_source_missing", "commit_seq": str(_current_commit_seq(connection))}
+            if any(not str(row["provenance_kind"]).startswith("legacy_") for row in active_owned):
+                return {"proof_conflict": "active_nonlegacy_source_present", "commit_seq": str(_current_commit_seq(connection))}
+
+            if session["render_state"] == "retired":
+                return {
+                    "changed": False,
+                    "already_retired": True,
+                    "session_id": session_key,
+                    "preserved_raw_objects": len(active_owned),
+                    "replacement_proofs": replacement_proofs,
+                    "commit_seq": str(session["commit_seq"]),
+                }
+
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            retired_render = connection.execute(
+                update(render_objects)
+                .where(render_objects.c.session_id == session_key, render_objects.c.retired_at.is_(None))
+                .values(retired_at=observed_at, retirement_revision=commit_seq)
+            ).rowcount
+            retired_generations = connection.execute(
+                update(generations)
+                .where(generations.c.session_id == session_key, generations.c.state != "superseded")
+                .values(state="superseded", superseded_at=observed_at, commit_seq=commit_seq, updated_at=observed_at)
+            ).rowcount
+            connection.execute(
+                update(sessions)
+                .where(sessions.c.session_id == session_key)
+                .values(
+                    hidden_from_default_timeline=1,
+                    render_state="retired",
+                    commit_seq=commit_seq,
+                    updated_at=observed_at,
+                )
+            )
+            for projector_name in KNOWN_PROJECTORS:
+                state = (
+                    connection.execute(
+                        select(projector_state).where(
+                            projector_state.c.projector == projector_name,
+                            projector_state.c.session_id == session_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                values = {
+                    "desired_revision": commit_seq,
+                    "claimed_revision": None,
+                    "claim_token": None,
+                    "worker_id": None,
+                    "claim_expires_at": None,
+                    "status": "idle",
+                    "failure_count": 0,
+                    "last_error_code": None,
+                    "last_error_message": None,
+                    "retry_at": None,
+                    "commit_seq": commit_seq,
+                    "updated_at": observed_at,
+                }
+                if state is None:
+                    connection.execute(
+                        insert(projector_state).values(
+                            projector=projector_name,
+                            session_id=session_key,
+                            completed_revision=0,
+                            created_at=observed_at,
+                            **values,
+                        )
+                    )
+                else:
+                    connection.execute(
+                        update(projector_state)
+                        .where(
+                            projector_state.c.projector == projector_name,
+                            projector_state.c.session_id == session_key,
+                        )
+                        .values(**values)
+                    )
+            return {
+                "changed": True,
+                "session_id": session_key,
+                "preserved_raw_objects": len(active_owned),
+                "retired_render_objects": int(retired_render or 0),
+                "retired_render_generations": int(retired_generations or 0),
+                "replacement_proofs": replacement_proofs,
+                "commit_seq": str(commit_seq),
+            }
+
     def read_storage_session(self, *, session_id: UUID) -> dict[str, Any]:
         table = StorageSession.__table__
         tombstone = LiveSessionTombstone.__table__
@@ -8067,6 +8247,29 @@ class CatalogStore:
                 )
                 if generation_row is None or generation_row["state"] != "pending":
                     return {"render_generation_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                render_objects = RenderObject.__table__
+                raw_objects = LiveRawObject.__table__
+                invalid_source = connection.execute(
+                    select(render_objects.c.object_id)
+                    .select_from(
+                        render_objects.outerjoin(
+                            raw_objects,
+                            raw_objects.c.envelope_id == render_objects.c.source_envelope_id,
+                        )
+                    )
+                    .where(
+                        render_objects.c.generation_id == generation_key,
+                        render_objects.c.session_id == session_key,
+                        or_(
+                            render_objects.c.retired_at.is_not(None),
+                            raw_objects.c.envelope_id.is_(None),
+                            raw_objects.c.retired_at.is_not(None),
+                        ),
+                    )
+                    .limit(1)
+                ).first()
+                if invalid_source is not None:
+                    return {"render_generation_retired": True, "commit_seq": str(_current_commit_seq(connection))}
             state = "verified" if degradation_code is None else "degraded"
             commit_seq = _advance_commit_seq(connection, completed_at)
             if generation_key is not None:

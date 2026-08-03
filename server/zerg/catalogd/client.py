@@ -93,6 +93,7 @@ _SAFE_RETRY_METHODS = {
     "storage.session.title.complete.v2",
     "storage.session.title.fail.v2",
     "storage.session.delete.v2",
+    "storage.session.relinked_legacy.reconcile.v2",
     "storage.session.timeline.list.v2",
     "storage.health.v2",
     "storage.telemetry.summary.v2",

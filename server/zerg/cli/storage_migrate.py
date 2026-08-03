@@ -8,11 +8,11 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
-from uuid import uuid4
 
 import typer
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.config import get_settings
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -20,7 +20,6 @@ from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.legacy_corpus_migration import ORDERING_REVISION
 from zerg.services.legacy_corpus_migration import PARSER_REVISION
 from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
-from zerg.services.legacy_corpus_migration import LegacyHighWatermark
 from zerg.services.legacy_corpus_migration import create_inventory_run
 from zerg.services.legacy_corpus_migration import freeze_high_watermark
 from zerg.services.legacy_corpus_migration import inventory_rows
@@ -137,61 +136,48 @@ def status(
         engine.dispose()
 
 
-@app.command("repair-sessions")
-def repair_sessions(
-    source_run_id: UUID = typer.Option(..., "--source-run-id"),
+@app.command("reconcile-relinked-legacy")
+def reconcile_relinked_legacy(
     session_ids: list[UUID] = typer.Option(..., "--session-id"),
-    run_id: UUID | None = typer.Option(None, "--run-id"),
-    workers: int = typer.Option(1, "--workers", min=1, max=2),
-    database_url: str | None = typer.Option(None, "--database-url"),
-    object_root: Path | None = typer.Option(None, "--object-root"),
 ) -> None:
-    """Republish selected legacy sessions as a fresh paired raw/render generation."""
+    """Sequentially retire sessions proven duplicated by a relinked native source."""
 
     if not 1 <= len(set(session_ids)) <= 100:
         raise typer.BadParameter("provide 1 to 100 unique --session-id values")
-    settings, engine, factory, catalog = _context(database_url)
+    _, socket_path = catalogd_paths()
+    catalog = CatalogClient(socket_path)
 
     async def execute() -> dict:
-        target_run_id = run_id or uuid4()
+        results = []
         try:
-            source = await catalog.call(
-                "migration.run.read.v2",
-                {"run_id": str(source_run_id)},
-                timeout_seconds=5.0,
-            )
-            source_run = source.get("run")
-            if not isinstance(source_run, dict):
-                raise typer.BadParameter("source migration run does not exist")
-            watermark = LegacyHighWatermark.decode(str(source_run["legacy_high_watermark"]))
-            with factory() as db:
-                inventory = await create_inventory_run(
-                    db,
-                    catalog,
-                    run_id=target_run_id,
-                    watermark=watermark,
-                    session_ids=session_ids,
-                )
-            converter = LegacyCorpusConverter(
-                session_factory=factory,
-                catalog=catalog,
-                object_root=object_root or storage_v2_root(),
-                tenant_id=settings.archive_primary_tenant_id,
-            )
-            summary = await converter.migrate_run(
-                target_run_id,
-                workers=workers,
-                worker_prefix="legacy-repair",
-                replace_existing_epochs=True,
-            )
-            return {"inventory": inventory, "summary": summary}
+            for session_id in session_ids:
+                try:
+                    result = await catalog.call(
+                        "storage.session.relinked_legacy.reconcile.v2",
+                        {
+                            "session_id": str(session_id),
+                            "observed_at": datetime.now(UTC).isoformat(),
+                        },
+                        timeout_seconds=30.0,
+                    )
+                    results.append({"session_id": str(session_id), "ok": True, "result": result})
+                except CatalogRemoteError as exc:
+                    results.append(
+                        {
+                            "session_id": str(session_id),
+                            "ok": False,
+                            "error": {"code": exc.code, "message": str(exc), "details": exc.details},
+                        }
+                    )
+            failed = sum(result["ok"] is False for result in results)
+            return {"reconciled": len(results) - failed, "failed": failed, "results": results}
         finally:
             await catalog.close()
 
-    try:
-        _print(asyncio.run(execute()))
-    finally:
-        engine.dispose()
+    output = asyncio.run(execute())
+    _print(output)
+    if output["failed"]:
+        raise typer.Exit(code=1)
 
 
 @app.command("repair-render")

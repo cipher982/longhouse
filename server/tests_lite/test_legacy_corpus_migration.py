@@ -14,6 +14,8 @@ from sqlalchemy import event as sqlalchemy_event
 
 import zerg.services.legacy_corpus_migration as migration_module
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.server import CatalogDaemon
 from zerg.database import Base
 from zerg.database import make_engine
@@ -1072,6 +1074,34 @@ async def test_converter_commits_through_real_catalog_contract(legacy_db, tmp_pa
         stored = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
         assert stored["session"]["current_render_generation"] == str(result.render_generation_id)
         assert stored["session"]["render_state"] == "ready"
+
+        # Source relinking may retire a staged generation before a delayed
+        # migration completion arrives. That completion must not reactivate it.
+        stale_claim = uuid4()
+        stale_at = datetime.now(UTC)
+        engine = create_catalog_engine(catalog_root / "live.db")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE legacy_migration_sessions SET state = 'migrating', claim_token = ?, "
+                "last_completion_token = NULL WHERE run_id = ? AND session_id = ?",
+                (str(stale_claim), str(run_id), str(session.id)),
+            )
+            connection.exec_driver_sql(
+                "UPDATE render_generations SET state = 'pending' WHERE generation_id = ?",
+                (str(result.render_generation_id),),
+            )
+            connection.exec_driver_sql(
+                "UPDATE render_objects SET retired_at = ?, retirement_revision = commit_seq + 1 WHERE generation_id = ?",
+                (stale_at, str(result.render_generation_id)),
+            )
+            connection.exec_driver_sql(
+                "UPDATE raw_objects SET retired_at = ?, retirement_revision = commit_seq + 1 WHERE session_id = ?",
+                (stale_at, str(session.id)),
+            )
+        engine.dispose()
+        with pytest.raises(CatalogRemoteError) as stale_completion:
+            await converter._complete(run_id, stale_claim, result)
+        assert stale_completion.value.code == "conflict"
     finally:
         await client.close()
         await daemon.close()

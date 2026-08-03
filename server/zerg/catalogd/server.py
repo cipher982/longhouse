@@ -368,6 +368,8 @@ class CatalogDaemon:
             return await self._fail_storage_title(request)
         if request.method == "storage.session.delete.v2":
             return await self._delete_storage_session(request)
+        if request.method == "storage.session.relinked_legacy.reconcile.v2":
+            return await self._reconcile_relinked_legacy_session(request)
         if request.method == "storage.session.timeline.list.v2":
             return await self._list_storage_sessions(request)
         if request.method == "storage.health.v2":
@@ -2183,6 +2185,35 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _reconcile_relinked_legacy_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "observed_at"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "storage.session.relinked_legacy.reconcile.v2 has invalid parameters",
+            )
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.reconcile_relinked_legacy_session,
+            session_id=session_id,
+            observed_at=observed_at,
+        )
+        if result.get("session_missing"):
+            return self._error(request, "not_found", "storage session does not exist")
+        if result.get("proof_conflict"):
+            return self._error(
+                request,
+                "conflict",
+                "session does not satisfy relinked legacy duplicate proof",
+                details={"reason": result["proof_conflict"]},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_storage_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {
             "owner_id",
@@ -2616,7 +2647,12 @@ class CatalogDaemon:
         result = await self._run_store(self._store.complete_legacy_migration_session, **params)
         if result.get("session_missing"):
             return self._error(request, "not_found", "migration session does not exist")
-        if result.get("claim_conflict") or result.get("coverage_conflict") or result.get("render_generation_conflict"):
+        if (
+            result.get("claim_conflict")
+            or result.get("coverage_conflict")
+            or result.get("render_generation_conflict")
+            or result.get("render_generation_retired")
+        ):
             return self._error(request, "conflict", "migration completion conflicts with durable claim or inventory")
         return CatalogRpcResponse(id=request.id, result=result)
 

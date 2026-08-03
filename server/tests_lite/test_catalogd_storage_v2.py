@@ -2035,3 +2035,104 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_relinked_legacy_reconciliation_requires_duplicate_proof_and_retires_projection(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    old_session, canonical_session = uuid4(), uuid4()
+    legacy_epoch, native_epoch, replacement_epoch = uuid4(), uuid4(), uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        legacy = _raw_params(
+            epoch=legacy_epoch,
+            session_id=old_session,
+            start=0,
+            end=6,
+            records=(b"legacy\n",),
+            sealed_at=now,
+            opaque_source_id="legacy-source-lines",
+        )
+        legacy["provenance_kind"] = "legacy_source_lines"
+        await client.call("storage.raw_object.commit.v2", legacy)
+
+        native = _raw_params(
+            epoch=native_epoch,
+            session_id=old_session,
+            start=0,
+            end=6,
+            records=(b"native\n",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        native.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, source_epoch=native_epoch),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        await client.call("storage.raw_object.commit.v2", native)
+
+        replacement = _raw_params(
+            epoch=replacement_epoch,
+            predecessor=native_epoch,
+            session_id=canonical_session,
+            start=0,
+            end=6,
+            records=(b"native\n",),
+            sealed_at=now + timedelta(seconds=2),
+        )
+        replacement.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"replacement-render", source_epoch=replacement_epoch),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        await client.call("storage.raw_object.commit.v2", replacement)
+
+        stale = await client.call("storage.session.read.v2", {"session_id": str(old_session)})
+        assert stale["session"]["render_state"] == "ready"
+        assert stale["session"]["current_render_generation"] == str(generation_id)
+
+        repaired = await client.call(
+            "storage.session.relinked_legacy.reconcile.v2",
+            {"session_id": str(old_session), "observed_at": (now + timedelta(seconds=3)).isoformat()},
+        )
+        assert repaired["changed"] is True
+        assert repaired["preserved_raw_objects"] == 1
+        assert repaired["replacement_proofs"][0]["replacement_session_id"] == str(canonical_session)
+
+        retired = await client.call("storage.session.read.v2", {"session_id": str(old_session)})
+        assert retired["session"]["raw_state"] == "durable"
+        assert retired["session"]["render_state"] == "retired"
+        assert retired["session"]["hidden_from_default_timeline"] is True
+        page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(old_session),
+                "generation_id": None,
+                "snapshot_revision": int(repaired["commit_seq"]),
+                "after_object_id": None,
+                "limit": 10,
+            },
+        )
+        assert page["retired"] is True
+
+        replay = await client.call(
+            "storage.session.relinked_legacy.reconcile.v2",
+            {"session_id": str(old_session), "observed_at": (now + timedelta(seconds=4)).isoformat()},
+        )
+        assert replay["changed"] is False
+        assert replay["already_retired"] is True
+
+        with pytest.raises(CatalogRemoteError) as current_conflict:
+            await client.call(
+                "storage.session.relinked_legacy.reconcile.v2",
+                {"session_id": str(canonical_session), "observed_at": (now + timedelta(seconds=4)).isoformat()},
+            )
+        assert current_conflict.value.code == "conflict"
+        assert current_conflict.value.details == {"reason": "current_generation_not_retired"}
+    finally:
+        await client.close()
+        await daemon.close()
