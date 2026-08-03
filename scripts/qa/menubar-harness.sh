@@ -23,6 +23,7 @@ Usage:
   scripts/qa/menubar-harness.sh raw-snapshot-live [output.png]
   scripts/qa/menubar-harness.sh compare-header-variants <fixture-name>
   scripts/qa/menubar-harness.sh render-fixtures
+  scripts/qa/menubar-harness.sh render-trust-states
   scripts/qa/menubar-harness.sh smoke [fixture-name]
   scripts/qa/menubar-harness.sh xcuitest
   scripts/qa/menubar-harness.sh full
@@ -189,16 +190,33 @@ capture_window_render() {
   local app_bin="$1"
   local input_json="$2"
   local output_png="$3"
+
+  capture_window_render_args "$app_bin" "$output_png" --input "$input_json"
+}
+
+# Same capture, but the caller supplies the app arguments. Trust-state renders
+# need a live source pointed at a broken health command, which --input cannot
+# express: a fixture always loads, so it can never produce a stale banner.
+capture_window_render_args() {
+  local app_bin="$1"
+  local output_png="$2"
+  shift 2
   local pid=""
   local capture_status=0
   local window_id=""
 
   rm -f "$output_png"
-  "$app_bin" --input "$input_json" --quit-after 30 >/dev/null 2>&1 &
+  "$app_bin" "$@" --quit-after 30 >/dev/null 2>&1 &
   pid=$!
 
   if ! window_id="$(wait_for_window_id "LonghouseMenuBarHarnessApp" "Longhouse Desktop")"; then
     capture_status=$?
+  fi
+
+  # The window appears in its booting state. Anything that has to be observed
+  # after the store settles must wait out SnapshotStore.bootGraceSeconds first.
+  if [[ $capture_status -eq 0 && "${CAPTURE_SETTLE_SECONDS:-0}" != "0" ]]; then
+    sleep "$CAPTURE_SETTLE_SECONDS"
   fi
 
   if [[ $capture_status -eq 0 ]]; then
@@ -390,6 +408,21 @@ case "$cmd" in
       fixture_name="$(basename "$fixture_json" .json)"
       capture_window_render "$app_bin" "$fixture_json" "$ARTIFACT_DIR/${fixture_name}.png"
     done < <(find "$PKG_PATH/Fixtures" -maxdepth 1 -name '*.json' -print | sort)
+    ;;
+  render-trust-states)
+    # The banner the panel shows when it cannot read this Mac. Driven by a real
+    # failing producer rather than a fixture, because trust lives in the store:
+    # a fixture always loads and can never produce a stale banner. The store
+    # renders its last-good cache underneath, which is the incident shape --
+    # real-looking content the app must refuse to call current.
+    app_bin="$(build_app_binary)"
+    output="$ARTIFACT_DIR/trust-never-loaded.png"
+    # No --live: an explicit live flag suppresses the status window, and this
+    # capture needs the window on screen.
+    CAPTURE_SETTLE_SECONDS=14 capture_window_render_args "$app_bin" "$output" \
+      --health-exec "$ARTIFACT_DIR/nonexistent-local-health" \
+      --health-arg --fast \
+      --health-arg --json
     ;;
   smoke)
     fixture="${1:-healthy}"
