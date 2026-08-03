@@ -680,6 +680,13 @@ HYDRATION_RESERVED_SECONDS = 1.0
 CANDIDATE_DEPTH_FACTOR = 5
 
 
+def _discovery_budget(*, remaining_seconds: float, context_turns: int) -> float:
+    """Keep hydration's reserve only when the caller requested hydration."""
+
+    hydration_reserve = HYDRATION_RESERVED_SECONDS if context_turns > 0 else 0.0
+    return max(0.05, remaining_seconds - hydration_reserve)
+
+
 def _rank_single_lane(
     matches: list[RecallMatch],
     *,
@@ -1024,7 +1031,10 @@ async def recall_sessions(
     # Reserved, not leftover. Hydration used to receive whatever discovery had
     # not already spent, which in practice was the 0.05s floor, so matches came
     # back "partial / search_evidence_unavailable" whenever a lane ran long.
-    discovery_deadline = max(0.05, remaining_budget() - HYDRATION_RESERVED_SECONDS)
+    discovery_deadline = _discovery_budget(
+        remaining_seconds=remaining_budget(),
+        context_turns=context_turns,
+    )
 
     async def lexical() -> list[RecallMatch]:
         with timing.span("lexical"):

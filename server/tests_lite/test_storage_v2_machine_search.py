@@ -52,6 +52,11 @@ def test_recall_contract_accepts_evaluator_depth():
     assert max_results["schema"]["maximum"] == 25
 
 
+def test_recall_discovery_uses_hydration_reserve_only_when_requested():
+    assert agents_search._discovery_budget(remaining_seconds=1.9, context_turns=0) == 1.9
+    assert agents_search._discovery_budget(remaining_seconds=1.9, context_turns=2) == pytest.approx(0.9)
+
+
 def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     observed = {}
 
