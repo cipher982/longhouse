@@ -9,17 +9,24 @@ keeps raw evidence under an isolated evidence directory.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
+import pty
+import select
 import shutil
+import signal
+import struct
 import subprocess
 import tempfile
+import termios
 import time
 import uuid
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from typing import Callable
 from typing import Mapping
 
 from zerg.qa.repo_root import default_repo_root
@@ -389,6 +396,18 @@ def build_operation_evidence(
     )
     if reattach:
         evidence["reattach"] = reattach
+
+    managed_cold_resume = canaries.get("managed_cold_resume") or {}
+    resume = _canary_operation_entry(
+        contract,
+        "resume",
+        canary_name="managed_cold_resume",
+        canary=managed_cold_resume,
+        level="live_token",
+        message="Stock Codex resumed the same provider thread under a new managed run and connection.",
+    )
+    if resume:
+        evidence["resume"] = resume
 
     tail_output = _canary_operation_entry(
         contract,
@@ -810,18 +829,22 @@ def _start_bridge(
     evidence_root: Path,
     codex_bin: str,
     launch_mode: str,
+    session_id: str | None = None,
+    isolation_root: Path | None = None,
+    resume_thread_id: str | None = None,
+    resume_thread_path: str | None = None,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str], Path]:
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
         raise RuntimeError("longhouse-engine binary was not found")
 
-    session_id = str(uuid.uuid4())
-    isolation_root = Path(tempfile.mkdtemp(prefix=f"lhx-{launch_mode[:1]}-", dir="/tmp"))
+    session_id = session_id or str(uuid.uuid4())
+    isolation_root = isolation_root or Path(tempfile.mkdtemp(prefix=f"lhx-{launch_mode[:1]}-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
 
-    create_initial_thread = launch_mode == "detached_ui"
+    create_initial_thread = launch_mode == "detached_ui" and not resume_thread_id
     command = [
         engine,
         "codex-bridge",
@@ -849,6 +872,10 @@ def _start_bridge(
     ]
     if create_initial_thread:
         command.append("--create-initial-thread")
+    if resume_thread_id:
+        command.extend(["--resume-thread-id", resume_thread_id])
+    if resume_thread_path:
+        command.extend(["--resume-thread-path", resume_thread_path])
     if launch_mode == "detached_ui":
         command.extend(["--launch-mode", "detached-ui"])
     if args.model:
@@ -971,6 +998,275 @@ def _record_terminal_session(
         *command,
     ]
     return _run(wrapped, cwd=args.repo_root, timeout=args.tui_record_secs + 10)
+
+
+def _record_pty_session(
+    args: argparse.Namespace,
+    command: list[str],
+    recording_path: Path,
+    *,
+    env: dict[str, str] | None = None,
+    ready: Callable[[], bool] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Keep a real PTY open for a bounded stock-TUI canary run."""
+    master_fd, slave_fd = pty.openpty()
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(args.repo_root),
+            env=env,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception:
+        os.close(master_fd)
+        os.close(slave_fd)
+        raise
+    os.close(slave_fd)
+    chunks: list[bytes] = []
+    deadline = time.monotonic() + args.tui_record_secs
+    timed_out = False
+    ready_observed = False
+    try:
+        while True:
+            if ready is not None and ready():
+                ready_observed = True
+                break
+            if process.poll() is not None:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            readable, _, _ = select.select([master_fd], [], [], min(0.1, remaining))
+            if readable:
+                try:
+                    data = os.read(master_fd, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+        if (timed_out or ready_observed) and process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=2)
+        while True:
+            readable, _, _ = select.select([master_fd], [], [], 0)
+            if not readable:
+                break
+            try:
+                data = os.read(master_fd, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+    finally:
+        os.close(master_fd)
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+    output = b"".join(chunks).decode("utf-8", errors="replace")
+    recording_path.write_text(output, encoding="utf-8")
+    return subprocess.CompletedProcess(
+        command,
+        0 if ready_observed else (124 if timed_out else process.returncode),
+        output,
+        "",
+    )
+
+
+def run_managed_cold_resume(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
+    root = evidence_root / "managed-cold-resume"
+    root.mkdir(parents=True, exist_ok=True)
+    credentials_gap = _managed_bridge_credentials_gap(args)
+    if credentials_gap is not None:
+        return credentials_gap
+    isolation_root: Path | None = None
+    session_id: str | None = None
+    initial_stopped = False
+    try:
+        initial_summary, _, isolation_root = _start_bridge(
+            args,
+            evidence_root=root,
+            codex_bin=codex_bin,
+            launch_mode="detached_ui",
+        )
+        session_id = str(initial_summary.get("session_id") or "")
+        state_file = Path(str(initial_summary.get("state_file") or ""))
+        initial_state = _read_json(state_file)
+        thread_id = str(initial_state.get("thread_id") or "").strip()
+        thread_path = str(initial_state.get("thread_path") or "").strip()
+        if not session_id or not thread_id or not thread_path:
+            return _fail(
+                "managed_cold_resume_missing_initial_thread",
+                "initial managed bridge did not materialize a resumable Codex thread",
+                initial_state=initial_state,
+                evidence_root=str(root),
+            )
+        marker = f"LONGHOUSE_CODEX_COLD_RESUME_SEED_{uuid.uuid4().hex}"
+        send_result = _run(
+            [
+                _resolve_executable(args.engine, "longhouse-engine") or "longhouse-engine",
+                "codex-bridge",
+                "send",
+                "--session-id",
+                session_id,
+                "--text",
+                f"Reply exactly {marker} and nothing else.",
+                "--state-root",
+                str(_bridge_state_root(isolation_root)),
+                "--json",
+            ],
+            cwd=args.repo_root,
+            timeout=args.live_send_timeout_secs + 20,
+        )
+        if send_result.returncode != 0:
+            return _fail(
+                "managed_cold_resume_seed_failed",
+                "initial Codex turn failed before cold Resume",
+                evidence=_command_evidence(send_result, secrets=[args.agents_token]),
+                evidence_root=str(root),
+            )
+        deadline = time.monotonic() + args.live_send_timeout_secs
+        initial_state = _read_json(state_file)
+        while not _terminal_turn_state(initial_state) and time.monotonic() < deadline:
+            time.sleep(1)
+            initial_state = _read_json(state_file)
+        thread_path = str(initial_state.get("thread_path") or "").strip()
+        if (
+            initial_state.get("last_turn_status") != "completed"
+            or not thread_path
+            or not Path(thread_path).is_file()
+            or not _assistant_transcript_contains(Path(thread_path), marker)
+        ):
+            return _fail(
+                "managed_cold_resume_seed_not_durable",
+                "initial Codex turn did not produce durable resumable history",
+                initial_state=initial_state,
+                marker=marker,
+                evidence_root=str(root),
+            )
+        initial_stop = _stop_bridge(args, session_id, isolation_root)
+        initial_stopped = bool((initial_stop.get("verification") or {}).get("verified"))
+        if not initial_stopped:
+            return _fail(
+                "managed_cold_resume_initial_cleanup_failed",
+                "initial managed bridge did not stop cleanly before Resume",
+                initial_stop=initial_stop,
+                evidence_root=str(root),
+            )
+
+        resumed_summary, _, _ = _start_bridge(
+            args,
+            evidence_root=root,
+            codex_bin=codex_bin,
+            launch_mode="tui",
+            session_id=session_id,
+            isolation_root=isolation_root,
+            resume_thread_id=thread_id,
+            resume_thread_path=thread_path,
+        )
+        resumed_state_file = Path(str(resumed_summary.get("state_file") or ""))
+        ws_url = str(resumed_summary.get("ws_url") or "")
+        recording = root / "resume-tui.tty"
+        command = [
+            codex_bin,
+            "resume",
+            thread_id,
+            "-c",
+            "check_for_update_on_startup=false",
+            "--enable",
+            "tui_app_server",
+            "--remote",
+            ws_url,
+            "--no-alt-screen",
+        ]
+        tui_env = os.environ.copy()
+        tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+        subscribed_state: dict[str, Any] | None = None
+
+        def resumed_thread_subscribed() -> bool:
+            nonlocal subscribed_state
+            try:
+                candidate = _read_json(resumed_state_file)
+            except (OSError, json.JSONDecodeError):
+                return False
+            if candidate.get("thread_subscription_status") == "subscribed" and str(candidate.get("thread_id") or "") == thread_id:
+                subscribed_state = candidate
+                return True
+            return False
+
+        tui_result = _record_pty_session(
+            args,
+            command,
+            recording,
+            env=tui_env,
+            ready=resumed_thread_subscribed,
+        )
+        resumed_state = subscribed_state or _read_json(resumed_state_file)
+        output = recording.read_text(encoding="utf-8", errors="replace")
+        if tui_result.returncode not in (0, 124):
+            return _fail(
+                "managed_cold_resume_tui_failed",
+                "stock Codex TUI cold Resume failed",
+                evidence=_command_evidence(tui_result, secrets=[args.agents_token]),
+                resumed_state=resumed_state,
+                evidence_root=str(root),
+            )
+        assertions = {
+            "same_longhouse_session": str(resumed_state.get("session_id") or "") == session_id,
+            "same_provider_thread": str(resumed_state.get("thread_id") or "") == thread_id,
+            "new_run": resumed_state.get("run_id") != initial_state.get("run_id"),
+            "new_connection": resumed_state.get("connection_id") != initial_state.get("connection_id"),
+            "new_app_server_process": (
+                resumed_state.get("app_server_pid"),
+                resumed_state.get("app_server_process_start_time"),
+            )
+            != (
+                initial_state.get("app_server_pid"),
+                initial_state.get("app_server_process_start_time"),
+            ),
+            "bridge_subscribed": resumed_state.get("thread_subscription_status") == "subscribed",
+            "no_active_thread_error": ACTIVE_THREAD_ERROR not in output,
+        }
+        if not all(assertions.values()):
+            return _fail(
+                "managed_cold_resume_invariant_failed",
+                "stock Codex cold Resume did not preserve identity under a new owner",
+                assertions=assertions,
+                initial_state=initial_state,
+                resumed_state=resumed_state,
+                recording=str(recording),
+                evidence_root=str(root),
+            )
+        return _status(
+            "pass",
+            level="live_token",
+            assertions=assertions,
+            session_id=session_id,
+            provider_thread_id=thread_id,
+            initial_run_id=initial_state.get("run_id"),
+            resumed_run_id=resumed_state.get("run_id"),
+            initial_connection_id=initial_state.get("connection_id"),
+            resumed_connection_id=resumed_state.get("connection_id"),
+            seed_marker=marker,
+            recording=str(recording),
+            evidence_root=str(root),
+        )
+    except Exception as exc:  # noqa: BLE001 - canary artifact should keep failure evidence
+        return _fail("managed_cold_resume_exception", str(exc), evidence_root=str(root))
+    finally:
+        if session_id and isolation_root:
+            _stop_bridge(args, session_id, isolation_root)
 
 
 def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
@@ -1518,6 +1814,7 @@ def _profile_requested(args: argparse.Namespace) -> bool:
             args.run_fake_app_server_binary,
             args.run_raw_fresh_remote,
             args.run_managed_tui_attach,
+            args.run_managed_cold_resume,
             args.run_managed_live_send,
             args.run_managed_live_interrupt,
             args.run_real_tool,
@@ -1583,6 +1880,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-fake-app-server-binary", action="store_true")
     parser.add_argument("--run-raw-fresh-remote", action="store_true")
     parser.add_argument("--run-managed-tui-attach", action="store_true")
+    parser.add_argument("--run-managed-cold-resume", action="store_true")
     parser.add_argument("--run-managed-live-send", action="store_true")
     parser.add_argument("--run-managed-live-interrupt", action="store_true")
     parser.add_argument("--run-real-tool", action="store_true")
@@ -1638,6 +1936,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         args.run_fake_app_server_binary = True
         args.run_raw_fresh_remote = True
         args.run_managed_tui_attach = True
+        args.run_managed_cold_resume = True
         args.run_managed_live_send = True
         args.run_managed_live_interrupt = True
         args.run_real_tool = True
@@ -1675,6 +1974,11 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         run_managed_tui_attach(args, evidence_root, codex_bin)
         if args.run_managed_tui_attach
         else _status("not_run", reason="pass --run-managed-tui-attach to exercise this canary")
+    )
+    canaries["managed_cold_resume"] = (
+        run_managed_cold_resume(args, evidence_root, codex_bin)
+        if args.run_managed_cold_resume
+        else _status("not_run", reason="pass --run-managed-cold-resume to exercise this canary")
     )
     canaries["managed_live_send"] = (
         run_managed_live_send(args, evidence_root, codex_bin)

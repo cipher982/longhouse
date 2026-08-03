@@ -110,6 +110,7 @@ if args[:2] == ["codex-bridge", "start"]:
     ws_url = "ws://127.0.0.1:65535/fake"
     launch_mode = "detached_ui" if arg_value("--launch-mode") == "detached-ui" else "tui"
     create_initial_thread = "--create-initial-thread" in args
+    resume_thread_id = arg_value("--resume-thread-id")
     if "detached-ui" in str(isolation_root) and launch_mode != "detached_ui":
         print("detached bridge missing --launch-mode detached-ui", file=sys.stderr)
         raise SystemExit(2)
@@ -119,7 +120,9 @@ if args[:2] == ["codex-bridge", "start"]:
     if launch_mode == "detached_ui" and not create_initial_thread:
         print("detached-ui bridge missing --create-initial-thread", file=sys.stderr)
         raise SystemExit(2)
-    thread_id = "thread_fake" if launch_mode == "detached_ui" else None
+    # This fixture only proves argument/evidence wiring. The real live canary
+    # proves that stock Codex, rather than the bridge seed, owns cold Resume.
+    thread_id = resume_thread_id or ("thread_fake" if launch_mode == "detached_ui" else None)
     state = {
         "schema_version": 1,
         "session_id": session_id,
@@ -128,7 +131,12 @@ if args[:2] == ["codex-bridge", "start"]:
         "launch_mode": launch_mode,
         "ws_url": ws_url,
         "thread_id": thread_id,
-        "thread_path": str(isolation_root / "thread.jsonl"),
+        "thread_path": arg_value("--resume-thread-path", str(isolation_root / "thread.jsonl")),
+        "run_id": "run_resumed" if resume_thread_id else "run_initial",
+        "connection_id": "connection_resumed" if resume_thread_id else "connection_initial",
+        "app_server_pid": 200 if resume_thread_id else 100,
+        "app_server_process_start_time": "second" if resume_thread_id else "first",
+        "thread_subscription_status": "subscribed" if thread_id else "waiting_for_thread",
         "pid": os.getpid(),
         "status": "ready",
         "log_file": arg_value("--log-file"),
@@ -158,6 +166,15 @@ if args[:2] == ["codex-bridge", "stop"]:
     if calls:
         with open(calls, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(args) + "\n")
+    session_id = arg_value("--session-id")
+    state_root = Path(arg_value("--state-root"))
+    state_file = state_root / f"{session_id}.json"
+    if state_file.exists():
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["status"] = "stopped"
+        state["active_turn_id"] = None
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        state_file.with_suffix(".sock").unlink(missing_ok=True)
     raise SystemExit(0)
 
 if args[:2] == ["codex-bridge", "send"]:
@@ -487,6 +504,7 @@ def test_full_fake_canary_can_go_green() -> None:
             "launch_local",
             "permission_prompt",
             "reattach",
+            "resume",
             "run_once",
             "send_input",
             "tail_output",
@@ -497,6 +515,7 @@ def test_full_fake_canary_can_go_green() -> None:
             == "managed_tui_attach"
         )
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["resume"]["level"] == "live_token"
         assert (
             payload["operation_evidence"]["send_input"]["canary"] == "managed_live_send"
         )
@@ -526,7 +545,7 @@ def test_full_fake_canary_can_go_green() -> None:
         assert "--dangerously-bypass-approvals-and-sandbox" in codex_args
 
         stop_lines = fixture["calls"].read_text(encoding="utf-8").splitlines()
-        assert len(stop_lines) == 3
+        assert len(stop_lines) == 5
         assert all(json.loads(line)[:2] == ["codex-bridge", "stop"] for line in stop_lines)
 
 

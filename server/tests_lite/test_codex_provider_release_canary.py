@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from zerg.qa import codex_provider_release_canary as canary
 
@@ -17,6 +20,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         agents_token="test-agents-token",
         model=None,
         bridge_start_timeout_secs=5,
+        live_send_timeout_secs=1,
         live_interrupt_timeout_secs=1,
     )
 
@@ -137,6 +141,108 @@ def test_stop_verification_rejects_zero_exit_shape_without_terminal_cleanup(tmp_
     assert result["verified"] is False
     assert result["terminal_state"] is False
     assert result["socket_absent"] is False
+
+
+def test_pty_recorder_times_out_captures_output_and_reaps_process_group(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    args.tui_record_secs = 1
+    pid_path = tmp_path / "pty.pid"
+    recording = tmp_path / "pty.tty"
+    command = [
+        "/bin/sh",
+        "-c",
+        f"echo $$ > {pid_path}; printf pty-ready; sleep 30",
+    ]
+
+    result = canary._record_pty_session(args, command, recording)
+
+    assert result.returncode == 124
+    assert "pty-ready" in result.stdout
+    assert "pty-ready" in recording.read_text(encoding="utf-8")
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_managed_cold_resume_keeps_thread_and_replaces_run_and_connection(tmp_path: Path, monkeypatch) -> None:
+    args = _args(tmp_path)
+    args.tui_record_secs = 1
+    isolation_root = tmp_path / "isolation"
+    state_root = isolation_root / "codex-bridge"
+    state_root.mkdir(parents=True)
+    state_file = state_root / "session-1.json"
+    thread_path = isolation_root / "rollout.jsonl"
+    thread_path.write_text("{}\n", encoding="utf-8")
+    starts: list[dict[str, object]] = []
+
+    def fake_start(*_args, **kwargs):
+        starts.append(kwargs)
+        if len(starts) == 1:
+            state = {
+                "session_id": "session-1",
+                "thread_id": "thread-1",
+                "thread_path": str(thread_path),
+                "run_id": "run-1",
+                "connection_id": "connection-1",
+                "app_server_pid": 100,
+                "app_server_process_start_time": "first",
+                "thread_subscription_status": "subscribed",
+            }
+            summary = {"session_id": "session-1", "state_file": str(state_file)}
+        else:
+            state = {
+                "session_id": "session-1",
+                "thread_id": "thread-1",
+                "thread_path": str(thread_path),
+                "run_id": "run-2",
+                "connection_id": "connection-2",
+                "app_server_pid": 200,
+                "app_server_process_start_time": "second",
+                "thread_subscription_status": "subscribed",
+            }
+            summary = {
+                "session_id": "session-1",
+                "state_file": str(state_file),
+                "ws_url": "ws://127.0.0.1:1234",
+            }
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        return summary, subprocess.CompletedProcess(["start"], 0, json.dumps(summary), ""), isolation_root
+
+    monkeypatch.setattr(canary, "_start_bridge", fake_start)
+    monkeypatch.setattr(
+        canary,
+        "_stop_bridge",
+        lambda *_args, **_kwargs: {"verification": {"verified": True}},
+    )
+
+    def fake_run(argv, **_kwargs):
+        marker = argv[argv.index("--text") + 1].split("Reply exactly ", 1)[1].split(" and nothing else.", 1)[0]
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["last_turn_status"] = "completed"
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        thread_path.write_text(json.dumps({"payload": {"type": "agent_message", "message": marker}}), encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+
+    def fake_record(_args, command, recording_path, **_kwargs):
+        recording_path.write_text("resumed", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 124, "resumed", "")
+
+    monkeypatch.setattr(canary, "_record_pty_session", fake_record)
+
+    result = canary.run_managed_cold_resume(args, tmp_path / "evidence", "/exact/codex")
+
+    assert result["status"] == "pass"
+    assert result["provider_thread_id"] == "thread-1"
+    assert result["initial_run_id"] == "run-1"
+    assert result["resumed_run_id"] == "run-2"
+    assert result["initial_connection_id"] == "connection-1"
+    assert result["resumed_connection_id"] == "connection-2"
+    assert all(result["assertions"].values())
+    assert starts[1]["session_id"] == "session-1"
+    assert starts[1]["resume_thread_id"] == "thread-1"
+    assert starts[1]["resume_thread_path"] == str(thread_path)
 
 
 def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_path: Path, monkeypatch) -> None:

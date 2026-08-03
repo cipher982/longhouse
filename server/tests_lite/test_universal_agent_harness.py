@@ -1917,6 +1917,60 @@ def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monk
     assert session["operation_statuses"]["reattach"]["status"] == "pass"
 
 
+def test_codex_cold_resume_uses_native_process_restart_canary(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    calls: list[dict[str, object]] = []
+
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "artifact_kind": "provider_release_canary",
+            "provider": "codex",
+            "provider_version": "codex 9.9.9-e2e",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "managed_cold_resume": {
+                    "status": "pass",
+                    "provider_thread_id": "thread_codex_cold_resume",
+                    "initial_run_id": "run-1",
+                    "resumed_run_id": "run-2",
+                },
+            },
+            "operation_evidence": {
+                "resume": {
+                    "status": "pass",
+                    "level": "live_token",
+                    "canary": "managed_cold_resume",
+                },
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    fake_codex = _fake_bins(tmp_path)["codex"]
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("helm_cold_resume",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": fake_codex},
+        )
+    )
+
+    assert calls[0]["run_managed_cold_resume"] is True
+    assert calls[0]["run_managed_tui_attach"] is False
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["native_resume_evidence"]["status"] == "pass"
+    assert result["data"]["native_resume_evidence"]["operation_evidence"]["resume"] == {
+        "status": "pass",
+        "level": "live_token",
+        "canary": "managed_cold_resume",
+    }
+
+
 def test_codex_resume_reattach_falls_back_to_attach_command_when_credentials_missing(
     tmp_path: Path,
     monkeypatch,

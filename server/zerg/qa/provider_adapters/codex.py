@@ -29,10 +29,10 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 
 def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
     canaries = dict(artifact.get("canaries") or {})
-    for name in ("managed_tui_attach", "managed_live_send", "managed_live_interrupt"):
+    for name in ("managed_cold_resume", "managed_tui_attach", "managed_live_send", "managed_live_interrupt"):
         canary = canaries.get(name)
         if isinstance(canary, Mapping):
-            thread_id = _clean_optional_str(canary.get("thread_id"))
+            thread_id = _clean_optional_str(canary.get("provider_thread_id") or canary.get("thread_id"))
             if thread_id:
                 return thread_id
     return None
@@ -40,9 +40,23 @@ def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
 
 def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
     canaries = dict(artifact.get("canaries") or {})
+    managed_cold_resume = dict(canaries.get("managed_cold_resume") or {})
     managed_tui = dict(canaries.get("managed_tui_attach") or {})
     provider_session_id = _first_codex_thread_id(artifact) or "codex-managed-session-e2e"
     rows: list[dict[str, Any]] = []
+    if managed_cold_resume:
+        rows.append(
+            {
+                "type": "session_start",
+                "role": "system",
+                "text": "Codex resumed a provider thread under a new managed run and connection.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "managed_cold_resume",
+                "thread_id": managed_cold_resume.get("provider_thread_id"),
+                "status": managed_cold_resume.get("status"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
     if managed_tui:
         rows.append(
             {
@@ -244,7 +258,7 @@ def _codex_canary_credentials_gap(artifact: Mapping[str, Any], canary_names: tup
 
 
 def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[str]:
-    return _codex_canary_credentials_gap(artifact, ("managed_tui_attach",))
+    return _codex_canary_credentials_gap(artifact, ("managed_tui_attach", "managed_cold_resume"))
 
 
 @register_adapter("codex")
@@ -805,7 +819,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             package,
             scenario="helm_cold_resume_native",
             assertion_name="helm_cold_resume_native",
-            require_operation="reattach",
+            require_operation="resume",
         )
         if payload.get("status") == STATUS_UNSUPPORTED_GAP and payload.get("failure_code") == "codex_managed_bridge_credentials_missing":
             payload["failure_code"] = "codex_cold_resume_canary_missing"
@@ -1006,7 +1020,8 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
                 "evidence_root": canary_evidence_root,
                 "repo_root": default_repo_root(),
                 "source_review_status": "pass",
-                "run_managed_tui_attach": True,
+                "run_managed_tui_attach": scenario != "helm_cold_resume_native",
+                "run_managed_cold_resume": scenario == "helm_cold_resume_native",
             }
         )
         if not canary_artifact_path.is_file():
