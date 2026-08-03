@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from dataclasses import asdict
 from dataclasses import dataclass
 from typing import Any
@@ -202,6 +203,10 @@ def _producer_supports_cell(
             failures.append(f"provider_artifact_{field}_digest")
     if artifact.get("acquisition_method") not in registration.get("acquisition_methods", []):
         failures.append("acquisition_method")
+    if artifact.get("platform") != census.get("platform"):
+        failures.append("provider_artifact_platform")
+    if artifact.get("architecture") != census.get("architecture"):
+        failures.append("provider_artifact_architecture")
     available_bindings = set(census.get("credential_binding_ids", []))
     if not set(registration.get("credential_binding_ids", [])).issubset(available_bindings):
         failures.append("credential_binding")
@@ -251,6 +256,8 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         diagnostics.append(_diagnostic("worker_census_digest_mismatch", "worker census content digest is invalid"))
     if census.get("longhouse_source_sha") != subject.get("longhouse_source_sha"):
         diagnostics.append(_diagnostic("longhouse_source_census_mismatch", "subject Longhouse SHA differs from worker census"))
+    if epoch.get("accepted_longhouse_sha") != subject.get("longhouse_source_sha"):
+        diagnostics.append(_diagnostic("accepted_longhouse_source_mismatch", "subject Longhouse SHA is not the accepted epoch source"))
     if census.get("verifier_bundle_digest") != epoch.get("verifier_bundle_digest"):
         diagnostics.append(_diagnostic("verifier_bundle_mismatch", "worker verifier bundle is not the accepted bundle"))
     if census.get("compiler_digest") != epoch.get("compiler_digest"):
@@ -370,6 +377,19 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"report": report, "plan": plan}
 
 
+def main() -> int:
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("compile input must be a JSON object")
+        compiled = compile_resume_plan(payload)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
+        return 2
+    print(json.dumps(compiled, sort_keys=True))
+    return 0
+
+
 __all__ = [
     "NATIVE_RESUME_ASSERTION",
     "NATIVE_RESUME_VARIANTS",
@@ -381,3 +401,7 @@ __all__ = [
     "content_digest",
     "sha256_json",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

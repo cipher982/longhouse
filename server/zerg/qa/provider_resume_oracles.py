@@ -39,7 +39,10 @@ def native_resume_assertions(variant: str, observation: Mapping[str, object]) ->
         and observation.get("bridge_subscribed") is True
         and observation.get("post_resume_provider_activity") is True
         and observation.get("post_resume_marker_in_assistant_transcript") is True
+        and observation.get("stale_input_rejected") is True
         and observation.get("stale_generation_dispatched") is False
+        and observation.get("concurrent_resume_refused") is True
+        and observation.get("artifact_secret_scan_passed") is True
         and observation.get("final_cleanup_verified") is True
         and observation.get("orphan_count") == 0
     )

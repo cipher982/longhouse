@@ -25,7 +25,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
     producer_revision=1,
     scenario_id="helm_cold_resume",
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),
@@ -35,7 +35,13 @@ REGISTRATION = ProducerRegistration(
     architectures=("x86_64", "aarch64"),
     modes=("helm",),
     evidence_classes=("live_token",),
-    observed_activity=("native_resume_command", "post_resume_provider_activity"),
+    observed_activity=(
+        "native_resume_command",
+        "post_resume_provider_activity",
+        "stale_input_rejected",
+        "concurrent_resume_refused",
+        "artifact_secret_scan_passed",
+    ),
     acquisition_methods=("staged_release",),
     credential_binding_ids=("codex_provider_token", "runtime_host_control"),
     sandbox_policy="provider-qualification-bwrap-v3",
@@ -48,6 +54,8 @@ REGISTRATION = ProducerRegistration(
         "resumed_bridge_state",
         "resumed_transcript",
         "process_transition_receipt",
+        "stale_input_receipt",
+        "concurrent_resume_receipt",
         "cleanup_receipt",
     ),
     required_cleanup=(
@@ -118,6 +126,11 @@ def _proc_command(pid: int) -> str:
         return ""
 
 
+def _process_start_time(pid: int) -> str:
+    result = bridge_canary._run(["ps", "-p", str(pid), "-o", "lstart="], timeout=5)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def _wait_dead(pid: int, *, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while _pid_alive(pid) and time.monotonic() < deadline:
@@ -130,10 +143,16 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
     app_server_pid = int(state.get("app_server_pid") or 0)
     bridge_command = _proc_command(bridge_pid)
     app_server_command = _proc_command(app_server_pid)
+    bridge_start_time = _process_start_time(bridge_pid)
+    app_server_start_time = _process_start_time(app_server_pid)
     if not _pid_alive(bridge_pid) or "longhouse-engine" not in bridge_command:
         raise RuntimeError("recorded bridge process identity is not live")
     if not _pid_alive(app_server_pid) or codex_bin.name not in app_server_command:
         raise RuntimeError("recorded Codex app-server process identity is not live")
+    if state.get("bridge_process_start_time") and state["bridge_process_start_time"] != bridge_start_time:
+        raise RuntimeError("recorded bridge process start identity no longer matches")
+    if state.get("app_server_process_start_time") and state["app_server_process_start_time"] != app_server_start_time:
+        raise RuntimeError("recorded Codex app-server process start identity no longer matches")
     os.kill(bridge_pid, signal.SIGKILL)
     if _pid_alive(app_server_pid):
         os.kill(app_server_pid, signal.SIGKILL)
@@ -146,12 +165,14 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
         "bridge": {
             "pid": bridge_pid,
             "recorded_start_time": state.get("bridge_process_start_time"),
+            "observed_start_time": bridge_start_time,
             "command": bridge_command,
             "dead": bridge_dead,
         },
         "app_server": {
             "pid": app_server_pid,
             "recorded_start_time": state.get("app_server_process_start_time"),
+            "observed_start_time": app_server_start_time,
             "command": app_server_command,
             "dead": app_server_dead,
         },
@@ -181,6 +202,80 @@ def _send_marker(args: argparse.Namespace, isolation_root: Path, session_id: str
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError("codex-bridge send returned invalid JSON") from exc
+
+
+def _attempt_stale_input(args: argparse.Namespace, isolation_root: Path, session_id: str) -> dict[str, Any]:
+    marker = f"LONGHOUSE_CODEX_STALE_INPUT_{uuid.uuid4().hex}"
+    result = bridge_canary._run(
+        [
+            str(args.engine),
+            "codex-bridge",
+            "send",
+            "--session-id",
+            session_id,
+            "--text",
+            f"Reply exactly {marker} and nothing else.",
+            "--state-root",
+            str(bridge_canary._bridge_state_root(isolation_root)),
+            "--json",
+        ],
+        cwd=args.repo_root,
+        timeout=30,
+    )
+    return {
+        "marker": marker,
+        "rejected": result.returncode != 0,
+        "evidence": bridge_canary._command_evidence(result, secrets=[args.agents_token]),
+    }
+
+
+def _attempt_concurrent_resume(
+    args: argparse.Namespace,
+    *,
+    root: Path,
+    isolation_root: Path,
+    session_id: str,
+    thread_id: str,
+    thread_path: Path,
+) -> dict[str, Any]:
+    attempt_root = root / "concurrent-resume-attempt"
+    attempt_root.mkdir()
+    try:
+        summary, _, _ = bridge_canary._start_bridge(
+            args,
+            evidence_root=attempt_root,
+            codex_bin=str(args.codex_bin),
+            launch_mode="tui",
+            session_id=session_id,
+            isolation_root=isolation_root,
+            resume_thread_id=thread_id,
+            resume_thread_path=str(thread_path),
+        )
+    except RuntimeError as exc:
+        return {"rejected": True, "error": str(exc)}
+    cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
+    return {"rejected": False, "unexpected_start": summary, "cleanup": cleanup}
+
+
+def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
+    encoded = [secret.encode() for secret in secrets if secret]
+    redacted: list[str] = []
+    if not encoded:
+        return redacted
+    for path in root.rglob("*"):
+        if not path.is_file() or path.name == "result.json":
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        replaced = data
+        for secret in encoded:
+            replaced = replaced.replace(secret, b"<redacted>")
+        if replaced != data:
+            path.write_bytes(replaced)
+            redacted.append(path.relative_to(root).as_posix())
+    return redacted
 
 
 def _wait_for_marker(state_file: Path, marker: str, *, timeout: int) -> tuple[dict[str, Any], Path]:
@@ -240,6 +335,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         else:
             process_transition = _force_process_loss(initial_state, args.codex_bin)
         _write_json(root / "process-transition-receipt.json", process_transition)
+        stale_input_receipt = _attempt_stale_input(args, isolation_root, session_id)
+        _write_json(root / "stale-input-receipt.json", stale_input_receipt)
+        if stale_input_receipt["rejected"] is not True:
+            raise RuntimeError("input addressed to the terminated Resume generation was accepted")
 
         resumed_summary, _, _ = bridge_canary._start_bridge(
             args,
@@ -291,6 +390,15 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "resumed-bridge-state.json", resumed_state)
         _write_json(root / "post-resume-send.json", send_summary)
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")
+        concurrent_resume_receipt = _attempt_concurrent_resume(
+            args,
+            root=root,
+            isolation_root=isolation_root,
+            session_id=session_id,
+            thread_id=thread_id,
+            thread_path=resumed_thread_path,
+        )
+        _write_json(root / "concurrent-resume-receipt.json", concurrent_resume_receipt)
 
         final_cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
         verification = final_cleanup.get("verification") or {}
@@ -308,6 +416,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
         _write_json(root / "cleanup-receipt.json", final_cleanup)
+        redacted_secret_files = _redact_retained_secrets(
+            root,
+            [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
+        )
 
         observation = {
             "variant": args.variant,
@@ -327,7 +439,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "bridge_subscribed": resumed_before_activity.get("thread_subscription_status") == "subscribed",
             "post_resume_provider_activity": resumed_state.get("last_turn_status") == "completed",
             "post_resume_marker_in_assistant_transcript": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),
-            "stale_generation_dispatched": False,
+            "stale_input_rejected": stale_input_receipt["rejected"] is True,
+            "stale_generation_dispatched": stale_input_receipt["rejected"] is not True,
+            "concurrent_resume_refused": concurrent_resume_receipt["rejected"] is True,
+            "artifact_secret_scan_passed": not redacted_secret_files,
             "clean_stop_verified": args.variant == "clean_exit" and bool((process_transition.get("verification") or {}).get("verified")),
             "old_bridge_process_dead": args.variant == "process_loss" and bool((process_transition.get("bridge") or {}).get("dead")),
             "old_app_server_process_dead": args.variant == "process_loss"
@@ -361,6 +476,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        redacted_secret_files = _redact_retained_secrets(
+            root,
+            [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
+        )
         failure = {
             "schema_version": 1,
             "artifact_kind": "direct_native_resume_result",
@@ -374,6 +493,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_native_resume_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": _artifact_manifest(root),
         }
         _write_json(root / "result.json", failure)

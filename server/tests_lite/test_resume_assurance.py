@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import json
+import subprocess
+import sys
 
 import pytest
 
@@ -42,6 +45,7 @@ def _inputs() -> dict:
         "schema_version": 1,
         "epoch_id": "helm-resume-v1-test",
         "profile": "helm_resume_v1",
+        "accepted_longhouse_sha": "2" * 40,
         "contract_shape": copy.deepcopy(contract),
         "selected_cells": copy.deepcopy(selected),
         "protected_inputs": dict(protected_inputs),
@@ -85,6 +89,8 @@ def _inputs() -> dict:
                 "executable_identity": "sha256:" + "9" * 64,
                 "build_identity": "sha256:" + "8" * 64,
                 "acquisition_method": "staged_release",
+                "platform": "linux",
+                "architecture": "x86_64",
                 "entrypoint": "/provider-builds/codex/0.999.0/provider",
                 "build_root": "/provider-builds/codex/0.999.0",
             },
@@ -150,6 +156,14 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
             lambda value: value["protected_inputs"].update({"server/zerg/qa/codex_native_resume.py": "sha256:" + "0" * 64}),
             "protected_input_digest_mismatch",
         ),
+        (
+            lambda value: value["accepted_epoch"].update(accepted_longhouse_sha="3" * 40),
+            "accepted_longhouse_source_mismatch",
+        ),
+        (
+            lambda value: value["subject"]["provider_artifact"].update(architecture="aarch64"),
+            "eligible_producer_missing",
+        ),
     ),
 )
 def test_compiler_retains_invalid_report_and_no_plan(mutate, expected_code: str) -> None:
@@ -175,6 +189,16 @@ def test_compiler_rejects_silent_variant_omission_before_execution() -> None:
     assert "scheduled_cell_omission" in _codes(compiled)
 
 
+def test_compiler_cli_is_deterministic_across_fresh_processes() -> None:
+    payload = json.dumps(_inputs())
+    command = [sys.executable, "-m", "zerg.qa.resume_assurance"]
+    first = subprocess.run(command, input=payload, text=True, capture_output=True, check=True)
+    second = subprocess.run(command, input=payload, text=True, capture_output=True, check=True)
+
+    assert first.stdout == second.stdout
+    assert json.loads(first.stdout)["report"]["valid"] is True
+
+
 def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup() -> None:
     from zerg.qa.provider_resume_oracles import native_resume_assertions
 
@@ -188,7 +212,10 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
         "bridge_subscribed": True,
         "post_resume_provider_activity": True,
         "post_resume_marker_in_assistant_transcript": True,
+        "stale_input_rejected": True,
         "stale_generation_dispatched": False,
+        "concurrent_resume_refused": True,
+        "artifact_secret_scan_passed": True,
         "final_cleanup_verified": True,
         "orphan_count": 0,
         "clean_stop_verified": True,
@@ -211,6 +238,11 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
         lambda pid: "/opt/bin/longhouse-engine codex-bridge" if pid == 101 else "/build/provider app-server",
     )
     monkeypatch.setattr(codex_native_resume, "_wait_dead", lambda pid, timeout=10: pid in {101, 202})
+    monkeypatch.setattr(
+        codex_native_resume,
+        "_process_start_time",
+        lambda pid: "bridge-start" if pid == 101 else "provider-start",
+    )
     monkeypatch.setattr(codex_native_resume.os, "kill", lambda pid, sig: killed.append((pid, sig)))
 
     receipt = codex_native_resume._force_process_loss(
@@ -228,10 +260,43 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
     assert receipt["app_server"]["dead"] is True
 
 
+def test_process_loss_refuses_reused_pid(monkeypatch) -> None:
+    from pathlib import Path
+
+    from zerg.qa import codex_native_resume
+
+    monkeypatch.setattr(codex_native_resume, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(codex_native_resume, "_proc_command", lambda _pid: "/bin/longhouse-engine provider app-server")
+    monkeypatch.setattr(codex_native_resume, "_process_start_time", lambda _pid: "different-start")
+
+    with pytest.raises(RuntimeError, match="start identity"):
+        codex_native_resume._force_process_loss(
+            {
+                "pid": 101,
+                "bridge_process_start_time": "bridge-start",
+                "app_server_pid": 202,
+                "app_server_process_start_time": "provider-start",
+            },
+            Path("/build/provider"),
+        )
+
+
+def test_retained_artifact_secret_scan_redacts_and_reports_leak(tmp_path) -> None:
+    from zerg.qa import codex_native_resume
+
+    artifact = tmp_path / "receipt.json"
+    artifact.write_text('{"token":"secret-value"}\n', encoding="utf-8")
+
+    redacted = codex_native_resume._redact_retained_secrets(tmp_path, ["secret-value"])
+
+    assert redacted == ["receipt.json"]
+    assert "secret-value" not in artifact.read_text(encoding="utf-8")
+
+
 def test_direct_producer_registration_names_real_evidence_and_cleanup() -> None:
     registration = REGISTRATION.to_dict()
 
-    assert registration["scenario_revision"] == 2
+    assert registration["scenario_revision"] == 3
     assert registration["assertion_cells"] == [
         {"assertion_id": "native_provider_resume_proven", "variant": "clean_exit"},
         {"assertion_id": "native_provider_resume_proven", "variant": "process_loss"},
@@ -239,6 +304,9 @@ def test_direct_producer_registration_names_real_evidence_and_cleanup() -> None:
     assert registration["observed_activity"] == [
         "native_resume_command",
         "post_resume_provider_activity",
+        "stale_input_rejected",
+        "concurrent_resume_refused",
+        "artifact_secret_scan_passed",
     ]
     assert "cleanup_receipt" in registration["required_artifacts"]
     assert "no_orphan_provider_processes" in registration["required_cleanup"]
