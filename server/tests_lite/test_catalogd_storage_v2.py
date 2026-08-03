@@ -925,13 +925,15 @@ async def test_storage_session_delete_fences_replay_retires_manifests_and_queues
 
 
 @pytest.mark.asyncio
-async def test_search_projector_claims_oldest_lag_before_hotter_revision(daemon_paths):
+async def test_recall_projectors_claim_oldest_lag_before_hotter_revision(daemon_paths):
     """Live ingest must not starve the stable corpus behind a coverage gate."""
 
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
-    stable_session = uuid4()
-    hot_session = uuid4()
+    # Make lexical UUID order oppose age order so the test catches a fallback
+    # to session-id ordering in either projector.
+    stable_session = UUID("ffffffff-ffff-4fff-8fff-ffffffffffff")
+    hot_session = UUID("00000000-0000-4000-8000-000000000001")
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -947,7 +949,7 @@ async def test_search_projector_claims_oldest_lag_before_hotter_revision(daemon_
         stable.update(
             render_state="ready",
             render_manifest=_render_manifest(uuid4(), seed=b"stable-backlog"),
-            projectors=["search-v2"],
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
         )
         await client.call("storage.raw_object.commit.v2", stable)
 
@@ -969,7 +971,7 @@ async def test_search_projector_claims_oldest_lag_before_hotter_revision(daemon_
                 opaque_source_id="hot-history.jsonl",
                 source_epoch=hot_epoch,
             ),
-            projectors=["search-v2"],
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
         )
         await client.call("storage.raw_object.commit.v2", hot)
 
@@ -985,6 +987,52 @@ async def test_search_projector_claims_oldest_lag_before_hotter_revision(daemon_
             },
         )
         assert [row["session_id"] for row in claim["claimed"]] == [str(stable_session)]
+        stable_revision = int(claim["claimed"][0]["claimed_revision"])
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": "search-v2",
+                "session_id": str(stable_session),
+                "claim_token": claim["claimed"][0]["claim_token"],
+                "completed_revision": stable_revision,
+                "completed_at": (now + timedelta(seconds=2)).isoformat(),
+            },
+        )
+        hot_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=3)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert [row["session_id"] for row in hot_claim["claimed"]] == [str(hot_session)]
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": "search-v2",
+                "session_id": str(hot_session),
+                "claim_token": hot_claim["claimed"][0]["claim_token"],
+                "completed_revision": int(hot_claim["claimed"][0]["claimed_revision"]),
+                "completed_at": (now + timedelta(seconds=3)).isoformat(),
+            },
+        )
+
+        embedding_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": EMBEDDING_PROJECTOR_ID,
+                "worker_id": "embedding-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=4)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert [row["session_id"] for row in embedding_claim["claimed"]] == [str(stable_session)]
     finally:
         await client.close()
         await daemon.close()

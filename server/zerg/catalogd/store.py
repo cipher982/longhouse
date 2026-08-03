@@ -7838,7 +7838,7 @@ class CatalogStore:
                             ),
                         )
                         .where(*eligible_predicates)
-                        .order_by(table.c.session_id.asc())
+                        .order_by(table.c.updated_at.asc(), table.c.session_id.asc())
                         .limit(limit)
                     )
                     .mappings()
