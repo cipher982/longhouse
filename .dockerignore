@@ -25,7 +25,9 @@ schemas/*
 # exact native control-path sources. Keep that context narrow; never send the
 # Rust build tree or the rest of the engine into a container build.
 !engine/
+engine/*
 !engine/src/
+engine/src/*
 !engine/src/codex_bridge.rs
 !engine/src/config.rs
 !engine/src/longhouse.rs
