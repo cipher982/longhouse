@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from zerg.qa.cursor_helm_gate0 import _auth_report
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
 from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
 from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
@@ -19,6 +20,30 @@ from zerg.qa.cursor_helm_gate0 import write_project_hooks
 def test_decode_cursor_meta_accepts_hex_encoded_json() -> None:
     raw = json.dumps({"agentId": "cursor-id"}).encode("utf-8")
     assert _decode_cursor_meta_value(raw.hex()) == {"agentId": "cursor-id"}
+
+
+def test_auth_report_accepts_request_scoped_cursor_api_key() -> None:
+    report = _auth_report(
+        {"status": "unauthenticated", "isAuthenticated": False},
+        api_key_configured=True,
+    )
+
+    assert report == {
+        "status": "unauthenticated",
+        "account_session_authenticated": False,
+        "api_key_configured": True,
+        "credential_mode": "api_key",
+        "is_authenticated": True,
+    }
+
+
+def test_auth_report_requires_account_session_when_no_api_key() -> None:
+    report = _auth_report(
+        {"status": "unauthenticated", "isAuthenticated": False},
+        api_key_configured=False,
+    )
+
+    assert report["is_authenticated"] is False
 
 
 def test_cursor_store_agent_id_reads_native_meta(tmp_path: Path) -> None:

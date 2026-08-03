@@ -155,6 +155,27 @@ def _provider_version(binary: str, cwd: Path) -> str:
     return result.stdout.strip()
 
 
+def _auth_report(auth: dict[str, Any], *, api_key_configured: bool | None = None) -> dict[str, Any]:
+    """Describe the two authentication surfaces exposed by Cursor Agent.
+
+    ``status`` reports persisted Cursor account login. An API key is accepted
+    on individual requests and is intentionally absent from that status, so a
+    factory qualification must not reject a valid request-scoped key merely
+    because there is no copied browser session.
+    """
+
+    account_session_authenticated = auth.get("isAuthenticated") is True
+    if api_key_configured is None:
+        api_key_configured = bool(str(os.environ.get("CURSOR_API_KEY") or "").strip())
+    return {
+        "status": auth.get("status"),
+        "account_session_authenticated": account_session_authenticated,
+        "api_key_configured": api_key_configured,
+        "credential_mode": "api_key" if api_key_configured else "account_session",
+        "is_authenticated": account_session_authenticated or api_key_configured,
+    }
+
+
 def _create_chat(binary: str, cwd: Path) -> str:
     result = subprocess.run(
         [binary, "create-chat"],
@@ -1369,11 +1390,8 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         version = _provider_version(binary, workspace)
         auth = _run_json([binary, "status", "--format", "json"], cwd=workspace)
         report["provider_version"] = version
-        report["auth"] = {
-            "status": auth.get("status"),
-            "is_authenticated": auth.get("isAuthenticated") is True,
-        }
-        if auth.get("isAuthenticated") is not True:
+        report["auth"] = _auth_report(auth)
+        if report["auth"]["is_authenticated"] is not True:
             raise RuntimeError("cursor-agent is not authenticated")
         report["scenarios"]["workspace_trust"] = _trust_workspace(
             binary=binary,
