@@ -17,6 +17,47 @@ ASSERTIONS_BY_SCENARIO = {
 }
 
 
+def native_resume_assertions(variant: str, observation: Mapping[str, object]) -> dict[str, bool]:
+    """Evaluate the direct native Resume producer's non-negotiable facts.
+
+    The universal harness remains useful adjacent coverage, but it cannot call
+    a provider's native resume command.  This oracle therefore requires both
+    the command and new provider activity after the resumed owner registered.
+    Process-loss additionally requires evidence that the exact recorded old
+    bridge and provider processes died before the replacement was launched.
+    """
+
+    if variant not in {"clean_exit", "process_loss"}:
+        raise KeyError(variant)
+    common = (
+        observation.get("same_longhouse_session") is True
+        and observation.get("same_provider_thread") is True
+        and observation.get("new_run") is True
+        and observation.get("new_connection") is True
+        and observation.get("new_app_server_process") is True
+        and observation.get("native_resume_command") is True
+        and observation.get("bridge_subscribed") is True
+        and observation.get("post_resume_provider_activity") is True
+        and observation.get("post_resume_marker_in_assistant_transcript") is True
+        and observation.get("stale_input_rejected") is True
+        and observation.get("stale_generation_dispatched") is False
+        and observation.get("concurrent_resume_refused") is True
+        and observation.get("artifact_secret_scan_passed") is True
+        and observation.get("final_cleanup_verified") is True
+        and observation.get("orphan_count") == 0
+    )
+    variant_ok = (
+        observation.get("clean_stop_verified") is True
+        if variant == "clean_exit"
+        else (
+            observation.get("old_bridge_process_dead") is True
+            and observation.get("old_app_server_process_dead") is True
+            and observation.get("replacement_started_after_process_loss") is True
+        )
+    )
+    return {"native_provider_resume_proven": common and variant_ok}
+
+
 def assertions_for(scenario_id: str, observation: Mapping[str, object]) -> dict[str, bool]:
     if scenario_id == "helm_cold_resume":
         return {
@@ -102,4 +143,4 @@ def assertions_for(scenario_id: str, observation: Mapping[str, object]) -> dict[
     raise KeyError(scenario_id)
 
 
-__all__ = ["ASSERTIONS_BY_SCENARIO", "assertions_for"]
+__all__ = ["ASSERTIONS_BY_SCENARIO", "assertions_for", "native_resume_assertions"]

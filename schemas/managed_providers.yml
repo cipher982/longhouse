@@ -126,14 +126,14 @@ providers:
       - id: native_provider_resume_proven
         variant: clean_exit
         scenario_id: helm_cold_resume
-        oracle_source: server/zerg/qa/universal_agent_harness.py
+        oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - id: native_provider_resume_proven
         variant: process_loss
         scenario_id: helm_cold_resume
-        oracle_source: server/zerg/qa/universal_agent_harness.py
+        oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
