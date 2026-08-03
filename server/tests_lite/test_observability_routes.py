@@ -699,7 +699,7 @@ def test_session_latency_report_stitches_existing_evidence(tmp_path):
         assert stages["server_fanout_to_client_received"]["duration_ms"] == 500
         assert stages["server_fanout_to_client_received"]["confidence"] == "derived"
         assert stages["client_received_to_rendered"]["duration_ms"] == 1_131
-        assert stages["client_received_to_rendered"]["confidence"] == "derived"
+        assert stages["client_received_to_rendered"]["confidence"] == "observed"
         assert payload["known_unimplemented_probes"] == []
     finally:
         api_app.dependency_overrides.clear()

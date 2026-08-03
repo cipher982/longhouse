@@ -286,7 +286,7 @@ metrics = [
   "warm_close_local_to_db_ms",
   "durable_archive_local_to_hosted_ms",
 ]
-notes = "Real attached OpenCode Helm turn. Provider/model time is diagnostic; the scored path starts when the assistant row appears in native OpenCode SQLite."
+notes = "Terminal-originated OpenCode Helm send/interrupt/terminate exists. This case runs a real attached Helm turn; provider/model time is diagnostic, and the scored path starts when the assistant row appears in native OpenCode SQLite."
 
 [[cases]]
 id = "managed_cursor_helm_content_promotion"
