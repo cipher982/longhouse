@@ -205,7 +205,7 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
     assert observed["params"]["token_hash"] == hash_token(plain_token)
     assert observed["params"]["touch_last_used"] is False
     assert observed["params"]["touch_interval_seconds"] == 300
-    assert observed["timeout_seconds"] == 0.1
+    assert observed["timeout_seconds"] == 1.0
 
 
 def test_production_agents_token_validation_maps_catalog_failure_to_typed_503():

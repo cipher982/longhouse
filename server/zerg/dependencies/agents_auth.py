@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 
+from zerg.auth.catalog_gateway import AUTH_CATALOG_CALL_DEADLINE_SECONDS
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.auth.managed_session_tokens import validate_managed_session_token
 from zerg.config import get_settings
@@ -150,7 +151,10 @@ def _validate_device_token_through_catalogd(token: str) -> DeviceToken | None:
                 "touch_last_used": False,
                 "touch_interval_seconds": 300,
             },
-            timeout_seconds=0.1,
+            # Machine-token auth sits in front of every agents request. Use the
+            # same hard-failure budget as browser auth so ordinary catalog
+            # pressure becomes bounded latency instead of intermittent 503s.
+            timeout_seconds=AUTH_CATALOG_CALL_DEADLINE_SECONDS,
         )
     except (CatalogUnavailable, CatalogRemoteError) as exc:
         raise HTTPException(
