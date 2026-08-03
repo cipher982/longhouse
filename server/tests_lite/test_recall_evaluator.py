@@ -5,6 +5,26 @@ import sys
 from pathlib import Path
 
 
+def _coverage() -> dict[str, object]:
+    return {
+        "ready": True,
+        "projector": "embeddings-5090578d9565-256d-p2",
+        "catalog_lag_count": 0,
+        "catalog_indexed_through": "10",
+        "catalog_commit_seq": "10",
+        "catalog_observed_at": "2026-08-02T00:00:10+00:00",
+        "expected_sessions": 1,
+        "published_sessions": 1,
+        "expected_episodes": 1,
+        "current_episodes": 1,
+        "invalid_vectors": 0,
+        "unnormalized_vectors": 0,
+        "unlocatable_episodes": 0,
+        "episode_count_mismatches": 0,
+        "missing_session_ids": [],
+    }
+
+
 def _module():
     path = Path(__file__).resolve().parents[2] / "eval" / "recall" / "run_eval.py"
     spec = importlib.util.spec_from_file_location("recall_eval", path)
@@ -49,12 +69,15 @@ def test_healthy_run_passes_and_reports_one_embedding_space():
                 embedding_model="google/embeddinggemma-300m",
                 embedding_dims=256,
                 embedding_revision="a" * 40,
+                coverage=_coverage(),
+                server_commit="c" * 40,
             )
         ],
     )
 
     assert report.gate_failures(max_false_negative_rate=0.671, min_recall_at_5=0.329) == []
     assert report.embedding_metadata() == {
+        "consistent": True,
         "model": "google/embeddinggemma-300m",
         "dims": 256,
         "revision": "a" * 40,
@@ -65,8 +88,15 @@ def test_category_regression_fails_the_release_gate_at_25():
     evaluator = _module()
     query = evaluator.Query("answer", "causal", "why", ["gold"])
     report = evaluator.Report(
-        strategy="semantic",
-        results=[evaluator.Result(query, [*[f"other-{i}" for i in range(24)], "gold-session"], 0.02)],
+        strategy="lexical",
+        results=[
+            evaluator.Result(
+                query,
+                [*[f"other-{i}" for i in range(24)], "gold-session"],
+                0.02,
+                server_commit="c" * 40,
+            )
+        ],
     )
 
     assert report.by_category(5) == {"causal": (0, 1)}
