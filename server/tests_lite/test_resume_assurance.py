@@ -240,3 +240,10 @@ def test_direct_producer_registration_names_real_evidence_and_cleanup() -> None:
     ]
     assert "cleanup_receipt" in registration["required_artifacts"]
     assert "no_orphan_provider_processes" in registration["required_cleanup"]
+
+
+def test_direct_producer_registration_cli_needs_no_execution_arguments(capsys) -> None:
+    from zerg.qa.codex_native_resume import main
+
+    assert main(["--registration"]) == 0
+    assert "codex.native_resume.v1" in capsys.readouterr().out

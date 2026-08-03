@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import signal
+import sys
 import time
 import uuid
 from datetime import UTC
@@ -397,10 +398,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if argv == ["--registration"]:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments == ["--registration"]:
         print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
         return 0
-    args = _parser().parse_args(argv)
+    args = _parser().parse_args(arguments)
     args.api_url = os.environ.get("CODEX_API_URL", "")
     args.agents_token = os.environ.get("CODEX_AGENTS_TOKEN", "")
     args.script_bin = None
