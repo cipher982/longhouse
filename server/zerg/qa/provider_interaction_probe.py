@@ -1254,6 +1254,7 @@ def _cursor_model_probe_with_runtime_home(
             for key in ("type", "subtype", "session_id", "request_id", "duration_ms", "duration_api_ms")
             if key in result_event
         }
+        cursor_result_event["model"] = observed_model
         cursor_result_event["usage"] = cursor_usage
         for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_write_input_tokens", "cacheRead", "cacheWrite"):
             if key in result_event:

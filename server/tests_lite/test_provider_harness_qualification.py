@@ -239,21 +239,18 @@ def _live_claude_interaction_data(
         {
             "evidence_class": evidence_class,
             "synthetic": False,
-                "provider_version": "2.1.220",
-                "provider_executable_identity": "sha256:" + "a" * 64,
-                "qualification_request_digest": digest,
-                "native_source_root": str(tmp_path),
-            }
-        )
+            "provider_version": "2.1.220",
+            "provider_executable_identity": "sha256:" + "a" * 64,
+            "qualification_request_digest": digest,
+            "native_source_root": str(tmp_path),
+        }
+    )
     for index, row in enumerate(observation["probes"]):
         events = row.get("raw_events") or []
         if not events:
             continue
         source_path = tmp_path / f"claude-probe-{index}.jsonl"
-        lines = [
-            json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-            for event in events
-        ]
+        lines = [json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in events]
         source_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         source_bytes = source_path.read_bytes()
         source_rows = []
@@ -280,9 +277,7 @@ def _live_claude_interaction_data(
             "stable_snapshots": 3,
             "stable_seconds": 1.5,
             "raw_event_count": len(source_rows),
-            "window_sha256": hashlib.sha256(
-                "".join(source["event_sha256"] for source in source_rows).encode("ascii")
-            ).hexdigest(),
+            "window_sha256": hashlib.sha256("".join(source["event_sha256"] for source in source_rows).encode("ascii")).hexdigest(),
         }
 
     observation_path = tmp_path / "provider-interaction-observation.json"
@@ -479,9 +474,7 @@ def test_full_column_gate_accepts_the_result_of_an_explicit_live_interaction_att
 ) -> None:
     payload = _passing_claude_full_column_payload()
     digest = "sha256:" + "a" * 64
-    interaction = next(
-        result for result in payload["results"] if result["scenario"] == "interaction_semantics"
-    )
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
     interaction["status"] = status
     if failure_code is not None:
         interaction["failure_code"] = failure_code
@@ -1121,9 +1114,7 @@ def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     source = semantic_observation["live_model_evidence"]["source_artifacts"][0]
     assert not Path(source["path"]).is_absolute()
     assert (output_root.parent / source["path"]).is_file()
-    assert bundle["execution_metadata"]["semantic_evidence_digest"] == (
-        "sha256:" + hashlib.sha256(semantic_path.read_bytes()).hexdigest()
-    )
+    assert bundle["execution_metadata"]["semantic_evidence_digest"] == ("sha256:" + hashlib.sha256(semantic_path.read_bytes()).hexdigest())
 
 
 @pytest.mark.timeout(30)
@@ -1298,6 +1289,9 @@ def test_helm_interrupt_uses_probe_and_interrupt_scenarios(tmp_path: Path, monke
     assert bundle["coverage_manifest"]["evidence_class"] == "live_token"
     semantic_path = tmp_path / "output" / "semantic-evidence" / "semantic-observation.json"
     assert semantic_path.is_file()
+    semantic_observation = json.loads(semantic_path.read_text(encoding="utf-8"))
+    assert "live_model_evidence" not in semantic_observation
+    assert semantic_observation["interrupt_cancel"]["status"] == "pass"
     for record in bundle["records"]:
         assert record["longhouse_build_id"] == "sha256:" + "a" * 64
 

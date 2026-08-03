@@ -16,6 +16,7 @@ from typing import Callable
 
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import qualification_request
+from zerg.qa.provider_event_digest import raw_event_digest as _native_event_digest
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -92,8 +93,93 @@ def _scrub_tree(root: Path, secrets: tuple[str, ...]) -> None:
             path.write_bytes(redacted)
 
 
+def _native_jsonl_events(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    events: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _event_has_provider_model(event: dict[str, Any]) -> bool:
+    model = event.get("model")
+    if not isinstance(model, str) and isinstance(event.get("message"), dict):
+        model = event["message"].get("model")
+    return isinstance(model, str) and bool(model.strip()) and model != "<synthetic>"
+
+
+def _select_redacted_native_event(
+    events: list[dict[str, Any]],
+    *,
+    source_canary: str,
+    event_type: str,
+    previous_digest: str | None,
+) -> dict[str, Any] | None:
+    if previous_digest:
+        exact = next((event for event in events if _native_event_digest(event) == previous_digest), None)
+        if exact is not None:
+            return exact
+    candidates = [event for event in events if event.get("type") == event_type]
+    if source_canary == "cursor_model_probe":
+        candidates = [event for event in candidates if event.get("subtype") == "success" and event.get("is_error") is not True]
+        return candidates[0] if candidates else None
+    if source_canary == "opencode_real_print":
+        candidates = [
+            event
+            for event in events
+            if event.get("type") in {"step_finish", "step-finish"}
+            or (isinstance(event.get("part"), dict) and event["part"].get("type") == "step-finish")
+        ]
+    return candidates[-1] if candidates else None
+
+
+def _select_model_source_event(events: list[dict[str, Any]], *, source_canary: str) -> dict[str, Any] | None:
+    if source_canary == "cursor_model_probe":
+        return next(
+            (
+                event
+                for event in events
+                if event.get("type") == "system" and event.get("subtype") == "init" and _event_has_provider_model(event)
+            ),
+            None,
+        )
+    if source_canary in {"claude_real_print", "real_print_canary"}:
+        return next((event for event in events if _event_has_provider_model(event)), None)
+    return None
+
+
+def _rewrite_native_event_digests(value: Any, rewrites: dict[str, str]) -> Any:
+    if isinstance(value, list):
+        return [_rewrite_native_event_digests(item, rewrites) for item in value]
+    if not isinstance(value, dict):
+        return value
+    rewritten: dict[str, Any] = {}
+    for key, item in value.items():
+        if key in {"event_sha256", "native_event_sha256", "model_source_event_sha256"} and isinstance(item, str):
+            rewritten[key] = rewrites.get(item, item)
+        else:
+            rewritten[key] = _rewrite_native_event_digests(item, rewrites)
+    return rewritten
+
+
 def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
-    """Refresh and relativize source references after redaction."""
+    """Refresh and relativize source references after redaction.
+
+    Redaction can change a JSONL event's bytes, so refresh both the file
+    digest and every semantic pointer to the affected parsed event. Otherwise
+    the factory would correctly reject an otherwise valid redacted capture as
+    a stale native-event digest.
+    """
 
     if isinstance(value, list):
         return [_refresh_native_source_digests(item, artifact_root=artifact_root) for item in value]
@@ -103,6 +189,8 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
     source_artifacts = refreshed.get("source_artifacts")
     if not isinstance(source_artifacts, list):
         return refreshed
+    source_canary = str(refreshed.get("source_canary") or "")
+    rewrites: dict[str, str] = {}
     updated_sources: list[Any] = []
     root = artifact_root.resolve()
     for source in source_artifacts:
@@ -113,16 +201,44 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
             raw_path = Path(source["path"]).expanduser()
             path = (raw_path if raw_path.is_absolute() else root / raw_path).resolve(strict=True)
             if path.is_relative_to(root) and path.is_file():
+                source_events = _native_jsonl_events(path) if source.get("kind") == "provider_jsonl_stream" else []
+                previous_event_digest = source.get("event_sha256")
+                selected_event = (
+                    _select_redacted_native_event(
+                        source_events,
+                        source_canary=source_canary,
+                        event_type=str(source.get("event_type") or ""),
+                        previous_digest=previous_event_digest if isinstance(previous_event_digest, str) else None,
+                    )
+                    if source_events and isinstance(source.get("event_type"), str)
+                    else None
+                )
+                if selected_event is not None and isinstance(previous_event_digest, str):
+                    rewrites[previous_event_digest] = _native_event_digest(selected_event)
                 source = {
                     **source,
                     "path": path.relative_to(root).as_posix(),
                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 }
+                if selected_event is not None:
+                    source["event_sha256"] = _native_event_digest(selected_event)
         except (OSError, ValueError):
             pass
         updated_sources.append(source)
     refreshed["source_artifacts"] = updated_sources
-    return refreshed
+    result_event = refreshed.get("result_event")
+    model_source_digest = result_event.get("model_source_event_sha256") if isinstance(result_event, dict) else None
+    if isinstance(model_source_digest, str) and model_source_digest not in rewrites:
+        source_events = [
+            event
+            for source in updated_sources
+            if isinstance(source, dict) and source.get("kind") == "provider_jsonl_stream" and isinstance(source.get("path"), str)
+            for event in _native_jsonl_events((root / source["path"]).resolve())
+        ]
+        model_source_event = _select_model_source_event(source_events, source_canary=source_canary)
+        if model_source_event is not None:
+            rewrites[model_source_digest] = _native_event_digest(model_source_event)
+    return _rewrite_native_event_digests(refreshed, rewrites)
 
 
 def _identity_records(output_root: Path) -> list[ProviderCapabilityProofRecord]:
