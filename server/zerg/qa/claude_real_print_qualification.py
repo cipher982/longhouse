@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -109,11 +110,16 @@ def _execute(binary: Path, evidence_root: Path):
         live_root = evidence_root / "live"
         live_root.mkdir(parents=True, exist_ok=True)
         env: dict[str, str | None] = {"LONGHOUSE_CLAUDE_BIN": str(binary), **credentials}
-        isolated_home = live_root / "home"
-        isolated_home.mkdir(mode=0o700)
-        env["HOME"] = str(isolated_home)
-        with semantic.temporary_environment(env):
-            live = module.run_claude_real_print_canary(argparse.Namespace(claude_print_timeout_secs=180), live_root)
+        # Provider runtime state is disposable execution machinery, not
+        # retained evidence. In particular, a profile-authenticated Claude
+        # run can materialize credential-bearing files below HOME even when
+        # the final JSON/log scrubber knows the configured token value.
+        with tempfile.TemporaryDirectory(prefix="longhouse-claude-runtime-") as runtime_root:
+            isolated_home = Path(runtime_root) / "home"
+            isolated_home.mkdir(mode=0o700)
+            env["HOME"] = str(isolated_home)
+            with semantic.temporary_environment(env):
+                live = module.run_claude_real_print_canary(argparse.Namespace(claude_print_timeout_secs=180), live_root)
     else:
         live = {
             "status": "blocked",

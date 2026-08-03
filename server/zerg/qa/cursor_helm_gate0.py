@@ -1306,8 +1306,8 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     (workspace / "README.md").write_text("# Longhouse Cursor Helm Gate 0\n", encoding="utf-8")
     events_path = artifact_root / "events.ndjson"
     write_project_hooks(workspace, events_path)
-    version = _provider_version(binary, workspace)
-    auth = _run_json([binary, "status", "--format", "json"], cwd=workspace)
+    version: str | None = None
+    auth: dict[str, Any] = {}
     report: dict[str, Any] = {
         "schema_version": 1,
         "gate": "cursor_helm_gate0",
@@ -1321,8 +1321,8 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         "workspace": str(workspace),
         "mutated_user_hooks": False,
         "auth": {
-            "status": auth.get("status"),
-            "is_authenticated": auth.get("isAuthenticated") is True,
+            "status": None,
+            "is_authenticated": False,
         },
         "scenarios": {},
     }
@@ -1356,6 +1356,13 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         return observation
 
     try:
+        version = _provider_version(binary, workspace)
+        auth = _run_json([binary, "status", "--format", "json"], cwd=workspace)
+        report["provider_version"] = version
+        report["auth"] = {
+            "status": auth.get("status"),
+            "is_authenticated": auth.get("isAuthenticated") is True,
+        }
         if auth.get("isAuthenticated") is not True:
             raise RuntimeError("cursor-agent is not authenticated")
         report["scenarios"]["workspace_trust"] = _trust_workspace(

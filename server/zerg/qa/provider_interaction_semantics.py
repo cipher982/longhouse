@@ -781,8 +781,9 @@ def evaluate_observation(
     raw_events = observation.get("raw_events")
     raw_events = raw_events if isinstance(raw_events, list) else []
     all_probes_inapplicable = all(probe.disposition in {"policy_disabled", "upstream_absent"} for probe in contract.interaction_probes)
-    if not (all_probes_inapplicable and not raw_events and not live_evidence):
-        if live_evidence:
+    has_boundary_fixture = isinstance(observation.get("semantic_boundary"), Mapping)
+    if not (all_probes_inapplicable and not raw_events and not live_evidence and not has_boundary_fixture):
+        if live_evidence or has_boundary_fixture:
             boundary = observation.get("semantic_boundary")
             if (
                 not isinstance(boundary, Mapping)
