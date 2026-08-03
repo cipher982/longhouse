@@ -1326,6 +1326,7 @@ def _compact_opencode_result_event(
     compact: dict[str, Any] = {
         "type": finish_event.get("type"),
         "part_type": part.get("type"),
+        "session_id": _event_session_id(finish_event),
         "native_event_sha256": _native_event_digest(finish_event),
         "session_id_present": bool(_event_session_id(finish_event)),
         "result_exact_match": any(
