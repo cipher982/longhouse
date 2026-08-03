@@ -250,6 +250,23 @@ def opencode_real_print_model_evidence(artifact: Mapping[str, Any]) -> dict[str,
         for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
         if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
     ]
+    native_model = canary.get("native_model_evidence")
+    if isinstance(native_model, Mapping):
+        if (
+            isinstance(native_model.get("path"), str)
+            and isinstance(native_model.get("sha256"), str)
+            and isinstance(native_model.get("record_sha256"), str)
+        ):
+            source_artifacts.append(
+                {
+                    "path": native_model["path"],
+                    "sha256": native_model["sha256"],
+                    "kind": "provider_sqlite_store",
+                    "record_sha256": native_model["record_sha256"],
+                    "model": native_model.get("model"),
+                    "session_id": native_model.get("session_id"),
+                }
+            )
     return {
         "source_canary": "opencode_real_print",
         "operation_evidence": opencode_real_print_operation_evidence(artifact),

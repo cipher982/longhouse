@@ -1303,6 +1303,11 @@ def _cursor_model_probe_with_runtime_home(
                 }
             },
             "model": observed_model,
+            "auth": {
+                "credential_mode": "api_key",
+                "api_key_source": api_key_source,
+                "api_key_configured": bool(str(environment.get("CURSOR_API_KEY") or "").strip()),
+            },
             "result_event": cursor_result_event,
             "source_artifacts": source_artifacts,
         }

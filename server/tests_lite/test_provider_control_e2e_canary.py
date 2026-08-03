@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import sqlite3
 from types import ModuleType
 
 import pytest
@@ -17,15 +19,48 @@ def _load_canary() -> ModuleType:
     return module
 
 
-def test_opencode_real_run_environment_passes_only_its_explicit_token(monkeypatch) -> None:
+def test_opencode_real_run_environment_passes_only_its_explicit_token(monkeypatch, tmp_path) -> None:
     canary = _load_canary()
     monkeypatch.setenv("OPENROUTER_API_KEY", "fixture-token")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-cross-boundary")
 
-    environment = canary._opencode_real_tool_env()  # noqa: SLF001
+    environment = canary._opencode_real_tool_env(tmp_path / "runtime")  # noqa: SLF001
 
     assert environment["OPENROUTER_API_KEY"] == "fixture-token"
     assert "UNRELATED_SECRET" not in environment
+    assert environment["HOME"] == str(tmp_path / "runtime" / "home")
+    assert environment["XDG_DATA_HOME"] == str(tmp_path / "runtime" / "data")
+
+
+def test_opencode_native_model_evidence_reads_the_selected_native_message(tmp_path) -> None:
+    canary = _load_canary()
+    runtime = tmp_path / "opencode-runtime"
+    database = runtime / "data" / "opencode" / "opencode.db"
+    database.parent.mkdir(parents=True)
+    record = {
+        "id": "message-1",
+        "sessionID": "session-1",
+        "role": "assistant",
+        "providerID": "openrouter",
+        "modelID": "deepseek/deepseek-v4-flash",
+    }
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            ("message-1", "session-1", 1, json.dumps(record)),
+        )
+
+    evidence = canary._opencode_native_model_evidence(runtime, session_ids=["session-1"])  # noqa: SLF001
+
+    assert evidence is not None
+    assert evidence["model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert evidence["session_id"] == "session-1"
+    assert evidence["path"] == "opencode-runtime/data/opencode/opencode.db"
+    assert len(evidence["sha256"]) == 64
+    assert len(evidence["record_sha256"]) == 64
 
 
 def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> None:

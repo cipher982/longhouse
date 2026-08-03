@@ -15,6 +15,7 @@ import json
 import os
 import queue
 import shutil
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -1227,8 +1228,26 @@ def _event_part(event: dict[str, Any]) -> dict[str, Any]:
     return part if isinstance(part, dict) else {}
 
 
-def _opencode_real_tool_env() -> dict[str, str]:
-    return _provider_real_run_env(extra_keys=("OPENROUTER_API_KEY",))
+def _opencode_real_tool_env(runtime_root: Path) -> dict[str, str]:
+    """Run OpenCode with an explicit disposable home and XDG store."""
+
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    home = runtime_root / "home"
+    data = runtime_root / "data"
+    config = runtime_root / "config"
+    cache = runtime_root / "cache"
+    for path in (home, data, config, cache):
+        path.mkdir(parents=True, exist_ok=True)
+    environment = _provider_real_run_env(extra_keys=("OPENROUTER_API_KEY",))
+    environment.update(
+        {
+            "HOME": str(home),
+            "XDG_DATA_HOME": str(data),
+            "XDG_CONFIG_HOME": str(config),
+            "XDG_CACHE_HOME": str(cache),
+        }
+    )
+    return environment
 
 
 def _opencode_qualification_model() -> str:
@@ -1330,6 +1349,78 @@ def _compact_opencode_result_event(
     return compact
 
 
+def _opencode_model_identity(provider_id: Any, model_id: Any) -> str | None:
+    provider = str(provider_id or "").strip().strip("/")
+    model = str(model_id or "").strip().strip("/")
+    if not model:
+        return None
+    if provider and model.lower().startswith(f"{provider.lower()}/"):
+        return model
+    return f"{provider}/{model}" if provider else model
+
+
+def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str]) -> dict[str, Any] | None:
+    """Read OpenCode's native message store for the model used by this run."""
+
+    databases = sorted(
+        path
+        for path in runtime_root.rglob("opencode.db")
+        if path.is_file() and not path.is_symlink()
+    )
+    for database in databases:
+        try:
+            connection = sqlite3.connect(
+                f"file:{database.resolve()}?mode=ro",
+                uri=True,
+                timeout=2,
+            )
+            try:
+                rows = connection.execute("SELECT id, session_id, data FROM message ORDER BY time_created").fetchall()
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error):
+            continue
+
+        candidates: list[dict[str, Any]] = []
+        for message_id, database_session_id, raw_data in rows:
+            try:
+                record = json.loads(raw_data)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            record_session_id = str(record.get("sessionID") or database_session_id or "").strip()
+            if session_ids and record_session_id not in session_ids:
+                continue
+            model_record = record.get("model") if isinstance(record.get("model"), dict) else record
+            model = _opencode_model_identity(
+                model_record.get("providerID") if isinstance(model_record, dict) else None,
+                model_record.get("modelID") if isinstance(model_record, dict) else None,
+            )
+            if not model:
+                model = str(model_record.get("model") or "").strip() if isinstance(model_record, dict) else ""
+            if not model:
+                continue
+            candidates.append(
+                {
+                    "message_id": str(message_id or record.get("id") or ""),
+                    "session_id": record_session_id,
+                    "model": model,
+                    "record_sha256": _native_event_digest(record),
+                }
+            )
+        if not candidates:
+            continue
+        selected = candidates[-1]
+        relative_path = database.resolve().relative_to(runtime_root.resolve()).as_posix()
+        return {
+            "path": str((Path("opencode-runtime") / relative_path).as_posix()),
+            "sha256": _sha256_file(database),
+            **selected,
+        }
+    return None
+
+
 def _opencode_text_done_event(events: list[dict[str, Any]], *, session_id: str) -> dict[str, Any] | None:
     for event in events:
         part = _event_part(event)
@@ -1383,6 +1474,7 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
 
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    runtime_root = root / "opencode-runtime"
     stdout_path = root / "opencode-print-stdout.jsonl"
     stderr_path = root / "opencode-print-stderr.log"
     marker = f"LONGHOUSE_OPENCODE_PRINT_{uuid.uuid4().hex}"
@@ -1407,7 +1499,7 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         result = subprocess.run(
             command,
             cwd=str(workspace),
-            env=_opencode_real_tool_env(),
+            env=_opencode_real_tool_env(runtime_root),
             text=True,
             capture_output=True,
             check=False,
@@ -1444,11 +1536,17 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         requested_model=requested_model,
     )
     session_ids = sorted({_event_session_id(event) for event in events if _event_session_id(event)})
+    native_model_evidence = _opencode_native_model_evidence(runtime_root, session_ids=session_ids)
+    if result_event is not None and native_model_evidence is not None:
+        result_event["model"] = native_model_evidence["model"]
+        result_event["model_source"] = "native_store"
+        result_event["model_source_event_sha256"] = native_model_evidence["record_sha256"]
     evidence = {
         "provider_version": version,
         "binary": binary,
         "binary_evidence": version_evidence,
         "workspace": str(workspace),
+        "runtime_root": str(runtime_root),
         "argv": command,
         "returncode": result.returncode,
         "elapsed_secs": elapsed,
@@ -1468,6 +1566,7 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         "model": result_event.get("model") if result_event else requested_model,
         "model_source": result_event.get("model_source") if result_event else "invocation",
         "result_event": result_event,
+        "native_model_evidence": native_model_evidence,
     }
     if result.returncode != 0 or timed_out:
         return _fail(
@@ -1491,6 +1590,18 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         return _fail(
             "opencode_real_print_result_missing",
             "real opencode run did not emit a step-finish accounting event",
+            **evidence,
+        )
+    if native_model_evidence is None:
+        return _fail(
+            "opencode_real_print_native_model_missing",
+            "real OpenCode completed, but its native message store did not record the selected model",
+            **evidence,
+        )
+    if native_model_evidence.get("model") != requested_model:
+        return _fail(
+            "opencode_real_print_native_model_mismatch",
+            "real OpenCode native message-store model did not match the requested qualification model",
             **evidence,
         )
 
@@ -1533,6 +1644,7 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
 
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    runtime_root = root / "opencode-runtime"
     stdout_path = root / "opencode-run-stdout.jsonl"
     stderr_path = root / "opencode-run-stderr.log"
     marker = f"LONGHOUSE_OPENCODE_TOOL_{uuid.uuid4().hex}"
@@ -1557,7 +1669,7 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         result = subprocess.run(
             command,
             cwd=str(workspace),
-            env=_opencode_real_tool_env(),
+            env=_opencode_real_tool_env(runtime_root),
             text=True,
             capture_output=True,
             check=False,

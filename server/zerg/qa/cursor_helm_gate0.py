@@ -90,6 +90,21 @@ def _scrub_artifact_tree(root: Path) -> None:
     source hashes remain readable after the scrub pass.
     """
 
+    # A byte replacement in a WAL file invalidates its page checksums. Commit
+    # any pending WAL content first, then scrub the stable database pages.
+    for database in root.rglob("*"):
+        if not database.is_file() or database.is_symlink() or database.suffix not in {".db", ".sqlite", ".sqlite3"}:
+            continue
+        wal = Path(f"{database}-wal")
+        shm = Path(f"{database}-shm")
+        if not wal.exists() and not shm.exists():
+            continue
+        try:
+            with sqlite3.connect(database, timeout=2.0) as connection:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"cannot checkpoint SQLite artifact before redaction: {database}") from exc
+
     exact_values = _artifact_secret_values()
     for path in root.rglob("*"):
         if not path.is_file() or path.is_symlink():

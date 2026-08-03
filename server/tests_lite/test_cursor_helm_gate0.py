@@ -136,6 +136,28 @@ def test_gate0_artifact_scrubber_preserves_sqlite_evidence(monkeypatch, tmp_path
     assert database.stat().st_size == original_size
 
 
+def test_gate0_artifact_scrubber_checkpoints_sqlite_wal_before_redaction(monkeypatch, tmp_path: Path) -> None:
+    secret = "fixture-token-that-is-not-prefix-shaped"
+    monkeypatch.setenv("CURSOR_API_KEY", secret)
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    database = artifact / "store.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA wal_autocheckpoint=100000")
+    connection.execute("CREATE TABLE evidence (value TEXT NOT NULL)")
+    connection.execute("INSERT INTO evidence VALUES (?)", [secret])
+    connection.commit()
+
+    _scrub_artifact_tree(artifact)
+    connection.close()
+
+    with sqlite3.connect(database) as retained:
+        value = retained.execute("SELECT value FROM evidence").fetchone()[0]
+    assert value != secret
+    assert not Path(f"{database}-wal").exists() or Path(f"{database}-wal").stat().st_size == 0
+
+
 def test_gate0_snapshots_native_cursor_store_and_hook_evidence(tmp_path: Path) -> None:
     artifact = tmp_path / "artifact"
     artifact.mkdir()
