@@ -304,6 +304,82 @@ def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
         connection.close()
 
 
+def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
+    """A same-generation revision bump must move reused vectors to the new fence."""
+
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    owner_id = "owner-1"
+    episode = {
+        "episode_ordinal": 0,
+        "event_index_start": 0,
+        "event_index_end": 1,
+        "start_order_time_us": 100,
+        "content_hash": "a" * 64,
+        "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
+    }
+    try:
+        connection.execute(
+            """
+            INSERT INTO session_index (
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages, assistant_messages,
+                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
+                started_at, published_at
+            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
+            """,
+            (session_id, generation_id, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        assert store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=generation_id,
+            revision=1,
+            model="test-model",
+            dims=2,
+            complete=True,
+            desired_episode_ordinals=[0],
+            episodes=[episode],
+        ) == {"written": 1, "skipped": 0}
+
+        connection.execute(
+            "UPDATE session_index SET desired_revision = 2, indexed_through = 2 WHERE session_id = ?",
+            (session_id,),
+        )
+        assert (
+            store.read_episode_embedding_hashes(
+                session_id=session_id,
+                model="test-model",
+                dims=2,
+            )["hashes"]
+            == {}
+        )
+        assert store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=generation_id,
+            revision=2,
+            model="test-model",
+            dims=2,
+            complete=True,
+            desired_episode_ordinals=[0],
+            episodes=[episode],
+        ) == {"written": 1, "skipped": 0}
+        row = connection.execute(
+            "SELECT revision FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = 0 AND model = 'test-model'",
+            (session_id,),
+        ).fetchone()
+        publication = connection.execute(
+            "SELECT revision FROM embedding_publications WHERE session_id = ? AND model = 'test-model'",
+            (session_id,),
+        ).fetchone()
+        assert (row["revision"], publication["revision"]) == (2, 2)
+    finally:
+        connection.close()
+
+
 def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
@@ -1306,9 +1382,7 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
         assert exact["ranking_scope"] == "exact"
         assert "candidate_count" not in exact["results"][0], "internal bookkeeping must not leak to callers"
         without_snippets = search(include_snippets=False)
-        assert [row["search_event_id"] for row in without_snippets["results"]] == [
-            row["search_event_id"] for row in exact["results"]
-        ]
+        assert [row["search_event_id"] for row in without_snippets["results"]] == [row["search_event_id"] for row in exact["results"]]
         assert without_snippets["results"][0]["content_snippet"] is None
         assert without_snippets["results"][0]["tool_output_snippet"] is None
 
@@ -1325,24 +1399,25 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
         )
         assert archive["search_scope"] == "published_archive"
         assert archive["ranking_scope"] == "exact"
-        assert [row["search_event_id"] for row in archive["results"]] == [
-            row["search_event_id"] for row in exact["results"]
-        ]
+        assert [row["search_event_id"] for row in archive["results"]] == [row["search_event_id"] for row in exact["results"]]
 
         # A ceiling below the match count forces the honest bounded answer.
         monkeypatch.setattr("zerg.searchd.store._CANDIDATE_CEILING", 1)
         assert search()["ranking_scope"] == "recent_bounded"
-        assert store.search(
-            owner_id="42",
-            query="needle",
-            project=None,
-            provider=None,
-            environment=None,
-            window_start_us=now_us - int(timedelta(days=365).total_seconds() * 1_000_000),
-            window_end_us=None,
-            limit=1,
-            include_snippets=False,
-        )["ranking_scope"] == "recent_bounded"
+        assert (
+            store.search(
+                owner_id="42",
+                query="needle",
+                project=None,
+                provider=None,
+                environment=None,
+                window_start_us=now_us - int(timedelta(days=365).total_seconds() * 1_000_000),
+                window_end_us=None,
+                limit=1,
+                include_snippets=False,
+            )["ranking_scope"]
+            == "recent_bounded"
+        )
     finally:
         connection.close()
 

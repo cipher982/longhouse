@@ -8046,6 +8046,78 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def requeue_projector_states(
+        self,
+        *,
+        projector: str,
+        session_ids: list[UUID],
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Reset only explicitly named completed states for coverage repair."""
+
+        table = ProjectorState.__table__
+        session_keys = sorted(str(session_id) for session_id in session_ids)
+        with _write_transaction(self.engine) as connection:
+            rows = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id.in_(session_keys)))
+                .mappings()
+                .all()
+            )
+            by_session = {str(row["session_id"]): row for row in rows}
+            missing = [session_id for session_id in session_keys if session_id not in by_session]
+            if missing:
+                return {
+                    "changed": False,
+                    "requeued_session_ids": [],
+                    "missing_session_ids": missing,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            changed = [
+                session_id
+                for session_id in session_keys
+                if int(by_session[session_id]["completed_revision"]) != 0
+                or by_session[session_id]["claimed_revision"] is not None
+                or by_session[session_id]["status"] != "idle"
+                or int(by_session[session_id]["failure_count"] or 0) != 0
+                or by_session[session_id]["last_error_code"] is not None
+                or by_session[session_id]["last_error_message"] is not None
+                or by_session[session_id]["retry_at"] is not None
+            ]
+            if not changed:
+                return {
+                    "changed": False,
+                    "requeued_session_ids": [],
+                    "missing_session_ids": [],
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            connection.execute(
+                update(table)
+                .where(table.c.projector == projector, table.c.session_id.in_(changed))
+                .values(
+                    completed_revision=0,
+                    claimed_revision=None,
+                    claim_token=None,
+                    worker_id=None,
+                    claim_expires_at=None,
+                    status="idle",
+                    failure_count=0,
+                    last_error_code=None,
+                    last_error_message=None,
+                    retry_at=None,
+                    last_completion_token=None,
+                    last_failure_token=None,
+                    commit_seq=commit_seq,
+                    updated_at=observed_at,
+                )
+            )
+            return {
+                "changed": True,
+                "requeued_session_ids": changed,
+                "missing_session_ids": [],
+                "commit_seq": str(commit_seq),
+            }
+
     def bind_projector_store(
         self,
         *,
