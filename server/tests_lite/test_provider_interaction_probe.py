@@ -189,6 +189,9 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
     assert evaluation["verification_scope"] == "provider_native"
     assert evaluation["assertions"][-1]["probe_id"] == "shared_title_boundary"
     assert row["live_model_evidence"]["result_event"]["usage"]["input_tokens"] == 12
+    assert row["live_model_evidence"]["result_event"]["model_source_event_sha256"] == provider_interaction_semantics.raw_event_digest(
+        row["raw_events"][0]
+    )
     assert runtime_homes and not runtime_homes[0].exists()
     assert all(b"fixture-token" not in path.read_bytes() for path in artifact_root.rglob("*") if path.is_file())
 

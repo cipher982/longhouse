@@ -1250,6 +1250,7 @@ def _cursor_model_probe_with_runtime_home(
         cursor_result_event["accounting_status"] = "subscription_aggregate_unreported"
         cursor_result_event["accounting_status_source"] = "producer_observation_classification"
         cursor_result_event["model_source"] = "provider_event"
+        cursor_result_event["model_source_event_sha256"] = raw_event_digest(init_event)
         cursor_result_event["native_event_sha256"] = raw_event_digest(result_event)
         row = _probe_status_row(
             probe,

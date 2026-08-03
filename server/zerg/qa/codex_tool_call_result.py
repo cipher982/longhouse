@@ -514,7 +514,7 @@ def run_codex_real_tool_command(
             sandbox_helper_evidence["shim_removed"] = not Path(shim_path).exists()
     events, invalid_lines = _jsonl_events(tool_stdout)
     redacted_events, _ = _jsonl_events(_redact(tool_stdout, api_key, managed_package_root))
-    result_event = _compact_codex_result_event(events, model=model)
+    result_event = _compact_codex_result_event(redacted_events, model=model)
     return {
         "command": command,
         "prompt": prompt,

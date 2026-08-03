@@ -861,6 +861,16 @@ def _claude_observed_model(events: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _claude_model_source_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in events:
+        model = event.get("model")
+        if not isinstance(model, str) and isinstance(event.get("message"), dict):
+            model = event["message"].get("model")
+        if isinstance(model, str) and model.strip() and model != "<synthetic>":
+            return event
+    return None
+
+
 def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> dict[str, Any]:
     stdout_path = root / "claude-auth-status-stdout.json"
     stderr_path = root / "claude-auth-status-stderr.log"
@@ -1006,6 +1016,9 @@ def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[s
     if compact_result is not None and "model" not in compact_result and observed_model is not None:
         compact_result["model"] = observed_model
         compact_result["model_source"] = "provider_event"
+        model_source_event = _claude_model_source_event(events)
+        if model_source_event is not None:
+            compact_result["model_source_event_sha256"] = _native_event_digest(model_source_event)
     if compact_result is not None and "model" not in compact_result:
         requested_model = str(os.environ.get("ANTHROPIC_MODEL") or "").strip()
         if requested_model:
