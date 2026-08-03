@@ -122,7 +122,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Playwright browser
-        run: cd e2e && bunx playwright install chromium
+        # --with-deps installs the shared libraries chromium links against.
+        # Without it the runner downloads a browser it cannot execute, and the
+        # profiler fails as "browser observer did not reach ready state" rather
+        # than as a missing libnspr4.so.
+        run: cd e2e && bunx playwright install --with-deps chromium
 
       - name: Select matrix case
         id: selection
@@ -145,12 +149,24 @@ jobs:
           code=$?
           set -e
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          if [[ "${{ matrix.experimental }}" != "true" && ( "$code" == "1" || "$code" == "3" ) ]]; then
-            exit 1
-          fi
-          if [[ "${{ matrix.experimental }}" == "true" && "$code" == "3" ]]; then
-            exit 1
-          fi
+          # 0 measured and met the SLA. 1 measured and missed it. 2 could not
+          # produce a trustworthy measurement (contaminated -- e.g. the hosted
+          # build changed mid-run). 3 never got far enough to measure.
+          #
+          # Only a measured SLA miss is negotiable. Exit 2 and 3 mean the gate
+          # proved nothing, so they fail on every case: a green check that stands
+          # for "no measurement occurred" is worse than a red one.
+          case "$code" in
+            0) ;;
+            2) echo "::error::$SESSION_PROPAGATION_SLA_CASE produced no trustworthy measurement (contaminated)"; exit 1 ;;
+            3) echo "::error::$SESSION_PROPAGATION_SLA_CASE failed setup before measuring"; exit 1 ;;
+            *)
+              if [[ "${{ matrix.experimental }}" != "true" ]]; then
+                exit 1
+              fi
+              echo "::warning::$SESSION_PROPAGATION_SLA_CASE missed its SLA (experimental, non-blocking)"
+              ;;
+          esac
 
       - name: Summary
         if: always()
