@@ -26,9 +26,10 @@
     "interaction_semantics"
   ],
   "selection_input_digests": {
+    "provider_factory/paired_public_revision.txt": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     "provider_factory/registry.py": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   },
   "schema_version": 2,
-  "semantic_digest": "sha256:b441bb0dc5491ff65a77e608a8d68a15920229a8be8f6b34c1ab6962ea2cffeb",
+  "semantic_digest": "sha256:97a6a84f845d967384ccdd8d7dd7526699849a9df8f00601158edae3aef9e48a",
   "trigger": "release_poll"
 }
