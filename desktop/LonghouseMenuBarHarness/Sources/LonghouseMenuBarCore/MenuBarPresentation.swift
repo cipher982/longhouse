@@ -88,14 +88,17 @@ extension HealthSnapshot {
         let inspectReasons: Set<String> = [
             "archive_dead_lettered", "orphaned_managed_bridge",
             "managed_session_control_degraded", "provider_release_blocked",
+            "consecutive_failures", "connect_errors", "server_errors",
+            "rate_limited", "retryable_client_errors",
         ]
+        let shippingFailures = engineStatus?.payload?.consecutiveShipFailures ?? 0
 
         let promotion: MenuBarPromotion
-        if !repairReasons.isDisjoint(with: reasons) || isSetupRequired || isInstallLocationBlocked {
+        if storageBlockedCount > 0 || !repairReasons.isDisjoint(with: reasons) || isSetupRequired || isInstallLocationBlocked {
             promotion = .repair
         } else if needsUser > 0 {
             promotion = .needsUser
-        } else if degraded > 0 || orphanBridgeCount > 0 || !inspectReasons.isDisjoint(with: reasons) {
+        } else if degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
         } else if !unavailableReasons.isDisjoint(with: reasons) || engineStatus?.error != nil {
             promotion = .unavailable
@@ -117,6 +120,8 @@ extension HealthSnapshot {
             headline = "\(needsUser) session\(needsUser == 1 ? "" : "s") need\(needsUser == 1 ? "s" : "") you"
         case .inspect where degraded > 0:
             headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
+        case .inspect where shippingFailures > 0:
+            headline = "Local upload is retrying"
         case .inspect where orphanBridgeCount > 0:
             headline = "\(orphanBridgeCount) background process\(orphanBridgeCount == 1 ? "" : "es") need cleanup"
         case .inspect:
@@ -154,12 +159,24 @@ extension HealthSnapshot {
     }
 
     private func menuBarSystemFacts(relativeTo referenceDate: Date) -> [MenuBarSystemFact] {
-        let localValue = serviceStatusLabel == "running" ? "Running" : serviceStatusTitle
+        // Native fast health intentionally has no service-manager block. A
+        // fresh engine pulse with a daemon pid is sufficient local-process
+        // evidence; otherwise the panel reports Unknown instead of inventing
+        // a service failure.
+        let localAgentRunning: Bool
+        if service != nil {
+            localAgentRunning = serviceStatusLabel == "running"
+        } else {
+            localAgentRunning = engineStatus?.fresh == true && engineStatus?.payload?.daemonPid != nil
+        }
+        let localValue = service != nil
+            ? (localAgentRunning ? "Running" : serviceStatusTitle)
+            : (localAgentRunning ? "Running" : "Unknown")
         let freshnessValue = engineFreshnessValueLabel(relativeTo: referenceDate)
         let freshnessIsCurrent = freshnessValue.hasPrefix("Fresh")
-        let localPromotion: MenuBarPromotion = serviceStatusLabel != "running"
+        let localPromotion: MenuBarPromotion = service != nil && !localAgentRunning
             ? .repair
-            : freshnessIsCurrent ? .normal : .unavailable
+            : localAgentRunning && freshnessIsCurrent ? .normal : .unavailable
 
         let controlLimited = hasLimitedCanonicalControl
         let controlValue = controlLimited ? "Limited" : hasCanonicalControlTruth ? "Connected" : "Unavailable"
@@ -191,6 +208,7 @@ extension HealthSnapshot {
         let transportValue: String
         let transportDetail: String?
         let transportPromotion: MenuBarPromotion
+        let shippingFailures = engineStatus?.payload?.consecutiveShipFailures ?? 0
         if !hasEngineEvidence {
             transportValue = "Unknown"
             transportDetail = "no engine evidence"
@@ -199,6 +217,10 @@ extension HealthSnapshot {
             transportValue = "Offline"
             transportDetail = "data retained locally"
             transportPromotion = .unavailable
+        } else if shippingFailures > 0 {
+            transportValue = "Retrying"
+            transportDetail = "\(shippingFailures) consecutive ship failure\(shippingFailures == 1 ? "" : "s")"
+            transportPromotion = .inspect
         } else {
             transportValue = "Connected"
             transportDetail = nil

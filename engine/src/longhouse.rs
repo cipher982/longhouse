@@ -16,7 +16,8 @@ mod managed_terminal;
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use managed_launch_lifecycle::{
-    register_managed_launch, ManagedLaunchResponse, ManagedLaunchTransaction,
+    register_managed_launch, register_managed_launch_with_timeout, ManagedLaunchResponse,
+    ManagedLaunchTransaction,
 };
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
@@ -27,7 +28,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -867,6 +868,103 @@ fn write_claude_mcp_config(
     Ok(PrivateTempFile { path })
 }
 
+fn write_claude_degraded_mcp_config(session_id: &str) -> anyhow::Result<PrivateTempFile> {
+    let path = longhouse_home()?
+        .join("run/claude-mcp")
+        .join(format!("{session_id}-{}.json", Uuid::new_v4()));
+    let config = json!({
+        "mcpServers": {
+            "longhouse-channel": {
+                "type": "stdio",
+                "command": paired_engine_path()?,
+                "args": ["claude-channel", "serve"],
+                "env": {
+                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+                },
+            }
+        }
+    });
+    write_private_text(&path, &serde_json::to_string(&config)?)?;
+    Ok(PrivateTempFile { path })
+}
+
+fn spawn_claude_registration_retry(
+    url: &str,
+    token: &str,
+    payload: serde_json::Value,
+    session_id: &str,
+) -> Arc<AtomicBool> {
+    let url = url.to_string();
+    let token = token.to_string();
+    let session_id = session_id.to_string();
+    let provider_alive = Arc::new(AtomicBool::new(false));
+    let provider_alive_for_thread = Arc::clone(&provider_alive);
+    std::thread::spawn(move || {
+        for attempt in 0..5 {
+            let Ok(runtime) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            match register_managed_launch_with_timeout(
+                &runtime,
+                &url,
+                &token,
+                "Claude degraded",
+                &payload,
+                Some(&session_id),
+                Duration::from_secs(2),
+            ) {
+                Ok(response) => {
+                    if response.provider_session_id.as_deref()
+                        != payload.get("provider_session_id").and_then(|value| value.as_str())
+                    {
+                        eprintln!(
+                            "Longhouse warning: degraded Claude registration returned a different provider identity"
+                        );
+                    } else {
+                        let mut transaction = ManagedLaunchTransaction::new(
+                            &runtime,
+                            &url,
+                            &token,
+                            &response.session_id,
+                            &response.run_id,
+                        );
+                        for _ in 0..100 {
+                            if provider_alive_for_thread.load(Ordering::Acquire) {
+                                if let Err(error) = transaction.confirm() {
+                                    eprintln!(
+                                        "Longhouse warning: recovered Claude registration could not be confirmed: {error:#}"
+                                    );
+                                }
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        eprintln!(
+                            "Longhouse warning: Claude exited before recovered registration became ready"
+                        );
+                    }
+                    return;
+                }
+                Err(error) if attempt < 4 => {
+                    std::thread::sleep(Duration::from_secs(2_u64.pow(attempt)));
+                    if attempt == 0 {
+                        eprintln!(
+                            "Longhouse warning: Runtime Host is still unavailable; Claude is running locally and registration will retry"
+                        );
+                    }
+                    let _ = error;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Longhouse warning: could not recover Claude Helm registration: {error:#}"
+                    );
+                }
+            }
+        }
+    });
+    provider_alive
+}
+
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
@@ -891,10 +989,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|target| acquire_provider_session_lock("claude", &target.session_id))
         .transpose()?;
-    let response: ManagedLaunchResponse = if let Some(target) = &resume_target {
+    let mut payload = if let Some(target) = &resume_target {
         cwd = target.cwd.clone();
         let resume_attempt_id = Uuid::new_v4().to_string();
-        let payload = ManagedLaunchRegistration {
+        ManagedLaunchRegistration {
             provider: "claude",
             cwd: &cwd,
             project: args.project.as_deref(),
@@ -909,15 +1007,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 ("provider_thread_id", json!(target.provider_session_id)),
             ],
         }
-        .to_json();
-        register_managed_launch(
-            &runtime,
-            &url,
-            &token,
-            "Claude resume",
-            &payload,
-            Some(&target.session_id),
-        )?
+        .to_json()
     } else {
         let mut payload = ManagedLaunchRegistration {
             provider: "claude",
@@ -938,38 +1028,115 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         if let Some(surface) = launch_surface {
             payload["launch_surface"] = json!(surface);
         }
-        register_managed_launch(&runtime, &url, &token, "Claude", &payload, None)?
+        payload
     };
-    let mut launch_transaction = ManagedLaunchTransaction::new(
-        &runtime,
-        &url,
-        &token,
-        &response.session_id,
-        &response.run_id,
-    );
+    let mut degraded_provider_alive: Option<Arc<AtomicBool>> = None;
+    let registration = if resume_target.is_some() {
+        register_managed_launch(
+            &runtime,
+            &url,
+            &token,
+            "Claude resume",
+            &payload,
+            resume_target.as_ref().map(|target| target.session_id.as_str()),
+        )
+    } else {
+        register_managed_launch_with_timeout(
+            &runtime,
+            &url,
+            &token,
+            "Claude",
+            &payload,
+            None,
+            // A healthy host normally answers within this window. A slower or
+            // unavailable host must not hold the user's provider TUI hostage.
+            Duration::from_millis(750),
+        )
+    };
+    let response: Option<ManagedLaunchResponse> = match registration {
+        Ok(response) => Some(response),
+        Err(error) if resume_target.is_none() && !args.remote_approve => {
+            // The local provider is still a valid Helm owner when the remote
+            // plane is unavailable. Mint both identities once, persist them
+            // through the local channel, and retry registration asynchronously
+            // so a transient Runtime Host outage cannot strand the TUI.
+            let session_id = Uuid::new_v4().to_string();
+            let provider_session_id = Uuid::new_v4().to_string();
+            payload["session_id"] = json!(session_id);
+            payload["provider_session_id"] = json!(provider_session_id);
+            degraded_provider_alive = Some(spawn_claude_registration_retry(
+                &url,
+                &token,
+                payload.clone(),
+                &session_id,
+            ));
+            eprintln!(
+                "Longhouse warning: starting Claude in degraded Helm mode; durable upload will catch up if the Runtime Host recovers, while remote control stays disabled ({error:#})"
+            );
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let session_id = response
+        .as_ref()
+        .map(|response| response.session_id.clone())
+        .or_else(|| payload.get("session_id").and_then(|value| value.as_str()).map(str::to_owned))
+        .context("degraded Claude launch has no session identity")?;
+    let run_id = response
+        .as_ref()
+        .map(|response| response.run_id.clone())
+        .unwrap_or_else(|| {
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+            )
+            .to_string()
+        });
     let provider_session_id = response
-        .provider_session_id
-        .as_deref()
+        .as_ref()
+        .and_then(|response| response.provider_session_id.clone())
+        .or_else(|| payload.get("provider_session_id").and_then(|value| value.as_str()).map(str::to_owned))
         .context("Longhouse did not return a Claude provider session")?;
-    response.validate_transport("Claude", "claude_channel_bridge")?;
-    if resume_target.as_ref().is_some_and(|target| {
-        response.provider_session_id.as_deref() != Some(target.provider_session_id.as_str())
-    }) {
-        anyhow::bail!("Claude resumed a different provider session; the new run was aborted");
+    if let Some(response) = response.as_ref() {
+        response.validate_transport("Claude", "claude_channel_bridge")?;
+        if resume_target.as_ref().is_some_and(|target| {
+            response.provider_session_id.as_deref() != Some(target.provider_session_id.as_str())
+        }) {
+            anyhow::bail!("Claude resumed a different provider session; the new run was aborted");
+        }
     }
-    let coordination_token = response
-        .coordination_token()
-        .context("Longhouse did not issue coordination authority for this session")?
-        .to_owned();
-    let mcp_config = write_claude_mcp_config(&response.session_id, &coordination_token)?;
+    let permission_mode = response
+        .as_ref()
+        .and_then(|response| response.permission_mode.as_deref())
+        .unwrap_or(if args.remote_approve {
+            "remote_approve"
+        } else {
+            "bypass"
+        });
+    let hook_token = response
+        .as_ref()
+        .and_then(|response| response.hook_token.as_deref())
+        .unwrap_or(&token);
+    let coordination_token = match response.as_ref() {
+        Some(response) => Some(response.require_authority("Claude", "claude_channel_bridge")?.to_owned()),
+        None => None,
+    };
+    let mcp_config = if let Some(coordination_token) = coordination_token.as_deref() {
+        write_claude_mcp_config(&session_id, coordination_token)?
+    } else {
+        write_claude_degraded_mcp_config(&session_id)?
+    };
+    let mut launch_transaction = response.as_ref().map(|response| {
+        ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
+    });
     let mut command = Command::new(&binary);
-    if response.permission_mode.as_deref() != Some("remote_approve") {
+    if permission_mode != "remote_approve" {
         command.arg("--dangerously-skip-permissions");
     }
     if resume_target.is_some() {
-        command.args(["--resume", provider_session_id]);
+        command.args(["--resume", &provider_session_id]);
     } else {
-        command.args(["--session-id", provider_session_id]);
+        command.args(["--session-id", &provider_session_id]);
     }
     command
         .args([
@@ -979,51 +1146,62 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         ])
         .arg(&mcp_config.path)
         .current_dir(&cwd)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
-        .env("LONGHOUSE_RUN_ID", &response.run_id)
-        .env("LONGHOUSE_CHANNEL_SESSION_ID", &response.session_id)
-        .env("LONGHOUSE_PROVIDER_SESSION_ID", provider_session_id)
+        .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
+        .env("LONGHOUSE_RUN_ID", &run_id)
+        .env("LONGHOUSE_CHANNEL_SESSION_ID", &session_id)
+        .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
         .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
-        .env(
-            "LONGHOUSE_HOOK_TOKEN",
-            response.hook_token.as_deref().unwrap_or(&token),
-        )
+        .env("LONGHOUSE_HOOK_TOKEN", hook_token)
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env(
             "LONGHOUSE_PERMISSION_HOOK_ENABLED",
-            if response.permission_mode.as_deref() == Some("remote_approve") {
+            if permission_mode == "remote_approve" {
                 "1"
             } else {
                 "0"
             },
         );
-    let contract_path = claude_contract_path(&response.session_id)?;
+    let contract_path = claude_contract_path(&session_id)?;
     let retained_contract_existed = contract_path.is_file();
     if let Err(error) = record_claude_contract(
-        &response.session_id,
+        &session_id,
         &cwd,
         &binary,
-        provider_session_id,
-        response.permission_mode.as_deref(),
+        &provider_session_id,
+        Some(permission_mode),
     ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let run_result =
-        run_foreground_command_after_spawn(&mut command, || launch_transaction.confirm());
+    let degraded_provider_alive_for_spawn = degraded_provider_alive.clone();
+    let run_result = run_foreground_command_after_spawn(&mut command, || {
+        if let Some(provider_alive) = degraded_provider_alive_for_spawn {
+            provider_alive.store(true, Ordering::Release);
+        }
+        match launch_transaction.as_mut() {
+            Some(transaction) => transaction.confirm(),
+            None => Ok(()),
+        }
+    });
     let exit = match run_result {
         Ok(exit) => exit,
         Err(error) => {
+            if let Some(provider_alive) = &degraded_provider_alive {
+                provider_alive.store(false, Ordering::Release);
+            }
             if !retained_contract_existed {
                 let _ = std::fs::remove_file(&contract_path);
             }
             return Err(error);
         }
     };
+    if let Some(provider_alive) = degraded_provider_alive {
+        provider_alive.store(false, Ordering::Release);
+    }
     if let Err(error) = record_claude_terminal_event(
-        &response.session_id,
-        &response.run_id,
-        provider_session_id,
+        &session_id,
+        &run_id,
+        &provider_session_id,
         &machine_name,
         exit,
     ) {
@@ -2403,6 +2581,53 @@ fn wait_for_child_or_signal(
     signal: &Arc<AtomicUsize>,
     process_group: Option<libc::pid_t>,
 ) -> anyhow::Result<i32> {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as libc::pid_t;
+        loop {
+            let received = signal.load(Ordering::Relaxed);
+            if received != 0 {
+                terminate_child(child, process_group);
+                let _ = child.wait();
+                return Ok(128 + received as i32);
+            }
+
+            let mut raw_status = 0;
+            let waited = unsafe {
+                libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED)
+            };
+            if waited == pid {
+                if libc::WIFEXITED(raw_status) {
+                    return Ok(libc::WEXITSTATUS(raw_status));
+                }
+                if libc::WIFSIGNALED(raw_status) {
+                    return Ok(128 + libc::WTERMSIG(raw_status));
+                }
+                if libc::WIFSTOPPED(raw_status) {
+                    let stop_signal = libc::WSTOPSIG(raw_status);
+                    // A provider must never strand the Longhouse wrapper in a
+                    // wait after losing the terminal race. Resume stopped
+                    // children and let the normal signal/exit path decide the
+                    // outcome. This also makes a Ctrl-C recover a provider
+                    // that was stopped by SIGTTOU/SIGTTIN during startup.
+                    unsafe {
+                        libc::kill(-process_group.unwrap_or(pid), libc::SIGCONT);
+                    }
+                    eprintln!(
+                        "Longhouse warning: provider stopped by signal {stop_signal}; resuming it"
+                    );
+                }
+            } else if waited < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::EINTR) {
+                    return Err(error.into());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[cfg(not(unix))]
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(status.code().unwrap_or(1));
@@ -2421,6 +2646,8 @@ fn wait_for_child_or_signal(
 fn terminate_child(child: &mut std::process::Child, process_group: Option<libc::pid_t>) {
     if let Some(group) = process_group {
         unsafe {
+            // A stopped child does not handle SIGTERM until it is continued.
+            libc::kill(-group, libc::SIGCONT);
             libc::kill(-group, libc::SIGTERM);
         }
     } else {
@@ -2464,39 +2691,119 @@ fn run_foreground_command_after_spawn(
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
 
+    // The child must join its own process group before it touches the TTY, but
+    // the parent cannot hand that group the foreground until after spawn. A
+    // fast TUI can otherwise call tcsetattr while still backgrounded, receive
+    // SIGTTOU, and leave this wrapper waiting forever on a stopped child.
+    let mut release_fds = [-1; 2];
+    if unsafe { libc::pipe(release_fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let child_release_read = release_fds[0];
+    let child_release_write = release_fds[1];
+
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             // Signal-hook handlers are installed in the facade after a first
             // child launches. Reset in every provider child so stock Codex
             // keeps its normal Ctrl-C/HUP behavior on reattach.
             for signal in [libc::SIGHUP, libc::SIGTERM, libc::SIGINT] {
                 libc::signal(signal, libc::SIG_DFL);
             }
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
+            libc::close(child_release_write);
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut byte = [0_u8; 1];
+            loop {
+                let result = libc::read(
+                    child_release_read,
+                    byte.as_mut_ptr().cast::<libc::c_void>(),
+                    byte.len(),
+                );
+                if result == 1 {
+                    libc::close(child_release_read);
+                    return Ok(());
+                }
+                if result < 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                {
+                    continue;
+                }
+                libc::close(child_release_read);
+                return Err(if result == 0 {
+                    std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "provider launch released without a barrier signal",
+                    )
+                } else {
+                    std::io::Error::last_os_error()
+                });
             }
         });
     }
-    let mut child = command.spawn()?;
-    let signal = install_tui_signal_flag()?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            unsafe {
+                libc::close(release_fds[0]);
+                libc::close(release_fds[1]);
+            }
+            return Err(error.into());
+        }
+    };
+    unsafe {
+        libc::close(release_fds[0]);
+    }
+    release_fds[0] = -1;
+    let signal = match install_tui_signal_flag() {
+        Ok(signal) => signal,
+        Err(error) => {
+            unsafe {
+                libc::close(release_fds[1]);
+            }
+            let child_pgrp = child.id() as libc::pid_t;
+            terminate_child(&mut child, Some(child_pgrp));
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
     let child_pgrp = child.id() as libc::pid_t;
     unsafe {
         libc::setpgid(child_pgrp, child_pgrp);
     }
     if let Err(error) = after_spawn() {
         terminate_child(&mut child, Some(child_pgrp));
+        unsafe {
+            libc::close(release_fds[1]);
+        }
         let _ = child.wait();
         return Err(error);
     }
     if !interactive_stdio() {
+        unsafe {
+            libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
+            libc::close(release_fds[1]);
+        }
         return wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
     }
     let stdin_fd = std::io::stdin().as_raw_fd();
     let parent_pgrp = unsafe { libc::getpgrp() };
     let old_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
     let handed_off = unsafe { libc::tcsetpgrp(stdin_fd, child_pgrp) == 0 };
+    if !handed_off {
+        unsafe {
+            libc::close(release_fds[1]);
+            libc::signal(libc::SIGTTOU, old_sigttou);
+        }
+        terminate_child(&mut child, Some(child_pgrp));
+        let _ = child.wait();
+        anyhow::bail!("could not hand the terminal to the managed provider");
+    }
+    unsafe {
+        libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
+        libc::close(release_fds[1]);
+    }
     let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
     if handed_off {
         unsafe {

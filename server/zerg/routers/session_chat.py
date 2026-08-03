@@ -431,6 +431,12 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
             "convergence must reuse this identity instead of minting a replacement."
         ),
     )
+    provider_session_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description=("Optional client-minted provider-native identity for degraded Helm convergence"),
+    )
     resume_attempt_id: uuid.UUID | None = Field(
         None,
         description="Idempotency identity for an explicit managed-session resume",
@@ -1622,6 +1628,7 @@ async def launch_managed_local_this_device(
             launch_actor=body.launch_actor,
             launch_surface=body.launch_surface,
             session_id=body.session_id,
+            provider_session_id=body.provider_session_id,
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.
