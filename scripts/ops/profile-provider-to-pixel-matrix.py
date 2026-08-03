@@ -281,6 +281,7 @@ def main(argv: list[str]) -> int:
             args.browser_ui_base_url or f"https://{args.subdomain}.longhouse.ai",
             "--browser-transport",
             args.browser_transport,
+            "--provider-to-pixel-only",
         ]
         if args.container:
             command.extend(["--container", args.container])

@@ -12,6 +12,7 @@ PROFILE="${SESSION_PROPAGATION_PROFILE:-warm-live}"
 PROVIDER="${SESSION_PROPAGATION_PROVIDER:-codex}"
 OWNERSHIP="${SESSION_PROPAGATION_OWNERSHIP:-managed}"
 CODEX_EFFORT="${SESSION_PROPAGATION_CODEX_EFFORT:-low}"
+PROVIDER_TO_PIXEL_ONLY="${SESSION_PROPAGATION_PROVIDER_TO_PIXEL_ONLY:-false}"
 BASE_RUN_ID="${SESSION_PROPAGATION_RUN_ID:-session-propagation-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_ROOT="${SESSION_PROPAGATION_OUTPUT_ROOT:-$ROOT_DIR/artifacts/session-propagation-sla/$BASE_RUN_ID}"
 RETRY_SLEEP_SECS="${SESSION_PROPAGATION_RETRY_SLEEP_SECS:-15}"
@@ -32,6 +33,7 @@ summary="$OUTPUT_ROOT/summary.md"
   echo "- Project: \`$PROJECT\`"
   echo "- Attempts: \`$ATTEMPTS\`"
   echo "- Iterations per attempt: \`$ITERATIONS\`"
+  echo "- Provider-to-pixel only: \`$PROVIDER_TO_PIXEL_ONLY\`"
   echo "- Started: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
   echo ""
   echo "## Attempts"
@@ -103,6 +105,9 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   )
   if [[ "$PROVIDER" == "codex" && "$OWNERSHIP" == "managed" ]]; then
     cmd+=(--trust-longhouse-codex-hooks --codex-effort "$CODEX_EFFORT")
+  fi
+  if [[ "$PROVIDER_TO_PIXEL_ONLY" == "true" ]]; then
+    cmd+=(--provider-to-pixel-only)
   fi
   cmd+=("$@")
 

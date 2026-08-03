@@ -2422,43 +2422,53 @@ except Exception as exc:
                 payload={"thread_path": str(thread_path) if thread_path else None},
             )
         else:
-            self.poll_hosted_session(
+            if self.args.provider_to_pixel_only:
+                self.wait_for_provider_to_pixel(
+                    case_id,
+                    session_id,
+                    ownership=ownership,
+                )
+            else:
+                self.poll_hosted_session(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                    predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+                    event="assistant_response_hosted",
+                    timeout=180,
+                    interval=0.5,
+                )
+        if not self.args.provider_to_pixel_only:
+            if content_promotion_poll is not None:
+                content_promotion_poll.join(timeout=95)
+            if timeline_live_poll is not None:
+                timeline_live_poll.join(timeout=95)
+            if timeline_live_sse is not None:
+                timeline_live_sse.join(timeout=95)
+        self.write_snapshot(case_id, ownership, session_id, "post_response")
+
+        timeline_close_sse = None
+        if not self.args.provider_to_pixel_only:
+            timeline_close_sse = self.start_timeline_close_sse(
                 session_id,
                 case_id=case_id,
                 ownership=ownership,
-                predicate=lambda data: hosted_assistant_events_contain(data, nonce),
-                event="assistant_response_hosted",
-                timeout=180,
-                interval=0.5,
             )
-        if content_promotion_poll is not None:
-            content_promotion_poll.join(timeout=95)
-        if timeline_live_poll is not None:
-            timeline_live_poll.join(timeout=95)
-        if timeline_live_sse is not None:
-            timeline_live_sse.join(timeout=95)
-        self.write_snapshot(case_id, ownership, session_id, "post_response")
-
-        timeline_close_sse = self.start_timeline_close_sse(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-        )
-        close_sse_ready = self.wait_for_observation(
-            case_id,
-            session_id,
-            "timeline_close_sse_ready",
-            timeout=10,
-        )
-        if not close_sse_ready:
-            self.observe(
-                case_id=case_id,
-                provider="codex",
-                ownership=ownership,
-                source="harness",
-                event="timeline_close_sse_precondition_timeout",
-                session_id=session_id,
+            close_sse_ready = self.wait_for_observation(
+                case_id,
+                session_id,
+                "timeline_close_sse_ready",
+                timeout=10,
             )
+            if not close_sse_ready:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="harness",
+                    event="timeline_close_sse_precondition_timeout",
+                    session_id=session_id,
+                )
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -2483,16 +2493,18 @@ except Exception as exc:
             session_id=session_id,
         )
         terminate_process(tui)
-        self.poll_hosted_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=lambda data: lifecycle_closed(data),
-            event="hosted_runtime_closed",
-            timeout=15,
-            interval=0.25,
-        )
-        timeline_close_sse.join(timeout=12)
+        if not self.args.provider_to_pixel_only:
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: lifecycle_closed(data),
+                event="hosted_runtime_closed",
+                timeout=15,
+                interval=0.25,
+            )
+            assert timeline_close_sse is not None
+            timeline_close_sse.join(timeout=12)
         if self.args.profile == "cold-timeline":
             browser_ui = self.start_browser_ui_observer(
                 session_id,
@@ -2501,7 +2513,7 @@ except Exception as exc:
                 ownership=ownership,
                 observer_kind="cold",
             )
-        if browser_ui is not None:
+        if browser_ui is not None and not self.args.provider_to_pixel_only:
             browser_ui.join(timeout=150)
         self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
         return {
@@ -2937,36 +2949,48 @@ except Exception as exc:
                 )
                 is not None
             ):
-                self.poll_hosted_session(
+                if self.args.provider_to_pixel_only:
+                    self.wait_for_provider_to_pixel(
+                        case_id,
+                        session_id,
+                        ownership=ownership,
+                    )
+                else:
+                    self.poll_hosted_session(
+                        session_id,
+                        case_id=case_id,
+                        ownership=ownership,
+                        predicate=lambda data: hosted_assistant_events_contain(
+                            data, nonce
+                        ),
+                        event="assistant_response_hosted",
+                        timeout=180,
+                        interval=0.5,
+                    )
+            if not self.args.provider_to_pixel_only:
+                if content_promotion_poll is not None:
+                    content_promotion_poll.join(timeout=95)
+                if timeline_live_poll is not None:
+                    timeline_live_poll.join(timeout=95)
+                if timeline_live_sse is not None:
+                    timeline_live_sse.join(timeout=95)
+                if browser_ui is not None:
+                    browser_ui.join(timeout=150)
+            self.write_snapshot(case_id, ownership, session_id, "post_response")
+
+            timeline_close_sse = None
+            if not self.args.provider_to_pixel_only:
+                timeline_close_sse = self.start_timeline_close_sse(
                     session_id,
                     case_id=case_id,
                     ownership=ownership,
-                    predicate=lambda data: hosted_assistant_events_contain(data, nonce),
-                    event="assistant_response_hosted",
-                    timeout=180,
-                    interval=0.5,
                 )
-            if content_promotion_poll is not None:
-                content_promotion_poll.join(timeout=95)
-            if timeline_live_poll is not None:
-                timeline_live_poll.join(timeout=95)
-            if timeline_live_sse is not None:
-                timeline_live_sse.join(timeout=95)
-            if browser_ui is not None:
-                browser_ui.join(timeout=150)
-            self.write_snapshot(case_id, ownership, session_id, "post_response")
-
-            timeline_close_sse = self.start_timeline_close_sse(
-                session_id,
-                case_id=case_id,
-                ownership=ownership,
-            )
-            self.wait_for_observation(
-                case_id,
-                session_id,
-                "timeline_close_sse_ready",
-                timeout=10,
-            )
+                self.wait_for_observation(
+                    case_id,
+                    session_id,
+                    "timeline_close_sse_ready",
+                    timeout=10,
+                )
             self.observe(
                 case_id=case_id,
                 provider=self.args.provider,
@@ -2998,15 +3022,16 @@ except Exception as exc:
             if session is not None:
                 session.close()
                 session = None
-            self.poll_hosted_session(
-                session_id,
-                case_id=case_id,
-                ownership=ownership,
-                predicate=lambda data: lifecycle_closed(data),
-                event="hosted_runtime_closed",
-                timeout=30,
-                interval=0.25,
-            )
+            if not self.args.provider_to_pixel_only:
+                self.poll_hosted_session(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                    predicate=lambda data: lifecycle_closed(data),
+                    event="hosted_runtime_closed",
+                    timeout=30,
+                    interval=0.25,
+                )
             if timeline_close_sse is not None:
                 timeline_close_sse.join(timeout=12)
             self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
@@ -3291,15 +3316,24 @@ except Exception as exc:
                     provider_session_id=local_provider_session_id,
                     payload={"database_path": str(database_path), "nonce": nonce},
                 )
-                self.poll_hosted_session(
-                    session_id,
-                    case_id=case_id,
-                    ownership=ownership,
-                    predicate=lambda data: hosted_assistant_events_contain(data, nonce),
-                    event="assistant_response_hosted",
-                    timeout=180,
-                    interval=0.25,
-                )
+                if self.args.provider_to_pixel_only:
+                    self.wait_for_provider_to_pixel(
+                        case_id,
+                        session_id,
+                        ownership=ownership,
+                    )
+                else:
+                    self.poll_hosted_session(
+                        session_id,
+                        case_id=case_id,
+                        ownership=ownership,
+                        predicate=lambda data: hosted_assistant_events_contain(
+                            data, nonce
+                        ),
+                        event="assistant_response_hosted",
+                        timeout=180,
+                        interval=0.25,
+                    )
             else:
                 self.observe(
                     case_id=case_id,
@@ -3311,23 +3345,26 @@ except Exception as exc:
                     payload={"database_path": str(database_path)},
                 )
 
-            if content_promotion_poll is not None:
-                content_promotion_poll.join(timeout=20)
-            timeline_live_poll.join(timeout=20)
-            timeline_live_sse.join(timeout=20)
+            if not self.args.provider_to_pixel_only:
+                if content_promotion_poll is not None:
+                    content_promotion_poll.join(timeout=20)
+                timeline_live_poll.join(timeout=20)
+                timeline_live_sse.join(timeout=20)
             self.write_snapshot(case_id, ownership, session_id, "post_response")
 
-            timeline_close_sse = self.start_timeline_close_sse(
-                session_id,
-                case_id=case_id,
-                ownership=ownership,
-            )
-            self.wait_for_observation(
-                case_id,
-                session_id,
-                "timeline_close_sse_ready",
-                timeout=10,
-            )
+            timeline_close_sse = None
+            if not self.args.provider_to_pixel_only:
+                timeline_close_sse = self.start_timeline_close_sse(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
+                self.wait_for_observation(
+                    case_id,
+                    session_id,
+                    "timeline_close_sse_ready",
+                    timeout=10,
+                )
             self.observe(
                 case_id=case_id,
                 provider=self.args.provider,
@@ -3348,17 +3385,19 @@ except Exception as exc:
                 raise RuntimeError(f"managed OpenCode stop failed: {stop.short()}")
             session.close()
             session = None
-            self.poll_hosted_session(
-                session_id,
-                case_id=case_id,
-                ownership=ownership,
-                predicate=lambda data: lifecycle_closed(data),
-                event="hosted_runtime_closed",
-                timeout=30,
-                interval=0.25,
-            )
-            timeline_close_sse.join(timeout=12)
-            if browser_ui is not None:
+            if not self.args.provider_to_pixel_only:
+                self.poll_hosted_session(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                    predicate=lambda data: lifecycle_closed(data),
+                    event="hosted_runtime_closed",
+                    timeout=30,
+                    interval=0.25,
+                )
+            if timeline_close_sse is not None:
+                timeline_close_sse.join(timeout=12)
+            if browser_ui is not None and not self.args.provider_to_pixel_only:
                 browser_ui.join(timeout=150)
             self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
             return {
@@ -3546,35 +3585,42 @@ except Exception as exc:
                 payload={"returncode": proc.returncode},
             )
 
-        self.poll_timeline_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=timeline_has_card,
-            event="timeline_card_visible_pre_ingest",
-            timeout=30,
-            interval=0.25,
-        )
-        self.poll_hosted_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=lambda data: hosted_assistant_events_contain(data, nonce),
-            event="assistant_response_hosted",
-            timeout=60,
-            interval=0.25,
-        )
-        self.poll_hosted_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=lambda data: lifecycle_closed(data),
-            event="hosted_runtime_closed",
-            timeout=30,
-            interval=0.25,
-        )
-        if browser_ui is not None:
-            browser_ui.join(timeout=150)
+        if self.args.provider_to_pixel_only:
+            self.wait_for_provider_to_pixel(
+                case_id,
+                session_id,
+                ownership=ownership,
+            )
+        else:
+            self.poll_timeline_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=timeline_has_card,
+                event="timeline_card_visible_pre_ingest",
+                timeout=30,
+                interval=0.25,
+            )
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+                event="assistant_response_hosted",
+                timeout=60,
+                interval=0.25,
+            )
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: lifecycle_closed(data),
+                event="hosted_runtime_closed",
+                timeout=30,
+                interval=0.25,
+            )
+            if browser_ui is not None:
+                browser_ui.join(timeout=150)
         self.write_snapshot(case_id, ownership, session_id, "post_claude")
         return {
             "case_id": case_id,
@@ -4126,6 +4172,12 @@ except Exception as exc:
         requires_durable = (
             not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
         )
+        if self.args.provider_to_pixel_only:
+            requires_promotion = False
+            requires_live = True
+            requires_close = False
+            requires_cold = False
+            requires_durable = False
         hosted = self.hosted_db_direct(session_id) or {}
         if not hosted.get("session"):
             # The catalog-owned live store and the debug helper can briefly
@@ -4721,6 +4773,31 @@ except Exception as exc:
             metrics["live_first_pass"] = (
                 live_first_from_local_latency <= live_first_output_target_ms()
             )
+        if self.args.provider_to_pixel_only:
+            waterfall_total = metrics.get("waterfall_total_provider_to_first_render_ms")
+            live_first_from_local_latency = (
+                waterfall_total if isinstance(waterfall_total, int) else None
+            )
+            metrics["live_first_from_local_ms"] = live_first_from_local_latency
+            metrics["warm_live_output_local_to_paint_ms"] = (
+                live_first_from_local_latency
+            )
+            metrics["live_first_source"] = (
+                "client_render_beacon"
+                if live_first_from_local_latency is not None
+                else None
+            )
+            metrics["live_first_timing_source"] = (
+                "ship_trace.v1" if live_first_from_local_latency is not None else None
+            )
+            metrics["live_tail_non_slo_from_local_ms"] = None
+            metrics["live_first_pass"] = (
+                live_first_from_local_latency <= live_first_output_target_ms()
+                if live_first_from_local_latency is not None
+                else None
+            )
+            live_ui_source = "client_render_beacon"
+            live_timing_source = "ship_trace.v1"
 
         promotion_note = "promotion=not_applicable"
         if requires_promotion:
@@ -5129,6 +5206,45 @@ except Exception as exc:
                     continue
                 beacons.append(value)
         return beacons
+
+    def wait_for_provider_to_pixel(
+        self,
+        case_id: str,
+        session_id: str,
+        *,
+        ownership: str,
+        timeout: float = 15,
+    ) -> dict[str, Any] | None:
+        """Wait only for the browser's trace-bearing paint receipt."""
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            waterfall = select_live_beacon_waterfall(
+                self.browser_client_render_beacons(case_id, session_id),
+                surface="web",
+            )
+            if waterfall is not None:
+                self.observe(
+                    case_id=case_id,
+                    provider=self.args.provider,
+                    ownership=ownership,
+                    source="browser_ui",
+                    event="provider_to_pixel_observed",
+                    session_id=session_id,
+                    payload=waterfall,
+                )
+                return waterfall
+            time.sleep(0.02)
+        self.observe(
+            case_id=case_id,
+            provider=self.args.provider,
+            ownership=ownership,
+            source="browser_ui",
+            event="provider_to_pixel_timeout",
+            session_id=session_id,
+            payload={"timeout_ms": round(timeout * 1000)},
+        )
+        return None
 
     def event_delta_ms(
         self, case_id: str, session_id: str, start_event: str, end_event: str
@@ -6526,6 +6642,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Skip the Playwright browser layer and keep the profiler to HTTP/SSE/DB observers.",
     )
     parser.add_argument(
+        "--provider-to-pixel-only",
+        action="store_true",
+        help=(
+            "Finish a warm managed sample after the trace-bearing web paint receipt. "
+            "Durable archive and close qualification remain available in the normal profile."
+        ),
+    )
+    parser.add_argument(
         "--ios-device",
         help="Optional physical iPhone identifier/name to open on each measured session.",
     )
@@ -6587,6 +6711,8 @@ def normalize_args(args: argparse.Namespace) -> None:
             )
         args.ownership = "managed"
         args.skip_unmanaged = True
+    if args.provider_to_pixel_only and args.profile != "warm-live":
+        raise SystemExit("--provider-to-pixel-only requires --profile warm-live")
 
 
 def run_single(args: argparse.Namespace) -> tuple[int, Path]:

@@ -54,42 +54,49 @@ jobs:
             provider: codex
             ownership: managed
             experimental: false
+            provider_to_pixel_only: true
           - name: managed-codex-cold-timeline
             case: managed_codex_cold_timeline_closed
             profile: cold-timeline
             provider: codex
             ownership: managed
             experimental: true
+            provider_to_pixel_only: false
           - name: managed-codex-durable-archive
             case: managed_codex_durable_archive
             profile: warm-live
             provider: codex
             ownership: managed
             experimental: true
+            provider_to_pixel_only: false
           - name: managed-claude-warm-realtime
             case: managed_claude_warm_live_graceful_close
             profile: warm-live
             provider: claude
             ownership: managed
             experimental: false
+            provider_to_pixel_only: true
           - name: managed-cursor-warm-realtime
             case: managed_cursor_helm_content_promotion
             profile: warm-live
             provider: cursor
             ownership: managed
             experimental: false
+            provider_to_pixel_only: true
           - name: managed-opencode-warm-realtime
             case: managed_opencode_warm_lifecycle
             profile: warm-live
             provider: opencode
             ownership: managed
             experimental: false
+            provider_to_pixel_only: true
           - name: unmanaged-codex-baseline
             case: unmanaged_codex_direct_graceful_close
             profile: baseline
             provider: codex
             ownership: unmanaged
             experimental: true
+            provider_to_pixel_only: false
     env:
       SESSION_PROPAGATION_ATTEMPTS: ${{ inputs.attempts || '3' }}
       SESSION_PROPAGATION_ITERATIONS: ${{ inputs.iterations || '20' }}
@@ -102,6 +109,7 @@ jobs:
       SESSION_PROPAGATION_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.case }}
       SESSION_PROPAGATION_OUTPUT_ROOT: ${{ github.workspace }}/artifacts/session-propagation-sla/gha-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.case }}
       SESSION_PROPAGATION_CODEX_EFFORT: low
+      SESSION_PROPAGATION_PROVIDER_TO_PIXEL_ONLY: ${{ matrix.provider_to_pixel_only || false }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       INCLUDE_EXPERIMENTAL: ${{ inputs.include_experimental || 'false' }}
 
