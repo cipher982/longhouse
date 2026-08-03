@@ -292,7 +292,7 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
 
 
 @pytest.mark.asyncio
-async def test_search_projector_claims_newest_revision_first_without_changing_other_projectors(daemon_paths):
+async def test_projectors_claim_oldest_update_first(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -338,8 +338,8 @@ async def test_search_projector_claims_newest_revision_first_without_changing_ot
             },
         )
 
-        assert search_claim["claimed"][0]["session_id"] == session_ids[1]
-        assert search_claim["claimed"][0]["claimed_revision"] == "20"
+        assert search_claim["claimed"][0]["session_id"] == session_ids[0]
+        assert search_claim["claimed"][0]["claimed_revision"] == "10"
         assert render_claim["claimed"][0]["session_id"] == session_ids[2]
         assert render_claim["claimed"][0]["claimed_revision"] == "10"
     finally:
