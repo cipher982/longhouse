@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -44,6 +45,12 @@ CLAUDE_REAL_PRINT_ENV_KEYS = (
 )
 CLAUDE_CHANNEL_STDOUT_TIMEOUT_SECS = 20.0
 OPENCODE_BARE_MODEL_VENDORS = frozenset({"deepseek", "~openai"})
+_OPENCODE_SECRET_PATTERNS = (
+    re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"),
+    re.compile(rb"sk-or-v1-[A-Za-z0-9_-]+"),
+    re.compile(rb"crsr_[A-Za-z0-9]+"),
+    re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
+)
 
 
 def _repo_root_from_script() -> Path:
@@ -1359,6 +1366,37 @@ def _opencode_model_identity(provider_id: Any, model_id: Any) -> str | None:
     return f"{provider}/{model}" if provider else model
 
 
+def _opencode_native_store_secret_scan(runtime_root: Path) -> dict[str, Any]:
+    """Reject retained OpenCode runtime artifacts containing provider keys."""
+
+    secret_values = tuple(
+        value.encode("utf-8")
+        for name in (
+            "OPENROUTER_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "CURSOR_API_KEY",
+            "CODEX_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        )
+        if (value := str(os.environ.get(name) or "").strip())
+    )
+    scanned = 0
+    for path in sorted(runtime_root.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            return {"status": "fail", "failure": f"read_error:{type(exc).__name__}"}
+        scanned += 1
+        if any(secret and secret in content for secret in secret_values) or any(
+            pattern.search(content) for pattern in _OPENCODE_SECRET_PATTERNS
+        ):
+            return {"status": "fail", "failure": "provider_key_material_detected", "files_scanned": scanned}
+    return {"status": "pass", "files_scanned": scanned}
+
+
 def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str]) -> dict[str, Any] | None:
     """Read OpenCode's native message store for the model used by this run."""
 
@@ -1537,6 +1575,7 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
     )
     session_ids = sorted({_event_session_id(event) for event in events if _event_session_id(event)})
     native_model_evidence = _opencode_native_model_evidence(runtime_root, session_ids=session_ids)
+    native_secret_scan = _opencode_native_store_secret_scan(runtime_root)
     if result_event is not None and native_model_evidence is not None:
         result_event["model"] = native_model_evidence["model"]
         result_event["model_source"] = "native_store"
@@ -1567,6 +1606,7 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         "model_source": result_event.get("model_source") if result_event else "invocation",
         "result_event": result_event,
         "native_model_evidence": native_model_evidence,
+        "native_secret_scan": native_secret_scan,
     }
     if result.returncode != 0 or timed_out:
         return _fail(
@@ -1596,6 +1636,12 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         return _fail(
             "opencode_real_print_native_model_missing",
             "real OpenCode completed, but its native message store did not record the selected model",
+            **evidence,
+        )
+    if native_secret_scan.get("status") != "pass":
+        return _fail(
+            "opencode_real_print_native_store_secret_detected",
+            "real OpenCode native store contains provider credential material",
             **evidence,
         )
     if native_model_evidence.get("model") != requested_model:

@@ -90,6 +90,8 @@ def _scrub_artifact_tree(root: Path) -> None:
     source hashes remain readable after the scrub pass.
     """
 
+    exact_values = _artifact_secret_values()
+
     # A byte replacement in a WAL file invalidates its page checksums. Commit
     # any pending WAL content first, then scrub the stable database pages.
     for database in root.rglob("*"):
@@ -100,18 +102,36 @@ def _scrub_artifact_tree(root: Path) -> None:
         if not wal.exists() and not shm.exists():
             continue
         try:
-            with sqlite3.connect(database, timeout=2.0) as connection:
-                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            header = database.read_bytes()[:16]
+        except OSError as exc:
+            raise RuntimeError(f"cannot inspect SQLite artifact before redaction: {database}") from exc
+        if header != b"SQLite format 3\x00":
+            # A provider may use a non-SQLite file whose name happens to have
+            # a -wal/-shm sibling. Do not open or mutate it as a database.
+            continue
+        try:
+            connection = sqlite3.connect(database, timeout=2.0)
+            try:
+                result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            finally:
+                connection.close()
         except sqlite3.Error as exc:
             raise RuntimeError(f"cannot checkpoint SQLite artifact before redaction: {database}") from exc
+        if not result or result[0] != 0:
+            raise RuntimeError(f"SQLite WAL checkpoint was busy before redaction: {database}")
+        if wal.exists() and wal.stat().st_size:
+            raise RuntimeError(f"SQLite WAL remained non-empty after checkpoint: {database}")
 
-    exact_values = _artifact_secret_values()
     for path in root.rglob("*"):
         if not path.is_file() or path.is_symlink():
             continue
         try:
             original = path.read_bytes()
         except OSError:
+            continue
+        if path.name.endswith(("-wal", "-shm")):
+            if any(secret in original for secret in exact_values) or any(pattern.search(original) for pattern in _ARTIFACT_SECRET_PATTERNS):
+                raise RuntimeError(f"secret material remains in SQLite sidecar: {path}")
             continue
         redacted = original
         for secret in exact_values:

@@ -3125,6 +3125,8 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
                 "extra_env": extra_env,
             }
         )
+        native_path = tmp_path / "fake-opencode.db"
+        native_path.write_bytes(b"fake-native-opencode-store")
         return {
             "schema_version": 1,
             "provider": "opencode",
@@ -3148,6 +3150,14 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
                         "total_cost_usd": 0.0002,
                         "accounting_status": "provider_reported",
                     },
+                    "native_model_evidence": {
+                        "path": str(native_path),
+                        "sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
+                        "record_sha256": "a" * 64,
+                        "model": "openrouter/deepseek/deepseek-v4-flash",
+                        "session_id": "fake-opencode-print-session",
+                    },
+                    "native_secret_scan": {"status": "pass", "files_scanned": 1},
                     "operation_evidence": {
                         "run_once": {
                             "status": "pass",

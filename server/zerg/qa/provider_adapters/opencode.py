@@ -251,22 +251,24 @@ def opencode_real_print_model_evidence(artifact: Mapping[str, Any]) -> dict[str,
         if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)
     ]
     native_model = canary.get("native_model_evidence")
-    if isinstance(native_model, Mapping):
-        if (
-            isinstance(native_model.get("path"), str)
-            and isinstance(native_model.get("sha256"), str)
-            and isinstance(native_model.get("record_sha256"), str)
-        ):
-            source_artifacts.append(
-                {
-                    "path": native_model["path"],
-                    "sha256": native_model["sha256"],
-                    "kind": "provider_sqlite_store",
-                    "record_sha256": native_model["record_sha256"],
-                    "model": native_model.get("model"),
-                    "session_id": native_model.get("session_id"),
-                }
-            )
+    native_secret_scan = canary.get("native_secret_scan")
+    if not isinstance(native_model, Mapping) or not isinstance(native_secret_scan, Mapping) or native_secret_scan.get("status") != "pass":
+        return None
+    if (
+        isinstance(native_model.get("path"), str)
+        and isinstance(native_model.get("sha256"), str)
+        and isinstance(native_model.get("record_sha256"), str)
+    ):
+        source_artifacts.append(
+            {
+                "path": native_model["path"],
+                "sha256": native_model["sha256"],
+                "kind": "provider_sqlite_store",
+                "record_sha256": native_model["record_sha256"],
+                "model": native_model.get("model"),
+                "session_id": native_model.get("session_id"),
+            }
+        )
     return {
         "source_canary": "opencode_real_print",
         "operation_evidence": opencode_real_print_operation_evidence(artifact),
@@ -656,12 +658,17 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
-        if model_evidence := opencode_real_print_model_evidence(control_artifact):
+        model_evidence = opencode_real_print_model_evidence(control_artifact)
+        if model_evidence is not None:
             payload["live_model_evidence"] = model_evidence
         if verdict != "green" or live_status != STATUS_PASS or run_once_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or opencode.get("failure_code")
             payload["failure_code"] = failure_code or "opencode_live_token_streaming_failed"
             payload["message"] = "OpenCode real-print canary did not pass."
+        elif model_evidence is None:
+            payload["status"] = STATUS_FAIL
+            payload["failure_code"] = "opencode_native_model_evidence_missing"
+            payload["message"] = "OpenCode passed its live operation checks without a retained native model-evidence envelope."
         elif db_status != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
             payload["message"] = "OpenCode live-token evidence did not pass Longhouse DB ingest assertions."
