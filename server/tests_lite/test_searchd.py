@@ -1187,13 +1187,44 @@ async def test_dense_refresh_retries_nonrelational_failure_only_for_blocking_ses
 
     daemon._dense_index.load = counted_load
     daemon._dense_index.invalidate()
-    daemon._dense_index._blocking_session_ids = frozenset({"bad-session"})
+    daemon._dense_index._nonrelational_blocking_session_ids = frozenset({"bad-session"})
     daemon._dense_known_incomplete = True
     daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: True
     try:
         await daemon._run_with_dense_refresh(lambda session_id: {"session_id": session_id}, session_id="other-session")
         assert loads == 0
         await daemon._run_with_dense_refresh(lambda session_id: {"session_id": session_id}, session_id="bad-session")
+        assert loads == 1
+        assert daemon._dense_index.coverage.ready is True
+    finally:
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_dense_refresh_does_not_treat_stale_relational_blockers_as_value_failures(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    assert daemon._store is not None
+    original_load = daemon._dense_index.load
+    loads = 0
+
+    def counted_load(connection):
+        nonlocal loads
+        loads += 1
+        original_load(connection)
+
+    daemon._dense_index.load = counted_load
+    daemon._dense_index.invalidate()
+    daemon._dense_index._blocking_session_ids = frozenset({"old-missing-publication"})
+    daemon._dense_index._nonrelational_blocking_session_ids = frozenset()
+    daemon._dense_known_incomplete = True
+    daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: True
+    try:
+        await daemon._run_with_dense_refresh(lambda session_id: {"session_id": session_id}, session_id="new-final-blocker")
         assert loads == 1
         assert daemon._dense_index.coverage.ready is True
     finally:
