@@ -372,6 +372,10 @@ class CatalogDaemon:
             return await self._list_storage_sessions(request)
         if request.method == "storage.health.v2":
             return await self._read_storage_health(request)
+        if request.method == "telemetry.client_render.record.v2":
+            return await self._record_client_render_receipts(request)
+        if request.method == "telemetry.client_render.list.v2":
+            return await self._list_client_render_receipts(request)
         if request.method == "storage.telemetry.summary.v2":
             return await self._read_storage_telemetry_summary(request)
         if request.method == "storage.session.raw_manifest.v2":
@@ -2247,6 +2251,43 @@ class CatalogDaemon:
         result = await self._run_read_store(self._store.read_storage_telemetry_summary)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _record_client_render_receipts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"observations"} or not isinstance(request.params["observations"], list):
+            return self._error(request, "invalid_request", "telemetry.client_render.record.v2 requires observations")
+        raw_observations = request.params["observations"]
+        if not 1 <= len(raw_observations) <= 100:
+            return self._error(request, "invalid_request", "observations must contain 1 through 100 receipts")
+        observations = []
+        try:
+            for raw in raw_observations:
+                observations.append(_validate_client_render_receipt(raw))
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.record_client_render_receipts, observations=observations)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_client_render_receipts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "event_id", "limit"}:
+            return self._error(request, "invalid_request", "telemetry.client_render.list.v2 has invalid parameters")
+        session_id = request.params["session_id"]
+        event_id = request.params["event_id"]
+        limit = request.params["limit"]
+        if session_id is not None and not _is_canonical_uuid(session_id):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID or null")
+        if event_id is not None and not _is_string(event_id, maximum=128):
+            return self._error(request, "invalid_request", "event_id must be a bounded string or null")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 200")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.list_client_render_receipts,
+            session_id=session_id,
+            event_id=event_id,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"session_id", "owner_id", "after_source_key", "limit"}:
             return self._error(request, "invalid_request", "storage.session.raw_manifest.v2 has invalid parameters")
@@ -3865,3 +3906,39 @@ def _parse_datetime(value: object, field: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{field} must include a UTC offset")
     return parsed.astimezone(UTC)
+
+
+def _validate_client_render_receipt(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("client render receipt must be an object")
+    expected = {
+        "observation_id",
+        "session_id",
+        "event_id",
+        "surface",
+        "payload",
+        "observed_at",
+        "received_at",
+    }
+    if set(value) != expected:
+        raise ValueError("client render receipt has invalid fields")
+    if not _is_string(value["observation_id"], maximum=1024):
+        raise ValueError("observation_id must be a bounded string")
+    if not _is_canonical_uuid(value["session_id"]):
+        raise ValueError("session_id must be a canonical UUID")
+    if not _is_string(value["event_id"], maximum=128):
+        raise ValueError("event_id must be a bounded string")
+    if value["surface"] not in {"web", "ios"}:
+        raise ValueError("surface must be web or ios")
+    payload = value["payload"]
+    if not isinstance(payload, dict) or len(json.dumps(payload, separators=(",", ":")).encode()) > 64 * 1024:
+        raise ValueError("payload must be an object no larger than 64 KiB")
+    return {
+        "observation_id": value["observation_id"],
+        "session_id": value["session_id"],
+        "event_id": value["event_id"],
+        "surface": value["surface"],
+        "payload": payload,
+        "observed_at": _parse_datetime(value["observed_at"], "observed_at"),
+        "received_at": _parse_datetime(value["received_at"], "received_at"),
+    }

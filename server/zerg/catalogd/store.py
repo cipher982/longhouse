@@ -40,6 +40,7 @@ from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
+from zerg.catalogd.models import ClientRenderReceipt
 from zerg.catalogd.models import FactConflict
 from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import FactParityDelta
@@ -6664,6 +6665,77 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }
+
+    def record_client_render_receipts(self, *, observations: list[dict[str, Any]]) -> dict[str, Any]:
+        """Persist idempotent pixel receipts without perturbing served session state."""
+
+        table = ClientRenderReceipt.__table__
+        sessions = StorageSession.__table__
+        with _write_transaction(self.engine) as connection:
+            commit_seq = _current_commit_seq(connection)
+            inserted = 0
+            for observation in observations:
+                provider = connection.execute(
+                    select(sessions.c.provider).where(sessions.c.session_id == observation["session_id"])
+                ).scalar_one_or_none()
+                result = connection.execute(
+                    sqlite_insert(table)
+                    .values(
+                        observation_id=observation["observation_id"],
+                        session_id=observation["session_id"],
+                        event_id=observation["event_id"],
+                        surface=observation["surface"],
+                        provider=provider,
+                        payload_json=json.dumps(observation["payload"], sort_keys=True, separators=(",", ":")),
+                        observed_at=observation["observed_at"],
+                        received_at=observation["received_at"],
+                        commit_seq=commit_seq,
+                    )
+                    .on_conflict_do_nothing(index_elements=[table.c.observation_id])
+                )
+                inserted += int(result.rowcount or 0)
+            newest_received_at = max(observation["received_at"] for observation in observations)
+            connection.execute(delete(table).where(table.c.received_at < newest_received_at - timedelta(days=30)))
+            return {
+                "accepted": len(observations),
+                "inserted": inserted,
+                "duplicates": len(observations) - inserted,
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_client_render_receipts(
+        self,
+        *,
+        session_id: str | None,
+        event_id: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        table = ClientRenderReceipt.__table__
+        with _read_snapshot(self.engine) as connection:
+            query = select(table)
+            if session_id is not None:
+                query = query.where(table.c.session_id == session_id)
+            if event_id is not None:
+                query = query.where(table.c.event_id == event_id)
+            rows = connection.execute(query.order_by(table.c.observed_at.desc(), table.c.observation_id.desc()).limit(limit)).mappings()
+            items = []
+            for row in rows:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except (TypeError, ValueError):
+                    payload = {}
+                items.append(
+                    {
+                        "session_id": row["session_id"],
+                        "event_id": row["event_id"],
+                        "surface": row["surface"],
+                        "provider": row["provider"],
+                        "payload": payload if isinstance(payload, dict) else {},
+                        "observed_at": _encode_datetime(row["observed_at"]),
+                        "received_at": _encode_datetime(row["received_at"]),
+                    }
+                )
+            return {"items": items, "commit_seq": str(_current_commit_seq(connection))}
 
     def read_storage_telemetry_summary(self) -> dict[str, Any]:
         """Return O(1) transactional storage and projector counters."""

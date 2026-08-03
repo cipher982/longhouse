@@ -153,6 +153,33 @@ class FactParityDelta(CatalogBase):
     )
 
 
+class ClientRenderReceipt(CatalogBase):
+    """Durable browser/iOS proof that one live event reached pixels."""
+
+    __tablename__ = "client_render_receipts"
+
+    observation_id = Column(String(1024), primary_key=True)
+    session_id = Column(String(36), nullable=False)
+    event_id = Column(String(128), nullable=False)
+    surface = Column(String(8), nullable=False)
+    provider = Column(String(32), nullable=True)
+    payload_json = Column(Text, nullable=False)
+    observed_at = Column(DateTime(timezone=True), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False)
+    commit_seq = Column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_client_render_receipts_session_event_recent",
+            "session_id",
+            "event_id",
+            "observed_at",
+        ),
+        Index("ix_client_render_receipts_surface_recent", "surface", "observed_at"),
+        Index("ix_client_render_receipts_retention", "received_at"),
+    )
+
+
 class StorageSession(CatalogBase):
     """One denormalized session row for timeline and storage convergence."""
 
@@ -553,6 +580,7 @@ class LegacyMigrationSession(CatalogBase):
 
 __all__ = [
     "CatalogBase",
+    "ClientRenderReceipt",
     "FactConflict",
     "FactHead",
     "FactParityDelta",

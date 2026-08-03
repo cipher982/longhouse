@@ -129,6 +129,48 @@ def test_beacon_remains_available_when_live_catalog_owns_sqlite(monkeypatch):
     assert response.json()["accepted"] == 1
 
 
+def test_live_catalog_persists_and_reads_pixel_receipt(monkeypatch):
+    telemetry_mod._samples.clear()
+    telemetry_mod._buckets.clear()
+    monkeypatch.setattr(telemetry_mod, "live_catalog_enabled", lambda: True)
+    calls = []
+
+    class FakeCatalog:
+        async def call(self, method, params, **_kwargs):
+            calls.append((method, params))
+            if method == "telemetry.client_render.list.v2":
+                observation = calls[0][1]["observations"][0]
+                return {
+                    "items": [
+                        {
+                            "session_id": observation["session_id"],
+                            "event_id": observation["event_id"],
+                            "surface": observation["surface"],
+                            "provider": "codex",
+                            "payload": observation["payload"],
+                            "observed_at": observation["observed_at"],
+                            "received_at": observation["received_at"],
+                        }
+                    ]
+                }
+            return {"inserted": 1}
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: FakeCatalog())
+    app = FastAPI()
+    app.dependency_overrides[require_admin] = lambda: None
+    app.include_router(beacon_router)
+    app.include_router(admin_router)
+    client = TestClient(app)
+    session_id = "aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb"
+    response = client.post("/telemetry/client-render", json=_beacon(session_id=session_id, event_id="pixel-1"))
+    recent = client.get(f"/telemetry/client-render/recent?session_id={session_id}&event_id=pixel-1")
+
+    assert response.status_code == 200
+    assert calls[0][0] == "telemetry.client_render.record.v2"
+    assert recent.json()["persistence"] == "catalogd"
+    assert recent.json()["items"][0]["event_id"] == "pixel-1"
+
+
 def test_beacon_drops_implausible_clock_skew():
     c, _factory = _client()
     resp = c.post("/telemetry/client-render", json=_beacon(clock_skew_ms=120_000))

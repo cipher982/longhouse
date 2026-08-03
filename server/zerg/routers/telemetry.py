@@ -186,18 +186,8 @@ def _utc_from_ms(ms: int) -> datetime:
     return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
 
 
-def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int) -> None:
-    if not beacon.session_id:
-        return
-    try:
-        session_id = UUID(str(beacon.session_id))
-    except ValueError:
-        return
-
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    provider = session.provider if session else "unknown"
-    observed_at = _utc_from_ms(beacon.rendered_at_ms - beacon.clock_skew_ms)
-    payload = {
+def _render_beacon_payload(beacon: RenderBeacon, *, latency_ms: int) -> dict:
+    payload: dict = {
         "event_id": beacon.event_id,
         "surface": beacon.surface,
         "managed": beacon.managed,
@@ -224,6 +214,21 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
     }
     if beacon.webkit is not None:
         payload["webkit"] = beacon.webkit.model_dump(exclude_none=True)
+    return payload
+
+
+def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int) -> None:
+    if not beacon.session_id:
+        return
+    try:
+        session_id = UUID(str(beacon.session_id))
+    except ValueError:
+        return
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    provider = session.provider if session else "unknown"
+    observed_at = _utc_from_ms(beacon.rendered_at_ms - beacon.clock_skew_ms)
+    payload = _render_beacon_payload(beacon, latency_ms=latency_ms)
     record_session_observation(
         db,
         observation_id=(f"client_render:{beacon.surface}:{session_id}:" f"{beacon.event_id}:{beacon.rendered_at_ms}"),
@@ -252,6 +257,45 @@ async def _persist_render_beacons(
             _persist_render_beacon(write_db, beacon, latency_ms=latency_ms)
 
     await get_write_serializer().execute_or_direct(_do, db, label="client-render")
+
+
+async def _persist_catalog_render_beacons(beacons: list[tuple[RenderBeacon, int]]) -> None:
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        return
+    received_at = datetime.now(timezone.utc).isoformat()
+    observations = []
+    for beacon, latency_ms in beacons:
+        try:
+            session_id = str(UUID(str(beacon.session_id)))
+        except (TypeError, ValueError):
+            continue
+        observed_at = _utc_from_ms(beacon.rendered_at_ms - beacon.clock_skew_ms).isoformat()
+        observations.append(
+            {
+                "observation_id": (f"client_render:{beacon.surface}:{session_id}:{beacon.event_id}:{beacon.rendered_at_ms}"),
+                "session_id": session_id,
+                "event_id": beacon.event_id,
+                "surface": beacon.surface,
+                "payload": _render_beacon_payload(beacon, latency_ms=latency_ms),
+                "observed_at": observed_at,
+                "received_at": received_at,
+            }
+        )
+    if not observations:
+        return
+    try:
+        await catalogd.call(
+            "telemetry.client_render.record.v2",
+            {"observations": observations},
+            timeout_seconds=1.0,
+        )
+    except (CatalogUnavailable, CatalogRemoteError):
+        logger.exception("client_render catalog persistence failed")
 
 
 @beacon_router.post("/client-render", include_in_schema=False)
@@ -337,6 +381,8 @@ async def client_render_beacon(
         except Exception:
             # Metrics and structured logs must not depend on forensic persistence.
             logger.exception("client_render persistence failed")
+    elif live_catalog_enabled():
+        await _persist_catalog_render_beacons(persistable)
 
     return {"accepted": accepted, "dropped_skew": dropped_skew, "dropped_range": dropped_range}
 
@@ -362,7 +408,67 @@ async def recent_client_render_beacons(
 ) -> dict:
     """Return recent persisted browser/iOS render beacons for forensic debugging."""
     if db is None:
-        return {"items": [], "persistence": "structured_logs"}
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            return {"items": [], "persistence": "structured_logs"}
+        canonical_session_id = None
+        if session_id:
+            try:
+                canonical_session_id = str(UUID(str(session_id)))
+            except ValueError:
+                return {"items": [], "persistence": "catalogd"}
+        try:
+            result = await catalogd.call(
+                "telemetry.client_render.list.v2",
+                {
+                    "session_id": canonical_session_id,
+                    "event_id": event_id,
+                    "limit": max(1, min(limit, 200)),
+                },
+                timeout_seconds=1.0,
+            )
+        except (CatalogUnavailable, CatalogRemoteError):
+            logger.exception("client_render catalog read failed")
+            return {"items": [], "persistence": "catalogd_unavailable"}
+        items = []
+        for row in result.get("items", []):
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            items.append(
+                {
+                    "session_id": row.get("session_id"),
+                    "event_id": payload.get("event_id", row.get("event_id")),
+                    "surface": payload.get("surface", row.get("surface")),
+                    "managed": payload.get("managed"),
+                    "latency_ms": payload.get("latency_ms"),
+                    "emitted_at_ms": payload.get("emitted_at_ms"),
+                    "rendered_at_ms": payload.get("rendered_at_ms"),
+                    "clock_skew_ms": payload.get("clock_skew_ms"),
+                    "clock_sync_rtt_ms": payload.get("clock_sync_rtt_ms"),
+                    "clock_sync_uncertainty_ms": payload.get("clock_sync_uncertainty_ms"),
+                    "clock_sync_sample_count": payload.get("clock_sync_sample_count"),
+                    "server_fanout_at_ms": payload.get("server_fanout_at_ms"),
+                    "client_received_at_ms": payload.get("client_received_at_ms"),
+                    "pubsub_seq": payload.get("pubsub_seq"),
+                    "render_kind": payload.get("render_kind", "event"),
+                    "state_commit_seq": payload.get("state_commit_seq"),
+                    "state_phase": payload.get("state_phase"),
+                    "state_observed_at_ms": payload.get("state_observed_at_ms"),
+                    "ship_trace_id": payload.get("ship_trace_id"),
+                    "provider_observed_at_ms": payload.get("provider_observed_at_ms"),
+                    "engine_enqueued_at_ms": payload.get("engine_enqueued_at_ms"),
+                    "engine_job_started_at_ms": payload.get("engine_job_started_at_ms"),
+                    "engine_http_send_started_at_ms": payload.get("engine_http_send_started_at_ms"),
+                    "server_handler_entered_at_ms": payload.get("server_handler_entered_at_ms"),
+                    "webkit": payload.get("webkit"),
+                    "observed_at": row.get("observed_at"),
+                    "received_at": row.get("received_at"),
+                }
+            )
+        return {"items": items, "persistence": "catalogd"}
     query = (
         db.query(SessionObservation)
         .filter(SessionObservation.source_domain == SOURCE_DOMAIN_CLIENT)
