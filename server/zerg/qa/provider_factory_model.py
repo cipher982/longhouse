@@ -269,7 +269,9 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
 @dataclass(frozen=True)
 class AssertionStatus:
     assertion_id: str
+    variant: str | None
     scenario_id: str
+    minimum_scenario_revision: int
     acceptable_evidence: tuple[str, ...]
     producible_evidence: tuple[str, ...]
     satisfiable: bool
@@ -372,7 +374,9 @@ def _assertion_statuses(assertions: tuple[CapabilityAssertion, ...]) -> tuple[As
         out.append(
             AssertionStatus(
                 assertion_id=assertion.assertion_id,
+                variant=assertion.variant,
                 scenario_id=assertion.scenario_id,
+                minimum_scenario_revision=assertion.minimum_scenario_revision,
                 acceptable_evidence=assertion.acceptable_evidence,
                 producible_evidence=producible,
                 satisfiable=satisfiable,
@@ -575,7 +579,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             status="never_run",
             reason=(
                 f"remaining capability-proof assertions for {provider} have no registered evidence producer: "
-                f"{sorted(status.assertion_id for status in manual_statuses)}"
+                f"{sorted(status.assertion_id + (':' + status.variant if status.variant else '') for status in manual_statuses)}"
             ),
             scenario_ids=tuple(sorted({a.scenario_id for a in manual_assertions})),
             assertion_status=manual_statuses,

@@ -165,24 +165,24 @@
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -702,24 +702,24 @@
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -1254,24 +1254,24 @@
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -1947,24 +1947,24 @@
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
               "oracle_source": "server/zerg/qa/universal_agent_harness.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cbea44bb8e5e133ea4182d1aab61c345b4ff2d1895e9905f12e2e8827c9cc285"
+              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",

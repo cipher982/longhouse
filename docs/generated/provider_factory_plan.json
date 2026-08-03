@@ -95,7 +95,9 @@
       "assertion_status": [
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "variant": null,
           "scenario_id": "antigravity_turn_boundary_quiescent",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -104,7 +106,9 @@
         },
         {
           "assertion_id": "real_print_injection_observed",
+          "variant": null,
           "scenario_id": "antigravity_hook_inbox",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -295,7 +299,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -307,7 +313,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -316,7 +324,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -325,7 +335,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -337,7 +349,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -349,7 +363,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -361,7 +377,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -372,7 +390,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -383,7 +403,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -394,7 +416,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -410,7 +434,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven', 'native_provider_resume_proven']",
+      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -422,7 +446,9 @@
       "assertion_status": [
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "variant": null,
           "scenario_id": "claude_turn_boundary_quiescent",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -431,7 +457,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -440,7 +468,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -569,7 +599,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -581,7 +613,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -590,7 +624,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -599,7 +635,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -611,7 +649,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -623,7 +663,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -635,7 +677,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -646,7 +690,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -657,7 +703,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -668,7 +716,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -679,7 +729,9 @@
         },
         {
           "assertion_id": "claude_cli_channel_contract_preserved",
+          "variant": null,
           "scenario_id": "claude_real_print",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_no_token"
           ],
@@ -690,7 +742,9 @@
         },
         {
           "assertion_id": "real_print_marker_returned",
+          "variant": null,
           "scenario_id": "claude_real_print",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -749,7 +803,9 @@
       "assertion_status": [
         {
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
+          "variant": null,
           "scenario_id": "codex_coordination_awareness_post_compaction",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -758,7 +814,9 @@
         },
         {
           "assertion_id": "no_duplicate_visible_bootstrap",
+          "variant": null,
           "scenario_id": "codex_coordination_awareness_post_compaction",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -830,7 +888,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -842,7 +902,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -851,7 +913,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -860,7 +924,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -872,7 +938,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -884,7 +952,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -896,7 +966,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -907,7 +979,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -918,7 +992,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -929,7 +1005,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -945,7 +1023,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction', 'native_provider_resume_proven', 'native_provider_resume_proven']",
+      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -958,7 +1036,9 @@
       "assertion_status": [
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "variant": null,
           "scenario_id": "codex_turn_boundary_quiescent",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -967,7 +1047,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -976,7 +1058,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -985,7 +1069,9 @@
         },
         {
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
+          "variant": null,
           "scenario_id": "codex_coordination_awareness_post_compaction",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1117,7 +1203,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1129,7 +1217,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1138,7 +1228,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1147,7 +1239,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1159,7 +1253,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1171,7 +1267,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1183,7 +1281,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1194,7 +1294,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1205,7 +1307,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1216,7 +1320,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1331,7 +1437,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1343,7 +1451,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1352,7 +1462,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1361,7 +1473,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1373,7 +1487,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1385,7 +1501,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1397,7 +1515,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1408,7 +1528,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1419,7 +1541,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1430,7 +1554,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1488,7 +1614,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1500,7 +1628,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1509,7 +1639,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1518,7 +1650,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1530,7 +1664,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1542,7 +1678,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1554,7 +1692,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1565,7 +1705,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1576,7 +1718,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1587,7 +1731,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1667,7 +1813,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1679,7 +1827,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1688,7 +1838,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1697,7 +1849,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1709,7 +1863,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1721,7 +1877,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1733,7 +1891,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1744,7 +1904,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1755,7 +1917,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1766,7 +1930,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -1933,7 +2099,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1945,7 +2113,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1954,7 +2124,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1963,7 +2135,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1975,7 +2149,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1987,7 +2163,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1999,7 +2177,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2010,7 +2190,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2021,7 +2203,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2032,7 +2216,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2048,7 +2234,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven', 'native_provider_resume_proven']",
+      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -2060,7 +2246,9 @@
       "assertion_status": [
         {
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "variant": null,
           "scenario_id": "opencode_turn_boundary_quiescent",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2069,7 +2257,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2078,7 +2268,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2205,7 +2397,9 @@
       "assertion_status": [
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
+          "variant": null,
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -2217,7 +2411,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "clean_exit",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2226,7 +2422,9 @@
         },
         {
           "assertion_id": "native_provider_resume_proven",
+          "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2235,7 +2433,9 @@
         },
         {
           "assertion_id": "live_reattach_does_not_spawn_owner",
+          "variant": null,
           "scenario_id": "helm_live_reattach",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -2247,7 +2447,9 @@
         },
         {
           "assertion_id": "console_continuation_is_distinct",
+          "variant": null,
           "scenario_id": "console_thread_continue",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -2259,7 +2461,9 @@
         },
         {
           "assertion_id": "session_thread_and_machine_identity_continue",
+          "variant": null,
           "scenario_id": "resume_identity_continuity",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -2271,7 +2475,9 @@
         },
         {
           "assertion_id": "resume_attempt_is_idempotent",
+          "variant": null,
           "scenario_id": "resume_attempt_idempotency",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2282,7 +2488,9 @@
         },
         {
           "assertion_id": "one_local_provider_owner_wins",
+          "variant": null,
           "scenario_id": "resume_single_owner",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2293,7 +2501,9 @@
         },
         {
           "assertion_id": "stale_input_is_not_replayed",
+          "variant": null,
           "scenario_id": "resume_input_safety",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2304,7 +2514,9 @@
         },
         {
           "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "variant": null,
           "scenario_id": "resume_failure_cleanup",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "hermetic"
           ],
@@ -2315,7 +2527,9 @@
         },
         {
           "assertion_id": "serve_session_contract_preserved",
+          "variant": null,
           "scenario_id": "opencode_server_contract",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_no_token"
           ],
@@ -2326,7 +2540,9 @@
         },
         {
           "assertion_id": "process_restart_reattach_preserved",
+          "variant": null,
           "scenario_id": "opencode_server_contract",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_no_token"
           ],

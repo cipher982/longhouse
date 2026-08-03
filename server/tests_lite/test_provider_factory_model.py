@@ -198,6 +198,8 @@ def test_weekly_cron_runs_the_full_default_scenario_set_for_scheduled_providers(
     assert resume_statuses
     native = [status for status in resume_statuses if status.assertion_id == "native_provider_resume_proven"]
     assert len(native) == 2
+    assert {status.variant for status in native} == {"clean_exit", "process_loss"}
+    assert all(status.minimum_scenario_revision == 2 for status in native)
     assert all(not status.satisfiable for status in native)
     assert all(
         status.satisfiable
@@ -243,6 +245,7 @@ def test_native_resume_has_no_legacy_eligible_evidence_producer(facts, provider:
 
     assert {assertion.variant for assertion in native} == {"clean_exit", "process_loss"}
     assert all(assertion.acceptable_evidence == ("live_token",) for assertion in native)
+    assert all(assertion.minimum_scenario_revision == 2 for assertion in native)
     assert KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION["native_provider_resume_proven"] == ()
 
 

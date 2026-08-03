@@ -6319,9 +6319,9 @@ def run_provider_resume_factory(adapter: AgentHarnessAdapter, package: EvidenceP
                 native_status if native_status in {STATUS_UNSUPPORTED_GAP, STATUS_NOT_APPLICABLE, STATUS_BLOCKED} else STATUS_FAIL
             )
             payload["failure_code"] = (
-                native.get("failure_code")
-                or ("native_provider_resume_requires_live_token" if native.get("status") == STATUS_PASS else None)
-                or "native_provider_resume_not_proven"
+                "native_provider_resume_requires_live_token"
+                if native.get("status") == STATUS_PASS
+                else native.get("failure_code") or "native_provider_resume_not_proven"
             )
     elif package.scenario == "resume_unsupported" and payload.get("status") == STATUS_PASS:
         native = adapter.cold_resume(package)

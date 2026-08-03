@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 from typing import Mapping
@@ -154,6 +155,8 @@ def validate(
     ):
         if not isinstance(request.get(key), str) or not request[key].strip():
             raise QualificationRequestError(f"{key} must be a non-empty string")
+    if re.fullmatch(r"[0-9a-f]{40}", request["factory_source_sha"]) is None:
+        raise QualificationRequestError("factory_source_sha must be a full 40-character lowercase Git SHA")
     selection_input_digests = request.get("selection_input_digests")
     if (
         not isinstance(selection_input_digests, dict)

@@ -20,6 +20,7 @@ def _assertion(
         scenario_id="interrupt_cancel",
         assertion_id=assertion_id,
         variant=variant,
+        minimum_scenario_revision=1,
         provider=provider,
         capability="interrupt",
         oracle_source="codex_helm_interrupt",

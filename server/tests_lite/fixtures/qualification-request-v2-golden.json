@@ -26,9 +26,9 @@
     "interaction_semantics"
   ],
   "selection_input_digests": {
-    "schemas/managed_providers.yml": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    "provider_factory/registry.py": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   },
   "schema_version": 2,
-  "semantic_digest": "sha256:5b9f4f3148a712054e651799b52d3aa2da2e0d1891fb1323bf04ac612f47a7c4",
+  "semantic_digest": "sha256:b441bb0dc5491ff65a77e608a8d68a15920229a8be8f6b34c1ab6962ea2cffeb",
   "trigger": "release_poll"
 }

@@ -80,6 +80,15 @@ def test_v2_request_rejects_unknown_build_granularity() -> None:
         validate(request)
 
 
+def test_v2_request_requires_full_factory_source_sha() -> None:
+    request = _request()
+    request["factory_source_sha"] = "d9577c7cd"
+    request["semantic_digest"] = semantic_digest(request)
+
+    with pytest.raises(QualificationRequestError, match="full 40-character"):
+        validate(request)
+
+
 def test_v2_request_requires_evidence_for_every_declared_scenario() -> None:
     request = _request()
     request["scenario_evidence"].pop("claude_real_print_v1")
