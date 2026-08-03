@@ -30,43 +30,45 @@ def _write_app_bundle(app_bundle: Path, *, version: str) -> None:
     )
 
 
-def test_build_snapshot_command_prefers_dedicated_local_health_script(monkeypatch, tmp_path: Path):
+def _write_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+NATIVE_ARGV_TAIL = ["local-health", "--fast", "--json"]
+
+
+def test_snapshot_command_is_the_installed_native_facade(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
-    health_path = home / ".local" / "bin" / "longhouse-local-health"
-    health_path.parent.mkdir(parents=True)
-    health_path.write_text("#!/bin/sh\n", encoding="utf-8")
-    health_path.chmod(0o755)
+    cli_path = _write_executable(home / ".local" / "bin" / "longhouse")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(desktop_app.shutil, "which", lambda _name: None)
 
-    command = desktop_app.build_snapshot_command(claude_dir="/tmp/claude")
-    arguments = desktop_app.build_snapshot_arguments(claude_dir="/tmp/claude")
-
-    assert command.startswith(str(health_path))
-    assert arguments[:3] == [str(health_path), "--fast", "--json"]
-    assert arguments[-2:] == ["--claude-dir", "/tmp/claude"]
+    assert desktop_app.build_snapshot_arguments() == [str(cli_path), *NATIVE_ARGV_TAIL]
 
 
-def test_build_snapshot_command_falls_back_to_stable_user_local_cli(monkeypatch, tmp_path: Path):
+def test_snapshot_command_uses_path_facade_when_canonical_is_absent(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
-    cli_path = home / ".local" / "bin" / "longhouse"
-    cli_path.parent.mkdir(parents=True)
-    cli_path.write_text("#!/bin/sh\n", encoding="utf-8")
-    cli_path.chmod(0o755)
+    home.mkdir()
+    elsewhere = _write_executable(tmp_path / "opt" / "longhouse")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(desktop_app.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(desktop_app.shutil, "which", lambda name: str(elsewhere) if name == "longhouse" else None)
 
-    arguments = desktop_app.build_snapshot_arguments(claude_dir="/tmp/claude")
-
-    # The native facade's local-health accepts only --fast and --json. Appending
-    # --claude-dir to it produced a command that exits non-zero on argument
-    # parsing, so the plist regenerated after the Python entrypoint was removed
-    # would have been broken in a new way.
-    assert arguments == [str(cli_path), "local-health", "--fast", "--json"]
-    assert "--claude-dir" not in arguments
+    # Location may vary. The producer may not.
+    assert desktop_app.build_snapshot_arguments() == [str(elsewhere), *NATIVE_ARGV_TAIL]
 
 
-def test_build_snapshot_command_falls_back_to_fast_module_when_cli_missing(monkeypatch, tmp_path: Path):
+def test_snapshot_command_never_substitutes_a_different_producer(monkeypatch, tmp_path: Path):
+    """With nothing installed, name the facade anyway rather than swapping producers.
+
+    The app then fails loudly against a command that does not exist, naming it,
+    which is recoverable. The alternative this replaced -- quietly falling back
+    to `python -m zerg.cli.local_health_fast` -- put a second producer emitting a
+    different envelope on the device path that
+    `scripts/qa/check-no-python-device-path.py` exists to forbid.
+    """
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -74,37 +76,31 @@ def test_build_snapshot_command_falls_back_to_fast_module_when_cli_missing(monke
 
     arguments = desktop_app.build_snapshot_arguments()
 
-    assert arguments[:4] == [arguments[0], "-m", "zerg.cli.local_health_fast", "--fast"]
+    assert arguments == [str(home / ".local" / "bin" / "longhouse"), *NATIVE_ARGV_TAIL]
+    assert not any("python" in argument.lower() for argument in arguments)
+    assert "-m" not in arguments
 
 
-def test_native_facade_health_command_is_runnable(monkeypatch, tmp_path: Path):
-    """Whatever the resolver picks must be a command that can actually run.
+def test_stranded_legacy_console_script_is_never_selected(monkeypatch, tmp_path: Path):
+    """The incident, pinned.
 
-    The regression this pins: after the Python entrypoint was removed the
-    resolver fell through to the native facade but kept appending --claude-dir,
-    which that command rejects. Any plist written from it would fail on argument
-    parsing rather than produce a snapshot.
+    A `longhouse-local-health` left over from an older install used to win the
+    resolution. `server/pyproject.toml` stopped publishing it, the file went
+    away, and the launch agent that had recorded it kept pointing at a binary
+    that no longer existed -- so the panel served an 11-day-old cache. Its mere
+    presence on disk must not steer the producer again.
     """
     home = tmp_path / "home"
-    cli_path = home / ".local" / "bin" / "longhouse"
-    cli_path.parent.mkdir(parents=True)
-    cli_path.write_text("#!/bin/sh\n", encoding="utf-8")
-    cli_path.chmod(0o755)
+    legacy = _write_executable(home / ".local" / "bin" / "longhouse-local-health")
+    cli_path = _write_executable(home / ".local" / "bin" / "longhouse")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(desktop_app.shutil, "which", lambda _name: None)
 
-    prefix, accepts_claude_dir = desktop_app._default_cli_snapshot_prefix()
+    arguments = desktop_app.build_snapshot_arguments()
 
-    assert prefix == [str(cli_path), "local-health"]
-    assert accepts_claude_dir is False
-    # And the claude_dir argument is dropped rather than silently producing an
-    # unrunnable command.
-    assert desktop_app.build_snapshot_arguments(claude_dir="/tmp/claude") == [
-        str(cli_path),
-        "local-health",
-        "--fast",
-        "--json",
-    ]
+    assert arguments == [str(cli_path), *NATIVE_ARGV_TAIL]
+    assert str(legacy) not in arguments
+    assert "--claude-dir" not in arguments
 
 
 def test_default_install_desktop_app_respects_env(monkeypatch):
@@ -151,7 +147,10 @@ def test_install_desktop_app_service_writes_plist_and_loads(monkeypatch, tmp_pat
     assert "/Applications/Longhouse.app/Contents/MacOS/Longhouse" in plist
     assert "ai.longhouse.app" in plist
     assert "--health-exec" in plist
-    assert "zerg.cli.local_health_fast" in plist
+    # The launch agent records the native facade, never a Python producer.
+    assert str(home / ".local" / "bin" / "longhouse") in plist
+    assert "local-health" in plist
+    assert "zerg.cli" not in plist
     assert "<string>30</string>" in plist
     assert "https://longhouse.ai" in plist
     assert str(home / ".longhouse" / "agent" / "logs" / "desktop-app.stdout.log") in plist
