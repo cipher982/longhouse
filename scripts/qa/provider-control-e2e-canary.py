@@ -1438,7 +1438,10 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
                 continue
             if not isinstance(record, dict):
                 continue
-            record_session_id = str(record.get("sessionID") or database_session_id or "").strip()
+            database_session_id = str(database_session_id or "").strip()
+            record_session_id = str(record.get("sessionID") or "").strip()
+            if not database_session_id or not record_session_id or database_session_id != record_session_id:
+                continue
             if session_ids and record_session_id not in session_ids:
                 continue
             model_record = record.get("model") if isinstance(record.get("model"), dict) else record
@@ -1454,6 +1457,7 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
                 {
                     "message_id": str(message_id or record.get("id") or ""),
                     "session_id": record_session_id,
+                    "database_session_id": database_session_id,
                     "model": model,
                     "record_sha256": _native_event_digest(record),
                 }

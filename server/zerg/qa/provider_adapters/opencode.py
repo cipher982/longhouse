@@ -267,6 +267,7 @@ def opencode_real_print_model_evidence(artifact: Mapping[str, Any]) -> dict[str,
                 "record_sha256": native_model["record_sha256"],
                 "model": native_model.get("model"),
                 "session_id": native_model.get("session_id"),
+                "database_session_id": native_model.get("database_session_id"),
             }
         )
     return {
