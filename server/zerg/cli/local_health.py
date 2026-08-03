@@ -754,7 +754,7 @@ def _launch_desktop_surface(
 ) -> None:
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
     ui_url = get_zerg_url(config_dir) or _resolve_local_runtime_url(claude_dir)
-    health_arguments = build_snapshot_arguments(claude_dir=claude_dir)
+    health_arguments = build_snapshot_arguments()
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None
     if prebuilt_artifact is not None:

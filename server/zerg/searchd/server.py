@@ -470,13 +470,18 @@ class SearchDaemon:
                 return result
             if not candidate_complete:
                 return result
-            blocking_session_ids = dense_index.blocking_session_ids
+            blocking_session_ids = dense_index.nonrelational_blocking_session_ids
             mutation_session_id = kwargs.get("session_id")
             if blocking_session_ids and isinstance(mutation_session_id, str) and mutation_session_id not in blocking_session_ids:
                 # The relational corpus is complete, but the last full load
-                # found bad vector/ordinal/locator data in specific sessions.
-                # Rebuild only when one of those sessions changes; unrelated
-                # writes cannot repair the failed invariant.
+                # found non-finite or unnormalized vectors in specific
+                # sessions. Rebuild only when one of those sessions changes;
+                # unrelated writes cannot repair a value-level invariant.
+                # Relational blocker ids must not be used here: a moving
+                # backlog can clear the old set, acquire a new blocker, and
+                # finally become complete on a session absent from that stale
+                # snapshot. Suppressing that final rebuild leaves the gate
+                # closed until restart despite a complete durable corpus.
                 return result
             if self._closing:
                 return result

@@ -10,9 +10,11 @@ from uuid import uuid4
 
 import pytest
 
+from zerg.services.search_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
 from zerg.services.search_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.search_v2_projector import SearchV2Projector
 from zerg.services.search_v2_projector import _run_forever
+from zerg.services.search_v2_projector import _run_worker
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 
@@ -66,6 +68,22 @@ async def test_search_projector_workers_refill_independently():
     with pytest.raises(asyncio.CancelledError):
         await _run_forever(Projector(), worker_count=2)
     assert active == 2
+
+
+@pytest.mark.asyncio
+async def test_search_projector_backs_off_when_the_claim_ledger_is_empty(monkeypatch):
+    class Projector:
+        async def run_once(self, *, limit):
+            assert limit == 1
+            return 0
+
+    async def stop_after_observation(delay):
+        assert delay == PROJECTOR_IDLE_POLL_SECONDS
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("zerg.services.search_v2_projector.asyncio.sleep", stop_after_observation)
+    with pytest.raises(asyncio.CancelledError):
+        await _run_worker(Projector())
 
 
 @pytest.mark.asyncio

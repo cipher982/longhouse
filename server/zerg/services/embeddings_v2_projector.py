@@ -25,7 +25,12 @@ from zerg.services.session_processing.embeddings import iter_turn_chunks
 logger = logging.getLogger(__name__)
 PROJECTOR = EMBEDDING_PROJECTOR_ID
 SOURCE_PAGE_SIZE = 1_000
-PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "4")))
+# See search_v2_projector: catalogd is a single writer, and idle claim polling
+# is still write traffic. One worker kept interactive reads available during
+# the full hosted corpus projection; higher concurrency remains an explicit
+# bounded-repair override.
+PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "1")))
+PROJECTOR_IDLE_POLL_SECONDS = 5.0
 PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_LEASE_SECONDS", "900")))
 
 
@@ -381,7 +386,7 @@ _task: asyncio.Task[None] | None = None
 async def _run_worker(projector: EmbeddingsV2Projector) -> None:
     while True:
         try:
-            await asyncio.sleep(0 if await projector.run_once(limit=1) else 0.5)
+            await asyncio.sleep(0 if await projector.run_once(limit=1) else PROJECTOR_IDLE_POLL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -2756,6 +2756,45 @@ struct LonghouseMenuBarCoreTests {
         #expect(clearedSession?.bridgePid == 42)
     }
 
+    /// The panel must name the Runtime Host it is connected to.
+    ///
+    /// `hostValueLabel` used to read `launch_readiness.stored_url`, which the
+    /// native producer does not emit, so it returned "-" on every real machine
+    /// and the "Remote control" fact quietly dropped its host. The fixtures
+    /// still carried the retired key, so the rendered fixture looked more
+    /// complete than the live product -- the failure was invisible exactly
+    /// where it would have been caught.
+    @Test
+    func hostLabelComesFromTheRealtimeBlockTheProducerActuallyEmits() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-03T20:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: nil,
+            realtime: RealtimeConnectionSnapshot(
+                runtimeUrl: "https://david010.longhouse.ai",
+                machineName: "cinder",
+                tokenPath: nil
+            ),
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.hostValueLabel == "david010")
+    }
+
+    @Test
+    func hostLabelIsPlaceholderWhenNoRuntimeUrlIsKnown() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-03T20:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: nil,
+            realtime: nil, launchReadiness: nil
+        )
+
+        #expect(snapshot.hostValueLabel == "-")
+    }
+
     /// The consumer-contract test: the recorded envelope decodes into the type
     /// the app actually uses.
     ///

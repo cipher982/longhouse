@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 
 PROJECTOR = "search-v2"
 PAGE_SIZE = 100
-PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_SEARCH_PROJECTOR_WORKERS", "4")))
+# catalogd is a deliberate single writer. Multiple idle workers each poll the
+# claim ledger twice per second, so a default of four created enough write
+# pressure to starve interactive search reads on the production corpus even at
+# zero lag. Operators can raise this for a bounded repair, but the steady-state
+# default must preserve the user-facing lane.
+PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_SEARCH_PROJECTOR_WORKERS", "1")))
+PROJECTOR_IDLE_POLL_SECONDS = 5.0
 # Production has sessions with more than 1,500 immutable render objects. A
 # complete fenced pass over those objects can exceed 15 minutes under ordinary
 # catalog/search contention, so a shorter lease lets another worker reclaim the
@@ -369,7 +375,11 @@ async def _run_worker(projector: SearchV2Projector) -> None:
     while True:
         try:
             claimed = await projector.run_once(limit=1)
-            await asyncio.sleep(0 if claimed else 0.5)
+            # An empty claim still opens catalogd's single-writer transaction.
+            # Polling it twice per second kept catalogd CPU-bound on an idle
+            # corpus and starved interactive search. Once work exists we drain
+            # continuously; only the zero-work steady state backs off.
+            await asyncio.sleep(0 if claimed else PROJECTOR_IDLE_POLL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception:

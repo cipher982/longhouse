@@ -133,6 +133,7 @@ class ResidentEpisodeIndex:
         self._loaded = False
         self._coverage = EmbeddingCoverage(False, 0, 0, 0, 0, 0, 0, 0, 0, ())
         self._blocking_session_ids: frozenset[str] = frozenset()
+        self._nonrelational_blocking_session_ids: frozenset[str] = frozenset()
         self._write_lock = threading.Lock()
 
     @property
@@ -159,6 +160,18 @@ class ResidentEpisodeIndex:
         """Sessions that prevented the last full coverage validation."""
 
         return self._blocking_session_ids
+
+    @property
+    def nonrelational_blocking_session_ids(self) -> frozenset[str]:
+        """Blockers the relational completeness precheck cannot detect.
+
+        Blob shape, locators, counts, ordinals, and publications are visible to
+        SQLite. Floating-point finiteness and normalization require decoding
+        the matrix, so only those failures may safely suppress a rebuild after
+        the relational precheck reports a complete candidate.
+        """
+
+        return self._nonrelational_blocking_session_ids
 
     @property
     def model(self) -> str:
@@ -216,14 +229,15 @@ class ResidentEpisodeIndex:
             """,
             (self._model, self._dims),
         ).fetchall()
-        valid_rows, coverage, blocking_session_ids = self._validate_coverage(publications, rows)
+        valid_rows, coverage, blocking_session_ids, nonrelational_blocking_session_ids = self._validate_coverage(publications, rows)
         with self._write_lock:
             self._snapshot = self._build(valid_rows)
             self._coverage = coverage
             self._blocking_session_ids = blocking_session_ids
+            self._nonrelational_blocking_session_ids = nonrelational_blocking_session_ids
             self._loaded = True
 
-    def _validate_coverage(self, publications, rows) -> tuple[list, EmbeddingCoverage, frozenset[str]]:
+    def _validate_coverage(self, publications, rows) -> tuple[list, EmbeddingCoverage, frozenset[str], frozenset[str]]:
         expected_by_session = {
             str(row["session_id"]): int(row["expected_episode_count"]) for row in publications if row["expected_episode_count"] is not None
         }
@@ -234,6 +248,7 @@ class ResidentEpisodeIndex:
         unnormalized_vectors = 0
         unlocatable_episodes = 0
         blocking_session_ids = set(missing_sessions)
+        nonrelational_blocking_session_ids: set[str] = set()
         for row in rows:
             session_id = str(row["session_id"])
             ordinals_by_session.setdefault(session_id, set()).add(int(row["episode_ordinal"]))
@@ -246,10 +261,12 @@ class ResidentEpisodeIndex:
             if not np.isfinite(vector).all() or float(np.linalg.norm(vector)) <= 1e-6:
                 invalid_vectors += 1
                 blocking_session_ids.add(session_id)
+                nonrelational_blocking_session_ids.add(session_id)
                 continue
             if not np.isclose(float(np.linalg.norm(vector)), 1.0, rtol=1e-4, atol=1e-4):
                 unnormalized_vectors += 1
                 blocking_session_ids.add(session_id)
+                nonrelational_blocking_session_ids.add(session_id)
                 continue
             if row["start_order_time_us"] is None:
                 unlocatable_episodes += 1
@@ -287,6 +304,7 @@ class ResidentEpisodeIndex:
                 missing_session_ids=missing_sessions[:20],
             ),
             frozenset(blocking_session_ids),
+            frozenset(nonrelational_blocking_session_ids),
         )
 
     def _build(self, rows) -> _Snapshot:

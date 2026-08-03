@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import os
 import plistlib
-import shlex
 import shutil
 import subprocess
-import sys
 import xml.sax.saxutils as saxutils
 from pathlib import Path
 from typing import Literal
@@ -37,47 +35,38 @@ PROVIDER_RELEASE_ENV_KEYS = (
 )
 
 
-def build_snapshot_command(*, claude_dir: str | None = None) -> str:
-    return shlex.join(build_snapshot_arguments(claude_dir=claude_dir))
+def build_snapshot_arguments() -> list[str]:
+    """Build the argv the Desktop app runs to read this Mac's status.
 
+    One producer, always: the native ``longhouse`` facade. This used to pick
+    between four candidates -- two ``longhouse-local-health`` console-script
+    paths, the facade, and ``python -m zerg.cli.local_health_fast`` -- and the
+    branches did not agree with each other. The Python entrypoints emit a
+    different envelope than the native one and accept a ``--claude-dir`` the
+    facade rejects, so which producer the app got, and which envelope it had to
+    decode, depended on what happened to be on disk when the launch agent was
+    written.
 
-def _executable_file(path: Path) -> bool:
-    return path.is_file() and os.access(path, os.X_OK)
+    That is what stranded a launch agent pointing at a ``longhouse-local-health``
+    that later stopped existing: the plist outlived the binary it had selected.
+    The console script is not published at all any more (``server/pyproject.toml``
+    declares only ``longhouse-server``), so those two branches were unreachable,
+    and ``scripts/qa/check-no-python-device-path.py`` forbids Python on the
+    device path -- ``local-health`` is in its ``DEVICE_COMMANDS`` -- which the
+    ``local_health_fast`` fallback violated by running the interpreter directly.
 
-
-def _default_cli_snapshot_prefix() -> tuple[list[str], bool]:
-    """Resolve the health command prefix and whether it accepts ``--claude-dir``.
-
-    The native facade's ``local-health`` takes only ``--fast`` and ``--json`` and
-    exits non-zero on anything else, so appending ``--claude-dir`` to it produces
-    a command that cannot run. Only the Python entrypoints accept it.
+    Resolution can still vary by location, but never by producer: every branch
+    below returns the same facade running the same subcommand. The canonical
+    install path wins; PATH is the dev fallback; and when neither exists the
+    canonical path is emitted anyway so the app fails loudly naming the command
+    it could not run, rather than quietly substituting a different one.
     """
-    user_local_bin = Path.home() / ".local" / "bin"
-    user_local_health = user_local_bin / "longhouse-local-health"
-    if _executable_file(user_local_health):
-        return [str(user_local_health)], True
-
-    path_local_health = shutil.which("longhouse-local-health")
-    if path_local_health:
-        return [path_local_health], True
-
-    user_local_longhouse = user_local_bin / "longhouse"
-    if _executable_file(user_local_longhouse):
-        return [str(user_local_longhouse), "local-health"], False
-
-    path_longhouse = shutil.which("longhouse")
-    if path_longhouse:
-        return [path_longhouse, "local-health"], False
-
-    return [sys.executable, "-m", "zerg.cli.local_health_fast"], True
-
-
-def build_snapshot_arguments(*, claude_dir: str | None = None) -> list[str]:
-    prefix, accepts_claude_dir = _default_cli_snapshot_prefix()
-    command = [*prefix, "--fast", "--json"]
-    if claude_dir and accepts_claude_dir:
-        command.extend(["--claude-dir", claude_dir])
-    return command
+    canonical = Path.home() / ".local" / "bin" / "longhouse"
+    if canonical.is_file() and os.access(canonical, os.X_OK):
+        facade = str(canonical)
+    else:
+        facade = shutil.which("longhouse") or str(canonical)
+    return [facade, "local-health", "--fast", "--json"]
 
 
 def default_install_desktop_app() -> bool:
@@ -361,7 +350,7 @@ def install_desktop_app_service(
     plist_path.write_text(
         _generate_launchd_plist(
             launch_path=installed_app.launch_path,
-            health_arguments=build_snapshot_arguments(claude_dir=claude_dir),
+            health_arguments=build_snapshot_arguments(),
             refresh_seconds=refresh_seconds,
             ui_url=ui_url,
             claude_dir=claude_dir,

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 
 def _coverage() -> dict[str, object]:
@@ -112,3 +117,28 @@ def test_category_regression_fails_the_release_gate_at_25():
         min_recall_at_5=0.0,
         min_category_hits_at_25={"causal": 2},
     ) == ["causal_hits_at_25 1/1 is below 2"]
+
+
+def test_http_error_preserves_typed_response_detail():
+    evaluator = _module()
+    error = urllib.error.HTTPError(
+        "https://example.test/api/agents/recall",
+        503,
+        "Service Unavailable",
+        hdrs=None,
+        fp=io.BytesIO(b'{"detail":{"code":"catalog_unavailable"}}'),
+    )
+
+    with (
+        patch.object(evaluator.urllib.request, "urlopen", side_effect=error),
+        pytest.raises(ValueError, match="catalog_unavailable"),
+    ):
+        evaluator.search_recall(
+            "query",
+            base_url="https://example.test",
+            token="test-token",
+            limit=25,
+            days=365,
+            mode="lexical",
+            expected_sha="a" * 40,
+        )
