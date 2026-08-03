@@ -216,6 +216,7 @@ def test_codex_result_event_preserves_usage_and_unreported_cost() -> None:
 
     assert result == {
         "type": "turn.completed",
+        "native_event_sha256": "3107a026f76078a1a8699ed9124f85a6e655663cb8bfe9967a800ef2bbf161d5",
         "accounting_status": "provider_reported_usage_cost_unavailable",
         "accounting_status_source": "producer_observation_classification",
         "usage": {

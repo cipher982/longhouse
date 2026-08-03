@@ -69,6 +69,7 @@ def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance(
     assert result == {
         "type": "step_finish",
         "part_type": "step-finish",
+        "native_event_sha256": "23b71ffdd9b8ac9b0cd95dfc94b3699ebcf33acfbfd649bb71a5540d0302517d",
         "session_id_present": True,
         "result_exact_match": True,
         "accounting_status": "provider_reported",

@@ -277,6 +277,7 @@ def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any
             "sha256": canary[digest_key],
             "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
             **({"event_type": result_event.get("type")} if path_key == "stdout_path" else {}),
+            **({"event_sha256": result_event_payload.get("native_event_sha256")} if path_key == "stdout_path" else {}),
         }
         for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
         if isinstance(canary.get(path_key), str) and isinstance(canary.get(digest_key), str) and canary.get(digest_key)

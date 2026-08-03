@@ -6113,6 +6113,7 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
                 "sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
                 "kind": "provider_jsonl_stream",
                 "event_type": result_event.get("type") if isinstance(result_event, dict) else None,
+                "event_sha256": result_event.get("native_event_sha256") if isinstance(result_event, dict) else None,
             }
         )
     package.write_json(

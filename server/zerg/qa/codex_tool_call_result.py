@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -126,6 +127,9 @@ def _compact_codex_result_event(events: list[dict[str, Any]], *, model: str | No
         return None
     compact: dict[str, Any] = {
         "type": event.get("type"),
+        "native_event_sha256": hashlib.sha256(
+            json.dumps(dict(event), ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest(),
         "accounting_status": "provider_reported_usage_cost_unavailable",
         "accounting_status_source": "producer_observation_classification",
     }

@@ -27,6 +27,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from typing import Mapping
 
 CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
 OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
@@ -805,6 +806,11 @@ def _flatten_numeric_usage(value: Any, *, prefix: str = "") -> dict[str, int | f
     return usage
 
 
+def _native_event_digest(event: Mapping[str, Any]) -> str:
+    encoded = json.dumps(dict(event), ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -> dict[str, Any] | None:
     if event is None:
         return None
@@ -819,6 +825,7 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
         "stop_reason": event.get("stop_reason"),
         "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
         "result_exact_match": result_text.strip() == marker,
+        "native_event_sha256": _native_event_digest(event),
     }
     model = event.get("model")
     if isinstance(model, str) and model.strip():
@@ -1265,6 +1272,7 @@ def _compact_opencode_result_event(
     compact: dict[str, Any] = {
         "type": finish_event.get("type"),
         "part_type": part.get("type"),
+        "native_event_sha256": _native_event_digest(finish_event),
         "session_id_present": bool(_event_session_id(finish_event)),
         "result_exact_match": any(
             isinstance(event, dict)

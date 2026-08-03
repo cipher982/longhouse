@@ -150,6 +150,7 @@ def _execute(binary: Path, evidence_root: Path):
                 "sha256": live[digest_key],
                 "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
                 **({"event_type": (live.get("result_event") or {}).get("type")} if path_key == "stdout_path" else {}),
+                **({"event_sha256": (live.get("result_event") or {}).get("native_event_sha256")} if path_key == "stdout_path" else {}),
             }
             for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
             if isinstance(live.get(path_key), str) and isinstance(live.get(digest_key), str) and live.get(digest_key)
