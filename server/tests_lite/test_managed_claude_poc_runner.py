@@ -172,6 +172,33 @@ def test_find_channel_session_id_resolves_longhouse_id_by_cwd(tmp_path, monkeypa
     assert runner.find_channel_session_id(cwd) == session_id
 
 
+def test_find_channel_session_id_requires_exact_provider_when_supplied(tmp_path, monkeypatch):
+    runner = _load_runner()
+    cwd = tmp_path / "workspace"
+    sessions = tmp_path / ".claude" / "channels" / "longhouse" / "sessions"
+    sessions.mkdir(parents=True)
+    stale_id = "44444444-4444-4444-8444-444444444444"
+    current_id = "66666666-6666-4666-8666-666666666666"
+    for session_id, provider_session_id in (
+        (stale_id, "provider-stale"),
+        (current_id, "provider-current"),
+    ):
+        (sessions / f"{session_id}.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "provider_session_id": provider_session_id,
+                    "cwd": str(cwd.resolve()),
+                    "ready": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert runner.find_channel_session_id(cwd, provider_session_id="provider-current") == current_id
+
+
 def test_transcript_lookup_id_uses_provider_session_id():
     runner = _load_runner()
 

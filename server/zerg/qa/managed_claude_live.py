@@ -138,7 +138,10 @@ def find_channel_session_id(cwd: Path, *, provider_session_id: str | None = None
             continue
         if not isinstance(state, dict):
             continue
-        if state.get("cwd") != expected_cwd and (not provider_session_id or state.get("provider_session_id") != provider_session_id):
+        if provider_session_id:
+            if state.get("provider_session_id") != provider_session_id:
+                continue
+        elif state.get("cwd") != expected_cwd:
             continue
         session_id = state.get("session_id")
         if isinstance(session_id, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", session_id):
@@ -428,7 +431,7 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                             config.session_id_file.parent.mkdir(parents=True, exist_ok=True)
                             config.session_id_file.write_text(session_id + "\n", encoding="utf-8")
 
-            if not session_id:
+            if not session_id and provider_session_id:
                 discovered_session_id = find_channel_session_id(
                     config.cwd,
                     provider_session_id=provider_session_id,
@@ -445,52 +448,52 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                         config.session_id_file.parent.mkdir(parents=True, exist_ok=True)
                         config.session_id_file.write_text(session_id + "\n", encoding="utf-8")
 
-                if not confirmed_workspace_trust and "Yes,Itrustthisfolder" in compact_buffer:
-                    os.write(master_fd, b"\r")
-                    confirmed_workspace_trust = True
-                    recorder.write("workspace_trust_confirmed", session_id=session_id)
+            if not confirmed_workspace_trust and "Yes,Itrustthisfolder" in compact_buffer:
+                os.write(master_fd, b"\r")
+                confirmed_workspace_trust = True
+                recorder.write("workspace_trust_confirmed", session_id=session_id)
 
-                if not confirmed_warning and "Iamusingthisforlocaldevelopment" in compact_buffer:
-                    os.write(master_fd, b"\r")
-                    confirmed_warning = True
-                    recorder.write("development_channel_warning_confirmed", session_id=session_id)
+            if not confirmed_warning and "Iamusingthisforlocaldevelopment" in compact_buffer:
+                os.write(master_fd, b"\r")
+                confirmed_warning = True
+                recorder.write("development_channel_warning_confirmed", session_id=session_id)
 
-                if session_id and confirmed_warning and not prompt_send_attempted:
-                    channel_ready = wait_for_channel_ready(session_id, timeout_secs=0.2)
-                    if channel_ready:
-                        if not config.skip_live_probe:
-                            probe_output_dir = output_dir / "live_probe"
-                            probe_proc = subprocess.Popen(
-                                [
-                                    str(repo_root / "scripts" / "ops" / "probe-managed-claude-truth.py"),
-                                    "--session-id",
-                                    session_id,
-                                    "--duration-secs",
-                                    str(max(5.0, config.response_timeout_secs - 5.0)),
-                                    "--interval-secs",
-                                    "1",
-                                    "--output-dir",
-                                    str(probe_output_dir),
-                                    "--run-id",
-                                    f"{run_id}-live",
-                                ],
-                                cwd=str(repo_root),
-                                text=True,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                            )
-                        send = channel_send(session_id, config.prompt, repo_root=repo_root)
-                        prompt_send_attempted = True
-                        prompt_send_returncode = send.returncode
-                        recorder.write(
-                            "prompt_sent",
-                            session_id=session_id,
-                            returncode=send.returncode,
-                            stdout=send.stdout[-1000:],
-                            stderr=send.stderr[-1000:],
+            if session_id and confirmed_warning and not prompt_send_attempted:
+                channel_ready = wait_for_channel_ready(session_id, timeout_secs=0.2)
+                if channel_ready:
+                    if not config.skip_live_probe:
+                        probe_output_dir = output_dir / "live_probe"
+                        probe_proc = subprocess.Popen(
+                            [
+                                str(repo_root / "scripts" / "ops" / "probe-managed-claude-truth.py"),
+                                "--session-id",
+                                session_id,
+                                "--duration-secs",
+                                str(max(5.0, config.response_timeout_secs - 5.0)),
+                                "--interval-secs",
+                                "1",
+                                "--output-dir",
+                                str(probe_output_dir),
+                                "--run-id",
+                                f"{run_id}-live",
+                            ],
+                            cwd=str(repo_root),
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
                         )
-                        sent_prompt = send.returncode == 0
-                        prompt_sent_at = time.monotonic()
+                    send = channel_send(session_id, config.prompt, repo_root=repo_root)
+                    prompt_send_attempted = True
+                    prompt_send_returncode = send.returncode
+                    recorder.write(
+                        "prompt_sent",
+                        session_id=session_id,
+                        returncode=send.returncode,
+                        stdout=send.stdout[-1000:],
+                        stderr=send.stderr[-1000:],
+                    )
+                    sent_prompt = send.returncode == 0
+                    prompt_sent_at = time.monotonic()
 
             if (
                 session_id
@@ -537,6 +540,7 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                     os.write(master_fd, b"/exit\r")
                     exit_sent = True
                     recorder.write("exit_sent", session_id=session_id)
+                    break
 
             if provider_auth_prompt_observed:
                 break
