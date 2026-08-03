@@ -160,6 +160,7 @@ class _TimelineFiltersCacheEntry:
 
 _timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCacheEntry] = {}
 _timeline_filters_cache_lock = Lock()
+_SEARCH_RESULT_HYDRATION_CONCURRENCY = 4
 
 
 async def _search_storage_v2_timeline(
@@ -203,9 +204,12 @@ async def _search_storage_v2_timeline(
             seen.add(session_id)
             session_ids.append(UUID(session_id))
             search_rows.append(row)
-    projected = await asyncio.gather(
-        *(asyncio.to_thread(read_live_catalog_session, session_id, owner_id=owner_id) for session_id in session_ids)
-    )
+    projected = []
+    for start in range(0, len(session_ids), _SEARCH_RESULT_HYDRATION_CONCURRENCY):
+        batch = session_ids[start : start + _SEARCH_RESULT_HYDRATION_CONCURRENCY]
+        projected.extend(
+            await asyncio.gather(*(asyncio.to_thread(read_live_catalog_session, session_id, owner_id=owner_id) for session_id in batch))
+        )
     cards: list[TimelineSessionCardResponse] = []
     for (session, _provider_alias, _commit_seq), row in zip(projected, search_rows, strict=True):
         if session is None:

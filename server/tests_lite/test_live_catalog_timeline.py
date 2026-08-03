@@ -417,6 +417,62 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
     assert observed == {"requested": session_id, "owner_id": 7}
 
 
+@pytest.mark.asyncio
+async def test_storage_v2_browser_search_bounds_catalog_hydration_to_read_capacity(monkeypatch):
+    session_ids = [uuid4() for _ in range(12)]
+    active = 0
+    maximum_active = 0
+
+    class SearchClient:
+        async def call(self, method, params):
+            assert method == "search.query.v2"
+            return {
+                "results": [
+                    {
+                        "session_id": str(session_id),
+                        "content_snippet": "bounded hit",
+                        "rank": float(index + 1),
+                    }
+                    for index, session_id in enumerate(session_ids)
+                ]
+            }
+
+    async def fake_to_thread(function, *args, **kwargs):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(0)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            active -= 1
+
+    def read_session(requested, *, owner_id):
+        return (
+            SessionResponse.model_construct(
+                id=str(requested),
+                user_hidden_from_timeline=False,
+                environment="development",
+                user_messages=1,
+                timeline_anchor_at=datetime.now(timezone.utc),
+                origin_label="cube",
+                match_snippet=None,
+                match_score=None,
+            ),
+            None,
+            "9",
+        )
+
+    monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
+    monkeypatch.setattr(timeline_router, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(timeline_router.asyncio, "to_thread", fake_to_thread)
+
+    result = await timeline_router._search_storage_v2_timeline(owner_id=7, params=_params(query="needle", limit=12))
+
+    assert result.total == 12
+    assert maximum_active == timeline_router._SEARCH_RESULT_HYDRATION_CONCURRENCY
+
+
 def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
     projected = SimpleNamespace(
         id=str(uuid4()),
