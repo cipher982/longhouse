@@ -74,7 +74,7 @@ def login_with_api_key(
         raise CodexAuthError("Codex auth.json permissions could not be restricted") from exc
     return {
         "method": "codex_login_with_api_key_stdin",
-        "auth_path": str(auth_path),
+        "auth_path": "isolated_codex_home/auth.json",
         "environment_key_used": "none",
     }
 

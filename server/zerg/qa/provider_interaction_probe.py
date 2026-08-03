@@ -17,8 +17,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
+import tempfile
 import time
 from datetime import UTC
 from datetime import datetime
@@ -41,6 +43,7 @@ from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.qa.provider_interaction_semantics import MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
 from zerg.qa.provider_interaction_semantics import raw_event_digest
+from zerg.qa.provider_interaction_semantics import semantic_boundary_fixture
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -367,7 +370,27 @@ def _codex_rollout_paths(codex_home: Path) -> list[Path]:
     return sorted(path for path in sessions_root.rglob("*.jsonl") if path.is_file())
 
 
-def _codex_native_store_snapshot(codex_home: Path, *, artifact_root: Path) -> list[dict[str, Any]]:
+def _materialize_codex_native_file(path: Path, *, codex_home: Path, evidence_root: Path) -> Path | None:
+    try:
+        relative_path = path.resolve().relative_to(codex_home.resolve())
+        file_bytes = path.read_bytes()
+    except (OSError, ValueError):
+        return None
+    destination = evidence_root / relative_path
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(file_bytes)
+    except OSError:
+        return None
+    return destination
+
+
+def _codex_native_store_snapshot(
+    codex_home: Path,
+    *,
+    artifact_root: Path,
+    evidence_root: Path,
+) -> list[dict[str, Any]]:
     """Hash non-secret Codex state relevant to the native archive absence proof."""
 
     if not codex_home.exists():
@@ -382,7 +405,8 @@ def _codex_native_store_snapshot(codex_home: Path, *, artifact_root: Path) -> li
             continue
         if path.suffix not in {".jsonl", ".sqlite", ".sqlite-shm", ".sqlite-wal"}:
             continue
-        evidence = _file_evidence(path, artifact_root=artifact_root)
+        materialized = _materialize_codex_native_file(path, codex_home=codex_home, evidence_root=evidence_root)
+        evidence = _file_evidence(materialized, artifact_root=artifact_root) if materialized is not None else None
         if evidence is not None:
             rows.append(evidence)
     return rows[:128]
@@ -392,6 +416,7 @@ def _codex_native_interaction_capture(
     codex_home: Path,
     *,
     artifact_root: Path,
+    evidence_root: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Extract native records that characterize ``/model`` then cancel.
 
@@ -408,9 +433,12 @@ def _codex_native_interaction_capture(
             file_bytes = path.read_bytes()
         except OSError:
             continue
+        materialized = _materialize_codex_native_file(path, codex_home=codex_home, evidence_root=evidence_root)
+        if materialized is None:
+            continue
         file_digest = hashlib.sha256(file_bytes).hexdigest()
         try:
-            source_path = str(path.resolve().relative_to(artifact_root.resolve()))
+            source_path = str(materialized.resolve().relative_to(artifact_root.resolve()))
         except ValueError:
             continue
         for offset, line_bytes in _jsonl_bytes(file_bytes, start_offset=0):
@@ -442,12 +470,20 @@ def _codex_native_interaction_capture(
                 }
             )
     if not events:
-        current_sources = _codex_native_store_snapshot(codex_home, artifact_root=artifact_root)
+        current_sources = _codex_native_store_snapshot(
+            codex_home,
+            artifact_root=artifact_root,
+            evidence_root=evidence_root,
+        )
         stable_snapshots = 1
         stable_seconds = 0.0
         for _ in range(6):
             time.sleep(_NEGATIVE_PROOF_QUIESCENCE_SECONDS)
-            next_sources = _codex_native_store_snapshot(codex_home, artifact_root=artifact_root)
+            next_sources = _codex_native_store_snapshot(
+                codex_home,
+                artifact_root=artifact_root,
+                evidence_root=evidence_root,
+            )
             if next_sources == current_sources:
                 stable_snapshots += 1
                 stable_seconds += _NEGATIVE_PROOF_QUIESCENCE_SECONDS
@@ -476,6 +512,7 @@ def _codex_native_interaction_capture(
                     "rollout_file_count": 0,
                     "file_count": len(current_sources),
                 },
+                "provider_store_root": str(evidence_root.resolve().relative_to(artifact_root.resolve())),
             },
         )
     return (
@@ -601,8 +638,17 @@ def _opencode_native_interaction_capture(
     frozen_database_path: str | None = None
     try:
         database_source_path = str(database.resolve().relative_to(artifact_root.resolve()))
+        sqlite_sidecar_paths = {
+            database_source_path,
+            f"{database_source_path}-wal",
+            f"{database_source_path}-shm",
+        }
         for index, (source_path, file_bytes) in enumerate(native_payload):
-            destination = frozen_root / f"{index:03d}-{Path(source_path).name}"
+            destination = (
+                frozen_root / "database" / Path(source_path).name
+                if source_path in sqlite_sidecar_paths
+                else frozen_root / f"{index:03d}-{Path(source_path).name}"
+            )
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(file_bytes)
             frozen_path = str(destination.resolve().relative_to(artifact_root.resolve()))
@@ -636,6 +682,7 @@ def _opencode_native_interaction_capture(
                 "raw_event_count": 0,
                 "native_event_count": 0,
                 "provider_database": {
+                    "store_kind": "opencode_sqlite",
                     "source_path": frozen_database_path,
                     "source_sha256": frozen_database_digest,
                     "event_count": len(event_rows),
@@ -643,6 +690,7 @@ def _opencode_native_interaction_capture(
                     "message_count": message_count,
                     "part_count": part_count,
                 },
+                "provider_store_root": str(frozen_root.resolve().relative_to(artifact_root.resolve())),
             },
         )
     if probe_id != "opencode_new_boundary" or len(event_rows) < 2:
@@ -860,14 +908,16 @@ def _codex_model_probe(
     workspace.mkdir()
     home = output_root / "home"
     home.mkdir(mode=0o700)
-    codex_home = output_root / "codex"
-    codex_home.mkdir(mode=0o700)
+    evidence_root = output_root / "codex-native-store"
     env = dict(environment)
+    runtime_home = Path(tempfile.mkdtemp(prefix="longhouse-codex-interaction-"))
+    codex_home = runtime_home / "codex-home"
+    codex_home.mkdir(mode=0o700)
     env["CODEX_HOME"] = str(codex_home)
     auth_receipt: dict[str, str] | None = None
     api_key = str(env.get("CODEX_API_KEY") or "").strip()
-    if api_key:
-        try:
+    try:
+        if api_key:
             auth_receipt = login_with_api_key(
                 binary,
                 api_key=api_key,
@@ -875,50 +925,53 @@ def _codex_model_probe(
                 cwd=workspace,
                 timeout=min(timeout, 30),
             )
-        except CodexAuthError as exc:
-            return [
-                _probe_status_row(
-                    probe,
-                    status="blocked",
-                    failure_code="missing_isolated_auth",
-                    message=str(exc),
-                    submitted_input_sequence=[],
-                )
-            ], []
-        # The provider-native auth file is now the only credential source for
-        # the TUI child. This proves the factory's internal env name is not
-        # being mistaken for a stock Codex auth mechanism.
-        env.pop("CODEX_API_KEY", None)
-    row = _run_terminal_interaction_probe(
-        provider="codex",
-        probe=probe,
-        artifact_root=artifact_root,
-        output_root=output_root,
-        workspace=workspace,
-        home=home,
-        native_root=codex_home,
-        environment=env,
-        argv=[
-            str(binary),
-            "--no-alt-screen",
-            "--ask-for-approval",
-            "never",
-            "--sandbox",
-            "read-only",
-            "-C",
-            str(workspace),
-        ],
-        ready_markers=(),
-        acknowledgement_markers=("model",),
-        timeout=timeout,
-        native_capture=lambda _process_status: _codex_native_interaction_capture(
-            codex_home,
+            # The provider-native auth file is now the only credential source
+            # for the TUI child. This proves the factory's internal env name is
+            # not being mistaken for a stock Codex auth mechanism.
+            env.pop("CODEX_API_KEY", None)
+        row = _run_terminal_interaction_probe(
+            provider="codex",
+            probe=probe,
             artifact_root=artifact_root,
-        ),
-    )
-    if auth_receipt is not None:
-        row["authentication"] = auth_receipt
-    return [row], list(row.get("native_source_rows") or [])
+            output_root=output_root,
+            workspace=workspace,
+            home=home,
+            native_root=codex_home,
+            environment=env,
+            argv=[
+                str(binary),
+                "--no-alt-screen",
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "read-only",
+                "-C",
+                str(workspace),
+            ],
+            ready_markers=(),
+            acknowledgement_markers=("model",),
+            timeout=timeout,
+            native_capture=lambda _process_status: _codex_native_interaction_capture(
+                codex_home,
+                artifact_root=artifact_root,
+                evidence_root=evidence_root,
+            ),
+        )
+        if auth_receipt is not None:
+            row["authentication"] = auth_receipt
+        return [row], list(row.get("native_source_rows") or [])
+    except CodexAuthError as exc:
+        return [
+            _probe_status_row(
+                probe,
+                status="blocked",
+                failure_code="missing_isolated_auth",
+                message=str(exc),
+                submitted_input_sequence=[],
+            )
+        ], []
+    finally:
+        shutil.rmtree(runtime_home, ignore_errors=True)
 
 
 def _opencode_interaction_probes(
@@ -1077,6 +1130,7 @@ def _cursor_model_probe(
         requested_model == "auto" or _cursor_model_identity(requested_model) == _cursor_model_identity(observed_model)
     )
     api_key_observed = api_key_source.lower() in {"apikey", "api_key", "env"}
+    cursor_usage = _cursor_usage_evidence(result_event) if result_event is not None else None
     capture_path = output_root / "cursor-stream.jsonl"
     stream_source_rows, capture_receipt = _write_native_event_capture(
         stream_events,
@@ -1111,10 +1165,15 @@ def _cursor_model_probe(
         and model_selected
         and api_key_observed
         and bool(str(environment.get("CURSOR_API_KEY") or "").strip())
+        and cursor_usage is not None
     ):
         cursor_result_event = {
             key: result_event[key] for key in ("session_id", "request_id", "duration_ms", "duration_api_ms") if key in result_event
         }
+        cursor_result_event["usage"] = cursor_usage
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_write_input_tokens", "cacheRead", "cacheWrite"):
+            if key in result_event:
+                cursor_result_event[key] = result_event[key]
         cursor_result_event["accounting_status"] = "subscription_aggregate_unreported"
         row = _probe_status_row(
             probe,
@@ -1143,6 +1202,26 @@ def _cursor_model_probe(
             "model": observed_model,
             "result_event": cursor_result_event,
         }
+    elif (
+        stream_events
+        and init_event is not None
+        and result_event is not None
+        and model_selected
+        and api_key_observed
+        and bool(str(environment.get("CURSOR_API_KEY") or "").strip())
+        and cursor_usage is None
+    ):
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="cursor_usage_missing",
+            message="Cursor completed a model request without exposing numeric token accounting in its native result event.",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows,
+            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
+            raw_events=stream_events,
+            terminal_acknowledged=True,
+        )
     elif stream_events and init_event is not None and result_event is not None:
         row = _probe_status_row(
             probe,
@@ -1200,6 +1279,28 @@ def _cursor_model_identity(value: str) -> str:
     """Compare Cursor's CLI aliases with its human-readable init model name."""
 
     return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _cursor_usage_evidence(result_event: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Keep provider-reported token accounting without inventing a price."""
+
+    usage = result_event.get("usage")
+    if isinstance(usage, Mapping):
+        numeric_usage = {str(key): value for key, value in usage.items() if type(value) in {int, float}}
+        if numeric_usage:
+            return numeric_usage
+    flat_keys = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "cacheRead",
+        "cacheWrite",
+        "total_cost_usd",
+        "cost",
+    )
+    flat_usage = {key: result_event[key] for key in flat_keys if type(result_event.get(key)) in {int, float}}
+    return flat_usage or None
 
 
 def _sha256(path: Path) -> str:
@@ -1408,6 +1509,7 @@ def _claude_native_store_capture(
                         "rollout_file_count": 0,
                         "file_count": len(source_rows),
                     },
+                    "provider_store_root": str(store_root.resolve().relative_to(artifact_root.resolve())),
                 },
             )
         time.sleep(0.2)
@@ -1973,6 +2075,7 @@ def produce_live_observation(
         "raw_events": [],
         "native_source_rows": [],
         "native_source_root": str(artifact_root.resolve()),
+        "semantic_boundary": semantic_boundary_fixture(provider),
     }
     model_name = next(
         (

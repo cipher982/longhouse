@@ -4,6 +4,7 @@ from subprocess import CompletedProcess
 import pytest
 
 from zerg.qa import provider_interaction_probe
+from zerg.qa import provider_interaction_semantics
 from zerg.qa.provider_interaction_semantics import evaluate_observation
 
 
@@ -103,7 +104,7 @@ def test_cursor_stream_json_parser_keeps_native_init_and_result_records() -> Non
         "\n".join(
             [
                 '{"type":"system","subtype":"init","model":"grok-4.5","apiKeySource":"apiKey","session_id":"s"}',
-                '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"ok"}',
+                '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"ok","usage":{"input_tokens":12,"output_tokens":3}}',
                 "terminal text that is not a native event",
             ]
         )
@@ -129,7 +130,7 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
         [
             '{"type":"system","subtype":"init","model":"grok-4.5","apiKeySource":"apiKey","session_id":"s"}',
             '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"s"}',
-            '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"ok"}',
+            '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"ok","usage":{"input_tokens":12,"output_tokens":3}}',
         ]
     )
 
@@ -163,12 +164,52 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
         "probes": rows,
         "raw_events": row["raw_events"],
         "native_source_root": str(artifact_root),
+        "semantic_boundary": provider_interaction_semantics.semantic_boundary_fixture("cursor"),
     }
     evaluation = evaluate_observation("cursor", observation)
 
     assert evaluation["status"] == "pass"
     assert evaluation["provider_status"] == "pass"
     assert evaluation["verification_scope"] == "provider_native"
+    assert evaluation["assertions"][-1]["probe_id"] == "shared_title_boundary"
+    assert row["live_model_evidence"]["result_event"]["usage"]["input_tokens"] == 12
+
+
+def test_codex_model_probe_keeps_provider_auth_outside_the_artifact_root(monkeypatch, tmp_path: Path) -> None:
+    binary = tmp_path / "codex"
+    binary.write_text("fixture", encoding="utf-8")
+    artifact_root = tmp_path / "artifacts"
+    runtime_homes: list[Path] = []
+
+    def fake_login(_binary, *, environment, **_kwargs):
+        codex_home = Path(environment["CODEX_HOME"])
+        runtime_homes.append(codex_home)
+        (codex_home / "auth.json").write_text("provider secret", encoding="utf-8")
+        return {"method": "codex_login_with_api_key_stdin", "auth_path": "isolated_codex_home/auth.json"}
+
+    def fake_probe(**kwargs):
+        assert not Path(kwargs["native_root"]).is_relative_to(artifact_root)
+        return {
+            "probe_id": "codex_model_picker",
+            "status": "observed",
+            "raw_events": [],
+            "native_source_rows": [],
+        }
+
+    monkeypatch.setattr(provider_interaction_probe, "login_with_api_key", fake_login)
+    monkeypatch.setattr(provider_interaction_probe, "_run_terminal_interaction_probe", fake_probe)
+
+    rows, source_rows = provider_interaction_probe._codex_model_probe(  # noqa: SLF001
+        binary=binary,
+        artifact_root=artifact_root,
+        timeout=1,
+        environment={"CODEX_API_KEY": "fixture-token"},
+    )
+
+    assert rows[0]["authentication"]["auth_path"] == "isolated_codex_home/auth.json"
+    assert source_rows == []
+    assert runtime_homes and not runtime_homes[0].exists()
+    assert not list(artifact_root.rglob("auth.json"))
 
 
 def test_terminal_acknowledgement_uses_post_submit_delta(tmp_path: Path) -> None:

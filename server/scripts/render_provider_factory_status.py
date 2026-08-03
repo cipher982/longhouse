@@ -27,10 +27,10 @@ from zerg.qa.provider_factory_model import plan_run
 
 # The trigger/provenance pairs actually wired to a real runner today
 # (release_poll on clifford, push + weekly_cron on GitHub Actions, manual for
-# humans). Every other combination in the 5 x 3 x 4 cross product is either
-# nonsensical (e.g. push against staged_release) or simply never invoked by
-# any workflow — plan_run() still answers them, but rendering all sixty cells
-# would bury the four that matter behind noise no reader asked for.
+# humans). Cursor is the one deliberate release-lane exception: its observed
+# install is pinned and qualified, while staged upstream releases do not run
+# there. Every other combination in the 5 x 3 x 4 cross product is either
+# nonsensical or simply never invoked by any workflow.
 _WIRED_COMBINATIONS: tuple[tuple[str, str], ...] = (
     (Trigger.RELEASE_POLL, BuildProvenance.STAGED_RELEASE),
     (Trigger.PUSH, BuildProvenance.GENERATED_FAKE),
@@ -58,8 +58,13 @@ def render_status_table(facts: ProviderFactoryFacts) -> str:
     lines = ["| Provider | Trigger | Build provenance | Status |", "|---|---|---|---|"]
     for provider in ALL_PROVIDERS:
         for trigger, provenance in _WIRED_COMBINATIONS:
-            cell = plan_run(facts, provider, provenance, trigger)
-            lines.append(f"| {provider} | {trigger} | {provenance} | {_cell_detail(cell)} |")
+            effective_provenance = (
+                BuildProvenance.OBSERVED_INSTALL
+                if provider == "cursor" and trigger == Trigger.RELEASE_POLL
+                else provenance
+            )
+            cell = plan_run(facts, provider, effective_provenance, trigger)
+            lines.append(f"| {provider} | {trigger} | {effective_provenance} | {_cell_detail(cell)} |")
     return "\n".join(lines)
 
 

@@ -20,7 +20,7 @@
 | antigravity | push | generated_fake | runs — 4 scenarios |
 | antigravity | weekly_cron | generated_fake | never runs — antigravity is not weekly_unconditional in config/provider-release-schedule.yml |
 | antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed'] |
-| cursor | release_poll | staged_release | never runs — Cursor's release lane only runs against its pinned observed install |
+| cursor | release_poll | observed_install | runs — 1 qualification scenario + 23 harness scenarios |
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 23 scenarios |
 | cursor | manual | observed_install | runs — 23 scenarios |

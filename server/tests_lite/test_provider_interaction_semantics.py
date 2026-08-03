@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -182,7 +183,17 @@ def test_live_observation_can_prove_bounded_native_record_absence(tmp_path: Path
     contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "opencode")
     probe = next(probe for probe in contract.interaction_probes if probe.probe_id == "opencode_help_command")
     database = tmp_path / "opencode.db"
-    database.write_bytes(b"stable isolated provider database")
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE event (id INTEGER PRIMARY KEY, type TEXT, data TEXT);
+            CREATE TABLE session (id INTEGER PRIMARY KEY);
+            CREATE TABLE message (id INTEGER PRIMARY KEY);
+            CREATE TABLE part (id INTEGER PRIMARY KEY);
+            INSERT INTO event (id, type, data) VALUES (1, 'session.created', '{}');
+            INSERT INTO session (id) VALUES (1);
+            """
+        )
     database_digest = hashlib.sha256(database.read_bytes()).hexdigest()
     observation = {
         "provider": "opencode",
@@ -214,7 +225,9 @@ def test_live_observation_can_prove_bounded_native_record_absence(tmp_path: Path
                     "stable_seconds": 1.5,
                     "raw_event_count": 0,
                     "native_event_count": 0,
+                    "provider_store_root": ".",
                     "provider_database": {
+                        "store_kind": "opencode_sqlite",
                         "source_path": "opencode.db",
                         "source_sha256": database_digest,
                         "event_count": 1,
@@ -235,6 +248,65 @@ def test_live_observation_can_prove_bounded_native_record_absence(tmp_path: Path
     assert row["evidence_basis"]["native_record_absence"] == "pass"
 
 
+def test_live_negative_database_counts_are_derived_from_the_captured_store(tmp_path: Path) -> None:
+    database = tmp_path / "opencode.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE event (id INTEGER PRIMARY KEY, type TEXT, data TEXT);
+            CREATE TABLE session (id INTEGER PRIMARY KEY);
+            CREATE TABLE message (id INTEGER PRIMARY KEY);
+            CREATE TABLE part (id INTEGER PRIMARY KEY);
+            INSERT INTO event (id, type, data) VALUES (1, 'session.created', '{}');
+            INSERT INTO session (id) VALUES (1);
+            """
+        )
+    database_bytes = database.read_bytes()
+    digest = hashlib.sha256(database_bytes).hexdigest()
+    observation = generated_fake_observation("opencode")
+    observation.update(
+        {
+            "evidence_class": "live_no_token",
+            "synthetic": False,
+            "native_source_root": str(tmp_path),
+            "raw_events": [],
+            "probes": [
+                {
+                    "probe_id": "opencode_help_command",
+                    "status": "observed_absence",
+                    "raw_events": [],
+                    "native_source_rows": [{"source_path": "opencode.db", "bytes": len(database_bytes), "sha256": digest}],
+                    "capture_receipt": {
+                        "negative_evidence": True,
+                        "completion_signal": "stable_native_store",
+                        "completion_status": 0,
+                        "stable_snapshots": 3,
+                        "stable_seconds": 1.5,
+                        "raw_event_count": 0,
+                        "native_event_count": 0,
+                        "provider_store_root": ".",
+                        "provider_database": {
+                            "store_kind": "opencode_sqlite",
+                            "source_path": "opencode.db",
+                            "source_sha256": digest,
+                            "event_count": 0,
+                            "session_count": 1,
+                            "message_count": 0,
+                            "part_count": 0,
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    result = evaluate_observation("opencode", observation)
+
+    row = next(row for row in result["assertions"] if row["probe_id"] == "opencode_help_command")
+    assert row["status"] == "fail"
+    assert row["failure_code"] == "interaction_negative_database_receipt_invalid"
+
+
 def test_live_observation_does_not_accept_normalized_semantics_from_provider_rows() -> None:
     observation = generated_fake_observation("codex")
     observation["evidence_class"] = "live_no_token"
@@ -246,6 +318,19 @@ def test_live_observation_does_not_accept_normalized_semantics_from_provider_row
     row = next(row for row in result["assertions"] if row["probe_id"] == probe["probe_id"])
     assert row["status"] == "blocked"
     assert row["semantic_events"][0]["interaction_kind"] == INTERACTION_DURABLE_USER_MESSAGE
+
+
+def test_live_observation_requires_a_separate_semantic_boundary_fixture() -> None:
+    observation = generated_fake_observation("codex")
+    observation["evidence_class"] = "live_no_token"
+    observation["synthetic"] = False
+    observation.pop("semantic_boundary")
+
+    result = evaluate_observation("codex", observation)
+
+    boundary = next(row for row in result["assertions"] if row["probe_id"] == "shared_title_boundary")
+    assert boundary["status"] == "blocked"
+    assert boundary["failure_code"] == "interaction_title_boundary_missing"
 
 
 def test_raw_provider_fields_cannot_override_parser_semantics() -> None:

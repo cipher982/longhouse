@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -107,19 +108,10 @@ def generated_fake_observation(provider: str) -> dict[str, Any]:
             }
         )
 
-    marker = f"LONGHOUSE_INTERACTION_SEMANTICS_{provider.upper()}_MARKER"
-    ordinary_prompt = {
-        "type": "user",
-        "role": "user",
-        "content_text": f"Reply with exactly {marker}",
-        "provider_probe_id": "ordinary_marker_prompt",
-    }
-    unknown_slash = {
-        "type": "user",
-        "role": "user",
-        "content_text": "/custom-command-that-provider-may-send-to-model",
-        "provider_probe_id": "unknown_slash_prompt",
-    }
+    boundary = semantic_boundary_fixture(provider)
+    marker = str(boundary["ordinary_marker"])
+    ordinary_prompt = dict(boundary["ordinary_event"])
+    unknown_slash = dict(boundary["unknown_slash_event"])
     raw_events.extend((ordinary_prompt, unknown_slash))
     return {
         "schema_version": 1,
@@ -131,6 +123,37 @@ def generated_fake_observation(provider: str) -> dict[str, Any]:
         "raw_events": raw_events,
         "ordinary_marker": marker,
         "unknown_slash_probe": unknown_slash["content_text"],
+        "semantic_boundary": boundary,
+    }
+
+
+def semantic_boundary_fixture(provider: str) -> dict[str, Any]:
+    """Return the deterministic semantic regression fixture used by live runs.
+
+    Provider-native control probes prove what a harness stored. They cannot
+    prove the independent projection boundary for an ordinary message and an
+    unknown slash command without fabricating provider rows. Keep that small
+    regression fixture explicit and separately labelled instead.
+    """
+
+    marker = f"LONGHOUSE_INTERACTION_SEMANTICS_{provider.upper()}_MARKER"
+    return {
+        "evidence_class": "hermetic",
+        "source_kind": "semantic_fixture",
+        "provider": provider,
+        "ordinary_marker": marker,
+        "ordinary_event": {
+            "type": "user",
+            "role": "user",
+            "content_text": f"Reply with exactly {marker}",
+            "provider_probe_id": "ordinary_marker_prompt",
+        },
+        "unknown_slash_event": {
+            "type": "user",
+            "role": "user",
+            "content_text": "/custom-command-that-provider-may-send-to-model",
+            "provider_probe_id": "unknown_slash_prompt",
+        },
     }
 
 
@@ -307,6 +330,70 @@ def _live_raw_provenance(
     return STATUS_PASS, None
 
 
+def _negative_store_inventory(
+    source_rows: list[Any],
+    *,
+    resolved_root: Path,
+    receipt: Mapping[str, Any],
+) -> tuple[Path, dict[str, tuple[int, str]]] | None:
+    """Rebuild the captured store inventory instead of trusting its counts."""
+
+    store_root_value = receipt.get("provider_store_root")
+    if not isinstance(store_root_value, str) or not store_root_value.strip() or Path(store_root_value).is_absolute():
+        return None
+    raw_store_root = resolved_root / store_root_value
+    if raw_store_root.is_symlink():
+        return None
+    try:
+        store_root = raw_store_root.resolve(strict=True)
+        store_root.relative_to(resolved_root)
+        if not store_root.is_dir():
+            return None
+        inventory_paths = sorted(store_root.rglob("*"))
+        if any(path.is_symlink() for path in inventory_paths):
+            return None
+        inventory_files = {str(path.resolve()) for path in inventory_paths if path.is_file()}
+    except (OSError, ValueError):
+        return None
+
+    observed_files: dict[str, tuple[int, str]] = {}
+    for source in source_rows:
+        if not isinstance(source, Mapping):
+            return None
+        source_path = source.get("source_path")
+        source_bytes = source.get("bytes")
+        source_digest = source.get("sha256")
+        if (
+            not isinstance(source_path, str)
+            or not source_path
+            or Path(source_path).is_absolute()
+            or type(source_bytes) is not int
+            or source_bytes < 0
+            or not isinstance(source_digest, str)
+            or len(source_digest) != 64
+        ):
+            return None
+        raw_source_path = resolved_root / source_path
+        if raw_source_path.is_symlink():
+            return None
+        try:
+            resolved_path = raw_source_path.resolve(strict=True)
+            resolved_path.relative_to(store_root)
+            file_bytes = resolved_path.read_bytes()
+        except (OSError, ValueError):
+            return None
+        if len(file_bytes) != source_bytes or hashlib.sha256(file_bytes).hexdigest() != source_digest:
+            return None
+        resolved_key = str(resolved_path)
+        if resolved_key in observed_files:
+            return None
+        observed_files[resolved_key] = (source_bytes, source_digest)
+
+    if set(observed_files) != inventory_files:
+        return None
+    return store_root, observed_files
+
+
 def _live_negative_provenance(
     row: Mapping[str, Any],
     *,
@@ -319,7 +406,8 @@ def _live_negative_provenance(
     hash-addressed native store snapshot and explicitly records the native
     counts it observed. This proves a bounded negative fact (no persisted
     event in that store), not that every provider-internal side effect is
-    impossible.
+    impossible. The evaluator rebuilds the store inventory and database counts
+    from the copied bytes; producer-supplied counts are never authoritative.
     """
 
     source_rows = row.get("native_source_rows")
@@ -351,76 +439,82 @@ def _live_negative_provenance(
     if not stable_capture:
         return STATUS_BLOCKED, "interaction_negative_capture_incomplete"
 
-    observed_files: dict[str, tuple[int, str]] = {}
-    for source in source_rows:
-        if not isinstance(source, Mapping):
-            return STATUS_FAIL, "interaction_negative_provenance_invalid"
-        source_path = source.get("source_path")
-        source_bytes = source.get("bytes")
-        source_digest = source.get("sha256")
-        if (
-            not isinstance(source_path, str)
-            or not source_path
-            or Path(source_path).is_absolute()
-            or type(source_bytes) is not int
-            or source_bytes < 0
-            or not isinstance(source_digest, str)
-            or len(source_digest) != 64
-        ):
-            return STATUS_FAIL, "interaction_negative_provenance_invalid"
-        try:
-            resolved_path = (resolved_root / source_path).resolve(strict=True)
-            resolved_path.relative_to(resolved_root)
-            file_bytes = resolved_path.read_bytes()
-        except (OSError, ValueError):
-            return STATUS_FAIL, "interaction_negative_provenance_invalid"
-        if len(file_bytes) != source_bytes or hashlib.sha256(file_bytes).hexdigest() != source_digest:
-            return STATUS_FAIL, "interaction_negative_provenance_invalid"
-        resolved_key = str(resolved_path)
-        if resolved_key in observed_files:
-            return STATUS_FAIL, "interaction_negative_provenance_duplicate"
-        observed_files[resolved_key] = (source_bytes, source_digest)
+    inventory = _negative_store_inventory(source_rows, resolved_root=resolved_root, receipt=receipt)
+    if inventory is None:
+        return STATUS_FAIL, "interaction_negative_store_inventory_invalid"
+    store_root, observed_files = inventory
 
     provider_database = receipt.get("provider_database")
     if isinstance(provider_database, Mapping):
         database_path = provider_database.get("source_path")
         database_digest = provider_database.get("source_sha256")
         if (
-            not isinstance(database_path, str)
+            provider_database.get("store_kind") != "opencode_sqlite"
+            or not isinstance(database_path, str)
             or not database_path
             or Path(database_path).is_absolute()
             or not isinstance(database_digest, str)
             or len(database_digest) != 64
-            or type(provider_database.get("event_count")) is not int
-            or type(provider_database.get("session_count")) is not int
-            or type(provider_database.get("message_count")) is not int
-            or type(provider_database.get("part_count")) is not int
-            or provider_database.get("event_count") != 1
-            or provider_database.get("session_count") != 1
-            or provider_database.get("message_count") != 0
-            or provider_database.get("part_count") != 0
         ):
             return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
         try:
             resolved_database = (resolved_root / database_path).resolve(strict=True)
-            resolved_database.relative_to(resolved_root)
+            resolved_database.relative_to(store_root)
         except (OSError, ValueError):
             return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
         observed_database = observed_files.get(str(resolved_database))
         if observed_database is None or observed_database[1] != database_digest:
             return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
+        try:
+            database_uri = f"file:{resolved_database}?mode=ro"
+            with sqlite3.connect(database_uri, uri=True) as connection:
+                counts = {
+                    "event_count": int(connection.execute("SELECT count(*) FROM event").fetchone()[0]),
+                    "session_count": int(connection.execute("SELECT count(*) FROM session").fetchone()[0]),
+                    "message_count": int(connection.execute("SELECT count(*) FROM message").fetchone()[0]),
+                    "part_count": int(connection.execute("SELECT count(*) FROM part").fetchone()[0]),
+                }
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
+        if any(provider_database.get(key) != value for key, value in counts.items()):
+            return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
+        if counts != {"event_count": 1, "session_count": 1, "message_count": 0, "part_count": 0}:
+            return STATUS_FAIL, "interaction_negative_database_assertion_failed"
     else:
         provider_store = receipt.get("provider_store")
         if not isinstance(provider_store, Mapping):
             return STATUS_BLOCKED, "interaction_negative_store_receipt_missing"
-        if (
-            not isinstance(provider_store.get("store_kind"), str)
-            or not provider_store.get("store_kind")
-            or type(provider_store.get("rollout_file_count")) is not int
-            or provider_store.get("rollout_file_count") != 0
-            or type(provider_store.get("file_count")) is not int
-            or provider_store.get("file_count") != len(source_rows)
-        ):
+        store_kind = provider_store.get("store_kind")
+        if not isinstance(store_kind, str) or not store_kind:
+            return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
+        if type(provider_store.get("file_count")) is not int or provider_store.get("file_count") != len(observed_files):
+            return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
+        if store_kind == "codex_rollout_jsonl":
+            rollout_file_count = sum(
+                1 for path in observed_files if "sessions" in Path(path).relative_to(store_root).parts and path.endswith(".jsonl")
+            )
+            if (
+                type(provider_store.get("rollout_file_count")) is not int
+                or provider_store.get("rollout_file_count") != rollout_file_count
+                or rollout_file_count != 0
+            ):
+                return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
+        elif store_kind == "claude_jsonl":
+            target_command = provider_store.get("target_command")
+            if not isinstance(target_command, str) or not target_command:
+                return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
+            matching_event_count = 0
+            for path in observed_files:
+                if not path.endswith(".jsonl"):
+                    continue
+                try:
+                    text = Path(path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
+                matching_event_count += text.count(f"<command-name>{target_command}</command-name>")
+            if provider_store.get("matching_event_count") != matching_event_count or matching_event_count != 0:
+                return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
+        else:
             return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
     return STATUS_PASS, None
 
@@ -681,64 +775,102 @@ def evaluate_observation(
     raw_events = raw_events if isinstance(raw_events, list) else []
     all_probes_inapplicable = all(probe.disposition in {"policy_disabled", "upstream_absent"} for probe in contract.interaction_probes)
     if not (all_probes_inapplicable and not raw_events):
-        marker = str(observation.get("ordinary_marker") or "")
-        marker_event = next(
-            (
-                event
-                for event in raw_events
-                if isinstance(event, Mapping) and marker and marker in str(event.get("content_text") or event.get("text") or "")
-            ),
-            None,
-        )
-        marker_semantics = (
-            _event_semantics(
-                provider,
-                marker_event,
-                allow_parser_semantics=not live_evidence,
+        if live_evidence:
+            boundary = observation.get("semantic_boundary")
+            if (
+                not isinstance(boundary, Mapping)
+                or boundary.get("evidence_class") != "hermetic"
+                or boundary.get("source_kind") != "semantic_fixture"
+            ):
+                assertion_rows.append(
+                    {
+                        "probe_id": "shared_title_boundary",
+                        "status": STATUS_BLOCKED,
+                        "failure_code": "interaction_title_boundary_missing",
+                        "evidence_basis": "hermetic_semantic_regression_required",
+                    }
+                )
+            else:
+                ordinary_event = boundary.get("ordinary_event")
+                unknown_event = boundary.get("unknown_slash_event")
+                if not isinstance(ordinary_event, Mapping) or not isinstance(unknown_event, Mapping):
+                    assertion_rows.append(
+                        {
+                            "probe_id": "shared_title_boundary",
+                            "status": STATUS_BLOCKED,
+                            "failure_code": "interaction_title_boundary_missing",
+                            "evidence_basis": "hermetic_semantic_regression_required",
+                        }
+                    )
+                else:
+                    marker_semantics = _event_semantics(
+                        provider,
+                        ordinary_event,
+                        allow_parser_semantics=False,
+                    )
+                    unknown_semantics = _event_semantics(
+                        provider,
+                        unknown_event,
+                        allow_parser_semantics=False,
+                    )
+                    boundary_assertions = {
+                        "ordinary_marker_is_title_eligible": marker_semantics.get("title_eligible") is True,
+                        "ordinary_marker_is_user_message": marker_semantics.get("counts_as_user_message") is True,
+                        "unknown_slash_remains_eligible": unknown_semantics.get("title_eligible") is True,
+                    }
+                    boundary_status = STATUS_PASS if all(boundary_assertions.values()) else STATUS_FAIL
+                    assertion_rows.append(
+                        {
+                            "probe_id": "shared_title_boundary",
+                            "status": boundary_status,
+                            "failure_code": None if boundary_status == STATUS_PASS else "interaction_title_boundary_assertion_failed",
+                            "assertions": boundary_assertions,
+                            "semantic_events": [marker_semantics, unknown_semantics],
+                            "evidence_basis": "hermetic_semantic_regression",
+                        }
+                    )
+        else:
+            marker = str(observation.get("ordinary_marker") or "")
+            marker_event = next(
+                (
+                    event
+                    for event in raw_events
+                    if isinstance(event, Mapping) and marker and marker in str(event.get("content_text") or event.get("text") or "")
+                ),
+                None,
             )
-            if isinstance(marker_event, Mapping)
-            else {}
-        )
-        unknown_slash = str(observation.get("unknown_slash_probe") or "")
-        unknown_event = next(
-            (
-                event
-                for event in raw_events
-                if isinstance(event, Mapping)
-                and unknown_slash
-                and unknown_slash == str(event.get("content_text") or event.get("text") or "")
-            ),
-            None,
-        )
-        unknown_semantics = (
-            _event_semantics(
-                provider,
-                unknown_event,
-                allow_parser_semantics=not live_evidence,
+            marker_semantics = (
+                _event_semantics(provider, marker_event, allow_parser_semantics=True) if isinstance(marker_event, Mapping) else {}
             )
-            if isinstance(unknown_event, Mapping)
-            else {}
-        )
-        # The shared boundary canary is part of the hermetic semantic fixture;
-        # a provider-native interaction capture does not get to manufacture
-        # ordinary/unknown-slash rows just to satisfy this assertion. If the
-        # producer supplied those rows, evaluate them; otherwise leave this
-        # separate semantic-engine assertion out of the native result.
-        if marker_semantics and unknown_semantics:
-            boundary_assertions = {
-                "ordinary_marker_is_title_eligible": marker_semantics.get("title_eligible") is True,
-                "ordinary_marker_is_user_message": marker_semantics.get("counts_as_user_message") is True,
-                "unknown_slash_remains_eligible": unknown_semantics.get("title_eligible") is True,
-            }
-            assertion_rows.append(
-                {
-                    "probe_id": "shared_title_boundary",
-                    "status": STATUS_PASS if all(boundary_assertions.values()) else STATUS_FAIL,
-                    "failure_code": None if all(boundary_assertions.values()) else "interaction_title_boundary_assertion_failed",
-                    "assertions": boundary_assertions,
-                    "semantic_events": [marker_semantics, unknown_semantics],
+            unknown_slash = str(observation.get("unknown_slash_probe") or "")
+            unknown_event = next(
+                (
+                    event
+                    for event in raw_events
+                    if isinstance(event, Mapping)
+                    and unknown_slash
+                    and unknown_slash == str(event.get("content_text") or event.get("text") or "")
+                ),
+                None,
+            )
+            unknown_semantics = (
+                _event_semantics(provider, unknown_event, allow_parser_semantics=True) if isinstance(unknown_event, Mapping) else {}
+            )
+            if marker_semantics and unknown_semantics:
+                boundary_assertions = {
+                    "ordinary_marker_is_title_eligible": marker_semantics.get("title_eligible") is True,
+                    "ordinary_marker_is_user_message": marker_semantics.get("counts_as_user_message") is True,
+                    "unknown_slash_remains_eligible": unknown_semantics.get("title_eligible") is True,
                 }
-            )
+                assertion_rows.append(
+                    {
+                        "probe_id": "shared_title_boundary",
+                        "status": STATUS_PASS if all(boundary_assertions.values()) else STATUS_FAIL,
+                        "failure_code": None if all(boundary_assertions.values()) else "interaction_title_boundary_assertion_failed",
+                        "assertions": boundary_assertions,
+                        "semantic_events": [marker_semantics, unknown_semantics],
+                    }
+                )
     statuses = [str(row.get("status") or STATUS_FAIL) for row in assertion_rows]
     if any(status == STATUS_FAIL for status in statuses):
         status = STATUS_FAIL
@@ -778,4 +910,4 @@ def jsonl_events(observation: Mapping[str, Any]) -> str:
     return "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows if isinstance(row, Mapping))
 
 
-__all__ = ["evaluate_observation", "generated_fake_observation", "jsonl_events"]
+__all__ = ["evaluate_observation", "generated_fake_observation", "jsonl_events", "semantic_boundary_fixture"]

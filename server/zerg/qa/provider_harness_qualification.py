@@ -381,7 +381,7 @@ def _full_column_gate(
             data = result.get("data")
             assertions = data.get("assertions") if isinstance(data, Mapping) else None
             probe_assertions = (
-                [row for row in assertions if isinstance(row, Mapping) and row.get("probe_id") != "shared_title_boundary"]
+                [row for row in assertions if isinstance(row, Mapping) and row.get("status") != "not_applicable"]
                 if isinstance(assertions, list)
                 else []
             )
@@ -391,6 +391,7 @@ def _full_column_gate(
                 and data.get("provider_status") == "pass"
                 and data.get("evidence_class") in {"live_no_token", "live_token"}
                 and bool(probe_assertions)
+                and any(row.get("probe_id") == "shared_title_boundary" for row in probe_assertions)
                 and all(row.get("status") == "pass" for row in probe_assertions)
                 and _validated_live_interaction_artifacts(provider, data)
             )

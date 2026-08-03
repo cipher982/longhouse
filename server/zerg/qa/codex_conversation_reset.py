@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import UTC
 from datetime import datetime
@@ -98,16 +99,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     output_root.mkdir(parents=True)
     workspace = Path(args.cwd).expanduser().resolve(strict=True)
     terminal_path = output_root / "terminal.raw"
-    codex_home = output_root / "codex-home"
-    codex_home.mkdir()
-    isolated_home = output_root / "home"
-    isolated_home.mkdir(mode=0o700)
     api_key = os.environ.get("CODEX_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("CODEX_API_KEY is required; the conversation-reset canary never copies the daily Codex profile")
     engine_bin = shutil.which("longhouse-engine")
     if not engine_bin:
         raise RuntimeError("longhouse-engine is required for the isolated Codex coordination MCP")
+    runtime_root = Path(tempfile.mkdtemp(prefix="longhouse-codex-reset-"))
+    codex_home = runtime_root / "codex-home"
+    codex_home.mkdir(mode=0o700)
+    isolated_home = runtime_root / "home"
+    isolated_home.mkdir(mode=0o700)
     (codex_home / "config.toml").write_text(
         f'[mcp_servers.longhouse]\ncommand = {json.dumps(engine_bin)}\nargs = ["claude-channel", "serve"]\n',
         encoding="utf-8",
@@ -121,12 +123,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     env["LONGHOUSE_CODEX_BIN"] = str(provider_bin)
     env["LONGHOUSE_CODEX_TUI_HOME"] = str(codex_home)
     env["CODEX_HOME"] = str(codex_home)
-    auth_receipt = login_with_api_key(
-        provider_bin,
-        api_key=api_key,
-        environment=env,
-        cwd=workspace,
-    )
+    try:
+        auth_receipt = login_with_api_key(
+            provider_bin,
+            api_key=api_key,
+            environment=env,
+            cwd=workspace,
+        )
+    except Exception:
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise
     env.pop("CODEX_API_KEY", None)
     argv = [
         "longhouse",
@@ -142,15 +148,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ]
     if args.model:
         argv.extend(("--model", args.model))
-    session = ProviderPtySession.start(
-        argv=argv,
-        cwd=workspace,
-        env=env,
-        terminal_path=terminal_path,
-        thread_name="codex-conversation-reset-terminal-drain",
-    )
+    session: ProviderPtySession | None = None
     observation: dict[str, Any] | None = None
     try:
+        session = ProviderPtySession.start(
+            argv=argv,
+            cwd=workspace,
+            env=env,
+            terminal_path=terminal_path,
+            thread_name="codex-conversation-reset-terminal-drain",
+        )
         state_root = isolated_home / ".longhouse" / "managed-local" / "codex-bridge"
 
         def launched_state():
@@ -284,7 +291,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         session.submit_line("/exit")
         return observation
     finally:
-        session.close()
+        if session is not None:
+            session.close()
         (output_root / "summary.json").write_text(
             json.dumps(
                 execution_summary(
@@ -297,6 +305,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             + "\n",
             encoding="utf-8",
         )
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
