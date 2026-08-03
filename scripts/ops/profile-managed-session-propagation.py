@@ -89,6 +89,7 @@ BATCH_METRIC_KEYS = (
     "waterfall_server_store_to_fanout_ms",
     "waterfall_server_fanout_to_client_received_ms",
     "waterfall_client_received_to_rendered_ms",
+    "waterfall_ios_total_provider_to_first_render_ms",
 )
 WATERFALL_STAGE_KEYS = (
     "provider_to_engine_observed",
@@ -386,10 +387,35 @@ class Profiler:
         deep_link = f"ai.longhouse.ios://session/{session_id}"
         if self.args.ios_simulator:
             target = self.args.ios_simulator
+            simulator_auth_bootstrapped = False
+            token = self.browser_session_cookie()
+            if token:
+                launch_env = {
+                    **os.environ,
+                    "SIMCTL_CHILD_LONGHOUSE_PROFILE_SERVER_URL": self.browser_ui_base_url,
+                    "SIMCTL_CHILD_LONGHOUSE_PROFILE_SESSION_TOKEN": token,
+                }
+                launch = subprocess.run(
+                    [
+                        "xcrun",
+                        "simctl",
+                        "launch",
+                        "--terminate-running-process",
+                        target,
+                        self.args.ios_bundle_id,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                    env=launch_env,
+                )
+                simulator_auth_bootstrapped = launch.returncode == 0
             command = ["xcrun", "simctl", "openurl", target, deep_link]
             observation_source = "ios_simulator"
         else:
             target = self.args.ios_device
+            simulator_auth_bootstrapped = False
             command = [
                 "xcrun",
                 "devicectl",
@@ -413,6 +439,13 @@ class Profiler:
                 timeout=30,
                 check=False,
             )
+            stream_ready = False
+            stream_ready_wait_ms = 0
+            if completed.returncode == 0 and self.args.ios_simulator:
+                stream_ready, stream_ready_wait_ms = self.wait_for_ios_simulator_stream_ready(
+                    target=target,
+                    session_id=session_id,
+                )
             payload = {
                 "device": target,
                 "bundle_id": self.args.ios_bundle_id,
@@ -421,6 +454,9 @@ class Profiler:
                 "returncode": completed.returncode,
                 "stdout": completed.stdout[-2000:],
                 "stderr": completed.stderr[-2000:],
+                "auth_bootstrapped": simulator_auth_bootstrapped,
+                "stream_ready": stream_ready,
+                "stream_ready_wait_ms": stream_ready_wait_ms,
             }
             self.observe(
                 case_id=case_id,
@@ -451,6 +487,45 @@ class Profiler:
                     "error": str(error),
                 },
             )
+
+    def wait_for_ios_simulator_stream_ready(
+        self,
+        *,
+        target: str,
+        session_id: str,
+        timeout_seconds: float = 12.0,
+    ) -> tuple[bool, int]:
+        started = monotonic_ms()
+        container = subprocess.run(
+            [
+                "xcrun",
+                "simctl",
+                "get_app_container",
+                target,
+                self.args.ios_bundle_id,
+                "data",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if container.returncode != 0:
+            return False, monotonic_ms() - started
+        data_root = Path(container.stdout.strip())
+        marker = (
+            data_root
+            / "Library"
+            / "Caches"
+            / "longhouse-profiler-stream-ready"
+            / f"{session_id}.connected"
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if marker.is_file():
+                return True, monotonic_ms() - started
+            time.sleep(0.1)
+        return False, monotonic_ms() - started
 
     def run_observed(
         self,
@@ -648,7 +723,13 @@ if table("session_observations"):
             "payload_json": json.dumps(inner, sort_keys=True),
         })
         payload["runtime_observations"].append(row)
+if table("client_render_receipts"):
+    client_rows = rows("SELECT observation_id AS id, 'client_render_beacon' AS source, observed_at, received_at, payload_json FROM client_render_receipts WHERE session_id=? ORDER BY observed_at DESC LIMIT ?", (sid, runtime_observation_limit))
+elif table("session_observations"):
     client_rows = rows("SELECT id, source, observed_at, received_at, payload_json FROM session_observations WHERE session_id=? AND source_domain='client' AND kind='client_render' ORDER BY id DESC LIMIT ?", (sid, runtime_observation_limit))
+else:
+    client_rows = []
+if client_rows:
     payload["client_render_observations"] = []
     for row in client_rows:
         payload_json = row.pop("payload_json") or "{}"
@@ -4201,13 +4282,20 @@ except Exception as exc:
         runtime = hosted.get("runtime_state") or {}
         waterfall_report = self.hosted_latency_report(session_id) or {}
         browser_render_beacons = self.browser_client_render_beacons(case_id, session_id)
+        persisted_render_beacons = self.persisted_client_render_beacons(hosted)
+        all_render_beacons = browser_render_beacons + persisted_render_beacons
         web_waterfall = select_propagation_waterfall(waterfall_report, surface="web")
         if web_waterfall is None:
             web_waterfall = select_live_beacon_waterfall(
-                browser_render_beacons,
+                all_render_beacons,
                 surface="web",
             )
         ios_waterfall = select_propagation_waterfall(waterfall_report, surface="ios")
+        if ios_waterfall is None:
+            ios_waterfall = select_live_beacon_waterfall(
+                all_render_beacons,
+                surface="ios",
+            )
         state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
         client_state = state_render_beacon_metrics(
             hosted,
@@ -4723,6 +4811,14 @@ except Exception as exc:
             if ios_waterfall
             else None
         )
+        metrics["ios_live_first_pass"] = (
+            metrics["waterfall_ios_total_provider_to_first_render_ms"]
+            <= live_first_output_target_ms()
+            if isinstance(
+                metrics["waterfall_ios_total_provider_to_first_render_ms"], int
+            )
+            else None
+        )
         for stage_key in WATERFALL_STAGE_KEYS:
             metrics[f"waterfall_ios_{stage_key}_ms"] = (
                 ((ios_waterfall.get("stages") or {}).get(stage_key) or {}).get(
@@ -4782,6 +4878,7 @@ except Exception as exc:
             metrics["live_first_pass"] = (
                 live_first_from_local_latency <= live_first_output_target_ms()
             )
+        ios_live_note = ""
         if self.args.provider_to_pixel_only:
             waterfall_total = metrics.get("waterfall_total_provider_to_first_render_ms")
             live_first_from_local_latency = (
@@ -4807,6 +4904,22 @@ except Exception as exc:
             )
             live_ui_source = "client_render_beacon"
             live_timing_source = "ship_trace.v1"
+            if self.args.ios_device or self.args.ios_simulator:
+                ios_total = metrics.get(
+                    "waterfall_ios_total_provider_to_first_render_ms"
+                )
+                ios_state = (
+                    "pass"
+                    if metrics["ios_live_first_pass"] is True
+                    else "slow"
+                    if isinstance(ios_total, int)
+                    else "missing"
+                )
+                ios_live_note = (
+                    f" ios={ios_state} output_to_pixel={ios_total}ms"
+                    if isinstance(ios_total, int)
+                    else " ios=missing"
+                )
 
         promotion_note = "promotion=not_applicable"
         if requires_promotion:
@@ -4850,6 +4963,7 @@ except Exception as exc:
                 live_ui += (
                     f" live_tail_non_slo_from_local={live_full_from_local_latency}ms"
                 )
+        live_ui += ios_live_note
 
         cold_note = "cold=not_run"
         if requires_cold:
@@ -5122,7 +5236,11 @@ except Exception as exc:
                 f"ownership={ownership}, transport={transport}"
             )
             return verdict, metrics["notes"], metrics
-        if requires_live and is_managed_case and metrics["live_first_pass"] is not True:
+        requires_ios = bool(self.args.ios_device or self.args.ios_simulator)
+        if requires_live and is_managed_case and (
+            metrics["live_first_pass"] is not True
+            or (requires_ios and metrics["ios_live_first_pass"] is not True)
+        ):
             metrics["verdict"] = "fail"
             metrics["notes"] = (
                 f"{promotion_note}; {live_ui}; transcript={transcript}; {close_note}; "
@@ -5216,6 +5334,18 @@ except Exception as exc:
                 beacons.append(value)
         return beacons
 
+    @staticmethod
+    def persisted_client_render_beacons(data: dict[str, Any]) -> list[dict[str, Any]]:
+        beacons: list[dict[str, Any]] = []
+        for row in data.get("client_render_observations") or []:
+            if not isinstance(row, dict):
+                continue
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+            if payload.get("render_kind") not in {"event", "state"}:
+                continue
+            beacons.append(payload)
+        return beacons
+
     def wait_for_provider_to_pixel(
         self,
         case_id: str,
@@ -5224,25 +5354,39 @@ except Exception as exc:
         ownership: str,
         timeout: float = 15,
     ) -> dict[str, Any] | None:
-        """Wait only for the browser's trace-bearing paint receipt."""
+        """Wait for every enabled client's trace-bearing paint receipt."""
 
         deadline = time.monotonic() + timeout
+        required_surfaces = {"web"}
+        if self.args.ios_device or self.args.ios_simulator:
+            required_surfaces.add("ios")
+        observed: dict[str, dict[str, Any]] = {}
+        next_persisted_poll = 0.0
+        persisted_beacons: list[dict[str, Any]] = []
         while time.monotonic() < deadline:
-            waterfall = select_live_beacon_waterfall(
-                self.browser_client_render_beacons(case_id, session_id),
-                surface="web",
-            )
-            if waterfall is not None:
+            browser_beacons = self.browser_client_render_beacons(case_id, session_id)
+            now = time.monotonic()
+            if required_surfaces - observed.keys() and now >= next_persisted_poll:
+                hosted = self.hosted_db_direct(session_id) or {}
+                persisted_beacons = self.persisted_client_render_beacons(hosted)
+                next_persisted_poll = now + 0.25
+            beacons = browser_beacons + persisted_beacons
+            for surface in sorted(required_surfaces - observed.keys()):
+                waterfall = select_live_beacon_waterfall(beacons, surface=surface)
+                if waterfall is None:
+                    continue
+                observed[surface] = waterfall
                 self.observe(
                     case_id=case_id,
                     provider=self.args.provider,
                     ownership=ownership,
-                    source="browser_ui",
+                    source=f"{surface}_client_render_receipt",
                     event="provider_to_pixel_observed",
                     session_id=session_id,
                     payload=waterfall,
                 )
-                return waterfall
+            if required_surfaces <= observed.keys():
+                return observed.get("web") or next(iter(observed.values()))
             time.sleep(0.02)
         self.observe(
             case_id=case_id,
@@ -5251,7 +5395,11 @@ except Exception as exc:
             source="browser_ui",
             event="provider_to_pixel_timeout",
             session_id=session_id,
-            payload={"timeout_ms": round(timeout * 1000)},
+            payload={
+                "timeout_ms": round(timeout * 1000),
+                "required_surfaces": sorted(required_surfaces),
+                "observed_surfaces": sorted(observed),
+            },
         )
         return None
 

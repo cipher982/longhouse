@@ -399,6 +399,22 @@ def test_live_render_beacon_builds_waterfall_without_archive_tables() -> None:
     assert waterfall["gaps"] == ["durable_store_is_not_on_live_preview_critical_path"]
 
 
+def test_catalog_render_receipts_feed_web_and_ios_matrix_metrics() -> None:
+    web = {"surface": "web", "render_kind": "event", "ship_trace_id": "trace-web"}
+    ios = {"surface": "ios", "render_kind": "event", "ship_trace_id": "trace-ios"}
+
+    assert profiler.Profiler.persisted_client_render_beacons(
+        {
+            "client_render_observations": [
+                {"payload": web},
+                {"payload": ios},
+                {"payload": {"surface": "ios", "render_kind": "ignored"}},
+            ]
+        }
+    ) == [web, ios]
+    assert "waterfall_ios_total_provider_to_first_render_ms" in profiler.BATCH_METRIC_KEYS
+
+
 def test_single_provider_run_is_aggregated_for_smoke_matrix() -> None:
     aggregate, cases = matrix_profiler.single_run_aggregate(
         {
@@ -430,6 +446,7 @@ if __name__ == "__main__":
         test_manifest_moves_legacy_metric_out_of_hard_targeting,
         test_batch_clean_metrics_exclude_classified_failures,
         test_http_protocol_browser_error_is_transport_contamination,
+        test_catalog_render_receipts_feed_web_and_ios_matrix_metrics,
     ):
         test()
     print("session propagation SLA tests passed")
