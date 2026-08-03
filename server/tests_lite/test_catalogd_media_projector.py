@@ -42,9 +42,7 @@ def _media_params(
         "mime_type": "image/png" if present else None,
         "byte_size": 123 if present else None,
         "object_path": f"media/{media_hash[:2]}/{media_hash}.bin" if present else None,
-        "session_refs": (
-            [{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []
-        ),
+        "session_refs": ([{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []),
         "observed_at": observed_at.isoformat(),
     }
 
@@ -519,6 +517,84 @@ async def test_projector_store_replacement_requeues_completed_state_exactly_once
             {"projector": projector, "after_session_id": None, "limit": 10},
         )
         assert lagged_again["states"][0]["completed_revision"] == "0"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_projector_state_requeue_resets_only_explicit_completed_sessions(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    projector = "search-v2"
+    session_ids = [str(uuid4()), str(uuid4())]
+    target_session_id = min(session_ids)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for session_id in session_ids:
+            await client.call(
+                "projector.state.advance.v2",
+                {
+                    "projector": projector,
+                    "session_id": session_id,
+                    "desired_revision": 7,
+                    "observed_at": now.isoformat(),
+                },
+            )
+        claim_token = str(uuid4())
+        claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "search-worker",
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert {state["session_id"] for state in claim["claimed"]} == set(session_ids)
+        for session_id in session_ids:
+            await client.call(
+                "projector.state.complete.v2",
+                {
+                    "projector": projector,
+                    "session_id": session_id,
+                    "claim_token": claim_token,
+                    "completed_revision": 7,
+                    "completed_at": now.isoformat(),
+                },
+            )
+
+        repaired = await client.call(
+            "projector.state.requeue.v2",
+            {
+                "projector": projector,
+                "session_ids": [target_session_id],
+                "observed_at": now.isoformat(),
+            },
+        )
+        assert repaired["changed"] is True
+        assert repaired["requeued_session_ids"] == [target_session_id]
+        assert repaired["missing_session_ids"] == []
+        lag = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": projector, "after_session_id": None, "limit": 10},
+        )
+        assert [(state["session_id"], state["completed_revision"]) for state in lag["states"]] == [(target_session_id, "0")]
+
+        replay = await client.call(
+            "projector.state.requeue.v2",
+            {
+                "projector": projector,
+                "session_ids": [target_session_id],
+                "observed_at": now.isoformat(),
+            },
+        )
+        assert replay["changed"] is False
+        assert replay["requeued_session_ids"] == []
     finally:
         await client.close()
         await daemon.close()

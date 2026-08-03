@@ -402,6 +402,8 @@ class CatalogDaemon:
             return await self._fail_projector_claim(request)
         if request.method == "projector.state.list_lag.v2":
             return await self._list_projector_lag(request)
+        if request.method == "projector.state.requeue.v2":
+            return await self._requeue_projector_states(request)
         if request.method == "projector.store.bind.v2":
             return await self._bind_projector_store(request)
         if request.method == "migration.run.create.v2":
@@ -2914,6 +2916,31 @@ class CatalogDaemon:
             after_session_id=after_session_id,
             limit=limit,
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _requeue_projector_states(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"projector", "session_ids", "observed_at"}:
+            return self._error(request, "invalid_request", "projector.state.requeue.v2 has invalid parameters")
+        try:
+            projector = _projector_name(request.params["projector"])
+            raw_session_ids = request.params["session_ids"]
+            if not isinstance(raw_session_ids, list) or not 1 <= len(raw_session_ids) <= 100:
+                raise ValueError("session_ids must contain from 1 through 100 UUIDs")
+            session_ids = [_canonical_uuid(value, "session_ids") for value in raw_session_ids]
+            if len(set(session_ids)) != len(session_ids):
+                raise ValueError("session_ids must be unique")
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.requeue_projector_states,
+            projector=projector,
+            session_ids=session_ids,
+            observed_at=observed_at,
+        )
+        if result.get("missing_session_ids"):
+            return self._error(request, "not_found", "one or more projector states do not exist")
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _bind_projector_store(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
