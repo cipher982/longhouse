@@ -334,11 +334,11 @@ def _negative_store_inventory(
     source_rows: list[Any],
     *,
     resolved_root: Path,
-    receipt: Mapping[str, Any],
+    provider_store_root: str,
 ) -> tuple[Path, dict[str, tuple[int, str]]] | None:
     """Rebuild the captured store inventory instead of trusting its counts."""
 
-    store_root_value = receipt.get("provider_store_root")
+    store_root_value = provider_store_root
     if not isinstance(store_root_value, str) or not store_root_value.strip() or Path(store_root_value).is_absolute():
         return None
     raw_store_root = resolved_root / store_root_value
@@ -439,7 +439,14 @@ def _live_negative_provenance(
     if not stable_capture:
         return STATUS_BLOCKED, "interaction_negative_capture_incomplete"
 
-    inventory = _negative_store_inventory(source_rows, resolved_root=resolved_root, receipt=receipt)
+    provider_store_root = receipt.get("provider_store_root")
+    if not isinstance(provider_store_root, str):
+        return STATUS_BLOCKED, "interaction_negative_store_receipt_missing"
+    inventory = _negative_store_inventory(
+        source_rows,
+        resolved_root=resolved_root,
+        provider_store_root=provider_store_root,
+    )
     if inventory is None:
         return STATUS_FAIL, "interaction_negative_store_inventory_invalid"
     store_root, observed_files = inventory
@@ -646,7 +653,7 @@ def evaluate_observation(
             allow_parser_semantics=not live_evidence,
         )
         first = semantic_rows[0] if semantic_rows else {}
-        expected_kind_present = any(semantics.get("interaction_kind") == probe.expected_interaction_kind for semantics in semantic_rows)
+        expected_kind_present = first.get("interaction_kind") == probe.expected_interaction_kind
         evidence_text = "\n".join(_event_evidence_text(event) for event in event_rows)
         output_text = "\n".join(_event_evidence_text(event) for event in event_rows)
         raw_output_markers_present = all(marker in output_text for marker in probe.raw_output_markers)
@@ -869,6 +876,14 @@ def evaluate_observation(
                         "failure_code": None if all(boundary_assertions.values()) else "interaction_title_boundary_assertion_failed",
                         "assertions": boundary_assertions,
                         "semantic_events": [marker_semantics, unknown_semantics],
+                    }
+                )
+            else:
+                assertion_rows.append(
+                    {
+                        "probe_id": "shared_title_boundary",
+                        "status": STATUS_BLOCKED,
+                        "failure_code": "interaction_title_boundary_observation_missing",
                     }
                 )
     statuses = [str(row.get("status") or STATUS_FAIL) for row in assertion_rows]
