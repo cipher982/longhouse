@@ -948,8 +948,16 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             .capitalized
     }
 
+    /// Host shown beside "Remote control" in System Facts.
+    ///
+    /// Reads `realtime`, which is where the native envelope actually carries the
+    /// runtime URL. It used to read `launch_readiness.stored_url`, a shape the
+    /// native producer never emits, so this silently returned "-" on every real
+    /// machine and the panel simply omitted the Runtime Host it was connected
+    /// to. Only the fixtures still had the old key, which is why the rendered
+    /// fixture looked more complete than the live product.
     public var hostValueLabel: String {
-        let rawURL = launchReadiness?.storedURL ?? launchReadiness?.runner?.runnerURLs?.first
+        let rawURL = realtime?.runtimeUrl
         guard let rawURL,
               let parsedURL = URL(string: rawURL),
               let host = parsedURL.host,
