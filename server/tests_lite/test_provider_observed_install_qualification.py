@@ -135,6 +135,7 @@ def test_cursor_observed_install_runs_full_exact_column(tmp_path: Path) -> None:
     assert Path(result["artifact_path"]).is_file()
 
 
+@pytest.mark.timeout(60)
 def test_cursor_observed_install_rejects_gate_for_different_executable(tmp_path: Path) -> None:
     root, binary, _ = _fake_cursor_install(tmp_path)
     gate0 = _gate0_artifact(tmp_path, identity="sha256:" + "0" * 64)
