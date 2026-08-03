@@ -321,6 +321,8 @@ class Profiler:
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
         self._observe_lock = threading.Lock()
         self._browser_session_cookie: str | None = None
+        self._ios_open_lock = threading.Lock()
+        self._ios_opened_sessions: set[str] = set()
 
     def observe(
         self,
@@ -359,6 +361,87 @@ class Profiler:
             self.observations.append(row)
             with self.observations_path.open("a") as fh:
                 fh.write(json.dumps(row, sort_keys=True) + "\n")
+        if event == "session_id_observed" and session_id and self.args.ios_device:
+            self.open_ios_session(
+                case_id=case_id,
+                ownership=ownership,
+                session_id=session_id,
+            )
+
+    def open_ios_session(
+        self,
+        *,
+        case_id: str,
+        ownership: str,
+        session_id: str,
+    ) -> None:
+        """Open the measured detail before provider output so iOS pixels join the trace."""
+
+        with self._ios_open_lock:
+            if session_id in self._ios_opened_sessions:
+                return
+            self._ios_opened_sessions.add(session_id)
+        deep_link = f"ai.longhouse.ios://session/{session_id}"
+        command = [
+            "xcrun",
+            "devicectl",
+            "device",
+            "process",
+            "launch",
+            "--device",
+            self.args.ios_device,
+            "--terminate-existing",
+            "--payload-url",
+            deep_link,
+            self.args.ios_bundle_id,
+        ]
+        started = monotonic_ms()
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            payload = {
+                "device": self.args.ios_device,
+                "bundle_id": self.args.ios_bundle_id,
+                "deep_link": deep_link,
+                "elapsed_ms": monotonic_ms() - started,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout[-2000:],
+                "stderr": completed.stderr[-2000:],
+            }
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="ios_device",
+                event="ios_session_opened"
+                if completed.returncode == 0
+                else "ios_session_open_failed",
+                session_id=session_id,
+                payload=payload,
+            )
+            if completed.returncode == 0 and self.args.ios_ready_delay_ms > 0:
+                time.sleep(self.args.ios_ready_delay_ms / 1000)
+        except (OSError, subprocess.SubprocessError) as error:
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="ios_device",
+                event="ios_session_open_failed",
+                session_id=session_id,
+                payload={
+                    "device": self.args.ios_device,
+                    "bundle_id": self.args.ios_bundle_id,
+                    "deep_link": deep_link,
+                    "elapsed_ms": monotonic_ms() - started,
+                    "error": str(error),
+                },
+            )
 
     def run_observed(
         self,
@@ -4574,6 +4657,19 @@ except Exception as exc:
             metrics["waterfall_total_provider_to_first_render_ms"] = None
             for stage_key in WATERFALL_STAGE_KEYS:
                 metrics[f"waterfall_{stage_key}_ms"] = None
+        metrics["waterfall_ios_total_provider_to_first_render_ms"] = (
+            ios_waterfall.get("total_provider_to_first_render_ms")
+            if ios_waterfall
+            else None
+        )
+        for stage_key in WATERFALL_STAGE_KEYS:
+            metrics[f"waterfall_ios_{stage_key}_ms"] = (
+                ((ios_waterfall.get("stages") or {}).get(stage_key) or {}).get(
+                    "duration_ms"
+                )
+                if ios_waterfall
+                else None
+            )
         if not session:
             metrics["verdict"] = "missing"
             metrics["notes"] = "hosted session row not observed"
@@ -5434,14 +5530,22 @@ def select_live_beacon_waterfall(
             "key": key,
             "duration_ms": duration,
             "confidence": "observed"
-            if key in {"engine_observed_to_enqueued", "engine_enqueued_to_job_started", "engine_job_started_to_http_send", "client_received_to_rendered"}
+            if key
+            in {
+                "engine_observed_to_enqueued",
+                "engine_enqueued_to_job_started",
+                "engine_job_started_to_http_send",
+                "client_received_to_rendered",
+            }
             else "derived",
             "source": "live_render_beacon",
         }
     measured = [
         stage for stage in stages.values() if isinstance(stage.get("duration_ms"), int)
     ]
-    bottleneck = max(measured, key=lambda stage: stage["duration_ms"]) if measured else None
+    bottleneck = (
+        max(measured, key=lambda stage: stage["duration_ms"]) if measured else None
+    )
     total = (
         max(0, rendered - provider_observed)
         if rendered is not None and provider_observed is not None
@@ -6421,6 +6525,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Skip the Playwright browser layer and keep the profiler to HTTP/SSE/DB observers.",
     )
+    parser.add_argument(
+        "--ios-device",
+        help="Optional physical iPhone identifier/name to open on each measured session.",
+    )
+    parser.add_argument("--ios-bundle-id", default="ai.longhouse.ios")
+    parser.add_argument(
+        "--ios-ready-delay-ms",
+        type=int,
+        default=750,
+        help="Delay after opening the iOS detail before continuing provider setup.",
+    )
     parser.add_argument("--skip-managed", action="store_true")
     parser.add_argument("--skip-unmanaged", action="store_true")
     parser.add_argument(
@@ -6463,6 +6578,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def normalize_args(args: argparse.Namespace) -> None:
+    if args.ios_ready_delay_ms < 0:
+        raise SystemExit("--ios-ready-delay-ms must be >= 0")
     if args.profile in {"cold-timeline", "warm-live"}:
         if args.skip_browser_ui:
             raise SystemExit(
@@ -6490,6 +6607,8 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             "browser_ui_base_url": profiler.browser_ui_base_url,
             "browser_ui_enabled": not args.skip_browser_ui,
             "browser_transport": args.browser_transport,
+            "ios_device": args.ios_device,
+            "ios_bundle_id": args.ios_bundle_id if args.ios_device else None,
             "profile_class": profiler.profile_class,
             "sla_case_id": profiler.sla_case.get("id") if profiler.sla_case else None,
             "sla_status": profiler.sla_case.get("status")

@@ -339,6 +339,9 @@ def test_provider_to_pixel_matrix_covers_every_launch_provider() -> None:
     assert matrix_profiler.SUMMARY_METRICS[0] == (
         "waterfall_total_provider_to_first_render_ms"
     )
+    args = matrix_profiler.parse_args(["--ios-device", "olive"])
+    assert args.ios_device == "olive"
+    assert args.ios_bundle_id == "ai.longhouse.ios"
 
 
 def test_live_render_beacon_builds_waterfall_without_archive_tables() -> None:
@@ -385,7 +388,10 @@ def test_single_provider_run_is_aggregated_for_smoke_matrix() -> None:
     assert len(cases) == 1
     assert aggregate["batch_verdict"] == "slow"
     assert aggregate["clean_observation_count"] == 1
-    assert aggregate["clean_metrics"]["waterfall_total_provider_to_first_render_ms"]["p50"] == 123
+    assert (
+        aggregate["clean_metrics"]["waterfall_total_provider_to_first_render_ms"]["p50"]
+        == 123
+    )
 
 
 if __name__ == "__main__":

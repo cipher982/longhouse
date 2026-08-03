@@ -108,7 +108,9 @@ def hosted_identity(subdomain: str) -> dict[str, Any] | None:
     return None
 
 
-def single_run_aggregate(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def single_run_aggregate(
+    metrics: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     case = next(iter(metrics.get("cases") or []), {})
     if not isinstance(case, dict) or not case:
         return {}, []
@@ -120,7 +122,9 @@ def single_run_aggregate(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[
 
     def stats(key: str) -> dict[str, Any]:
         value = case.get(key)
-        values = [value] if isinstance(value, int) and not isinstance(value, bool) else []
+        values = (
+            [value] if isinstance(value, int) and not isinstance(value, bool) else []
+        )
         return {
             "count": len(values),
             "min": value if values else None,
@@ -139,7 +143,9 @@ def single_run_aggregate(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[
     clean_metrics = {key: stats(key) for key in metric_keys}
     if not clean:
         for metric in clean_metrics.values():
-            metric.update({"count": 0, "min": None, "p50": None, "p95": None, "max": None})
+            metric.update(
+                {"count": 0, "min": None, "p50": None, "p95": None, "max": None}
+            )
     aggregate = {
         **all_metrics,
         "clean_observation_count": 1 if clean else 0,
@@ -162,13 +168,14 @@ def write_summary(path: Path, payload: dict[str, Any]) -> None:
         f"- Generated: `{payload['generated_at']}`",
         f"- Requested iterations per provider: `{payload['iterations']}`",
         "",
-        "| Provider | Clean | Verdict | Local output → web p50 | p95 | Waterfall bottleneck p50 |",
-        "| --- | ---: | --- | ---: | ---: | --- |",
+        "| Provider | Clean | Verdict | Output → web p50 | web p95 | Output → iOS p50 | Waterfall bottleneck p50 |",
+        "| --- | ---: | --- | ---: | ---: | ---: | --- |",
     ]
     for provider in payload["providers"]:
         aggregate = provider.get("aggregate") or {}
         clean = aggregate.get("clean_metrics") or {}
         total = clean.get("waterfall_total_provider_to_first_render_ms") or {}
+        ios_total = clean.get("waterfall_ios_total_provider_to_first_render_ms") or {}
         bottleneck = None
         for key in SUMMARY_METRICS[1:10]:
             metric = clean.get(key) or {}
@@ -184,6 +191,7 @@ def write_summary(path: Path, payload: dict[str, Any]) -> None:
                     str(aggregate.get("batch_verdict") or "missing"),
                     format_ms(total.get("p50")),
                     format_ms(total.get("p95")),
+                    format_ms(ios_total.get("p50")),
                     f"{bottleneck[0]} {bottleneck[1]}ms" if bottleneck else "-",
                 ]
             )
@@ -212,6 +220,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         choices=["default", "disable-quic"],
         default="disable-quic",
     )
+    parser.add_argument("--ios-device")
+    parser.add_argument("--ios-bundle-id", default="ai.longhouse.ios")
+    parser.add_argument("--ios-ready-delay-ms", type=int, default=750)
     return parser.parse_args(argv)
 
 
@@ -273,6 +284,17 @@ def main(argv: list[str]) -> int:
         ]
         if args.container:
             command.extend(["--container", args.container])
+        if args.ios_device:
+            command.extend(
+                [
+                    "--ios-device",
+                    args.ios_device,
+                    "--ios-bundle-id",
+                    args.ios_bundle_id,
+                    "--ios-ready-delay-ms",
+                    str(args.ios_ready_delay_ms),
+                ]
+            )
         if provider == "codex":
             command.extend(["--trust-longhouse-codex-hooks", "--codex-effort", "low"])
         completed = subprocess.run(command, cwd=ROOT, check=False)
@@ -280,15 +302,21 @@ def main(argv: list[str]) -> int:
         aggregate = batch.get("aggregate") or {}
         runs = batch.get("runs") or []
         if not aggregate and args.iterations == 1:
-            aggregate, cases = single_run_aggregate(read_json(provider_dir / "metrics.json"))
-            runs = [
-                {
-                    "run_id": provider_run_id,
-                    "metrics_path": str(provider_dir / "metrics.json"),
-                    "exit_code": completed.returncode,
-                    "verdict": aggregate.get("batch_verdict", "error"),
-                }
-            ] if cases else []
+            aggregate, cases = single_run_aggregate(
+                read_json(provider_dir / "metrics.json")
+            )
+            runs = (
+                [
+                    {
+                        "run_id": provider_run_id,
+                        "metrics_path": str(provider_dir / "metrics.json"),
+                        "exit_code": completed.returncode,
+                        "verdict": aggregate.get("batch_verdict", "error"),
+                    }
+                ]
+                if cases
+                else []
+            )
         payload["providers"].append(
             {
                 "provider": provider,
