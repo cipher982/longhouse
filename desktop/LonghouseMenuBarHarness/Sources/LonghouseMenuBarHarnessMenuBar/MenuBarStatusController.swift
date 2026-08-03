@@ -146,8 +146,18 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionColor() -> NSColor? {
-        if store.loadError != nil && store.snapshot == nil && !store.isRecovering {
-            return .systemRed
+        // A failing producer must reach the icon whether or not a cached
+        // snapshot is on screen. Gating this on `snapshot == nil` is what let a
+        // stale cache hold the icon normal through eleven days of failures.
+        if !store.isRecovering {
+            switch store.dataTrust() {
+            case .neverLoaded:
+                return .systemRed
+            case .lastKnown:
+                return .systemOrange
+            case .current:
+                break
+            }
         }
         guard let snapshot = store.snapshot else {
             return nil
@@ -167,11 +177,19 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionLabel() -> String? {
-        if store.loadError != nil && store.snapshot == nil && !store.isRecovering {
-            return "Longhouse needs attention"
-        }
         if store.isRecovering {
             return "Longhouse is catching up"
+        }
+        switch store.dataTrust() {
+        case .neverLoaded:
+            return "Longhouse needs attention"
+        case let .lastKnown(context):
+            if let age = context.age(relativeTo: Date()) {
+                return "Longhouse status is \(SnapshotAgeFormatter.compact(age)) old — refresh is failing"
+            }
+            return "Longhouse status is out of date — refresh is failing"
+        case .current:
+            break
         }
         guard let snapshot = store.snapshot else {
             return nil

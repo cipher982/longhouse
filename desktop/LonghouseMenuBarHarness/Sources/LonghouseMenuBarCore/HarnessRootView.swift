@@ -36,7 +36,12 @@ public struct HarnessRootView: View {
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
                     isManualRefreshing: store.isManualRefreshActive || store.isRecovering,
-                    headerSummaryVariant: headerSummaryVariant
+                    headerSummaryVariant: headerSummaryVariant,
+                    // Recomputed against presentationDate so the banner appears
+                    // and its age advances while the panel stays open.
+                    dataTrust: store.isRecovering
+                        ? .current
+                        : store.dataTrust(relativeTo: store.presentationDate)
                 ) {
                     store.refresh(reason: .manual)
                 }

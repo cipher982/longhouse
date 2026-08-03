@@ -9,6 +9,15 @@ public enum LonghouseMenuBarAccessibilityID {
         public static let retryButton = "LonghouseMenuBar.Error.RetryButton"
     }
 
+    /// Banner shown whenever the producer refresh is failing, including when a
+    /// cached snapshot is still on screen.
+    public enum StaleBanner {
+        public static let container = "LonghouseMenuBar.StaleBanner"
+        public static let headline = "LonghouseMenuBar.StaleBanner.Headline"
+        public static let detail = "LonghouseMenuBar.StaleBanner.Detail"
+        public static let command = "LonghouseMenuBar.StaleBanner.Command"
+    }
+
     public enum Header {
         public static let statusGlyph = "LonghouseMenuBar.Header.StatusGlyph"
         public static let headline = "LonghouseMenuBar.Header.Headline"

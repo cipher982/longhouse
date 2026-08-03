@@ -18,6 +18,35 @@ private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
     }
 }
 
+/// Succeeds until `startFailing()`, then fails on every subsequent load.
+private final class FlakyHealthSnapshotSource: HealthSnapshotSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private let snapshot: HealthSnapshot
+    private var failing = false
+
+    init(snapshot: HealthSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    var describedCommand: String? { "flaky-test-source" }
+
+    func startFailing() {
+        lock.lock()
+        defer { lock.unlock() }
+        failing = true
+    }
+
+    func load() throws -> HealthSnapshot {
+        lock.lock()
+        let isFailing = failing
+        lock.unlock()
+        if isFailing {
+            throw SnapshotSourceError.commandFailed("producer stopped responding")
+        }
+        return snapshot
+    }
+}
+
 private actor ChangeCounter {
     private(set) var value = 0
     func increment() { value += 1 }
@@ -2354,6 +2383,125 @@ struct LonghouseMenuBarCoreTests {
         return executableURL
     }
 
+    // MARK: - Producer freshness
+    //
+    // Regression coverage for the 2026-07-23 incident: the configured health
+    // exec was deleted, every refresh failed for eleven days, and the panel kept
+    // rendering its last-good cache as if it were current.
+
+    @Test
+    @MainActor
+    func cachedSnapshotWithFailingProducerIsNeverPresentedAsCurrent() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let cacheURL = tempDir.appendingPathComponent("last-good.json")
+        try writeCachedSnapshot(headline: "Cached Longhouse status", to: cacheURL)
+
+        // Exactly the incident shape: --health-exec points at a path that does
+        // not exist, so Process.run() throws before the command ever starts.
+        let store = SnapshotStore(
+            source: CLIHealthSnapshotSource(
+                launchPath: tempDir.appendingPathComponent("longhouse-local-health").path,
+                arguments: ["--fast", "--json"]
+            ),
+            cacheURL: cacheURL,
+            transientRetryDelay: 0.01
+        )
+
+        for _ in 0..<200 where store.loadError == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        // The cache still renders — it is useful evidence.
+        #expect(store.snapshot?.headline == "Cached Longhouse status")
+        // But it must never be mistaken for current data.
+        #expect(store.dataTrust().isCurrent == false)
+        guard case let .neverLoaded(failure) = store.dataTrust() else {
+            Issue.record("expected .neverLoaded, got \(store.dataTrust())")
+            return
+        }
+        // The user has to be able to see which command is broken.
+        #expect(failure?.command?.contains("longhouse-local-health") == true)
+    }
+
+    @Test
+    @MainActor
+    func producerSuccessThenFailureDegradesToLastKnown() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        // Succeeds on the first load, fails on every load after it.
+        let source = FlakyHealthSnapshotSource(snapshot: makeHealthySnapshot())
+        let store = SnapshotStore(
+            source: source,
+            cacheURL: tempDir.appendingPathComponent("last-good.json"),
+            transientRetryDelay: 0.01
+        )
+        #expect(store.dataTrust().isCurrent)
+
+        source.startFailing()
+        store.refresh(reason: .manual)
+        for _ in 0..<200 where store.loadError == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        guard case let .lastKnown(context) = store.dataTrust() else {
+            Issue.record("expected .lastKnown, got \(store.dataTrust())")
+            return
+        }
+        #expect(context.lastSuccessAt != nil)
+        #expect(context.failure?.command == "flaky-test-source")
+        // The snapshot from the successful load is still on screen — the point
+        // is that it is now labelled last-known rather than silently current.
+        #expect(store.snapshot?.headline == "Longhouse shipping healthy")
+    }
+
+    @Test
+    func producerTrustIgnoresPayloadClocksAndDecaysOnDeadline() {
+        let lastSuccess = Date(timeIntervalSince1970: 1_000_000)
+        let state = ProducerRefreshState(lastSuccessAt: lastSuccess, latestFailure: nil)
+
+        // Within deadline and no reported failure: current.
+        #expect(state.trust(relativeTo: lastSuccess.addingTimeInterval(30), deadline: 120) == .current)
+
+        // A producer that simply goes quiet still decays. This is the backstop for
+        // a wedged refresh that never reports a failure at all.
+        let decayed = state.trust(relativeTo: lastSuccess.addingTimeInterval(300), deadline: 120)
+        #expect(decayed.isCurrent == false)
+    }
+
+    @Test
+    func neverAttemptedProducerIsNeverCurrent() {
+        let state = ProducerRefreshState.neverAttempted
+        #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)
+    }
+
+}
+
+@MainActor
+private func writeCachedSnapshot(headline: String, to url: URL) throws {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    try encoder.encode(makeHealthySnapshot(headline: headline)).write(to: url)
+}
+
+private func makeHealthySnapshot(headline: String = "Longhouse shipping healthy") -> HealthSnapshot {
+    HealthSnapshot(
+        schemaVersion: 1,
+        collectedAt: "2026-05-05T12:00:00Z",
+        healthState: "healthy",
+        severity: "green",
+        headline: headline,
+        reasons: [],
+        suggestedActions: [],
+        service: nil,
+        engineStatus: nil,
+        outbox: nil,
+        activitySummary: nil,
+        launchReadiness: nil
+    )
 }
 
 private func presentationSession(phase: String) -> ManagedSessionSnapshot {
