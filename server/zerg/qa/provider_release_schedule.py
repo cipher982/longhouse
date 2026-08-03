@@ -90,8 +90,17 @@ def load_provider_release_schedule(path: Path = DEFAULT_SCHEDULE_PATH) -> Provid
             f"missing={sorted(expected - set(names))}, extra={sorted(set(names) - expected)}"
         )
     live_token = payload.get("live_token")
-    if live_token != {"cadence": "manual", "executor": "manual", "scheduled": False}:
-        raise ProviderReleaseScheduleError("live-token release proof must remain manual and unscheduled")
+    if not isinstance(live_token, dict):
+        raise ProviderReleaseScheduleError("live-token release proof schedule must be an object")
+    if not all(isinstance(live_token.get(key), str) and live_token[key] for key in ("cadence", "executor")):
+        raise ProviderReleaseScheduleError("live-token release proof cadence and executor must be non-empty strings")
+    if not isinstance(live_token.get("scheduled"), bool):
+        raise ProviderReleaseScheduleError("live-token release proof scheduled flag must be explicit")
+    if live_token["scheduled"]:
+        if live_token["executor"] != "private_factory":
+            raise ProviderReleaseScheduleError("scheduled live-token proof must use the private factory")
+    elif live_token != {"cadence": "manual", "executor": "manual", "scheduled": False}:
+        raise ProviderReleaseScheduleError("unscheduled live-token proof must be explicitly manual")
     weekly_cron = payload.get("weekly_cron")
     scheduled_evidence = payload.get("scheduled_evidence")
     measurement_started_at = payload.get("staleness_measurement_started_at")

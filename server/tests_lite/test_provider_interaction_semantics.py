@@ -178,6 +178,63 @@ def test_live_observation_uses_raw_capture_for_turn_and_state_assertions(tmp_pat
     assert row["evidence_basis"]["raw_provenance"] == "pass"
 
 
+def test_live_observation_can_prove_bounded_native_record_absence(tmp_path: Path) -> None:
+    contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "opencode")
+    probe = next(probe for probe in contract.interaction_probes if probe.probe_id == "opencode_help_command")
+    database = tmp_path / "opencode.db"
+    database.write_bytes(b"stable isolated provider database")
+    database_digest = hashlib.sha256(database.read_bytes()).hexdigest()
+    observation = {
+        "provider": "opencode",
+        "evidence_class": "live_no_token",
+        "synthetic": False,
+        "native_source_root": str(tmp_path),
+        "raw_events": [],
+        "probes": [
+            {
+                "probe_id": probe.probe_id,
+                "status": "observed_absence",
+                "raw_events": [],
+                "terminal_acknowledged": True,
+                "capture_complete": True,
+                "post_interaction_quiescent": True,
+                "provider_state_after": False,
+                "native_source_rows": [
+                    {
+                        "source_path": "opencode.db",
+                        "bytes": database.stat().st_size,
+                        "sha256": database_digest,
+                    }
+                ],
+                "capture_receipt": {
+                    "negative_evidence": True,
+                    "completion_signal": "stable_native_store",
+                    "completion_status": 0,
+                    "stable_snapshots": 3,
+                    "stable_seconds": 1.5,
+                    "raw_event_count": 0,
+                    "native_event_count": 0,
+                    "provider_database": {
+                        "source_path": "opencode.db",
+                        "source_sha256": database_digest,
+                        "event_count": 1,
+                        "session_count": 1,
+                        "message_count": 0,
+                        "part_count": 0,
+                    },
+                },
+            }
+        ],
+    }
+
+    result = evaluate_observation("opencode", observation)
+
+    row = next(row for row in result["assertions"] if row["probe_id"] == probe.probe_id)
+    assert row["status"] == "pass"
+    assert row["semantic_events"] == []
+    assert row["evidence_basis"]["native_record_absence"] == "pass"
+
+
 def test_live_observation_does_not_accept_normalized_semantics_from_provider_rows() -> None:
     observation = generated_fake_observation("codex")
     observation["evidence_class"] = "live_no_token"

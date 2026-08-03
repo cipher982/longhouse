@@ -16,9 +16,9 @@
 | opencode | push | generated_fake | runs — 4 scenarios |
 | opencode | weekly_cron | generated_fake | runs — 23 scenarios |
 | opencode | manual | observed_install | never runs — remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary'] |
-| antigravity | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
+| antigravity | release_poll | staged_release | never runs — Antigravity is maintenance-tier and is only qualified by an explicit manual invocation |
 | antigravity | push | generated_fake | runs — 4 scenarios |
-| antigravity | weekly_cron | generated_fake | runs — 23 scenarios |
+| antigravity | weekly_cron | generated_fake | never runs — antigravity is not weekly_unconditional in config/provider-release-schedule.yml |
 | antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed'] |
 | cursor | release_poll | staged_release | never runs — Cursor's release lane only runs against its pinned observed install |
 | cursor | push | generated_fake | runs — 4 scenarios |
@@ -32,5 +32,5 @@
 | codex | runs — 23 scenarios |
 | claude | runs — 23 scenarios |
 | opencode | runs — 23 scenarios |
-| antigravity | runs — 23 scenarios |
+| antigravity | never runs — release lane does not execute the full universal scenario set |
 | cursor | never runs — release lane does not execute the full universal scenario set |

@@ -33,19 +33,23 @@ providers:
   interaction_probes:
   - probe_id: codex_model_picker
     surface: helm_tui
-    input_sequence: ["/model"]
+    input_sequence: ["/model", "(escape)"]
     acknowledgement_oracle: codex_model_picker_open_or_cancel
     native_sources: [native_archive, managed_bridge]
-    raw_markers: ["/model", "model picker"]
-    raw_output_markers: ["model"]
+    # Codex opens this picker in the TUI but persists no rollout record for the
+    # control-only interaction. The live canary proves bounded absence in the
+    # isolated rollout store; terminal text is retained but never promoted to
+    # a transcript row.
+    raw_markers: []
+    raw_output_markers: []
     expected_interaction_kind: local_control
     expected_title_eligibility: false
     expected_model_turn: false
-    changes_provider_state: true
+    changes_provider_state: false
     source_surface: helm_tui
     state_mutation_scope: session_model
     evidence_class: live_no_token
-    disposition: not_implemented
+    disposition: implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
     channel: github_releases
@@ -288,11 +292,11 @@ providers:
     canary: server/zerg/qa/provider_interaction_probe.py
   - probe_id: claude_model_picker
     surface: helm_tui
-    input_sequence: ["/model", "cancel"]
+    input_sequence: ["/model", "(escape)"]
     acknowledgement_oracle: claude_model_picker_cancelled
     native_sources: [provider_file, native_archive, managed_bridge]
-    raw_markers: ["<command-name>", "<command-message>", "model"]
-    raw_output_markers: ["<local-command-stdout>"]
+    raw_markers: []
+    raw_output_markers: []
     expected_interaction_kind: local_control
     expected_title_eligibility: false
     expected_model_turn: false
@@ -300,7 +304,7 @@ providers:
     source_surface: helm_tui
     state_mutation_scope: session_model
     evidence_class: live_no_token
-    disposition: not_implemented
+    disposition: implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   - probe_id: claude_clear_boundary
     surface: helm_tui
@@ -316,8 +320,8 @@ providers:
     source_surface: helm_tui
     state_mutation_scope: conversation_identity
     evidence_class: live_no_token
-    disposition: not_implemented
-    canary: server/zerg/qa/claude_conversation_reset.py
+    disposition: implemented
+    canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
     channel: npm_registry
     coordinate: "@anthropic-ai/claude-code"
@@ -572,24 +576,29 @@ providers:
     input_sequence: ["/new"]
     acknowledgement_oracle: opencode_conversation_reset
     native_sources: [provider_file, native_archive, managed_bridge]
-    raw_markers: ["/new", "session boundary"]
-    raw_output_markers: ["session"]
-    expected_interaction_kind: conversation_boundary
+    # OpenCode's native archive records a session.created.1 event for the
+    # second session. The slash command is visible only in the terminal.
+    raw_markers: ["session.created.1", "sessionID"]
+    raw_output_markers: ["sessionID"]
+    expected_interaction_kind: provider_system
     expected_title_eligibility: false
     expected_model_turn: false
     changes_provider_state: true
     source_surface: helm_tui
     state_mutation_scope: conversation_identity
     evidence_class: live_no_token
-    disposition: not_implemented
+    disposition: implemented
     canary: server/zerg/qa/opencode_conversation_reset.py
   - probe_id: opencode_help_command
     surface: helm_tui
     input_sequence: ["/help"]
     acknowledgement_oracle: opencode_local_help_output
     native_sources: [provider_file, native_archive, managed_bridge]
-    raw_markers: ["/help", "help"]
-    raw_output_markers: ["commands", "help"]
+    # OpenCode renders /help in the terminal but does not persist a message,
+    # part, or control event. The live canary proves that bounded absence
+    # against a stable SQLite snapshot; it must not synthesize raw rows.
+    raw_markers: []
+    raw_output_markers: []
     expected_interaction_kind: local_control
     expected_title_eligibility: false
     expected_model_turn: false
@@ -597,7 +606,7 @@ providers:
     source_surface: helm_tui
     state_mutation_scope: command_help
     evidence_class: live_no_token
-    disposition: not_implemented
+    disposition: implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
     channel: github_releases
@@ -790,7 +799,7 @@ providers:
     raw_output_markers: [native_archive, hooks]
     expected_interaction_kind: provider_system
     expected_title_eligibility: false
-    expected_model_turn: null
+    expected_model_turn: false
     changes_provider_state: null
     source_surface: shadow
     state_mutation_scope: none
@@ -999,16 +1008,21 @@ providers:
     input_sequence: ["cursor-agent --model <fixture-model>"]
     acknowledgement_oracle: cursor_model_launch_metadata
     native_sources: [provider_file, native_archive, managed_bridge]
-    raw_markers: ["--model", "model"]
-    raw_output_markers: ["provider model"]
-    expected_interaction_kind: local_control
+    # Cursor's headless JSONL stream is the native qualification record. The
+    # launch option itself is in the invocation receipt; the stream binds the
+    # selected model and the completed provider result.
+    raw_markers: ["model", "apiKeySource"]
+    raw_output_markers: ["result"]
+    expected_interaction_kind: provider_system
     expected_title_eligibility: false
-    expected_model_turn: false
+    # The qualification request intentionally invokes one short provider
+    # response; the stream proves that model turn and its usage receipt.
+    expected_model_turn: true
     changes_provider_state: true
     source_surface: console
     state_mutation_scope: session_model
-    evidence_class: live_no_token
-    disposition: not_implemented
+    evidence_class: live_token
+    disposition: implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
     channel: observed_only

@@ -55,9 +55,17 @@ import json
 import os
 import shlex
 import sys
+from pathlib import Path
 
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
+    raise SystemExit(0)
+if sys.argv[1:] == ["login", "--with-api-key"]:
+    if not sys.stdin.read().strip():
+        raise SystemExit(4)
+    auth_path = Path(os.environ["CODEX_HOME"]) / "auth.json"
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    auth_path.write_text("{{}}", encoding="utf-8")
     raise SystemExit(0)
 prompt = sys.argv[-1]
 command = prompt.split("exactly this one command: ", 1)[1].split("\\nThen", 1)[0]

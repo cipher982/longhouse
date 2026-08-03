@@ -165,6 +165,13 @@ def test_live_token_request_reaches_the_credentialed_probe(monkeypatch, tmp_path
 
     assert calls == ["live_token"]
     assert result["scenario"] == "interaction_semantics"
+    # Passing the evidence class into a producer is not evidence. This fixture
+    # deliberately returns provider-shaped rows without native byte receipts,
+    # so the harness must retain the artifact but refuse a provider pass.
+    assert result["status"] == "blocked"
+    assert result["operation_evidence"]["provider_interaction_semantics"]["level"] == "none"
+    assert Path(result["raw_observation_path"]).is_file()
+    assert Path(result["raw_events_path"]).is_file()
 
 
 def test_live_probe_setup_block_binds_to_the_qualification_request(monkeypatch, tmp_path: Path) -> None:

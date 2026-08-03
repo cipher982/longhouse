@@ -49,6 +49,15 @@ def _synthetic_raw_event(provider: str, probe: Mapping[str, Any], *, output: boo
         }
     markers = probe.get("raw_output_markers") if output else probe.get("raw_markers")
     marker_text = " ".join(str(marker) for marker in markers or ()).strip()
+    if kind == "provider_system" and not output:
+        return {
+            "type": "system",
+            "role": "system",
+            "content_text": marker_text or command or "provider interaction acknowledgement",
+            "interaction_kind": kind,
+            "changes_provider_state": probe.get("changes_provider_state"),
+            "provider_probe_id": probe.get("probe_id"),
+        }
     return {
         "type": "user",
         "role": "user",
@@ -79,13 +88,22 @@ def generated_fake_observation(provider: str) -> dict[str, Any]:
             continue
         control = _synthetic_raw_event(provider, probe)
         output = _synthetic_raw_event(provider, probe, output=True)
-        raw_events.extend((control, output))
+        probe_events = [control, output]
+        if probe.get("expected_model_turn") is True:
+            probe_events.append(
+                {
+                    "type": "assistant",
+                    "message": {"role": "assistant", "content": "Qualification response."},
+                    "provider_probe_id": probe["probe_id"],
+                }
+            )
+        raw_events.extend(probe_events)
         probe_observations.append(
             {
                 "probe_id": probe["probe_id"],
                 "disposition": disposition,
                 "status": "observed",
-                "raw_events": [control, output],
+                "raw_events": probe_events,
             }
         )
 
@@ -269,18 +287,141 @@ def _live_raw_provenance(
     receipt = row.get("capture_receipt")
     if not isinstance(receipt, Mapping):
         return STATUS_BLOCKED, "interaction_capture_receipt_missing"
-    if (
-        type(receipt.get("stable_snapshots")) is not int
-        or receipt.get("stable_snapshots") < 3
-        or type(receipt.get("stable_seconds")) not in {int, float}
-        or receipt.get("stable_seconds") < MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
-        or receipt.get("raw_event_count") != len(event_rows)
-    ):
+    stable_capture = (
+        type(receipt.get("stable_snapshots")) is int
+        and receipt.get("stable_snapshots") >= 3
+        and type(receipt.get("stable_seconds")) in {int, float}
+        and receipt.get("stable_seconds") >= MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
+    )
+    completed_process_capture = (
+        receipt.get("completion_signal") == "process_exit"
+        and type(receipt.get("completion_status")) is int
+        and receipt.get("completion_status") == 0
+    )
+    if not (stable_capture or completed_process_capture) or receipt.get("raw_event_count") != len(event_rows):
         return STATUS_BLOCKED, "interaction_capture_receipt_incomplete"
     event_digests = "".join(str(source["event_sha256"]) for source in source_rows)
     expected_window_digest = hashlib.sha256(event_digests.encode("ascii")).hexdigest()
     if receipt.get("window_sha256") != expected_window_digest:
         return STATUS_FAIL, "interaction_capture_receipt_mismatch"
+    return STATUS_PASS, None
+
+
+def _live_negative_provenance(
+    row: Mapping[str, Any],
+    *,
+    source_root: str | None,
+) -> tuple[str, str | None]:
+    """Validate a provider-native receipt proving that no event was stored.
+
+    An empty raw-event list is normally incomplete evidence. A provider
+    adapter may opt into the absence form only when it supplies a stable,
+    hash-addressed native store snapshot and explicitly records the native
+    counts it observed. This proves a bounded negative fact (no persisted
+    event in that store), not that every provider-internal side effect is
+    impossible.
+    """
+
+    source_rows = row.get("native_source_rows")
+    if not isinstance(source_rows, list) or not source_rows:
+        return STATUS_BLOCKED, "interaction_negative_provenance_missing"
+    if not isinstance(source_root, str) or not source_root.strip():
+        return STATUS_BLOCKED, "interaction_raw_provenance_root_missing"
+    try:
+        resolved_root = Path(source_root).expanduser().resolve(strict=True)
+        if not resolved_root.is_dir():
+            return STATUS_FAIL, "interaction_negative_provenance_invalid"
+    except OSError:
+        return STATUS_FAIL, "interaction_negative_provenance_invalid"
+
+    receipt = row.get("capture_receipt")
+    if not isinstance(receipt, Mapping) or receipt.get("negative_evidence") is not True:
+        return STATUS_BLOCKED, "interaction_negative_capture_receipt_missing"
+    stable_capture = (
+        receipt.get("completion_signal") == "stable_native_store"
+        and type(receipt.get("completion_status")) is int
+        and receipt.get("completion_status") == 0
+        and type(receipt.get("stable_snapshots")) is int
+        and receipt.get("stable_snapshots") >= 3
+        and type(receipt.get("stable_seconds")) in {int, float}
+        and receipt.get("stable_seconds") >= MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
+        and receipt.get("raw_event_count") == 0
+        and receipt.get("native_event_count") == 0
+    )
+    if not stable_capture:
+        return STATUS_BLOCKED, "interaction_negative_capture_incomplete"
+
+    observed_files: dict[str, tuple[int, str]] = {}
+    for source in source_rows:
+        if not isinstance(source, Mapping):
+            return STATUS_FAIL, "interaction_negative_provenance_invalid"
+        source_path = source.get("source_path")
+        source_bytes = source.get("bytes")
+        source_digest = source.get("sha256")
+        if (
+            not isinstance(source_path, str)
+            or not source_path
+            or Path(source_path).is_absolute()
+            or type(source_bytes) is not int
+            or source_bytes < 0
+            or not isinstance(source_digest, str)
+            or len(source_digest) != 64
+        ):
+            return STATUS_FAIL, "interaction_negative_provenance_invalid"
+        try:
+            resolved_path = (resolved_root / source_path).resolve(strict=True)
+            resolved_path.relative_to(resolved_root)
+            file_bytes = resolved_path.read_bytes()
+        except (OSError, ValueError):
+            return STATUS_FAIL, "interaction_negative_provenance_invalid"
+        if len(file_bytes) != source_bytes or hashlib.sha256(file_bytes).hexdigest() != source_digest:
+            return STATUS_FAIL, "interaction_negative_provenance_invalid"
+        resolved_key = str(resolved_path)
+        if resolved_key in observed_files:
+            return STATUS_FAIL, "interaction_negative_provenance_duplicate"
+        observed_files[resolved_key] = (source_bytes, source_digest)
+
+    provider_database = receipt.get("provider_database")
+    if isinstance(provider_database, Mapping):
+        database_path = provider_database.get("source_path")
+        database_digest = provider_database.get("source_sha256")
+        if (
+            not isinstance(database_path, str)
+            or not database_path
+            or Path(database_path).is_absolute()
+            or not isinstance(database_digest, str)
+            or len(database_digest) != 64
+            or type(provider_database.get("event_count")) is not int
+            or type(provider_database.get("session_count")) is not int
+            or type(provider_database.get("message_count")) is not int
+            or type(provider_database.get("part_count")) is not int
+            or provider_database.get("event_count") != 1
+            or provider_database.get("session_count") != 1
+            or provider_database.get("message_count") != 0
+            or provider_database.get("part_count") != 0
+        ):
+            return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
+        try:
+            resolved_database = (resolved_root / database_path).resolve(strict=True)
+            resolved_database.relative_to(resolved_root)
+        except (OSError, ValueError):
+            return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
+        observed_database = observed_files.get(str(resolved_database))
+        if observed_database is None or observed_database[1] != database_digest:
+            return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
+    else:
+        provider_store = receipt.get("provider_store")
+        if not isinstance(provider_store, Mapping):
+            return STATUS_BLOCKED, "interaction_negative_store_receipt_missing"
+        if (
+            not isinstance(provider_store.get("store_kind"), str)
+            or not provider_store.get("store_kind")
+            or type(provider_store.get("rollout_file_count")) is not int
+            or provider_store.get("rollout_file_count") != 0
+            or type(provider_store.get("file_count")) is not int
+            or provider_store.get("file_count") != len(source_rows)
+        ):
+            return STATUS_FAIL, "interaction_negative_store_receipt_invalid"
     return STATUS_PASS, None
 
 
@@ -337,6 +478,55 @@ def evaluate_observation(
             )
             continue
         events = row.get("raw_events")
+        negative_absence = live_evidence and row.get("status") == "observed_absence"
+        if negative_absence:
+            provenance_status, provenance_failure_code = _live_negative_provenance(
+                row,
+                source_root=(
+                    source_root
+                    if source_root is not None
+                    else (observation.get("native_source_root") if isinstance(observation, Mapping) else None)
+                ),
+            )
+            if provenance_status != STATUS_PASS:
+                assertion_rows.append(
+                    {
+                        "probe_id": probe_id,
+                        "status": provenance_status,
+                        "disposition": probe.disposition,
+                        "failure_code": provenance_failure_code,
+                    }
+                )
+                continue
+            absence_assertions = {
+                "native_event_absent": events == [],
+                "terminal_acknowledged": row.get("terminal_acknowledged") is True,
+                "control_not_title_eligible": probe.expected_title_eligibility is False,
+                "control_not_user_message": probe.expected_title_eligibility is False,
+                "expected_model_turn": probe.expected_model_turn is False
+                and row.get("capture_complete") is True
+                and row.get("post_interaction_quiescent") is True,
+                "expected_state_change": probe.changes_provider_state is False and row.get("provider_state_after") is False,
+                "raw_markers_present": not probe.raw_markers,
+                "raw_output_markers_present": not probe.raw_output_markers,
+            }
+            status = STATUS_PASS if all(absence_assertions.values()) else STATUS_FAIL
+            assertion_rows.append(
+                {
+                    "probe_id": probe_id,
+                    "status": status,
+                    "disposition": probe.disposition,
+                    "assertions": absence_assertions,
+                    "semantic_events": [],
+                    "evidence_basis": {
+                        "native_record_absence": provenance_status,
+                        "terminal_acknowledgement": "provider_oracle",
+                        "raw_output_markers": "none_expected",
+                    },
+                    **({"failure_code": "interaction_negative_assertion_failed"} if status != STATUS_PASS else {}),
+                }
+            )
+            continue
         if not isinstance(events, list) or not events:
             assertion_rows.append(
                 {
@@ -362,6 +552,7 @@ def evaluate_observation(
             allow_parser_semantics=not live_evidence,
         )
         first = semantic_rows[0] if semantic_rows else {}
+        expected_kind_present = any(semantics.get("interaction_kind") == probe.expected_interaction_kind for semantics in semantic_rows)
         evidence_text = "\n".join(_event_evidence_text(event) for event in event_rows)
         output_text = "\n".join(_event_evidence_text(event) for event in event_rows)
         raw_output_markers_present = all(marker in output_text for marker in probe.raw_output_markers)
@@ -394,7 +585,10 @@ def evaluate_observation(
                 unresolved_evidence.append(provenance_failure_code or "interaction_raw_provenance_missing")
             assistant_observed = any(_event_role(event) == "assistant" for event in event_rows)
             if probe.expected_model_turn is None:
-                expected_model_turn = True
+                # ``None`` means the contract leaves the turn shape open, but
+                # the native window still has to prove that no assistant-role
+                # transcript row was smuggled into a provider-system probe.
+                expected_model_turn = not assistant_observed
             elif row.get("capture_complete") is True and row.get("post_interaction_quiescent") is True:
                 # A bounded, quiescent raw window is the evidence for a
                 # negative assertion. The classifier cannot manufacture this
@@ -412,15 +606,24 @@ def evaluate_observation(
                 # default ``changes_provider_state`` field.
                 expected_state_change = raw_output_markers_present
             else:
-                expected_state_change = None
-                unresolved_evidence.append("provider_state_after_missing")
+                if isinstance(row.get("provider_state_after"), bool):
+                    expected_state_change = row["provider_state_after"] is False
+                else:
+                    expected_state_change = None
+                    unresolved_evidence.append("provider_state_after_missing")
         else:
-            expected_model_turn = first.get("starts_model_turn") is probe.expected_model_turn
+            if probe.expected_model_turn is True:
+                expected_model_turn = any(
+                    _event_role(event) == "assistant" or semantics.get("starts_model_turn") is True
+                    for event, semantics in zip(event_rows, semantic_rows, strict=True)
+                )
+            else:
+                expected_model_turn = first.get("starts_model_turn") is probe.expected_model_turn
             expected_state_change = (
                 first.get("changes_provider_state") is probe.changes_provider_state if probe.changes_provider_state is not None else True
             )
         assertions = {
-            "expected_kind": first.get("interaction_kind") == probe.expected_interaction_kind,
+            "expected_kind": expected_kind_present,
             "control_not_title_eligible": first.get("title_eligible") is probe.expected_title_eligibility,
             "control_not_user_message": first.get("counts_as_user_message") is False,
             "expected_model_turn": expected_model_turn,
@@ -516,21 +719,26 @@ def evaluate_observation(
             if isinstance(unknown_event, Mapping)
             else {}
         )
-        boundary_assertions = {
-            "ordinary_marker_is_title_eligible": marker_semantics.get("title_eligible") is True,
-            "ordinary_marker_is_user_message": marker_semantics.get("counts_as_user_message") is True,
-            "unknown_slash_remains_eligible": unknown_semantics.get("title_eligible") is True,
-        }
-        boundary_observed = bool(marker_semantics and unknown_semantics)
-        assertion_rows.append(
-            {
-                "probe_id": "shared_title_boundary",
-                "status": (STATUS_PASS if all(boundary_assertions.values()) else STATUS_FAIL if boundary_observed else STATUS_BLOCKED),
-                "failure_code": None if boundary_observed else "interaction_title_boundary_observation_missing",
-                "assertions": boundary_assertions,
-                "semantic_events": [marker_semantics, unknown_semantics],
+        # The shared boundary canary is part of the hermetic semantic fixture;
+        # a provider-native interaction capture does not get to manufacture
+        # ordinary/unknown-slash rows just to satisfy this assertion. If the
+        # producer supplied those rows, evaluate them; otherwise leave this
+        # separate semantic-engine assertion out of the native result.
+        if marker_semantics and unknown_semantics:
+            boundary_assertions = {
+                "ordinary_marker_is_title_eligible": marker_semantics.get("title_eligible") is True,
+                "ordinary_marker_is_user_message": marker_semantics.get("counts_as_user_message") is True,
+                "unknown_slash_remains_eligible": unknown_semantics.get("title_eligible") is True,
             }
-        )
+            assertion_rows.append(
+                {
+                    "probe_id": "shared_title_boundary",
+                    "status": STATUS_PASS if all(boundary_assertions.values()) else STATUS_FAIL,
+                    "failure_code": None if all(boundary_assertions.values()) else "interaction_title_boundary_assertion_failed",
+                    "assertions": boundary_assertions,
+                    "semantic_events": [marker_semantics, unknown_semantics],
+                }
+            )
     statuses = [str(row.get("status") or STATUS_FAIL) for row in assertion_rows]
     if any(status == STATUS_FAIL for status in statuses):
         status = STATUS_FAIL

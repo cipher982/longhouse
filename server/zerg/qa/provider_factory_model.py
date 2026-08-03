@@ -340,6 +340,14 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
     Trigger(trigger)
 
     if trigger == Trigger.RELEASE_POLL:
+        if provider == "antigravity":
+            return PlanCell(
+                provider=provider,
+                build_provenance=build_provenance,
+                trigger=trigger,
+                status="never_run",
+                reason="Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
+            )
         expected_provenance = BuildProvenance.OBSERVED_INSTALL if provider == "cursor" else BuildProvenance.STAGED_RELEASE
         if build_provenance != expected_provenance:
             return PlanCell(

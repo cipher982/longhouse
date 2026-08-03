@@ -59,10 +59,10 @@ def test_push_harness_scenarios_is_the_smaller_ci_set(facts) -> None:
 
 
 def test_weekly_cron_providers_from_schedule_config(facts) -> None:
-    assert set(facts.weekly_cron_providers) == set(ALL_PROVIDERS)
+    assert set(facts.weekly_cron_providers) == set(ALL_PROVIDERS) - {"antigravity"}
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "antigravity"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode"])
 def test_release_poll_runs_the_deployed_profile_for_automated_providers(facts, provider: str) -> None:
     cell = plan_run(facts, provider, "staged_release", "release_poll")
     assert cell.status == "runs"
@@ -131,12 +131,11 @@ def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
     assert cell.credential_requirement == ("OPENROUTER_API_KEY",)
 
 
-def test_antigravity_release_poll_runs_the_full_staged_column_without_live_credentials(facts) -> None:
+def test_antigravity_release_poll_is_manual_maintenance_only(facts) -> None:
     cell = plan_run(facts, "antigravity", "staged_release", "release_poll")
 
-    assert cell.qualification_profiles == ("antigravity_hook_inbox_v1",)
-    assert cell.harness_scenarios == facts.default_harness_scenarios
-    assert cell.credential_requirement == ()
+    assert cell.status == "never_run"
+    assert "maintenance-tier" in cell.reason
 
 
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
@@ -170,11 +169,17 @@ def test_push_codex_coordination_proof_cannot_satisfy_its_live_token_assertion(f
     assert statuses["coordination_instructions_model_visible_after_compaction"].satisfiable is False
 
 
-@pytest.mark.parametrize("provider", ALL_PROVIDERS)
-def test_weekly_cron_runs_the_full_default_scenario_set_for_every_provider(facts, provider: str) -> None:
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
+def test_weekly_cron_runs_the_full_default_scenario_set_for_scheduled_providers(facts, provider: str) -> None:
     cell = plan_run(facts, provider, "generated_fake", "weekly_cron")
     assert cell.status == "runs"
     assert cell.harness_scenarios == facts.default_harness_scenarios
+
+
+def test_weekly_cron_does_not_run_antigravity_maintenance_lane(facts) -> None:
+    cell = plan_run(facts, "antigravity", "generated_fake", "weekly_cron")
+    assert cell.status == "never_run"
+    assert "not weekly_unconditional" in cell.reason
 
 
 def test_weekly_cron_never_runs_against_staged_release_provenance(facts) -> None:

@@ -18,6 +18,8 @@ from typing import Any
 
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import qualification_request
+from zerg.qa.codex_auth import CodexAuthError
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -644,7 +646,6 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             argv.append(prompt)
             tool_env = {
                 **version_env,
-                API_KEY_ENV: api_key,
                 "HOME": str(runtime_root),
                 "CODEX_HOME": str(codex_home),
             }
@@ -657,13 +658,23 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             tool_stderr = ""
             tool_error: str | None = None
             tool_timed_out = False
+            auth_observation: dict[str, str] | None = None
             try:
+                auth_observation = login_with_api_key(
+                    binary,
+                    api_key=api_key,
+                    environment=tool_env,
+                    cwd=workspace,
+                    timeout=30,
+                )
                 tool_result = _run_process_group(
                     argv,
                     cwd=workspace,
                     env=tool_env,
                     timeout=TIMEOUT_SECONDS,
                 )
+            except CodexAuthError as exc:
+                tool_error = str(exc)
             except subprocess.TimeoutExpired as exc:
                 tool_timed_out = True
                 tool_error = "timeout"
@@ -702,6 +713,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.INFRASTRUCTURE_ERROR
             execution_status = "infrastructure_error"
         tool_observation = {
+            "status": "completed" if tool_result is not None else "infrastructure_error",
             "argv": argv,
             "returncode": tool_result.returncode if tool_result else None,
             "timed_out": tool_timed_out,
@@ -722,6 +734,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 else None
             ),
             "model": model,
+            "authentication": auth_observation,
         }
 
     try:

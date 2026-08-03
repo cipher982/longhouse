@@ -42,28 +42,24 @@
           "probe_id": "codex_model_picker",
           "surface": "helm_tui",
           "input_sequence": [
-            "/model"
+            "/model",
+            "(escape)"
           ],
           "acknowledgement_oracle": "codex_model_picker_open_or_cancel",
           "native_sources": [
             "native_archive",
             "managed_bridge"
           ],
-          "raw_markers": [
-            "/model",
-            "model picker"
-          ],
-          "raw_output_markers": [
-            "model"
-          ],
+          "raw_markers": [],
+          "raw_output_markers": [],
           "expected_interaction_kind": "local_control",
           "expected_title_eligibility": false,
           "expected_model_turn": false,
-          "changes_provider_state": true,
+          "changes_provider_state": false,
           "source_surface": "helm_tui",
           "state_mutation_scope": "session_model",
           "evidence_class": "live_no_token",
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "canary": "server/zerg/qa/provider_interaction_probe.py"
         }
       ],
@@ -429,7 +425,7 @@
           "surface": "helm_tui",
           "input_sequence": [
             "/model",
-            "cancel"
+            "(escape)"
           ],
           "acknowledgement_oracle": "claude_model_picker_cancelled",
           "native_sources": [
@@ -437,14 +433,8 @@
             "native_archive",
             "managed_bridge"
           ],
-          "raw_markers": [
-            "<command-name>",
-            "<command-message>",
-            "model"
-          ],
-          "raw_output_markers": [
-            "<local-command-stdout>"
-          ],
+          "raw_markers": [],
+          "raw_output_markers": [],
           "expected_interaction_kind": "local_control",
           "expected_title_eligibility": false,
           "expected_model_turn": false,
@@ -452,7 +442,7 @@
           "source_surface": "helm_tui",
           "state_mutation_scope": "session_model",
           "evidence_class": "live_no_token",
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "canary": "server/zerg/qa/provider_interaction_probe.py"
         },
         {
@@ -483,8 +473,8 @@
           "source_surface": "helm_tui",
           "state_mutation_scope": "conversation_identity",
           "evidence_class": "live_no_token",
-          "disposition": "not_implemented",
-          "canary": "server/zerg/qa/claude_conversation_reset.py"
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
         }
       ],
       "release_channel": {
@@ -570,7 +560,7 @@
                 "live_no_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]
         },
@@ -597,7 +587,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]
         },
@@ -865,20 +855,20 @@
             "managed_bridge"
           ],
           "raw_markers": [
-            "/new",
-            "session boundary"
+            "session.created.1",
+            "sessionID"
           ],
           "raw_output_markers": [
-            "session"
+            "sessionID"
           ],
-          "expected_interaction_kind": "conversation_boundary",
+          "expected_interaction_kind": "provider_system",
           "expected_title_eligibility": false,
           "expected_model_turn": false,
           "changes_provider_state": true,
           "source_surface": "helm_tui",
           "state_mutation_scope": "conversation_identity",
           "evidence_class": "live_no_token",
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "canary": "server/zerg/qa/opencode_conversation_reset.py"
         },
         {
@@ -893,14 +883,8 @@
             "native_archive",
             "managed_bridge"
           ],
-          "raw_markers": [
-            "/help",
-            "help"
-          ],
-          "raw_output_markers": [
-            "commands",
-            "help"
-          ],
+          "raw_markers": [],
+          "raw_output_markers": [],
           "expected_interaction_kind": "local_control",
           "expected_title_eligibility": false,
           "expected_model_turn": false,
@@ -908,7 +892,7 @@
           "source_surface": "helm_tui",
           "state_mutation_scope": "command_help",
           "evidence_class": "live_no_token",
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "canary": "server/zerg/qa/provider_interaction_probe.py"
         }
       ],
@@ -996,7 +980,7 @@
                 "live_no_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]
         },
@@ -1023,7 +1007,7 @@
                 "live_no_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]
         }
@@ -1173,7 +1157,7 @@
           ],
           "expected_interaction_kind": "provider_system",
           "expected_title_eligibility": false,
-          "expected_model_turn": null,
+          "expected_model_turn": false,
           "changes_provider_state": null,
           "source_surface": "shadow",
           "state_mutation_scope": "none",
@@ -1264,7 +1248,7 @@
                 "live_no_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]
         },
@@ -1291,7 +1275,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]
         }
@@ -1438,20 +1422,20 @@
             "managed_bridge"
           ],
           "raw_markers": [
-            "--model",
-            "model"
+            "model",
+            "apiKeySource"
           ],
           "raw_output_markers": [
-            "provider model"
+            "result"
           ],
-          "expected_interaction_kind": "local_control",
+          "expected_interaction_kind": "provider_system",
           "expected_title_eligibility": false,
-          "expected_model_turn": false,
+          "expected_model_turn": true,
           "changes_provider_state": true,
           "source_surface": "console",
           "state_mutation_scope": "session_model",
-          "evidence_class": "live_no_token",
-          "disposition": "not_implemented",
+          "evidence_class": "live_token",
+          "disposition": "implemented",
           "canary": "server/zerg/qa/provider_interaction_probe.py"
         }
       ],
