@@ -328,7 +328,11 @@ describe("useSessionWorkspace", () => {
 
     const options = agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1];
     expect(options?.refetchInterval({ state: { data: undefined, error } } as never)).toBe(5_000);
-    expect(streamMocks.connectSessionWorkspaceStream).not.toHaveBeenCalled();
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledWith(
+      baseSession.id,
+      expect.any(Object),
+      { skipInitial: true, knownWorkspaceFingerprint: null },
+    );
   });
 
   it("opens the workspace stream with the rendered revision fingerprint", () => {
@@ -741,6 +745,79 @@ describe("useSessionWorkspace", () => {
     await waitFor(() => {
       expect(result.current.events.map((event) => event.content_text)).toContain(
         "Preview from SSE before refetch wins",
+      );
+    });
+  });
+
+  it("exposes and reports a live preview before the first workspace snapshot finishes", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
+            pubsub_seq?: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: -321,
+        thread_session_count: 1,
+        latest_event_emitted_at_ms: 1_779_220_000_000,
+        server_fanout_at_ms: 1_779_220_000_120,
+        pubsub_seq: 8,
+        transcript_preview: {
+          event_id: 321,
+          text: "Paint while history is loading",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+    });
+
+    expect(result.current.session).toBeNull();
+    expect(result.current.liveTranscriptPreview?.text).toBe("Paint while history is loading");
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitRenderBeacon).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: baseSession.id,
+          latestEventId: -321,
+          latestEventEmittedAtMs: 1_779_220_000_000,
+          serverFanoutAtMs: 1_779_220_000_120,
+          pubsubSeq: 8,
+        }),
       );
     });
   });

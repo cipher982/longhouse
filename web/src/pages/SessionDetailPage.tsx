@@ -77,6 +77,7 @@ function SessionDetailWorkspaceRoute({
 
   const {
     session,
+    liveTranscriptPreview,
     sessionLoading,
     sessionError,
     turns,
@@ -221,6 +222,16 @@ function SessionDetailWorkspaceRoute({
   });
 
   if (sessionLoading) {
+    if (liveTranscriptPreview?.text) {
+      return (
+        <div className="session-workspace-route session-workspace-route--empty">
+          <EmptyState
+            title="Live response"
+            description={liveTranscriptPreview.text}
+          />
+        </div>
+      );
+    }
     return (
       <div className="session-workspace-route session-workspace-route--empty">
         <EmptyState

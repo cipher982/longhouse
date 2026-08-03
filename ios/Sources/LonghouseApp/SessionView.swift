@@ -1819,6 +1819,12 @@ final class SessionViewModel: ObservableObject {
             activeServerURL = appState.serverURL
         }
         let hasContentOnScreen = restoredFromCache || !items.isEmpty
+        // Attach realtime before the cold archive fetch. A live provider reply
+        // is already sufficient to paint; it must not wait behind historical
+        // workspace hydration when catalog/projector reads are under pressure.
+        if enableRealtime && (sessionChanged || streamTask == nil) {
+            startStream(sessionId: sessionId, appState: appState)
+        }
         if hasContentOnScreen {
             // We already have something to show (hydrated from cache/disk, or
             // preserved across a pause). Reconcile in the background so a
@@ -1839,12 +1845,6 @@ final class SessionViewModel: ObservableObject {
             await reload(sessionId: sessionId, appState: appState)
         }
         guard enableRealtime else { return }
-        // Re-attach only when the session changed or the stream was torn down
-        // (e.g. scenePhase != .active called pauseRealtime()). Otherwise a scenePhase
-        // flap would churn URLSessions and polling tasks.
-        if sessionChanged || streamTask == nil {
-            startStream(sessionId: sessionId, appState: appState)
-        }
         if sessionChanged || pollTask == nil {
             startVisiblePolling(sessionId: sessionId, appState: appState)
         }
@@ -2458,14 +2458,19 @@ final class SessionViewModel: ObservableObject {
     private func applyRealtimeTranscriptPreview(_ preview: SessionTranscriptPreview, sessionId: String) {
         guard activeSessionId == sessionId else { return }
         let currentDetail = detail?.replacingTranscriptPreview(preview)
-        detail = currentDetail
+        if let currentDetail {
+            detail = currentDetail
+        }
         items = TimelineBuilder.build(
             items: projectionItemsWithTranscriptPreview(
                 lastWorkspaceProjectionItems,
                 durableEvents: lastWorkspaceEvents,
-                preview: currentDetail?.transcriptPreview
+                preview: preview
             )
         )
+        // The provisional item is real visible content even if the cold
+        // workspace request is still loading.
+        isInitialLoading = false
     }
 
     func loadOlder(sessionId: String, appState: AppState) async {

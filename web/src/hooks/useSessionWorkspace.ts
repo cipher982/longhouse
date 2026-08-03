@@ -208,8 +208,6 @@ export function useSessionWorkspace(
   const knownWorkspaceFingerprint = workspaceData?.workspace_revision?.fingerprint ?? null;
   const knownWorkspaceFingerprintRef = useRef(knownWorkspaceFingerprint);
   knownWorkspaceFingerprintRef.current = knownWorkspaceFingerprint;
-  const workspaceReady = workspaceData !== undefined;
-
   // SSE stream subscription — invalidates queries on server-side change detection
   useEffect(() => {
     // Always reset connection state at effect entry; the replacement stream
@@ -217,7 +215,7 @@ export function useSessionWorkspace(
     // fresh onConnected fires.
     setStreamConnected(false);
 
-    if (!sessionId || !documentVisible || !workspaceReady) {
+    if (!sessionId || !documentVisible) {
       return;
     }
 
@@ -342,7 +340,7 @@ export function useSessionWorkspace(
       disposed = true;
       cleanup();
     };
-  }, [sessionId, documentVisible, workspaceReady, queryClient, onlineEpoch]);
+  }, [sessionId, documentVisible, queryClient, onlineEpoch]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>
@@ -500,7 +498,12 @@ export function useSessionWorkspace(
     const pending = pendingRenderBeaconRef.current;
     if (!pending || pending.sessionId !== sessionId) return;
     if (!pending.latestEventEmittedAtMs) return;
-    const latestEventIsRendered = events.some((event) => event.id === pending.latestEventId);
+    const previewEventId = streamTranscriptPreview
+      ? -Math.abs(streamTranscriptPreview.event_id)
+      : null;
+    const latestEventIsRendered =
+      events.some((event) => event.id === pending.latestEventId) ||
+      (previewEventId === pending.latestEventId && shouldRenderTranscriptPreview(streamTranscriptPreview));
     if (!latestEventIsRendered) return;
 
     const caps = currentThreadSession?.capabilities;
@@ -517,7 +520,7 @@ export function useSessionWorkspace(
       serverTrace: pending.serverTrace,
     });
     pendingRenderBeaconRef.current = null;
-  }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession]);
+  }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession, streamTranscriptPreview]);
 
   useEffect(() => {
     const pending = pendingStateRenderBeaconRef.current;
@@ -691,6 +694,7 @@ export function useSessionWorkspace(
 
   return {
     session,
+    liveTranscriptPreview: streamTranscriptPreview ?? null,
     sessionLoading,
     sessionError,
     turns: turnsData?.turns ?? [],

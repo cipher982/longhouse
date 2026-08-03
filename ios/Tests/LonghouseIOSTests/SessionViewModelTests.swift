@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 
 @testable import Longhouse
@@ -56,6 +57,40 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
 
         #expect(model.items.map(\.id) == ["user:10", "prose:synthetic:preview:99"])
+    }
+
+    @Test
+    func startPaintsRealtimePreviewWhileColdTailIsStillLoading() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Durable tail")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        await api.pauseNextTailResponse(offset: 0)
+        let stream = EarlyPreviewStreamRecorder()
+        let snapshotDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-early-preview-\(UUID().uuidString)", isDirectory: true)
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, _, _ in stream.source() },
+            enableRealtime: true,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: TranscriptSnapshotStore(directory: snapshotDirectory)
+        )
+
+        let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
+        await waitForCount("stream start", atLeast: 1) { stream.startCount }
+        await waitForTailRequestCount(api, atLeast: 1)
+        stream.emitPreview("Live before archive")
+        await waitForCount("live preview item", atLeast: 1) {
+            model.items.filter { $0.id == "prose:synthetic:preview:321" }.count
+        }
+
+        #expect(model.isInitialLoading == false)
+        #expect(model.items.map(\.id) == ["prose:synthetic:preview:321"])
+
+        await api.resumePausedTailResponses()
+        await startTask.value
+        model.stop()
     }
 
     @Test
@@ -1329,6 +1364,66 @@ struct SessionViewModelTests {
             parentContinuationKind: nil,
             branchedFromEventId: nil
         )
+    }
+}
+
+private final class EarlyPreviewStreamRecorder: Sendable {
+    private struct State {
+        var startCount = 0
+        var continuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    var startCount: Int { state.withLock { $0.startCount } }
+
+    func source() -> SessionWorkspaceStreamSource {
+        SessionWorkspaceStreamSource(
+            start: { [state] in
+                AsyncStream { continuation in
+                    state.withLock {
+                        $0.startCount += 1
+                        $0.continuation = continuation
+                    }
+                }
+            },
+            stop: { [state] in
+                state.withLock {
+                    $0.continuation?.finish()
+                    $0.continuation = nil
+                }
+            },
+            clockSkewMs: { 0 }
+        )
+    }
+
+    func emitPreview(_ text: String) {
+        let continuation = state.withLock { $0.continuation }
+        continuation?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
+            session_id: "session-1",
+            latest_event_id: -321,
+            thread_session_count: 1,
+            latest_event_emitted_at_ms: nil,
+            server_fanout_at_ms: nil,
+            server_now_ms: nil,
+            pubsub_seq: 1,
+            transcript_preview: SessionWorkspaceStream.WorkspaceChanged.TranscriptPreview(
+                event_id: 321,
+                text: text,
+                role: "assistant",
+                tool_name: nil,
+                tool_input_json: nil,
+                tool_output_text: nil,
+                tool_call_id: nil,
+                tool_call_state: nil,
+                event_origin: "live_provisional",
+                timestamp: "2026-08-03T03:00:00Z",
+                is_provisional: true,
+                is_complete: false,
+                content_cursor: "preview-321",
+                is_stale: false,
+                stale_reason: nil
+            )
+        )))
     }
 }
 
