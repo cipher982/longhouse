@@ -22,6 +22,13 @@ from zerg.config import sqlite_file_path
 
 logger = logging.getLogger(__name__)
 
+# Large hosted catalogs can spend more than the generic 15-second daemon
+# default warming SQLite/schema pages after a container replacement. The
+# runtime health check already grants a 60-second start period, so let the
+# indispensable catalog owner finish that bounded cold start instead of
+# terminating it and relying on a warm crash-loop retry.
+CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS = 45.0
+
 
 def catalogd_paths() -> tuple[Path, Path]:
     database_path = sqlite_file_path(get_settings_unchecked().live_database_url)
@@ -258,7 +265,9 @@ async def start_catalogd_supervisor() -> dict[str, Any]:
     if _supervisor is None:
         database_path, socket_path = catalogd_paths()
         _supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
-    return await _supervisor.start()
+    return await _supervisor.start(
+        readiness_timeout_seconds=CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS,
+    )
 
 
 async def stop_catalogd_supervisor() -> None:
