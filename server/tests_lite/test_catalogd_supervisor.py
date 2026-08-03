@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from zerg.catalogd.client import CatalogClient
 from zerg.services import catalogd_supervisor as catalogd_supervisor_module
 from zerg.services.catalogd_supervisor import CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS
+from zerg.services.catalogd_supervisor import CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS
 from zerg.services.catalogd_supervisor import CatalogdSupervisor
 
 
@@ -103,6 +104,15 @@ async def test_runtime_wrapper_grants_catalogd_the_container_cold_start_budget(m
     assert await catalogd_supervisor_module.start_catalogd_supervisor() == {"ready": True}
     assert observed == [CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS]
     assert CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS == 45.0
+
+
+def test_supervisor_keeps_interactive_and_projector_deadlines_separate(supervisor_paths):
+    database_path, socket_path = supervisor_paths
+    supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    assert supervisor.client.default_timeout_seconds == 1.0
+    assert supervisor.projector_client.default_timeout_seconds == CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS
+    assert CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS == 15.0
 
 
 @pytest.mark.asyncio

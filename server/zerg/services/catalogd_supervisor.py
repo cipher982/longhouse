@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 # indispensable catalog owner finish that bounded cold start instead of
 # terminating it and relying on a warm crash-loop retry.
 CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS = 45.0
+# Projector catalog mutations share the single ordered writer with ingest. On
+# the hosted 4.8 GB catalog, the embedding claim SQL itself measured 52 ms but
+# waited longer than the generic one-second interactive deadline during active
+# ingest. A background projector can safely wait for writer admission; timing
+# out only abandons the response and immediately queues another claim attempt.
+CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS = 15.0
 
 
 def catalogd_paths() -> tuple[Path, Path]:
@@ -52,7 +58,10 @@ class CatalogdSupervisor:
         self.socket_path = socket_path
         self.status_path = socket_path.with_name("catalogd-status.json")
         self.client = CatalogClient(socket_path)
-        self.projector_client = CatalogClient(socket_path)
+        self.projector_client = CatalogClient(
+            socket_path,
+            default_timeout_seconds=CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS,
+        )
         self._task: asyncio.Task | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._stopping = False
