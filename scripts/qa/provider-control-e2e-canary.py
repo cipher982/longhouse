@@ -1232,7 +1232,14 @@ def _opencode_real_tool_env() -> dict[str, str]:
 
 def _opencode_qualification_model() -> str:
     default = "openrouter/~openai/gpt-mini-latest"
-    return os.environ.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "").strip() or default
+    configured = os.environ.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "").strip()
+    if not configured:
+        return default
+    # The factory stores the provider-agnostic OpenRouter API slug so the same
+    # value can be used in its auth policy and inventory. OpenCode's CLI model
+    # identity is provider-qualified, however; keep this boundary explicit so
+    # every real-run canary selects the same model as the interaction probe.
+    return configured if configured.startswith("openrouter/") else f"openrouter/{configured}"
 
 
 def _event_session_id(event: dict[str, Any]) -> str:

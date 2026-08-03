@@ -31,6 +31,9 @@ def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> 
     monkeypatch.delenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", raising=False)
     assert canary._opencode_qualification_model() == "openrouter/~openai/gpt-mini-latest"  # noqa: SLF001
 
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash")
+    assert canary._opencode_qualification_model() == "openrouter/deepseek/deepseek-v4-flash"  # noqa: SLF001
+
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/fixture/model")
     assert canary._opencode_qualification_model() == "openrouter/fixture/model"  # noqa: SLF001
 
