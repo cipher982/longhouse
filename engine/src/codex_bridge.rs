@@ -41,7 +41,16 @@ const RUNTIME_EVENT_RETRY_DELAYS_MS: &[u64] = &[
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const APP_SERVER_EXIT_CHECK_MS: u64 = 100;
 const APP_SERVER_EXIT_RECONCILE_MS: u64 = 500;
-const QUIET_ACTIVE_TURN_STALL_MS: u64 = 120_000;
+// Stall detection. A running command is not evidence of progress: the motivating
+// incident wedged inside an in-flight `exec` that never returned. Silence alone is
+// only suspicion, so a short clock requires process-level corroboration and an
+// uncorroborated stall must outlast this repo's legitimate multi-minute builds and
+// CI waits.
+const CORROBORATED_STALL_MS: u64 = 120_000;
+const PROLONGED_SILENCE_STALL_MS: u64 = 1_800_000;
+// A keepalive tick this far past its 30s schedule means the machine slept or the
+// event loop was starved. Wall-clock silence across that gap is not a stall.
+const KEEPALIVE_LATE_TICK_MS: u64 = 90_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
@@ -470,13 +479,64 @@ struct ResolvedBridgePaths {
 
 #[derive(Debug, Default)]
 struct CodexRuntimeTracker {
+    /// Provider-assigned turn id. May be absent even while a turn is in progress:
+    /// `turn/started` assigns id and status independently, so a partial
+    /// notification yields `active_turn_id: None` with an in-progress status.
+    /// Stall detection therefore keys off `turn_epoch`, never this field.
     active_turn_id: Option<String>,
+    /// Local monotonic turn identity. Present whenever the bridge believes a turn
+    /// is running, regardless of whether the provider supplied an id.
+    turn_epoch: Option<u64>,
+    next_turn_epoch: u64,
     active_turn_started_at: Option<Instant>,
-    last_active_turn_activity_at: Option<Instant>,
-    stalled_turn_id: Option<String>,
+    last_provider_progress_at: Option<Instant>,
+    stall_episode: Option<StallEpisode>,
+    last_keepalive_at: Option<Instant>,
+    last_rollout_len: Option<u64>,
     attention_state: Option<CodexAttentionState>,
     active_items: BTreeMap<String, ActiveCodexItem>,
     next_item_sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StallTrigger {
+    /// Silence corroborated by an owned command subprocess in `T`/`Z`.
+    StoppedProcess,
+    /// Silence long enough to outlast any legitimate quiet command.
+    ProlongedSilence,
+}
+
+impl StallTrigger {
+    fn as_str(self) -> &'static str {
+        match self {
+            StallTrigger::StoppedProcess => "stopped_process",
+            StallTrigger::ProlongedSilence => "prolonged_silence",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StallEpisode {
+    turn_epoch: u64,
+    trigger: StallTrigger,
+    silent_ms: u64,
+    oldest_item: Option<ActiveCodexItem>,
+    oldest_item_id: Option<String>,
+    stopped_process: Option<StoppedProcessFact>,
+}
+
+/// An owned subprocess found stopped or zombied while a command was in flight.
+/// Ownership is established by exact app-server identity plus either descent or
+/// membership in the app-server's recorded process group — the incident's wedged
+/// shell had been reparented to PID 1, so descent alone would have missed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoppedProcessFact {
+    pid: u32,
+    ppid: u32,
+    pgid: i32,
+    stat: String,
+    command: String,
+    matched_by: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,6 +550,8 @@ struct ActiveCodexItem {
     item_type: String,
     tool_name: Option<String>,
     sequence: u64,
+    started_at: Instant,
+    last_event_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4500,26 +4562,114 @@ fn adopt_thread_identity(
 impl CodexRuntimeTracker {
     fn mark_turn_started(&mut self, turn_id: Option<String>) {
         self.active_turn_id = turn_id;
-        self.active_turn_started_at = Some(Instant::now());
-        self.last_active_turn_activity_at = self.active_turn_started_at;
-        self.stalled_turn_id = None;
+        self.begin_turn_epoch();
+        // A turn transition is real progress; adopting an epoch is not.
+        self.note_active_turn_activity();
+    }
+
+    /// Start a local turn epoch if one is not already running. Called from any
+    /// signal that a turn is live — including item events that arrive without a
+    /// preceding well-formed `turn/started`.
+    ///
+    /// Adopting an epoch is deliberately not progress: a repeated unchanged
+    /// `active` thread status must not keep resetting the silence clock, or a
+    /// wedged turn would look alive forever.
+    fn begin_turn_epoch(&mut self) {
+        if self.turn_epoch.is_some() {
+            return;
+        }
+        self.next_turn_epoch += 1;
+        self.turn_epoch = Some(self.next_turn_epoch);
+        let now = Instant::now();
+        self.active_turn_started_at = Some(now);
+        self.last_provider_progress_at = Some(now);
+        self.stall_episode = None;
     }
 
     fn clear_active_turn(&mut self) {
         self.active_turn_id = None;
+        self.turn_epoch = None;
         self.active_turn_started_at = None;
-        self.last_active_turn_activity_at = None;
-        self.stalled_turn_id = None;
+        self.last_provider_progress_at = None;
+        self.stall_episode = None;
+        self.last_rollout_len = None;
     }
 
+    /// Record real provider progress. Returns true when this cleared a live stall
+    /// episode, so the caller can emit the recovered phase immediately.
     fn note_active_turn_activity(&mut self) -> bool {
-        let was_stalled =
-            self.active_turn_id.is_some() && self.stalled_turn_id == self.active_turn_id;
-        if self.active_turn_id.is_some() {
-            self.last_active_turn_activity_at = Some(Instant::now());
-            self.stalled_turn_id = None;
+        if self.turn_epoch.is_none() {
+            return false;
         }
+        let was_stalled = self.stall_episode.is_some();
+        self.last_provider_progress_at = Some(Instant::now());
+        self.stall_episode = None;
         was_stalled
+    }
+
+    /// Evidence for the current stall episode. Reports only checkable facts; it
+    /// never asserts a cause.
+    fn stall_evidence(&self, provider_turn_id: Option<&str>) -> Option<Value> {
+        let episode = self.stall_episode.as_ref()?;
+        Some(json!({
+            "turn_epoch": episode.turn_epoch,
+            "provider_turn_id": provider_turn_id,
+            "turn_identity_missing": provider_turn_id.is_none(),
+            "trigger": episode.trigger.as_str(),
+            "silent_ms": episode.silent_ms,
+            "oldest_item_id": episode.oldest_item_id,
+            "oldest_item_type": episode.oldest_item.as_ref().map(|item| item.item_type.clone()),
+            "oldest_item_tool": episode
+                .oldest_item
+                .as_ref()
+                .and_then(|item| item.tool_name.clone()),
+            "oldest_item_age_ms": episode
+                .oldest_item
+                .as_ref()
+                .map(|item| item.started_at.elapsed().as_millis() as u64),
+            "active_item_count": self.active_items.len(),
+            "stopped_process": episode.stopped_process.as_ref().map(|proc| json!({
+                "pid": proc.pid,
+                "ppid": proc.ppid,
+                "pgid": proc.pgid,
+                "stat": proc.stat,
+                "command": proc.command,
+                "matched_by": proc.matched_by,
+            })),
+        }))
+    }
+
+    fn touch_item(&mut self, item_id: &str) {
+        if let Some(item) = self.active_items.get_mut(item_id) {
+            item.last_event_at = Instant::now();
+        }
+    }
+
+    fn oldest_silent_item(&self) -> Option<(&String, &ActiveCodexItem)> {
+        self.active_items
+            .iter()
+            .min_by_key(|(_, item)| item.last_event_at)
+    }
+
+    fn silent_for(&self) -> Option<Duration> {
+        self.last_provider_progress_at
+            .or(self.active_turn_started_at)
+            .map(|at| at.elapsed())
+    }
+
+    /// True when the silence clock has passed the corroborated threshold and a
+    /// process inventory could still change the outcome. Keeps the scan off the
+    /// hot path: nothing is spawned until a turn has actually gone quiet.
+    fn stall_probe_needed(&self) -> bool {
+        if self.turn_epoch.is_none()
+            || self.attention_state.is_some()
+            || self.stall_episode.is_some()
+            || self.active_items.is_empty()
+        {
+            return false;
+        }
+        self.silent_for()
+            .is_some_and(|silent| silent >= Duration::from_millis(CORROBORATED_STALL_MS))
     }
 
     fn handle_server_request(
@@ -4581,6 +4731,12 @@ impl CodexRuntimeTracker {
             | "command/exec/outputDelta"
             | "item/fileChange/outputDelta"
             | "item/mcpToolCall/progress" => {
+                if let Some(item_id) = extract_string(params, &["item_id"])
+                    .or_else(|| extract_string(params, &["item", "id"]))
+                    .or_else(|| extract_string(params, &["itemId"]))
+                {
+                    self.touch_item(&item_id);
+                }
                 if self.note_active_turn_activity() {
                     return vec![BridgeRuntimeUpdate::Progress, self.current_phase_update()];
                 }
@@ -4594,18 +4750,24 @@ impl CodexRuntimeTracker {
         let item = params.get("item")?;
         let item_id = item.get("id").and_then(Value::as_str)?.to_string();
         let item_type = item.get("type").and_then(Value::as_str)?.to_string();
+        // An item event is itself proof a turn is live, even if `turn/started`
+        // never delivered a usable turn id.
+        self.begin_turn_epoch();
         self.note_active_turn_activity();
         if !item_supports_runtime_tracking(item_type.as_str(), item) {
             return None;
         }
         let tool_name = tracked_item_tool_name(item_type.as_str(), item);
         self.next_item_sequence += 1;
+        let now = Instant::now();
         self.active_items.insert(
             item_id,
             ActiveCodexItem {
                 item_type,
                 tool_name,
                 sequence: self.next_item_sequence,
+                started_at: now,
+                last_event_at: now,
             },
         );
         self.attention_state = None;
@@ -4615,6 +4777,7 @@ impl CodexRuntimeTracker {
     fn track_completed_item(&mut self, params: &Value) -> Option<BridgeRuntimeUpdate> {
         let item = params.get("item")?;
         let item_id = item.get("id").and_then(Value::as_str)?;
+        self.begin_turn_epoch();
         self.note_active_turn_activity();
         if self.active_items.remove(item_id).is_none() {
             return None;
@@ -4631,7 +4794,9 @@ impl CodexRuntimeTracker {
                 Some(self.current_phase_update())
             }
             "active" => {
-                self.note_active_turn_activity();
+                // Active thread status is attributable turn liveness; adopt it as a
+                // local epoch when the provider never gave us a turn id.
+                self.begin_turn_epoch();
                 let flags = extract_thread_active_flags(params);
                 if flags.iter().any(|flag| flag == "waitingOnApproval") {
                     let existing_tool = match self.attention_state.as_ref() {
@@ -4653,10 +4818,13 @@ impl CodexRuntimeTracker {
     }
 
     fn current_phase_update(&self) -> BridgeRuntimeUpdate {
-        if self.active_turn_id.is_some() && self.stalled_turn_id == self.active_turn_id {
+        if let Some(episode) = self.stall_episode.as_ref() {
             return BridgeRuntimeUpdate::Phase {
                 phase: "stalled",
-                tool_name: None,
+                tool_name: episode
+                    .oldest_item
+                    .as_ref()
+                    .and_then(|item| item.tool_name.clone()),
             };
         }
         if let Some(attention_state) = self.attention_state.as_ref() {
@@ -4677,7 +4845,7 @@ impl CodexRuntimeTracker {
                 tool_name: Some(tool_name),
             };
         }
-        if self.active_turn_id.is_some() {
+        if self.turn_epoch.is_some() {
             return BridgeRuntimeUpdate::Phase {
                 phase: "thinking",
                 tool_name: None,
@@ -4689,36 +4857,103 @@ impl CodexRuntimeTracker {
         }
     }
 
-    fn keepalive_update(&mut self) -> Option<BridgeRuntimeUpdate> {
-        self.refresh_stall_state();
+    /// One 30s keepalive tick. `rollout_len` is the observed length of the
+    /// controlled thread's rollout file (`None` when it could not be read —
+    /// missing evidence, which neither refreshes progress nor triggers a stall).
+    /// `stopped_process` is the result of a process inventory, supplied only when
+    /// `stall_probe_needed()` asked for one.
+    fn keepalive_update(
+        &mut self,
+        rollout_len: Option<u64>,
+        stopped_process: Option<StoppedProcessFact>,
+    ) -> Option<BridgeRuntimeUpdate> {
+        let entered_stall = self.refresh_stall_state(rollout_len, stopped_process);
         match self.current_phase_update() {
             BridgeRuntimeUpdate::Phase { phase, tool_name }
                 if matches!(phase, "thinking" | "running" | "stalled") =>
             {
+                let _ = entered_stall;
                 Some(BridgeRuntimeUpdate::Phase { phase, tool_name })
             }
             _ => None,
         }
     }
 
-    fn refresh_stall_state(&mut self) {
-        let Some(turn_id) = self.active_turn_id.clone() else {
-            self.stalled_turn_id = None;
-            return;
+    /// Returns true when this tick newly entered a stall episode.
+    fn refresh_stall_state(
+        &mut self,
+        rollout_len: Option<u64>,
+        stopped_process: Option<StoppedProcessFact>,
+    ) -> bool {
+        let now = Instant::now();
+        let previous_tick = self.last_keepalive_at.replace(now);
+
+        let Some(turn_epoch) = self.turn_epoch else {
+            self.stall_episode = None;
+            self.last_rollout_len = None;
+            return false;
         };
-        if self.attention_state.is_some() || !self.active_items.is_empty() {
-            self.stalled_turn_id = None;
-            return;
+
+        // Rollout growth is real provider progress even when the bridge saw no
+        // events, because the bridge opts out of token-usage and reasoning deltas.
+        if let Some(len) = rollout_len {
+            let grew = self.last_rollout_len.is_some_and(|prev| len > prev);
+            self.last_rollout_len = Some(len);
+            if grew {
+                self.last_provider_progress_at = Some(now);
+                self.stall_episode = None;
+                return false;
+            }
         }
-        let Some(last_activity) = self
-            .last_active_turn_activity_at
-            .or(self.active_turn_started_at)
-        else {
-            return;
+
+        // A late tick means the machine slept or the runtime was starved. Rebase
+        // the silence clock and skip this evaluation; a stall must accumulate a
+        // fresh continuous window after wake.
+        if previous_tick
+            .is_some_and(|prev| now.duration_since(prev) > Duration::from_millis(KEEPALIVE_LATE_TICK_MS))
+        {
+            self.last_provider_progress_at = Some(now);
+            self.stall_episode = None;
+            return false;
+        }
+
+        // Waiting on the user is quiescent, not stalled.
+        if self.attention_state.is_some() {
+            self.stall_episode = None;
+            return false;
+        }
+
+        if self.stall_episode.is_some() {
+            return false;
+        }
+
+        let Some(silent) = self.silent_for() else {
+            return false;
         };
-        if last_activity.elapsed() >= Duration::from_millis(QUIET_ACTIVE_TURN_STALL_MS) {
-            self.stalled_turn_id = Some(turn_id);
-        }
+
+        let trigger = if stopped_process.is_some()
+            && silent >= Duration::from_millis(CORROBORATED_STALL_MS)
+        {
+            StallTrigger::StoppedProcess
+        } else if silent >= Duration::from_millis(PROLONGED_SILENCE_STALL_MS) {
+            StallTrigger::ProlongedSilence
+        } else {
+            return false;
+        };
+
+        let (oldest_item_id, oldest_item) = match self.oldest_silent_item() {
+            Some((id, item)) => (Some(id.clone()), Some(item.clone())),
+            None => (None, None),
+        };
+        self.stall_episode = Some(StallEpisode {
+            turn_epoch,
+            trigger,
+            silent_ms: silent.as_millis().min(u64::MAX as u128) as u64,
+            oldest_item,
+            oldest_item_id,
+            stopped_process,
+        });
+        true
     }
 
     fn primary_running_tool(&self) -> Option<String> {
@@ -4890,6 +5125,11 @@ async fn emit_runtime_updates(
             BridgeRuntimeUpdate::Phase { phase, tool_name } => {
                 let pause_request_still_pending = matches!(phase, "running" | "thinking")
                     && !context.pending_pause_requests.lock().await.is_empty();
+                let stall_evidence = (phase == "stalled").then(|| {
+                    context
+                        .runtime_tracker
+                        .stall_evidence(context.state.active_turn_id.as_deref())
+                });
                 context
                     .runtime
                     .post_phase(
@@ -4901,6 +5141,7 @@ async fn emit_runtime_updates(
                         ),
                         tool_name,
                         pause_request_still_pending,
+                        stall_evidence.flatten(),
                     )
                     .await;
             }
@@ -4983,8 +5224,51 @@ fn observe_ownership(
     Some((owner_alive, terminal_attached))
 }
 
+/// Observed length of the controlled thread's rollout file. `None` means the file
+/// could not be read — missing evidence, never treated as silence or as progress.
+fn observe_rollout_len(context: &BridgeContext) -> Option<u64> {
+    let path = context.state.thread_path.as_deref()?;
+    std::fs::metadata(path).ok().map(|meta| meta.len())
+}
+
+/// Look for an owned command subprocess that is stopped or zombied. Ownership
+/// requires the recorded app-server PID to still be the same process (guarding
+/// PID reuse) and the candidate to be either a descendant or a member of the
+/// app-server's recorded process group.
+fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcessFact> {
+    let app_server_pid = context.state.app_server_pid?;
+    let fact = crate::process_identity::try_collect_process_fact(app_server_pid)?;
+    if let Some(recorded) = context.state.app_server_process_start_time.as_deref() {
+        if !crate::process_identity::lstart_matches_recorded(&fact, recorded) {
+            // PID was reused by an unrelated process; this inventory proves nothing.
+            return None;
+        }
+    }
+    let entries = crate::process_identity::try_collect_process_lineage()?;
+    crate::process_identity::owned_processes(&entries, app_server_pid, context.state.app_server_pgid)
+        .into_iter()
+        .find(|(entry, _)| entry.is_stopped_or_zombie())
+        .map(|(entry, matched_by)| StoppedProcessFact {
+            pid: entry.pid,
+            ppid: entry.ppid,
+            pgid: entry.pgid,
+            stat: entry.stat.clone(),
+            command: entry.command.clone(),
+            matched_by,
+        })
+}
+
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
-    if let Some(update) = context.runtime_tracker.keepalive_update() {
+    let rollout_len = observe_rollout_len(context);
+    let stopped_process = if context.runtime_tracker.stall_probe_needed() {
+        probe_stopped_owned_process(context)
+    } else {
+        None
+    };
+    if let Some(update) = context
+        .runtime_tracker
+        .keepalive_update(rollout_len, stopped_process)
+    {
         emit_runtime_updates(config, context, vec![update]).await;
     }
 }
@@ -5113,9 +5397,16 @@ impl BridgeRuntimeSink {
         dedupe_key: String,
         tool_name: Option<String>,
         pause_request_still_pending: bool,
+        stall_evidence: Option<Value>,
     ) {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
+        if let Some(evidence) = stall_evidence.as_ref() {
+            // The bridge log is the local forensic record; the runtime event below
+            // is the durable served one. Both, because a wedge is usually
+            // diagnosed after the process is gone.
+            eprintln!("[codex-bridge] stall detected {evidence}");
+        }
         // freshness_ms omitted — backend PHASE_FRESHNESS is the single source of truth.
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
@@ -5132,6 +5423,7 @@ impl BridgeRuntimeSink {
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
                 "pause_request_still_pending": pause_request_still_pending,
+                "stall": stall_evidence,
             }
         })]);
     }
@@ -8155,7 +8447,7 @@ mod tests {
     #[test]
     fn codex_runtime_tracker_keepalive_only_replays_live_execution_phases() {
         let mut tracker = CodexRuntimeTracker::default();
-        assert!(tracker.keepalive_update().is_none());
+        assert!(tracker.keepalive_update(None, None).is_none());
 
         tracker.handle_notification(
             "turn/started",
@@ -8164,7 +8456,7 @@ mod tests {
             }),
         );
         assert_phase_update(
-            tracker.keepalive_update().expect("thinking keepalive"),
+            tracker.keepalive_update(None, None).expect("thinking keepalive"),
             "thinking",
             None,
         );
@@ -8181,7 +8473,7 @@ mod tests {
             }),
         );
         assert_phase_update(
-            tracker.keepalive_update().expect("running keepalive"),
+            tracker.keepalive_update(None, None).expect("running keepalive"),
             "running",
             Some("shell"),
         );
@@ -8195,7 +8487,7 @@ mod tests {
                 }
             }),
         );
-        assert!(tracker.keepalive_update().is_none());
+        assert!(tracker.keepalive_update(None, None).is_none());
 
         tracker.handle_notification(
             "turn/completed",
@@ -8203,55 +8495,21 @@ mod tests {
                 "turn": {"id": "turn-1", "status": "completed"}
             }),
         );
-        assert!(tracker.keepalive_update().is_none());
+        assert!(tracker.keepalive_update(None, None).is_none());
     }
 
-    #[test]
-    fn codex_runtime_tracker_marks_quiet_thinking_turn_stalled() {
-        let mut tracker = CodexRuntimeTracker::default();
-        tracker.handle_notification(
-            "turn/started",
-            &json!({
-                "turn": {"id": "turn-1", "status": "inProgress"}
-            }),
-        );
-        tracker.last_active_turn_activity_at = Some(
-            Instant::now()
-                .checked_sub(Duration::from_millis(QUIET_ACTIVE_TURN_STALL_MS + 1_000))
-                .unwrap(),
-        );
-
-        assert_phase_update(
-            tracker.keepalive_update().expect("stalled keepalive"),
-            "stalled",
-            None,
-        );
-
-        assert_eq!(
-            tracker.handle_notification("item/agentMessage/delta", &json!({})),
-            vec![
-                BridgeRuntimeUpdate::Progress,
-                BridgeRuntimeUpdate::Phase {
-                    phase: "thinking",
-                    tool_name: None,
-                },
-            ]
-        );
-        assert_phase_update(
-            tracker.keepalive_update().expect("thinking after progress"),
-            "thinking",
-            None,
-        );
+    fn age_silence(tracker: &mut CodexRuntimeTracker, ms: u64) {
+        let past = Instant::now()
+            .checked_sub(Duration::from_millis(ms))
+            .unwrap();
+        tracker.last_provider_progress_at = Some(past);
+        tracker.active_turn_started_at = Some(past);
     }
 
-    #[test]
-    fn codex_runtime_tracker_does_not_mark_running_tool_stalled() {
-        let mut tracker = CodexRuntimeTracker::default();
+    fn start_turn_with_command(tracker: &mut CodexRuntimeTracker) {
         tracker.handle_notification(
             "turn/started",
-            &json!({
-                "turn": {"id": "turn-1", "status": "inProgress"}
-            }),
+            &json!({"turn": {"id": "turn-1", "status": "inProgress"}}),
         );
         tracker.handle_notification(
             "item/started",
@@ -8264,17 +8522,250 @@ mod tests {
                 }
             }),
         );
-        tracker.last_active_turn_activity_at = Some(
-            Instant::now()
-                .checked_sub(Duration::from_millis(QUIET_ACTIVE_TURN_STALL_MS + 1_000))
-                .unwrap(),
+    }
+
+    fn stopped_fact() -> StoppedProcessFact {
+        StoppedProcessFact {
+            pid: 17210,
+            ppid: 1,
+            pgid: 16956,
+            stat: "Ts".to_string(),
+            command: "/bin/zsh -lc for n in {1..10}; do ...".to_string(),
+            matched_by: "process_group",
+        }
+    }
+
+    #[test]
+    fn stall_tracking_survives_missing_provider_turn_id() {
+        // `turn/started` assigns id and status independently, so a partial
+        // notification leaves no provider turn id while a turn is genuinely live.
+        let mut tracker = CodexRuntimeTracker::default();
+        tracker.handle_notification(
+            "turn/started",
+            &json!({"turn": {"status": "inProgress"}}),
         );
+        assert!(tracker.active_turn_id.is_none());
+        assert!(tracker.turn_epoch.is_some(), "local epoch must still start");
+
+        tracker.handle_notification(
+            "item/started",
+            &json!({
+                "item": {"id": "cmd-1", "type": "commandExecution", "status": "inProgress", "command": "sleep 300"}
+            }),
+        );
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
 
         assert_phase_update(
-            tracker.keepalive_update().expect("running keepalive"),
+            tracker
+                .keepalive_update(None, Some(stopped_fact()))
+                .expect("stalled keepalive"),
+            "stalled",
+            Some("shell"),
+        );
+        let evidence = tracker.stall_evidence(None).expect("evidence");
+        assert_eq!(evidence["turn_identity_missing"], json!(true));
+    }
+
+    #[test]
+    fn silent_command_stays_running_without_process_corroboration() {
+        // A quiet `sleep`/build/CI wait is legitimate. Silence alone is suspicion.
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+
+        assert_phase_update(
+            tracker
+                .keepalive_update(None, None)
+                .expect("running keepalive"),
             "running",
             Some("shell"),
         );
+        assert!(tracker.stall_episode.is_none());
+    }
+
+    #[test]
+    fn silent_command_with_stopped_process_stalls_at_two_minutes() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+
+        assert_phase_update(
+            tracker
+                .keepalive_update(None, Some(stopped_fact()))
+                .expect("stalled keepalive"),
+            "stalled",
+            Some("shell"),
+        );
+        let evidence = tracker.stall_evidence(Some("turn-1")).expect("evidence");
+        assert_eq!(evidence["trigger"], json!("stopped_process"));
+        assert_eq!(evidence["stopped_process"]["pid"], json!(17210));
+        assert_eq!(evidence["stopped_process"]["matched_by"], json!("process_group"));
+    }
+
+    #[test]
+    fn silent_command_stalls_after_prolonged_silence_without_corroboration() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
+
+        assert_phase_update(
+            tracker
+                .keepalive_update(None, None)
+                .expect("stalled keepalive"),
+            "stalled",
+            Some("shell"),
+        );
+        assert_eq!(
+            tracker.stall_evidence(Some("turn-1")).expect("evidence")["trigger"],
+            json!("prolonged_silence")
+        );
+    }
+
+    #[test]
+    fn rollout_growth_counts_as_progress_and_clears_a_stall() {
+        // The bridge opts out of token-usage and reasoning deltas, so rollout
+        // growth is the only visible evidence of model-only work.
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
+        tracker.keepalive_update(Some(1_000), None);
+        assert!(tracker.stall_episode.is_some(), "first tick establishes baseline and stalls");
+
+        assert_phase_update(
+            tracker
+                .keepalive_update(Some(2_000), None)
+                .expect("running after growth"),
+            "running",
+            Some("shell"),
+        );
+        assert!(tracker.stall_episode.is_none());
+    }
+
+    #[test]
+    fn item_output_resets_the_silence_clock() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+        tracker.keepalive_update(None, Some(stopped_fact()));
+        assert!(tracker.stall_episode.is_some());
+
+        tracker.handle_notification(
+            "item/commandExecution/outputDelta",
+            &json!({"item_id": "cmd-1", "chunk": "hello"}),
+        );
+        assert!(tracker.stall_episode.is_none(), "output clears the episode");
+        assert_phase_update(
+            tracker
+                .keepalive_update(None, None)
+                .expect("running after output"),
+            "running",
+            Some("shell"),
+        );
+    }
+
+    #[test]
+    fn attention_state_never_stalls() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        tracker.handle_notification(
+            "thread/status/changed",
+            &json!({"status": {"type": "active", "activeFlags": ["waitingOnUserInput"]}}),
+        );
+        age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
+
+        assert!(
+            tracker.keepalive_update(None, Some(stopped_fact())).is_none(),
+            "waiting on the user is quiescent, not stalled"
+        );
+        assert!(tracker.stall_episode.is_none());
+    }
+
+    #[test]
+    fn late_keepalive_tick_rebases_clocks_instead_of_stalling() {
+        // Machine sleep or a starved event loop produces wall-clock silence that
+        // is not a wedge.
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        tracker.keepalive_update(None, None);
+        tracker.last_keepalive_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(KEEPALIVE_LATE_TICK_MS + 5_000))
+                .unwrap(),
+        );
+        age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
+
+        assert_phase_update(
+            tracker
+                .keepalive_update(None, Some(stopped_fact()))
+                .expect("running after wake"),
+            "running",
+            Some("shell"),
+        );
+        assert!(tracker.stall_episode.is_none());
+    }
+
+    #[test]
+    fn stall_episode_is_entered_once_and_can_recur_after_progress() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+
+        assert!(
+            tracker.refresh_stall_state(None, Some(stopped_fact())),
+            "first evaluation enters the episode"
+        );
+        assert!(
+            !tracker.refresh_stall_state(None, Some(stopped_fact())),
+            "subsequent keepalives must not re-enter the same episode"
+        );
+        let first_epoch = tracker.stall_episode.as_ref().unwrap().turn_epoch;
+
+        tracker.handle_notification(
+            "item/commandExecution/outputDelta",
+            &json!({"item_id": "cmd-1"}),
+        );
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+        assert!(
+            tracker.refresh_stall_state(None, Some(stopped_fact())),
+            "a later silence is a new episode"
+        );
+        assert_eq!(tracker.stall_episode.as_ref().unwrap().turn_epoch, first_epoch);
+    }
+
+    #[test]
+    fn probe_is_only_requested_after_the_corroboration_threshold() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        assert!(
+            !tracker.stall_probe_needed(),
+            "no process scan on the hot path"
+        );
+
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+        assert!(tracker.stall_probe_needed());
+
+        tracker.keepalive_update(None, Some(stopped_fact()));
+        assert!(
+            !tracker.stall_probe_needed(),
+            "an open episode does not need re-probing"
+        );
+    }
+
+    #[test]
+    fn turn_completion_clears_stall_state() {
+        let mut tracker = CodexRuntimeTracker::default();
+        start_turn_with_command(&mut tracker);
+        age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+        tracker.keepalive_update(None, Some(stopped_fact()));
+        assert!(tracker.stall_episode.is_some());
+
+        tracker.handle_notification(
+            "turn/completed",
+            &json!({"turn": {"id": "turn-1", "status": "completed"}}),
+        );
+        assert!(tracker.stall_episode.is_none());
+        assert!(tracker.turn_epoch.is_none());
+        assert!(tracker.keepalive_update(None, None).is_none());
     }
 
     #[test]
@@ -8301,7 +8792,7 @@ mod tests {
                 "turn": {"id": "turn-1", "status": "inProgress"}
             }),
         );
-        assert!(tracker.keepalive_update().is_some());
+        assert!(tracker.keepalive_update(None, None).is_some());
 
         // Transition to needs_user (reply needed)
         tracker.handle_notification(
@@ -8314,7 +8805,7 @@ mod tests {
             }),
         );
         assert!(
-            tracker.keepalive_update().is_none(),
+            tracker.keepalive_update(None, None).is_none(),
             "keepalive must be suppressed in needs_user state"
         );
     }

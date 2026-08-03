@@ -14,6 +14,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from zerg.catalogd.client import CatalogClient
+from zerg.services import catalogd_supervisor as catalogd_supervisor_module
+from zerg.services.catalogd_supervisor import CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS
+from zerg.services.catalogd_supervisor import CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS
 from zerg.services.catalogd_supervisor import CatalogdSupervisor
 
 
@@ -88,6 +91,31 @@ async def _eventually_running_status(path: Path, expected_pid: int, timeout: flo
 
 
 @pytest.mark.asyncio
+async def test_runtime_wrapper_grants_catalogd_the_container_cold_start_budget(monkeypatch):
+    observed: list[float] = []
+
+    class Supervisor:
+        async def start(self, *, readiness_timeout_seconds: float):
+            observed.append(readiness_timeout_seconds)
+            return {"ready": True}
+
+    monkeypatch.setattr(catalogd_supervisor_module, "_supervisor", Supervisor())
+
+    assert await catalogd_supervisor_module.start_catalogd_supervisor() == {"ready": True}
+    assert observed == [CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS]
+    assert CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS == 90.0
+
+
+def test_supervisor_keeps_interactive_and_projector_deadlines_separate(supervisor_paths):
+    database_path, socket_path = supervisor_paths
+    supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    assert supervisor.client.default_timeout_seconds == 1.0
+    assert supervisor.projector_client.default_timeout_seconds == CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS
+    assert CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS == 15.0
+
+
+@pytest.mark.asyncio
 async def test_supervisor_owns_restarts_and_stops_child(supervisor_paths):
     database_path, socket_path = supervisor_paths
     supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
@@ -113,9 +141,7 @@ def test_status_logs_only_meaningful_transitions(supervisor_paths, caplog):
         supervisor._write_status("degraded", log_transition=False, ownership="owned", error="transient ping")
         supervisor._write_status("running", ownership="owned", restart_count=0)
 
-    transitions = [
-        record for record in caplog.records if getattr(record, "event", None) == "supervisor_state_changed"
-    ]
+    transitions = [record for record in caplog.records if getattr(record, "event", None) == "supervisor_state_changed"]
     assert [record.status for record in transitions] == ["starting", "running"]
     assert transitions[0].tag == "CATALOGD"
     assert transitions[0].pid == 123

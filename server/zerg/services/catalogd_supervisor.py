@@ -22,6 +22,20 @@ from zerg.config import sqlite_file_path
 
 logger = logging.getLogger(__name__)
 
+# Large hosted catalogs can spend tens of seconds warming SQLite/schema pages
+# after a container replacement. The 4.8 GB hosted catalog measured 47.5
+# seconds and crossed the former 45-second bound, forcing a needless warm
+# crash-loop retry. Health checks have a 60-second start period plus three
+# 30-second retries, so let the indispensable catalog owner finish one bounded
+# cold start.
+CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS = 90.0
+# Projector catalog mutations share the single ordered writer with ingest. On
+# the hosted 4.8 GB catalog, the embedding claim SQL itself measured 52 ms but
+# waited longer than the generic one-second interactive deadline during active
+# ingest. A background projector can safely wait for writer admission; timing
+# out only abandons the response and immediately queues another claim attempt.
+CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS = 15.0
+
 
 def catalogd_paths() -> tuple[Path, Path]:
     database_path = sqlite_file_path(get_settings_unchecked().live_database_url)
@@ -45,7 +59,10 @@ class CatalogdSupervisor:
         self.socket_path = socket_path
         self.status_path = socket_path.with_name("catalogd-status.json")
         self.client = CatalogClient(socket_path)
-        self.projector_client = CatalogClient(socket_path)
+        self.projector_client = CatalogClient(
+            socket_path,
+            default_timeout_seconds=CATALOGD_PROJECTOR_RPC_TIMEOUT_SECONDS,
+        )
         self._task: asyncio.Task | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._stopping = False
@@ -258,7 +275,9 @@ async def start_catalogd_supervisor() -> dict[str, Any]:
     if _supervisor is None:
         database_path, socket_path = catalogd_paths()
         _supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
-    return await _supervisor.start()
+    return await _supervisor.start(
+        readiness_timeout_seconds=CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS,
+    )
 
 
 async def stop_catalogd_supervisor() -> None:

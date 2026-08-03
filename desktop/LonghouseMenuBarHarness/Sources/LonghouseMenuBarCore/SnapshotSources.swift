@@ -3,6 +3,13 @@ import Dispatch
 
 public protocol HealthSnapshotSource: Sendable {
     func load() throws -> HealthSnapshot
+    /// Human-readable description of what this source runs, surfaced when a
+    /// refresh fails so the user can see which command is broken.
+    var describedCommand: String? { get }
+}
+
+extension HealthSnapshotSource {
+    public var describedCommand: String? { nil }
 }
 
 public enum SnapshotSourceError: Error, LocalizedError {
@@ -52,6 +59,10 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
         return currentBundlePath == nil
             && launchPath == invocation.launchPath
             && arguments == invocation.arguments
+    }
+
+    public var describedCommand: String? {
+        ([launchPath] + arguments).joined(separator: " ")
     }
 
     public init() {

@@ -34,7 +34,11 @@ let package = Package(
         ),
         .testTarget(
             name: "LonghouseMenuBarCoreTests",
-            dependencies: ["LonghouseMenuBarCore"]
+            dependencies: ["LonghouseMenuBarCore"],
+            // Read via #filePath, not Bundle. Declaring it as a resource would
+            // synthesise a Bundle.module for this target and shadow the core
+            // target's bundle that other tests rely on.
+            exclude: ["Fixtures/native-desktop-health.json"]
         ),
     ]
 )

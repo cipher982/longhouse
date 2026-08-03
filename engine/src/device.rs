@@ -139,6 +139,118 @@ struct NativeManagedSessionsStatus {
     count: usize,
 }
 
+/// The envelope `longhouse local-health --fast --json` emits for Longhouse.app.
+///
+/// The Desktop app decodes this into `HealthSnapshot`, whose `severity` and
+/// `suggested_actions` are non-optional and whose `managed_sessions` is an
+/// array. The native fast payload satisfied none of that, so the app could not
+/// decode it at all.
+///
+/// Contract rule for every field here: an omission must render as **unknown**
+/// in the panel, never as zero, clear, none, or healthy. A missing block is a
+/// false negative, not a blank — so anything this producer cannot establish is
+/// left absent rather than defaulted to a reassuring value.
+#[derive(Debug, Clone, Serialize)]
+struct NativeDesktopHealth {
+    schema_version: u64,
+    collection_tier: &'static str,
+    collected_at: String,
+    health_state: String,
+    severity: String,
+    headline: String,
+    reasons: Vec<String>,
+    suggested_actions: Vec<String>,
+    engine_status: NativeDesktopEngineStatus,
+    transport: NativeTransportStatus,
+    spool: NativeSpoolStatus,
+    /// Absent when session evidence could not be read at all. An empty array
+    /// here is a positive claim that the engine reported no sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_sessions: Option<Vec<NativeDesktopSession>>,
+    managed_summary: NativeDesktopManagedSummary,
+    /// Required before the app will open the Runtime Host projection stream.
+    /// Without it `presentation` and `activity` stay null forever and every
+    /// session renders activity-unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    realtime: Option<NativeDesktopRealtime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control_channel: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<Value>,
+}
+
+/// Swift reads engine data from `engine_status.payload`, not from flat keys.
+#[derive(Debug, Clone, Serialize)]
+struct NativeDesktopEngineStatus {
+    path: String,
+    exists: bool,
+    fresh: bool,
+    age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NativeDesktopRealtime {
+    runtime_url: String,
+    machine_name: String,
+    token_path: String,
+}
+
+/// Counts are emitted only when session evidence was actually read.
+///
+/// `orphan_bridge_count` is absent because this producer does not scan for
+/// orphaned bridges. Emitting `0` would assert "no orphans" on the strength of
+/// not having looked, which is the false-negative the Desktop contract forbids.
+#[derive(Debug, Clone, Serialize)]
+struct NativeDesktopManagedSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attached_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detached_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    degraded_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_activity_at: Option<String>,
+}
+
+/// One managed session row.
+///
+/// `presentation`, `activity`, and `control` are deliberately absent. Those are
+/// Runtime Host authority, delivered over the projection stream; the Python
+/// producer sets `phase_overlay = None` for the same reason. Emitting a locally
+/// invented value here would put unverified phase data behind a field the panel
+/// treats as authoritative.
+#[derive(Debug, Clone, Serialize)]
+struct NativeDesktopSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeline_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_user_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bridge_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bridge_pid: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bridge_heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_codes: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct NativeRepairPlan {
     schema_version: u64,
@@ -307,11 +419,54 @@ pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow:
     let status_path = engine_status_path(state_root)?;
     let health = collect_native_fast_local_health(&status_path);
     if json {
-        println!("{}", serde_json::to_string_pretty(&health)?);
+        // JSON is what Longhouse.app consumes, so it must satisfy the Desktop
+        // contract. The human-readable path keeps the terse operator view.
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&collect_native_desktop_health(state_root, health)?)?
+        );
     } else {
         print_native_fast_local_health(&health);
     }
     Ok(())
+}
+
+fn machine_token_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
+    if let Some(root) = state_root {
+        return Ok(root.join("machine").join("device-token"));
+    }
+    Ok(config::get_machine_dir()?.join("device-token"))
+}
+
+fn collect_native_desktop_health(
+    state_root: Option<&Path>,
+    fast: NativeFastLocalHealth,
+) -> anyhow::Result<NativeDesktopHealth> {
+    let status_path = engine_status_path(state_root)?;
+    let engine_payload = std::fs::read_to_string(&status_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value.is_object());
+
+    let machine_state = std::fs::read_to_string(machine_state_path(state_root)?)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value.is_object());
+
+    // Only advertise a token path the app can actually read; a realtime block
+    // pointing at a missing token would fail the stream on every attempt.
+    let token_path = machine_token_path(state_root)
+        .ok()
+        .filter(|path| path.is_file())
+        .map(|path| path.display().to_string());
+
+    Ok(native_desktop_health_from_parts(
+        fast,
+        engine_payload,
+        machine_state.as_ref(),
+        token_path,
+        chrono::Utc::now().to_rfc3339(),
+    ))
 }
 
 pub fn cmd_device_repair_plan(json: bool, state_root: Option<&Path>) -> anyhow::Result<()> {
@@ -625,6 +780,127 @@ fn native_fast_health_from_parts(
             .and_then(|value| value.get("control_channel"))
             .cloned(),
         build: object.and_then(|value| value.get("build")).cloned(),
+    }
+}
+
+/// Project the native fast health plus raw engine evidence into the envelope
+/// Longhouse.app can decode.
+fn native_desktop_health_from_parts(
+    fast: NativeFastLocalHealth,
+    engine_payload: Option<Value>,
+    machine_state: Option<&Value>,
+    token_path: Option<String>,
+    now: String,
+) -> NativeDesktopHealth {
+    // Distinguish "the engine reported no sessions" from "we could not read
+    // session evidence". The first is a fact; the second must not render as an
+    // empty, reassuring session list.
+    let session_rows: Option<Vec<NativeDesktopSession>> = engine_payload
+        .as_ref()
+        .and_then(|value| value.get("sessions"))
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().map(native_desktop_session_from_row).collect());
+
+    let count_with_state = |state: &str| {
+        session_rows.as_ref().map(|rows| {
+            rows.iter()
+                .filter(|session| session.state.as_deref() == Some(state))
+                .count()
+        })
+    };
+    let attached_count = count_with_state("attached");
+    let detached_count = count_with_state("detached");
+    let degraded_count = count_with_state("degraded");
+
+    let severity = match fast.health_state.as_str() {
+        "healthy" => "green",
+        "degraded" => "yellow",
+        _ => "red",
+    }
+    .to_string();
+
+    let realtime = machine_state.and_then(|state| {
+        let runtime_url = state.get("runtime_url").and_then(Value::as_str)?;
+        let machine_name = state.get("machine_name").and_then(Value::as_str)?;
+        let token_path = token_path?;
+        Some(NativeDesktopRealtime {
+            runtime_url: runtime_url.to_string(),
+            machine_name: machine_name.to_string(),
+            token_path,
+        })
+    });
+
+    NativeDesktopHealth {
+        schema_version: 1,
+        collection_tier: "native_fast",
+        collected_at: now,
+        health_state: fast.health_state,
+        severity,
+        headline: fast.headline,
+        reasons: fast.reasons,
+        // The rollup that produces real remediation text is `_classify_health`,
+        // which is not ported yet. Emit nothing rather than inventing advice.
+        suggested_actions: Vec::new(),
+        engine_status: NativeDesktopEngineStatus {
+            path: fast.engine_status.path,
+            exists: fast.engine_status.exists,
+            fresh: fast.engine_status.fresh,
+            age_seconds: fast.engine_status.age_seconds,
+            error: fast.engine_status.error,
+            payload: engine_payload,
+        },
+        transport: fast.transport,
+        spool: fast.spool,
+        managed_summary: NativeDesktopManagedSummary {
+            attached_count,
+            detached_count,
+            degraded_count,
+            latest_activity_at: None,
+        },
+        managed_sessions: session_rows,
+        realtime,
+        control_channel: fast.control_channel,
+        build: fast.build,
+    }
+}
+
+fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
+    let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);
+    NativeDesktopSession {
+        session_id: text("session_id"),
+        provider: text("provider"),
+        workspace_label: row
+            .get("workspace")
+            .and_then(|value| value.get("label"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| text("workspace_label")),
+        timeline_title: text("timeline_title"),
+        first_user_message: text("first_user_message"),
+        title_state: text("title_state"),
+        title_source: text("title_source"),
+        state: text("state"),
+        bridge_status: row
+            .get("bridge")
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        bridge_pid: row
+            .get("bridge")
+            .and_then(|value| value.get("pid"))
+            .and_then(Value::as_u64),
+        bridge_heartbeat_at: row
+            .get("bridge")
+            .and_then(|value| value.get("heartbeat_at"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        reason_codes: row.get("reason_codes").and_then(Value::as_array).map(|codes| {
+            codes
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        }),
     }
 }
 
@@ -2767,6 +3043,201 @@ mod tests {
             .commands
             .iter()
             .all(|command| matches!(command.status.as_str(), "available" | "excluded")));
+    }
+
+    #[test]
+    fn desktop_envelope_satisfies_the_consumer_contract() {
+        let engine_payload = serde_json::json!({
+            "version": "test",
+            "sessions": [{
+                "session_id": "s1",
+                "provider": "claude",
+                "state": "attached",
+                "timeline_title": "Review the panel",
+                "workspace": {"label": "longhouse"},
+                "bridge": {"status": "ready", "pid": 42},
+                "reason_codes": ["a"],
+            }],
+        });
+        let machine_state = serde_json::json!({
+            "runtime_url": "https://example.longhouse.ai",
+            "machine_name": "cinder",
+        });
+        let fast = native_fast_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(engine_payload.clone()),
+            None,
+        );
+
+        let envelope = native_desktop_health_from_parts(
+            fast,
+            Some(engine_payload),
+            Some(&machine_state),
+            Some("/tmp/device-token".to_string()),
+            "2026-08-03T16:00:00Z".to_string(),
+        );
+        let value = serde_json::to_value(&envelope).unwrap();
+
+        // Swift declares these non-optional; their absence is what made the
+        // whole payload undecodable.
+        assert!(value["severity"].is_string());
+        assert!(value["suggested_actions"].is_array());
+        assert!(value["collected_at"].is_string());
+        // Swift declares managed_sessions as an array, not {count}.
+        assert_eq!(value["managed_sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(value["managed_sessions"][0]["workspace_label"], "longhouse");
+        assert_eq!(value["managed_sessions"][0]["bridge_pid"], 42);
+        // Swift reads engine data from engine_status.payload, not flat keys.
+        assert_eq!(value["engine_status"]["payload"]["version"], "test");
+        // Without realtime the app never opens the projection stream and every
+        // session renders activity-unknown forever.
+        assert_eq!(value["realtime"]["machine_name"], "cinder");
+        assert_eq!(value["managed_summary"]["attached_count"], 1);
+        // Never claimed, because this producer does not look for orphan bridges.
+        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+    }
+
+    /// The canonical envelope both the Rust golden test and the Swift consumer
+    /// fixture are built from. Synthetic on purpose: deterministic, and it keeps
+    /// real machine paths, URLs, and session ids out of the repo.
+    fn canonical_desktop_envelope() -> Value {
+        let engine_payload = serde_json::json!({
+            "version": "0.1.33",
+            "daemon_pid": 4242,
+            "last_updated": "2026-08-03T16:00:00Z",
+            "sessions": [{
+                "session_id": "00000000-0000-4000-8000-000000000001",
+                "provider": "claude",
+                "state": "attached",
+                "timeline_title": "Review the panel",
+                "first_user_message": "example",
+                "title_state": "pending",
+                "title_source": "prompt",
+                "workspace": {"label": "longhouse"},
+                "bridge": {
+                    "status": "ready",
+                    "pid": 4243,
+                    "heartbeat_at": "2026-08-03T16:00:00Z",
+                },
+                "reason_codes": [],
+            }],
+        });
+        let machine_state = serde_json::json!({
+            "runtime_url": "https://example.longhouse.ai",
+            "machine_name": "example-machine",
+        });
+        let fast = native_fast_health_from_parts(
+            Path::new("/example/.longhouse/agent/engine-status.json"),
+            true,
+            Some(0),
+            Some(engine_payload.clone()),
+            None,
+        );
+        serde_json::to_value(native_desktop_health_from_parts(
+            fast,
+            Some(engine_payload),
+            Some(&machine_state),
+            Some("/example/.longhouse/machine/device-token".to_string()),
+            "2026-08-03T16:00:00Z".to_string(),
+        ))
+        .unwrap()
+    }
+
+    /// Golden check against the fixture the Swift consumer test decodes.
+    ///
+    /// Without this the fixture is hand-maintained and independent of what Rust
+    /// actually emits, so the producer could drop a required field while the
+    /// Swift test kept passing on a stale fixture — the same blind spot that let
+    /// an undecodable replacement ship in the first place.
+    #[test]
+    fn desktop_envelope_matches_the_swift_consumer_fixture() {
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("desktop/LonghouseMenuBarHarness/Tests/LonghouseMenuBarCoreTests/Fixtures/native-desktop-health.json");
+        let fixture: Value =
+            serde_json::from_str(&std::fs::read_to_string(&fixture_path).unwrap()).unwrap();
+
+        let emitted = canonical_desktop_envelope();
+
+        // Set LONGHOUSE_UPDATE_FIXTURES=1 to rewrite the fixture after an
+        // intentional envelope change.
+        if std::env::var("LONGHOUSE_UPDATE_FIXTURES").as_deref() == Ok("1") {
+            std::fs::write(
+                &fixture_path,
+                format!("{}\n", serde_json::to_string_pretty(&emitted).unwrap()),
+            )
+            .unwrap();
+        }
+
+        // Compare the whole recursive shape, not a handful of key names. Key
+        // presence alone would let a type change through -- and a type change is
+        // exactly what breaks Swift decoding, which is the failure this test
+        // exists to catch.
+        fn shape(value: &Value) -> Value {
+            match value {
+                Value::Object(map) => Value::Object(
+                    map.iter()
+                        .map(|(key, child)| (key.clone(), shape(child)))
+                        .collect(),
+                ),
+                // Compare the element shape, not the element count, so a fixture
+                // with one session still pins the row structure.
+                Value::Array(items) => Value::Array(
+                    items.first().map(|item| vec![shape(item)]).unwrap_or_default(),
+                ),
+                Value::String(_) => Value::String("string".into()),
+                Value::Number(number) => {
+                    Value::String(if number.is_f64() { "number" } else { "integer" }.into())
+                }
+                Value::Bool(_) => Value::String("bool".into()),
+                Value::Null => Value::String("null".into()),
+            }
+        }
+
+        assert_eq!(
+            shape(&fixture),
+            shape(&emitted),
+            "native envelope no longer matches the Swift consumer fixture.\n\
+             Regenerate it with:\n  \
+             cargo run --bin longhouse -- local-health --fast --json > {}",
+            fixture_path.display()
+        );
+        // The false-negative the Desktop contract forbids must stay absent.
+        assert!(fixture["managed_summary"].get("orphan_bridge_count").is_none());
+    }
+
+    #[test]
+    fn desktop_envelope_omits_realtime_when_the_token_is_missing() {
+        let machine_state = serde_json::json!({
+            "runtime_url": "https://example.longhouse.ai",
+            "machine_name": "cinder",
+        });
+        let fast =
+            native_fast_health_from_parts(Path::new("/tmp/engine-status.json"), false, None, None, None);
+
+        let envelope = native_desktop_health_from_parts(
+            fast,
+            None,
+            Some(&machine_state),
+            None,
+            "2026-08-03T16:00:00Z".to_string(),
+        );
+        let value = serde_json::to_value(&envelope).unwrap();
+
+        // Advertising a stream the app cannot authenticate would fail on every
+        // attempt; absent is the honest answer.
+        assert!(value.get("realtime").is_none());
+        // No session evidence was readable, so the field is absent rather than
+        // an empty array. An empty array asserts "the engine reported no
+        // sessions", which is a different and unearned claim.
+        assert!(value.get("managed_sessions").is_none());
+        assert!(value["managed_summary"].get("attached_count").is_none());
+        // And never a zero orphan-bridge count from a producer that does not
+        // scan for orphaned bridges.
+        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
     }
 
     #[test]

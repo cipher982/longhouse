@@ -45,34 +45,37 @@ def _executable_file(path: Path) -> bool:
     return path.is_file() and os.access(path, os.X_OK)
 
 
-def _default_cli_snapshot_prefix() -> list[str]:
+def _default_cli_snapshot_prefix() -> tuple[list[str], bool]:
+    """Resolve the health command prefix and whether it accepts ``--claude-dir``.
+
+    The native facade's ``local-health`` takes only ``--fast`` and ``--json`` and
+    exits non-zero on anything else, so appending ``--claude-dir`` to it produces
+    a command that cannot run. Only the Python entrypoints accept it.
+    """
     user_local_bin = Path.home() / ".local" / "bin"
     user_local_health = user_local_bin / "longhouse-local-health"
     if _executable_file(user_local_health):
-        return [str(user_local_health)]
+        return [str(user_local_health)], True
 
     path_local_health = shutil.which("longhouse-local-health")
     if path_local_health:
-        return [path_local_health]
+        return [path_local_health], True
 
     user_local_longhouse = user_local_bin / "longhouse"
     if _executable_file(user_local_longhouse):
-        return [str(user_local_longhouse), "local-health"]
+        return [str(user_local_longhouse), "local-health"], False
 
     path_longhouse = shutil.which("longhouse")
     if path_longhouse:
-        return [path_longhouse, "local-health"]
+        return [path_longhouse, "local-health"], False
 
-    return [sys.executable, "-m", "zerg.cli.local_health_fast"]
+    return [sys.executable, "-m", "zerg.cli.local_health_fast"], True
 
 
 def build_snapshot_arguments(*, claude_dir: str | None = None) -> list[str]:
-    command = [
-        *_default_cli_snapshot_prefix(),
-        "--fast",
-        "--json",
-    ]
-    if claude_dir:
+    prefix, accepts_claude_dir = _default_cli_snapshot_prefix()
+    command = [*prefix, "--fast", "--json"]
+    if claude_dir and accepts_claude_dir:
         command.extend(["--claude-dir", claude_dir])
     return command
 

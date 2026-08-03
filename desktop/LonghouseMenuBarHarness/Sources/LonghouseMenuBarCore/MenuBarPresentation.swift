@@ -167,9 +167,17 @@ extension HealthSnapshot {
             ? .inspect
             : hasCanonicalControlTruth ? .normal : .unavailable
 
+        // Without an engine payload there is no upload or transport evidence at
+        // all. Reporting "Clear" and "Connected" from missing evidence is a
+        // false negative: it claims a healthy state nobody observed.
+        let hasEngineEvidence = engineStatus?.payload != nil
+
         let durableValue: String
         let durablePromotion: MenuBarPromotion
-        if storageBlockedCount > 0 {
+        if !hasEngineEvidence {
+            durableValue = "Unknown"
+            durablePromotion = .unavailable
+        } else if storageBlockedCount > 0 {
             durableValue = "\(storageBlockedCount) source conflict\(storageBlockedCount == 1 ? "" : "s")"
             durablePromotion = .repair
         } else if storagePendingCount > 0 {
@@ -178,6 +186,23 @@ extension HealthSnapshot {
         } else {
             durableValue = "Clear"
             durablePromotion = .normal
+        }
+
+        let transportValue: String
+        let transportDetail: String?
+        let transportPromotion: MenuBarPromotion
+        if !hasEngineEvidence {
+            transportValue = "Unknown"
+            transportDetail = "no engine evidence"
+            transportPromotion = .unavailable
+        } else if engineStatus?.payload?.isOffline == true {
+            transportValue = "Offline"
+            transportDetail = "data retained locally"
+            transportPromotion = .unavailable
+        } else {
+            transportValue = "Connected"
+            transportDetail = nil
+            transportPromotion = .normal
         }
 
         return [
@@ -198,9 +223,8 @@ extension HealthSnapshot {
             ),
             MenuBarSystemFact(
                 id: "transport", label: "Transport",
-                value: engineStatus?.payload?.isOffline == true ? "Offline" : "Connected",
-                detail: engineStatus?.payload?.isOffline == true ? "data retained locally" : nil,
-                promotion: engineStatus?.payload?.isOffline == true ? .unavailable : .normal
+                value: transportValue, detail: transportDetail,
+                promotion: transportPromotion
             ),
             MenuBarSystemFact(
                 id: "freshness", label: "Status freshness",

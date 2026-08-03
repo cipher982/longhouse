@@ -239,6 +239,113 @@ pub fn lstart_matches_recorded(fact: &ProcessFact, recorded_lstart: &str) -> boo
     recorded.is_empty() || fact.lstart.trim() == recorded
 }
 
+/// Parent and process-group lineage for one process.
+///
+/// Kept separate from [`ProcessFact`] because ownership questions ("is this
+/// subprocess ours?") need `ppid`/`pgid`, while liveness questions need `tty` and
+/// `lstart`. Collecting both in one struct would widen every existing caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessLineage {
+    pub pid: u32,
+    pub ppid: u32,
+    pub pgid: i32,
+    pub stat: String,
+    pub command: String,
+}
+
+impl ProcessLineage {
+    /// True for a process stopped by a signal (`T`) or reaped-but-unwaited (`Z`).
+    /// Either state under a live parent means work that will never finish on its
+    /// own.
+    pub fn is_stopped_or_zombie(&self) -> bool {
+        self.stat
+            .chars()
+            .next()
+            .is_some_and(|state| state == 'T' || state == 'Z')
+    }
+}
+
+/// Collect one coherent parent/process-group inventory. `None` distinguishes a
+/// failed `ps` from a genuinely empty result, so callers never read a scan
+/// failure as evidence of anything.
+pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,pgid=,stat=,command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line_count = text.lines().filter(|line| !line.trim().is_empty()).count();
+    let entries: Vec<ProcessLineage> = text.lines().filter_map(parse_process_lineage).collect();
+    if entries.len() != line_count || !entries.iter().any(|e| e.pid == std::process::id()) {
+        return None;
+    }
+    Some(entries)
+}
+
+/// Parse one `ps -axo pid=,ppid=,pgid=,stat=,command=` line. `command` stays last
+/// because it may contain spaces.
+pub fn parse_process_lineage(line: &str) -> Option<ProcessLineage> {
+    let trimmed = line.trim_start();
+    let (pid_text, rest) = trimmed.split_once(char::is_whitespace)?;
+    let (ppid_text, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+    let (pgid_text, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+    let (stat, command) = rest.trim_start().split_once(char::is_whitespace)?;
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    Some(ProcessLineage {
+        pid: pid_text.parse().ok()?,
+        ppid: ppid_text.parse().ok()?,
+        pgid: pgid_text.parse().ok()?,
+        stat: stat.to_string(),
+        command: command.to_string(),
+    })
+}
+
+/// Transitive descendants of `root`, plus any process sharing `pgid` when one is
+/// recorded. The process-group arm is load-bearing: a wedged command can be
+/// reparented to PID 1 and drop out of the descendant tree entirely.
+pub fn owned_processes<'a>(
+    entries: &'a [ProcessLineage],
+    root: u32,
+    pgid: Option<i32>,
+) -> Vec<(&'a ProcessLineage, &'static str)> {
+    let mut descendants: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    descendants.insert(root);
+    // Bounded relaxation: process trees here are shallow, and each pass can only
+    // add processes, so this converges well before the entry count.
+    for _ in 0..entries.len().min(64) {
+        let mut grew = false;
+        for entry in entries {
+            if !descendants.contains(&entry.pid) && descendants.contains(&entry.ppid) {
+                descendants.insert(entry.pid);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    entries
+        .iter()
+        .filter(|entry| entry.pid != root)
+        .filter_map(|entry| {
+            if descendants.contains(&entry.pid) {
+                Some((entry, "descendant"))
+            } else if pgid.is_some_and(|group| group == entry.pgid) {
+                Some((entry, "process_group"))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +424,76 @@ mod tests {
         assert_eq!(targeted.lstart, full.lstart);
         assert_eq!(targeted.command, full.command);
         assert!(targeted.start_time.is_some());
+    }
+
+    fn lineage(pid: u32, ppid: u32, pgid: i32, stat: &str) -> ProcessLineage {
+        ProcessLineage {
+            pid,
+            ppid,
+            pgid,
+            stat: stat.to_string(),
+            command: format!("proc-{pid}"),
+        }
+    }
+
+    #[test]
+    fn owned_processes_finds_reparented_group_member() {
+        // The motivating incident: the wedged shell was orphaned to PID 1, so it
+        // was no longer a descendant of the app-server. Process-group membership
+        // is the only thing that still identifies it as ours.
+        let entries = vec![
+            lineage(16956, 900, 16956, "Ss"),
+            lineage(17210, 1, 16956, "Ts"),
+            lineage(4242, 1, 4242, "Ts"),
+        ];
+
+        let owned = owned_processes(&entries, 16956, Some(16956));
+        let pids: Vec<(u32, &str)> = owned
+            .iter()
+            .map(|(entry, matched)| (entry.pid, *matched))
+            .collect();
+
+        assert_eq!(pids, vec![(17210, "process_group")]);
+        assert!(
+            !pids.iter().any(|(pid, _)| *pid == 4242),
+            "an unrelated stopped process must not be claimed"
+        );
+    }
+
+    #[test]
+    fn owned_processes_walks_transitive_descendants() {
+        let entries = vec![
+            lineage(100, 1, 100, "Ss"),
+            lineage(101, 100, 100, "S"),
+            lineage(102, 101, 100, "T"),
+        ];
+
+        let owned = owned_processes(&entries, 100, None);
+        let mut pids: Vec<u32> = owned.iter().map(|(entry, _)| entry.pid).collect();
+        pids.sort_unstable();
+        assert_eq!(pids, vec![101, 102]);
+        assert!(owned.iter().all(|(_, matched)| *matched == "descendant"));
+    }
+
+    #[test]
+    fn stopped_and_zombie_states_are_recognized() {
+        assert!(lineage(1, 1, 1, "Ts").is_stopped_or_zombie());
+        assert!(lineage(1, 1, 1, "T").is_stopped_or_zombie());
+        assert!(lineage(1, 1, 1, "Z").is_stopped_or_zombie());
+        assert!(!lineage(1, 1, 1, "S+").is_stopped_or_zombie());
+        assert!(!lineage(1, 1, 1, "R").is_stopped_or_zombie());
+    }
+
+    #[test]
+    fn parse_process_lineage_keeps_command_with_spaces() {
+        let entry =
+            parse_process_lineage("17210     1 16956 Ts   /bin/zsh -lc for n in {1..10}; do x; done")
+                .unwrap();
+        assert_eq!(entry.pid, 17210);
+        assert_eq!(entry.ppid, 1);
+        assert_eq!(entry.pgid, 16956);
+        assert_eq!(entry.stat, "Ts");
+        assert_eq!(entry.command, "/bin/zsh -lc for n in {1..10}; do x; done");
     }
 
     #[test]

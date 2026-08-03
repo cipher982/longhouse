@@ -345,9 +345,7 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
             "render_revision": None,
             "last_append_at": None,
         }
-        projected = project_catalog_session_facts(
-            read["facts"], observed_at=datetime.fromisoformat(read["observed_at"])
-        )
+        projected = project_catalog_session_facts(read["facts"], observed_at=datetime.fromisoformat(read["observed_at"]))
         assert projected.session_state.disposition.state == "open"
         canonical = project_catalog_session_facts(
             read["facts"],
@@ -434,9 +432,7 @@ async def test_storage_archive_progress_cannot_close_or_overwrite_live_session_i
         assert open_facts["catalog"]["device_name"] == "Cinder"
         assert open_facts["catalog"]["primary_thread_id"] is not None
         assert open_facts["latest_run"]["ended_at"] is None
-        open_state = project_catalog_session_facts(
-            open_facts, observed_at=datetime.fromisoformat(open_read["observed_at"])
-        ).session_state
+        open_state = project_catalog_session_facts(open_facts, observed_at=datetime.fromisoformat(open_read["observed_at"])).session_state
         assert open_state.disposition.state == "open"
         assert open_state.run is not None and open_state.run.lifecycle != "ended"
 
@@ -594,6 +590,41 @@ def test_catalog_gateway_normalizes_missing_file_backing(monkeypatch):
     )
     with pytest.raises(catalog_read_gateway.CatalogReadError, match="temporarily unavailable"):
         catalog_read_gateway.active_owner_id()
+
+
+def test_catalog_gateway_gives_timeline_snapshot_its_measured_bounded_budget(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, _method, *, params, timeout_seconds):
+        assert params["owner_id"] == 1
+        attempts.append(timeout_seconds)
+        if len(attempts) == 1:
+            raise catalog_read_gateway.CatalogUnavailable("transient")
+        return {"rows": [], "total": 0}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    result = catalog_read_gateway.canonical_timeline_snapshot({}, owner_id=1)
+
+    assert result == {"rows": [], "total": 0}
+    assert attempts == [1.5, 1.5]
+
+
+def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "auth.owner.get.v2"
+        assert params == {}
+        attempts.append(timeout_seconds)
+        return {"found": False, "owner_id": None}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    assert catalog_read_gateway.active_owner_id() is None
+    assert attempts == [0.35]
 
 
 @pytest.mark.asyncio
@@ -1063,9 +1094,7 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
     assert projected.session_state.control.actions.send_input.state == "available"
     assert detail["commit_seq"] == result["commit_seq"]
     assert detail["legacy_facts"]["catalog"]["session_id"] == session_id
-    assert {head["evidence_hash"] for head in detail["heads"]} == {
-        head["evidence_hash"] for head in row["heads"]
-    }
+    assert {head["evidence_hash"] for head in detail["heads"]} == {head["evidence_hash"] for head in row["heads"]}
 
 
 def test_shadow_state_read_bounds_combined_rpc_payload(daemon_paths):
@@ -1464,9 +1493,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
                             "id": oversized,
                             "header": oversized,
                             "question": oversized,
-                            "options": [
-                                {"label": oversized, "description": oversized, "value": oversized} for _ in range(20)
-                            ],
+                            "options": [{"label": oversized, "description": oversized, "value": oversized} for _ in range(20)],
                         }
                         for _ in range(20)
                     ],
@@ -1474,9 +1501,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
             )
         )
         connection.execute(
-            LiveLaunchReadiness.__table__.update()
-            .where(LiveLaunchReadiness.session_id == session_id)
-            .values(error_message=oversized)
+            LiveLaunchReadiness.__table__.update().where(LiveLaunchReadiness.session_id == session_id).values(error_message=oversized)
         )
         connection.execute(
             LiveSessionLivePreview.__table__.update()
@@ -1489,9 +1514,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
             .where(LiveSessionCatalog.session_id == session_id)
         ).scalar_one()
         run_id = connection.execute(
-            LiveSessionRun.__table__.select()
-            .with_only_columns(LiveSessionRun.id)
-            .where(LiveSessionRun.thread_id == thread_id)
+            LiveSessionRun.__table__.select().with_only_columns(LiveSessionRun.id).where(LiveSessionRun.thread_id == thread_id)
         ).scalar_one()
         for connection_index in range(7):
             connection.execute(
@@ -1527,9 +1550,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
     result["rows"] *= 100
     result["total"] = 100
     response = CatalogRpcResponse(id="0" * 32, result=result)
-    payload_bytes = len(
-        json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-    )
+    payload_bytes = len(json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
     batch_response = CatalogRpcResponse(
         id="1" * 32,
         result={

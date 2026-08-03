@@ -71,9 +71,10 @@ class EmbeddingCoverage:
     unlocatable_episodes: int
     episode_count_mismatches: int
     missing_session_ids: tuple[str, ...]
+    stale: bool = False
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "ready": self.ready,
             "expected_sessions": self.expected_sessions,
             "published_sessions": self.published_sessions,
@@ -85,6 +86,13 @@ class EmbeddingCoverage:
             "episode_count_mismatches": self.episode_count_mismatches,
             "missing_session_ids": list(self.missing_session_ids),
         }
+        # Successful dense responses keep their exact strict contract. This
+        # marker appears only while a committed mutation has invalidated the
+        # last fully validated snapshot, so progress counters cannot be
+        # mistaken for current database truth during a deferred backfill.
+        if self.stale:
+            payload["stale"] = True
+        return payload
 
 
 _EMPTY = _Snapshot(
@@ -124,6 +132,7 @@ class ResidentEpisodeIndex:
         self._snapshot = _EMPTY
         self._loaded = False
         self._coverage = EmbeddingCoverage(False, 0, 0, 0, 0, 0, 0, 0, 0, ())
+        self._blocking_session_ids: frozenset[str] = frozenset()
         self._write_lock = threading.Lock()
 
     @property
@@ -146,6 +155,12 @@ class ResidentEpisodeIndex:
         return self._coverage
 
     @property
+    def blocking_session_ids(self) -> frozenset[str]:
+        """Sessions that prevented the last full coverage validation."""
+
+        return self._blocking_session_ids
+
+    @property
     def model(self) -> str:
         return self._model
 
@@ -163,7 +178,7 @@ class ResidentEpisodeIndex:
         """
 
         with self._write_lock:
-            self._coverage = replace(self._coverage, ready=False)
+            self._coverage = replace(self._coverage, ready=False, stale=True)
 
     def load(self, connection) -> None:
         """Build the snapshot from SQLite. Called on the writer thread."""
@@ -201,13 +216,14 @@ class ResidentEpisodeIndex:
             """,
             (self._model, self._dims),
         ).fetchall()
-        valid_rows, coverage = self._validate_coverage(publications, rows)
+        valid_rows, coverage, blocking_session_ids = self._validate_coverage(publications, rows)
         with self._write_lock:
             self._snapshot = self._build(valid_rows)
             self._coverage = coverage
+            self._blocking_session_ids = blocking_session_ids
             self._loaded = True
 
-    def _validate_coverage(self, publications, rows) -> tuple[list, EmbeddingCoverage]:
+    def _validate_coverage(self, publications, rows) -> tuple[list, EmbeddingCoverage, frozenset[str]]:
         expected_by_session = {
             str(row["session_id"]): int(row["expected_episode_count"]) for row in publications if row["expected_episode_count"] is not None
         }
@@ -217,29 +233,35 @@ class ResidentEpisodeIndex:
         invalid_vectors = 0
         unnormalized_vectors = 0
         unlocatable_episodes = 0
+        blocking_session_ids = set(missing_sessions)
         for row in rows:
             session_id = str(row["session_id"])
             ordinals_by_session.setdefault(session_id, set()).add(int(row["episode_ordinal"]))
             payload = row["embedding"]
             if not isinstance(payload, bytes) or len(payload) != self._dims * 4:
                 invalid_vectors += 1
+                blocking_session_ids.add(session_id)
                 continue
             vector = np.frombuffer(payload, dtype="float32", count=self._dims)
             if not np.isfinite(vector).all() or float(np.linalg.norm(vector)) <= 1e-6:
                 invalid_vectors += 1
+                blocking_session_ids.add(session_id)
                 continue
             if not np.isclose(float(np.linalg.norm(vector)), 1.0, rtol=1e-4, atol=1e-4):
                 unnormalized_vectors += 1
+                blocking_session_ids.add(session_id)
                 continue
             if row["start_order_time_us"] is None:
                 unlocatable_episodes += 1
+                blocking_session_ids.add(session_id)
                 continue
             valid_rows.append(row)
 
-        count_mismatches = sum(
-            ordinals_by_session.get(session_id, set()) != set(range(expected_count))
-            for session_id, expected_count in expected_by_session.items()
-        )
+        count_mismatches = 0
+        for session_id, expected_count in expected_by_session.items():
+            if ordinals_by_session.get(session_id, set()) != set(range(expected_count)):
+                count_mismatches += 1
+                blocking_session_ids.add(session_id)
         expected_episodes = sum(expected_by_session.values())
         current_episodes = len(rows)
         ready = (
@@ -250,17 +272,21 @@ class ResidentEpisodeIndex:
             and unlocatable_episodes == 0
             and count_mismatches == 0
         )
-        return valid_rows, EmbeddingCoverage(
-            ready=ready,
-            expected_sessions=len(publications),
-            published_sessions=len(expected_by_session),
-            expected_episodes=expected_episodes,
-            current_episodes=current_episodes,
-            invalid_vectors=invalid_vectors,
-            unnormalized_vectors=unnormalized_vectors,
-            unlocatable_episodes=unlocatable_episodes,
-            episode_count_mismatches=count_mismatches,
-            missing_session_ids=missing_sessions[:20],
+        return (
+            valid_rows,
+            EmbeddingCoverage(
+                ready=ready,
+                expected_sessions=len(publications),
+                published_sessions=len(expected_by_session),
+                expected_episodes=expected_episodes,
+                current_episodes=current_episodes,
+                invalid_vectors=invalid_vectors,
+                unnormalized_vectors=unnormalized_vectors,
+                unlocatable_episodes=unlocatable_episodes,
+                episode_count_mismatches=count_mismatches,
+                missing_session_ids=missing_sessions[:20],
+            ),
+            frozenset(blocking_session_ids),
         )
 
     def _build(self, rows) -> _Snapshot:

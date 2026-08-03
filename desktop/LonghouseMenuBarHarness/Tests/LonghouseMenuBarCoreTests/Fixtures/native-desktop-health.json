@@ -1,0 +1,76 @@
+{
+  "collected_at": "2026-08-03T16:00:00Z",
+  "collection_tier": "native_fast",
+  "engine_status": {
+    "age_seconds": 0,
+    "exists": true,
+    "fresh": true,
+    "path": "/example/.longhouse/agent/engine-status.json",
+    "payload": {
+      "daemon_pid": 4242,
+      "last_updated": "2026-08-03T16:00:00Z",
+      "sessions": [
+        {
+          "bridge": {
+            "heartbeat_at": "2026-08-03T16:00:00Z",
+            "pid": 4243,
+            "status": "ready"
+          },
+          "first_user_message": "example",
+          "provider": "claude",
+          "reason_codes": [],
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "state": "attached",
+          "timeline_title": "Review the panel",
+          "title_source": "prompt",
+          "title_state": "pending",
+          "workspace": {
+            "label": "longhouse"
+          }
+        }
+      ],
+      "version": "0.1.33"
+    }
+  },
+  "headline": "Longhouse native fast health is healthy",
+  "health_state": "healthy",
+  "managed_sessions": [
+    {
+      "bridge_heartbeat_at": "2026-08-03T16:00:00Z",
+      "bridge_pid": 4243,
+      "bridge_status": "ready",
+      "first_user_message": "example",
+      "provider": "claude",
+      "reason_codes": [],
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "state": "attached",
+      "timeline_title": "Review the panel",
+      "title_source": "prompt",
+      "title_state": "pending",
+      "workspace_label": "longhouse"
+    }
+  ],
+  "managed_summary": {
+    "attached_count": 1,
+    "degraded_count": 0,
+    "detached_count": 0
+  },
+  "realtime": {
+    "machine_name": "example-machine",
+    "runtime_url": "https://example.longhouse.ai",
+    "token_path": "/example/.longhouse/machine/device-token"
+  },
+  "reasons": [],
+  "schema_version": 1,
+  "severity": "green",
+  "spool": {
+    "dead_count": 0,
+    "pending_count": 0
+  },
+  "suggested_actions": [],
+  "transport": {
+    "status": "healthy",
+    "status_reason": "healthy",
+    "status_summary": "Shipping healthy."
+  }
+}

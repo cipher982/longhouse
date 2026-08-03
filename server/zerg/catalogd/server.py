@@ -34,6 +34,13 @@ from zerg.catalogd.store import CatalogStore
 
 logger = logging.getLogger(__name__)
 
+# Browser QA opens timeline/detail surfaces concurrently, and an SSE client
+# that disconnects cannot cancel an already-running synchronous SQLite read.
+# Four slots let those abandoned reads queue every new timeline/auth request
+# past the RPC deadline. Eight remains bounded to the normal hosted core count
+# while preserving one admission wave for active interactive traffic.
+CATALOG_INTERACTIVE_READ_WORKERS = 8
+
 
 class CatalogDaemonError(RuntimeError):
     pass
@@ -60,6 +67,7 @@ class CatalogDaemon:
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._executor: ThreadPoolExecutor | None = None
         self._read_executor: ThreadPoolExecutor | None = None
+        self._projector_read_executor: ThreadPoolExecutor | None = None
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
 
@@ -78,10 +86,19 @@ class CatalogDaemon:
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
-            self._read_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalogd-read")
+            self._read_executor = ThreadPoolExecutor(
+                max_workers=CATALOG_INTERACTIVE_READ_WORKERS,
+                thread_name_prefix="catalogd-read",
+            )
+            self._projector_read_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="catalogd-projector-read")
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
             self._store.ensure_known_projector_states()
+            # Projector workers live in the supervising Runtime Host process.
+            # If catalogd is starting, no worker that owned a durable claim can
+            # still prove ownership of it. Release those claims immediately
+            # instead of waiting through 15-minute/hour-long work leases.
+            self._store.release_projector_claims_on_startup(observed_at=datetime.now(UTC))
             self._meta = read_catalog_meta(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)
@@ -129,6 +146,9 @@ class CatalogDaemon:
         if self._read_executor is not None:
             self._read_executor.shutdown(wait=True, cancel_futures=True)
             self._read_executor = None
+        if self._projector_read_executor is not None:
+            self._projector_read_executor.shutdown(wait=True, cancel_futures=True)
+            self._projector_read_executor = None
         if self._engine is not None:
             self._engine.dispose()
             self._engine = None
@@ -2423,7 +2443,11 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_read_store(
+        # Search and embedding projectors can spend seconds reconstructing a
+        # large render snapshot. Keep those background reads off the bounded
+        # interactive pool so timeline/auth/machine reads retain admission
+        # capacity while a corpus backfill is active.
+        result = await self._run_projector_read_store(
             self._store.list_storage_session_render_objects,
             session_id=session_id,
             generation_id=generation_id,
@@ -3031,6 +3055,12 @@ class CatalogDaemon:
             raise CatalogDaemonError("catalog read executor is not ready")
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._read_executor, lambda: operation(*args, **kwargs))
+
+    async def _run_projector_read_store(self, operation, *args, **kwargs):
+        if self._projector_read_executor is None:
+            raise CatalogDaemonError("catalog projector read executor is not ready")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._projector_read_executor, lambda: operation(*args, **kwargs))
 
     async def _checkpoint_loop(self) -> None:
         assert self._store is not None

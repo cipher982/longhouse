@@ -82,6 +82,8 @@ class SearchDaemon:
         self._dense_refresh_generation = 0
         self._dense_refreshed_generation = 0
         self._dense_refresh_waiters: list[tuple[int, asyncio.Future[None]]] = []
+        self._dense_known_incomplete = False
+        self._closing = False
         self._executor: ThreadPoolExecutor | None = None
         self._read_workers: asyncio.Queue[_ReadWorker] | None = None
         self._all_read_workers: list[_ReadWorker] = []
@@ -105,6 +107,7 @@ class SearchDaemon:
         return self._all_read_workers[0].store if self._all_read_workers else None
 
     async def start(self) -> None:
+        self._closing = False
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         parent = self.socket_path.parent.lstat()
@@ -125,6 +128,7 @@ class SearchDaemon:
             # an honest miss.
             self._dense_index = ResidentEpisodeIndex(model=ACTIVE_EMBEDDING_MODEL, dims=ACTIVE_EMBEDDING_DIMS)
             self._dense_index.load(self._connection)
+            self._dense_known_incomplete = not self._dense_index.coverage.ready
             logger.info("searchd resident index loaded vectors=%d", self._dense_index.size)
             # The commit -> invalidate -> coalesced refresh ordering below is
             # correct because mutations and snapshot loads share exactly one
@@ -160,6 +164,7 @@ class SearchDaemon:
             await self._server.serve_forever()
 
     async def close(self) -> None:
+        self._closing = True
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -415,21 +420,66 @@ class SearchDaemon:
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
 
     async def _run_with_dense_refresh(self, function, **kwargs):
-        """Commit a mutation, then await its coalesced dense snapshot.
+        """Commit a mutation and preserve a truthful resident coverage gate.
 
         Rebuilding and revalidating the full matrix after every projector RPC
-        makes corpus backfill quadratic in the number of committed batches.
-        Concurrent mutations now share one rebuild. Coverage is invalidated as
-        soon as each commit returns, so a new semantic query fails loudly until
-        the immutable replacement snapshot includes that mutation. SQLite
-        remains authoritative if the process dies between commit and refresh.
+        makes corpus backfill needlessly rescan blobs it still cannot serve.
+        Coverage is invalidated as soon as each commit returns. A live, complete
+        corpus awaits its coalesced immutable replacement; an already-incomplete
+        corpus defers that rebuild until a relational precheck says full
+        validation could open the gate. SQLite remains authoritative if the
+        process dies between commit and refresh.
         """
 
         assert self._executor is not None
         result = await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
-        if self._dense_index is None or self._connection is None:
+        if self._closing or self._dense_index is None or self._connection is None:
             return result
-        self._dense_index.invalidate()
+        store = self._store
+        executor = self._executor
+        if store is None or executor is None:
+            return result
+        dense_index = self._dense_index
+        dense_index.invalidate()
+        refresh_active = self._dense_refresh_task is not None and not self._dense_refresh_task.done()
+        if self._dense_known_incomplete and not refresh_active:
+            # A globally incomplete corpus cannot serve dense recall. Rebuilding
+            # and validating the full matrix after each backfill session only
+            # burns CPU and stalls interactive lexical reads while preserving
+            # the same closed gate. The relational precheck has no authority to
+            # open coverage; it only tells us when a full validated rebuild has
+            # become worthwhile.
+            try:
+                candidate_complete = await asyncio.get_running_loop().run_in_executor(
+                    executor,
+                    lambda: store.embedding_snapshot_candidate_complete(
+                        model=ACTIVE_EMBEDDING_MODEL,
+                        dims=ACTIVE_EMBEDDING_DIMS,
+                    ),
+                )
+            except asyncio.CancelledError:
+                if self._closing:
+                    return result
+                raise
+            except Exception:
+                # The mutation is already durable and the gate is closed. A
+                # failed optimization precheck must not turn that commit into a
+                # client-visible failure; a later mutation or cold start will
+                # reconstruct the resident snapshot from SQLite.
+                logger.exception("searchd dense snapshot candidate precheck failed")
+                return result
+            if not candidate_complete:
+                return result
+            blocking_session_ids = dense_index.blocking_session_ids
+            mutation_session_id = kwargs.get("session_id")
+            if blocking_session_ids and isinstance(mutation_session_id, str) and mutation_session_id not in blocking_session_ids:
+                # The relational corpus is complete, but the last full load
+                # found bad vector/ordinal/locator data in specific sessions.
+                # Rebuild only when one of those sessions changes; unrelated
+                # writes cannot repair the failed invariant.
+                return result
+            if self._closing:
+                return result
         self._dense_refresh_generation += 1
         generation = self._dense_refresh_generation
         waiter = asyncio.get_running_loop().create_future()
@@ -453,6 +503,7 @@ class SearchDaemon:
                             self._executor,
                             lambda: self._dense_index.load(self._connection),
                         )
+                        self._dense_known_incomplete = not self._dense_index.coverage.ready
                         break
                     except asyncio.CancelledError:
                         raise

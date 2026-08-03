@@ -18,6 +18,35 @@ private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
     }
 }
 
+/// Succeeds until `startFailing()`, then fails on every subsequent load.
+private final class FlakyHealthSnapshotSource: HealthSnapshotSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private let snapshot: HealthSnapshot
+    private var failing = false
+
+    init(snapshot: HealthSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    var describedCommand: String? { "flaky-test-source" }
+
+    func startFailing() {
+        lock.lock()
+        defer { lock.unlock() }
+        failing = true
+    }
+
+    func load() throws -> HealthSnapshot {
+        lock.lock()
+        let isFailing = failing
+        lock.unlock()
+        if isFailing {
+            throw SnapshotSourceError.commandFailed("producer stopped responding")
+        }
+        return snapshot
+    }
+}
+
 private actor ChangeCounter {
     private(set) var value = 0
     func increment() { value += 1 }
@@ -2354,6 +2383,426 @@ struct LonghouseMenuBarCoreTests {
         return executableURL
     }
 
+    // MARK: - Producer freshness
+    //
+    // Regression coverage for the 2026-07-23 incident: the configured health
+    // exec was deleted, every refresh failed for eleven days, and the panel kept
+    // rendering its last-good cache as if it were current.
+
+    @Test
+    @MainActor
+    func cachedSnapshotWithFailingProducerIsNeverPresentedAsCurrent() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let cacheURL = tempDir.appendingPathComponent("last-good.json")
+        try writeCachedSnapshot(headline: "Cached Longhouse status", to: cacheURL)
+
+        // Exactly the incident shape: --health-exec points at a path that does
+        // not exist, so Process.run() throws before the command ever starts.
+        let store = SnapshotStore(
+            source: CLIHealthSnapshotSource(
+                launchPath: tempDir.appendingPathComponent("longhouse-local-health").path,
+                arguments: ["--fast", "--json"]
+            ),
+            cacheURL: cacheURL,
+            transientRetryDelay: 0.01
+        )
+
+        for _ in 0..<200 where store.loadError == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        // The cache still renders — it is useful evidence.
+        #expect(store.snapshot?.headline == "Cached Longhouse status")
+        // But it must never be mistaken for current data.
+        #expect(store.dataTrust().isCurrent == false)
+        guard case let .neverLoaded(failure) = store.dataTrust() else {
+            Issue.record("expected .neverLoaded, got \(store.dataTrust())")
+            return
+        }
+        // The user has to be able to see which command is broken.
+        #expect(failure?.command?.contains("longhouse-local-health") == true)
+    }
+
+    @Test
+    @MainActor
+    func producerSuccessThenFailureDegradesToLastKnown() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        // Succeeds on the first load, fails on every load after it.
+        let source = FlakyHealthSnapshotSource(snapshot: makeHealthySnapshot())
+        let store = SnapshotStore(
+            source: source,
+            cacheURL: tempDir.appendingPathComponent("last-good.json"),
+            transientRetryDelay: 0.01
+        )
+        #expect(store.dataTrust().isCurrent)
+
+        source.startFailing()
+        store.refresh(reason: .manual)
+        for _ in 0..<200 where store.loadError == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        guard case let .lastKnown(context) = store.dataTrust() else {
+            Issue.record("expected .lastKnown, got \(store.dataTrust())")
+            return
+        }
+        #expect(context.lastSuccessAt != nil)
+        #expect(context.failure?.command == "flaky-test-source")
+        // The snapshot from the successful load is still on screen — the point
+        // is that it is now labelled last-known rather than silently current.
+        #expect(store.snapshot?.headline == "Longhouse shipping healthy")
+    }
+
+    @Test
+    func producerTrustIgnoresPayloadClocksAndDecaysOnDeadline() {
+        let lastSuccess = Date(timeIntervalSince1970: 1_000_000)
+        let state = ProducerRefreshState(lastSuccessAt: lastSuccess, latestFailure: nil)
+
+        // Within deadline and no reported failure: current.
+        #expect(state.trust(relativeTo: lastSuccess.addingTimeInterval(30), deadline: 120) == .current)
+
+        // A producer that simply goes quiet still decays. This is the backstop for
+        // a wedged refresh that never reports a failure at all.
+        let decayed = state.trust(relativeTo: lastSuccess.addingTimeInterval(300), deadline: 120)
+        #expect(decayed.isCurrent == false)
+    }
+
+    @Test
+    @MainActor
+    func repeatedTransientTimeoutsStopCountingAsRecovering() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        // A hung producer reports .timedOut every attempt, and .timedOut is
+        // transient. Gating the banner on isRecovering alone would keep a
+        // permanently broken producer looking normal forever.
+        let store = SnapshotStore(
+            source: CLIHealthSnapshotSource(
+                launchPath: "/bin/zsh",
+                arguments: ["-lc", "sleep 5"],
+                commandTimeoutSeconds: 0.05
+            ),
+            cacheURL: tempDir.appendingPathComponent("last-good.json"),
+            transientRetryDelay: 0.01
+        )
+
+        for _ in 0..<300 where store.refreshState.consecutiveFailures < 2 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.refreshState.consecutiveFailures >= 2)
+        #expect(store.isRecovering)
+        // Still retrying, but no longer allowed to hide behind it.
+        #expect(store.isBrieflyRecovering == false)
+        #expect(store.dataTrust().isCurrent == false)
+    }
+
+    @Test
+    func transientGraceCoversOnlyTheFirstFailure() {
+        let failure = ProducerRefreshFailure(message: "timeout", command: nil, observedAt: Date())
+        var state = ProducerRefreshState.neverAttempted.recordingSuccess(at: Date())
+        #expect(state.isWithinTransientGrace)
+
+        state = state.recordingFailure(failure)
+        #expect(state.consecutiveFailures == 1)
+        #expect(state.isWithinTransientGrace)
+
+        state = state.recordingFailure(failure)
+        #expect(state.consecutiveFailures == 2)
+        #expect(state.isWithinTransientGrace == false)
+
+        // A success clears the streak.
+        state = state.recordingSuccess(at: Date())
+        #expect(state.consecutiveFailures == 0)
+        #expect(state.isWithinTransientGrace)
+    }
+
+    @Test
+    func absentEvidenceRendersUnknownRatherThanHealthy() {
+        // No engine payload at all: the producer could not read upload or
+        // transport evidence. Rendering "Clear" and "Connected" from that would
+        // assert a healthy state nobody observed.
+        let blind = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-03T16:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Longhouse",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, launchReadiness: nil
+        )
+        let facts = blind.menuBarPresentation(relativeTo: Date()).facts
+        let value = { (id: String) in facts.first(where: { $0.id == id })?.value }
+
+        #expect(value("durable-upload") == "Unknown")
+        #expect(value("transport") == "Unknown")
+        #expect(facts.first(where: { $0.id == "transport" })?.promotion == .unavailable)
+    }
+
+    @Test
+    func absentSessionEvidenceIsNotAnObservedAbsence() {
+        let blind = makeHealthySnapshot(sessions: nil)
+        let observed = makeHealthySnapshot(sessions: [])
+
+        // nil means "could not read"; [] means "read, and there were none".
+        #expect(blind.managedSessions == nil)
+        #expect(observed.managedSessions?.isEmpty == true)
+    }
+
+    @Test
+    func singleSessionProjectionFailureClearsOnlyThatSession() {
+        let runtimeHost = { (id: String) in
+            ManagedSessionSnapshot(
+                sessionId: id, provider: "codex", workspaceLabel: "longhouse",
+                branch: "main", state: "attached", phase: "thinking",
+                lastActivityAt: nil, bridgeStatus: nil, bridgePid: nil,
+                bridgeHeartbeatAt: nil, reasonCodes: [], authority: "runtime_host",
+                presentation: SessionPresentationSnapshot(
+                    primary: SessionPresentationLabelSnapshot(
+                        key: "thinking", label: "Thinking", tone: "active"
+                    ),
+                    access: nil
+                )
+            )
+        }
+        let snapshot = makeHealthySnapshot(sessions: [runtimeHost("a"), runtimeHost("b")])
+
+        let cleared = snapshot.clearingRuntimeHostProjection(for: "a")
+        let sessions = cleared.managedSessions ?? []
+
+        #expect(sessions.first(where: { $0.sessionId == "a" })?.presentation == nil)
+        // The healthy session keeps its Runtime Host authority.
+        #expect(sessions.first(where: { $0.sessionId == "b" })?.presentation != nil)
+    }
+
+    @Test
+    func missingOrphanEvidenceIsNotZero() {
+        // The native producer does not scan for orphaned bridges. Collapsing
+        // that silence to zero would claim "no cleanup needed" without looking,
+        // and silently drop the cleanup section.
+        let blind = makeHealthySnapshot(sessions: [])
+        #expect(blind.observedOrphanBridgeCount == nil)
+        #expect(blind.orphanBridgeEvidenceMissing)
+
+        let observed = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-03T16:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Longhouse",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil,
+            managedSummary: ManagedSummarySnapshot(
+                attachedCount: 1, detachedCount: 0, degradedCount: 0,
+                orphanBridgeCount: 0, latestActivityAt: nil
+            ),
+            launchReadiness: nil
+        )
+        // A producer that looked and found none is a real zero.
+        #expect(observed.observedOrphanBridgeCount == 0)
+        #expect(observed.orphanBridgeEvidenceMissing == false)
+    }
+
+    @Test
+    func flappingStreamCannotSuppressFailureIndefinitely() {
+        // The bug this pins: replenishing the grace inside the same drop that
+        // consumes it. A stream that emits one line and closes, over and over,
+        // would forgive itself forever and never report.
+        var policy = ProjectionRetryPolicy()
+
+        let first = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(first.outcome == .retryQuietly)
+        #expect(first.resetBackoff)
+
+        let second = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(second.outcome == .reportFailure)
+
+        let third = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(third.outcome == .reportFailure)
+    }
+
+    @Test
+    func healthyLongLivedStreamClosesQuietlyEveryTime() {
+        var policy = ProjectionRetryPolicy()
+        let long = ProjectionRetryPolicy.healthySessionSeconds + 1
+
+        // Servers rotate long-lived SSE connections. Each ordinary close must
+        // stay silent, not accumulate toward a reported failure.
+        for _ in 0..<5 {
+            let decision = policy.recordDrop(carriedTraffic: true, duration: long)
+            #expect(decision.outcome == .retryQuietly)
+            #expect(decision.resetBackoff)
+        }
+        #expect(policy.consecutiveFailures == 0)
+    }
+
+    @Test
+    func streamThatNeverCarriedTrafficReportsImmediately() {
+        var policy = ProjectionRetryPolicy()
+
+        // An immediate 200-then-EOF, or a connection that never opened, gets no
+        // grace at all.
+        #expect(policy.recordDrop(carriedTraffic: false, duration: 0).outcome == .reportFailure)
+        #expect(policy.recordDrop(carriedTraffic: false, duration: 0).outcome == .reportFailure)
+    }
+
+    @Test
+    func healthySessionClearsAnEarlierFlapStreak() {
+        var policy = ProjectionRetryPolicy()
+        _ = policy.recordDrop(carriedTraffic: true, duration: 2)
+        _ = policy.recordDrop(carriedTraffic: true, duration: 2)
+        #expect(policy.consecutiveFailures == 2)
+
+        // Recovering into a genuinely healthy session resets the streak, so a
+        // later isolated blip is forgiven again.
+        let recovered = policy.recordDrop(
+            carriedTraffic: true,
+            duration: ProjectionRetryPolicy.healthySessionSeconds + 1
+        )
+        #expect(recovered.outcome == .retryQuietly)
+        #expect(policy.consecutiveFailures == 0)
+        #expect(policy.recordDrop(carriedTraffic: true, duration: 2).outcome == .retryQuietly)
+    }
+
+    @Test
+    func neverAttemptedProducerIsNeverCurrent() {
+        let state = ProducerRefreshState.neverAttempted
+        #expect(state.trust(relativeTo: Date(), deadline: 120).isCurrent == false)
+    }
+
+    @Test
+    func expiredProjectionClearsRuntimeHostFieldsButKeepsLocalRows() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "s1", provider: "codex", workspaceLabel: "longhouse",
+            branch: "main", state: "attached", phase: "thinking",
+            lastActivityAt: "2026-08-03T12:00:00Z", bridgeStatus: "ready",
+            bridgePid: 42, bridgeHeartbeatAt: "2026-08-03T12:00:00Z",
+            reasonCodes: [], authority: "runtime_host",
+            presentation: SessionPresentationSnapshot(
+                primary: SessionPresentationLabelSnapshot(
+                    key: "thinking", label: "Thinking", tone: "active"
+                ),
+                access: nil
+            ),
+            activity: SessionActivitySnapshot(
+                state: "active", rawKind: nil, tool: nil, observedAt: nil
+            ),
+            control: SessionControlSnapshot(
+                ownership: "runtime_host", connection: "connected",
+                actions: SessionControlActionsSnapshot(terminate: nil, reattach: nil)
+            )
+        )
+        let snapshot = makeHealthySnapshot(sessions: [session])
+
+        let cleared = snapshot.markingRuntimeHostProjectionUnavailable()
+        let clearedSession = try? #require(cleared.managedSessions?.first)
+
+        // Runtime Host authority is gone...
+        #expect(clearedSession?.presentation == nil)
+        #expect(clearedSession?.activity == nil)
+        #expect(clearedSession?.control == nil)
+        #expect(clearedSession?.authority == nil)
+        // ...but the session itself is still visible as local evidence.
+        #expect(clearedSession?.sessionId == "s1")
+        #expect(clearedSession?.state == "attached")
+        #expect(clearedSession?.bridgePid == 42)
+    }
+
+    /// The consumer-contract test.
+    ///
+    /// Nothing decoded real producer output into the real consumer type, which
+    /// is how a native replacement that `HealthSnapshot` cannot parse stayed
+    /// marked `available`. Point this at a built facade to check it for real;
+    /// without one it verifies the recorded contract shape so CI still fails on
+    /// a schema regression.
+    @Test
+    func nativeProducerOutputDecodesIntoHealthSnapshot() throws {
+        // Deliberately does not consider ~/.local/bin/longhouse. That is the
+        // user's installed binary, not the code under test, and letting it
+        // decide this result would make the check pass or fail on machine state.
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // LonghouseMenuBarCoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // LonghouseMenuBarHarness
+            .deletingLastPathComponent()  // desktop
+            .deletingLastPathComponent()  // repo root
+        let candidates = [
+            ProcessInfo.processInfo.environment["LONGHOUSE_HEALTH_BIN"],
+            repoRoot.appendingPathComponent("engine/target/debug/longhouse").path as String,
+            repoRoot.appendingPathComponent("engine/target/release/longhouse").path as String,
+        ].compactMap { $0 }
+
+        guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            // No facade built (clean CI checkout). Decode the shared fixture
+            // instead. The Rust test `desktop_envelope_matches_the_swift_consumer_fixture`
+            // asserts the producer still emits every key this file records, so
+            // the two cannot drift apart silently.
+            let fixtureURL = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .appendingPathComponent("Fixtures/native-desktop-health.json")
+            let snapshot = try HealthSnapshotDecoder.decode(data: Data(contentsOf: fixtureURL))
+            #expect(snapshot.severity == "green")
+            #expect(snapshot.managedSessions?.count == 1)
+            #expect(snapshot.realtime?.runtimeUrl != nil)
+            #expect(snapshot.engineStatus?.payload != nil)
+            return
+        }
+
+        let source = CLIHealthSnapshotSource(
+            launchPath: binary,
+            arguments: ["local-health", "--fast", "--json"],
+            commandTimeoutSeconds: 10
+        )
+        // The assertion is simply that this does not throw. A producer whose
+        // output the app cannot decode fails here instead of in the menu bar.
+        let snapshot = try source.load()
+        #expect(snapshot.severity.isEmpty == false)
+    }
+
+    @Test
+    func projectionWithoutRuntimeHostAuthorityIsLeftAlone() {
+        let localOnly = ManagedSessionSnapshot(
+            sessionId: "s2", provider: "claude", workspaceLabel: "longhouse",
+            branch: "main", state: "attached", phase: nil,
+            lastActivityAt: nil, bridgeStatus: nil, bridgePid: nil,
+            bridgeHeartbeatAt: nil, reasonCodes: []
+        )
+        let snapshot = makeHealthySnapshot(sessions: [localOnly])
+
+        let cleared = snapshot.markingRuntimeHostProjectionUnavailable()
+
+        #expect(cleared.managedSessions?.first?.sessionId == "s2")
+        #expect(cleared.managedSessions?.first?.state == "attached")
+    }
+
+}
+
+@MainActor
+private func writeCachedSnapshot(headline: String, to url: URL) throws {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    try encoder.encode(makeHealthySnapshot(headline: headline)).write(to: url)
+}
+
+private func makeHealthySnapshot(
+    headline: String = "Longhouse shipping healthy",
+    sessions: [ManagedSessionSnapshot]? = nil
+) -> HealthSnapshot {
+    HealthSnapshot(
+        schemaVersion: 1,
+        collectedAt: "2026-05-05T12:00:00Z",
+        healthState: "healthy",
+        severity: "green",
+        headline: headline,
+        reasons: [],
+        suggestedActions: [],
+        service: nil,
+        engineStatus: nil,
+        outbox: nil,
+        activitySummary: nil,
+        managedSessions: sessions,
+        launchReadiness: nil
+    )
 }
 
 private func presentationSession(phase: String) -> ManagedSessionSnapshot {

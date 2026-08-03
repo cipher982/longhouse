@@ -16,6 +16,15 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.client import call_catalogd_sync
 from zerg.services.catalogd_supervisor import catalogd_paths
 
+_DEFAULT_DEADLINE_SECONDS = 0.75
+_DEFAULT_ATTEMPT_SECONDS = 0.35
+# The real 5,000-session hosted timeline measures about 0.39s at p50 and
+# 0.7-0.8s during browser QA. The old 0.35s attempt budget timed out ordinary
+# successful work and amplified load with an immediate retry. Keep this
+# heavier snapshot bounded separately without weakening fast auth/machine reads.
+_TIMELINE_DEADLINE_SECONDS = 3.25
+_TIMELINE_ATTEMPT_SECONDS = 1.5
+
 
 class CatalogReadError(RuntimeError):
     """A bounded catalog read could not be completed."""
@@ -147,7 +156,13 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
         _database_path, socket_path = catalogd_paths()
     except RuntimeError as exc:
         raise CatalogReadError("catalog_unavailable", "The live catalog is temporarily unavailable.") from exc
-    deadline = time.monotonic() + 0.75
+    if method == "session.timeline.list.v2":
+        deadline_seconds = _TIMELINE_DEADLINE_SECONDS
+        attempt_seconds = _TIMELINE_ATTEMPT_SECONDS
+    else:
+        deadline_seconds = _DEFAULT_DEADLINE_SECONDS
+        attempt_seconds = _DEFAULT_ATTEMPT_SECONDS
+    deadline = time.monotonic() + deadline_seconds
     last_unavailable: CatalogUnavailable | None = None
     for _attempt in range(2):
         try:
@@ -158,7 +173,7 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 socket_path,
                 method,
                 params=params,
-                timeout_seconds=min(0.35, remaining),
+                timeout_seconds=min(attempt_seconds, remaining),
             )
         except CatalogRemoteError as exc:
             raise CatalogReadError(exc.code, str(exc)) from exc

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,24 +80,63 @@ def _validate_facade(contract: dict[str, Any], facade: Path) -> list[str]:
     return errors
 
 
+def _resolve_facade(explicit: Path | None) -> Path | None:
+    """Find a longhouse facade to check routes against.
+
+    Without one this script only validates the contract JSON, which is how a
+    route stayed marked `available` for eleven days while the command it named
+    could not feed its only consumer.
+    """
+    if explicit:
+        return explicit
+    candidate = Path.home() / ".local" / "bin" / "longhouse"
+    if candidate.is_file():
+        return candidate
+    which = shutil.which("longhouse")
+    return Path(which) if which else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=_root())
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--facade", type=Path, help="Built installed longhouse facade to parse-check")
+    parser.add_argument(
+        "--require-facade",
+        action="store_true",
+        help="Fail when no facade is available instead of reporting routes as unverified",
+    )
     args = parser.parse_args()
     path = args.contract or args.root / "config/native_device_entrypoints.json"
     contract = json.loads(path.read_text(encoding="utf-8"))
     errors = _validate(contract)
-    if args.facade:
-        errors.extend(_validate_facade(contract, args.facade))
+    facade = _resolve_facade(args.facade)
+    if facade:
+        errors.extend(_validate_facade(contract, facade))
+    elif args.require_facade:
+        errors.append("no longhouse facade available: contract routes were not verified against a binary")
     if args.json:
-        print(json.dumps({"contract": contract, "errors": errors}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "contract": contract,
+                    "errors": errors,
+                    "facade": str(facade) if facade else None,
+                    "routes_verified": bool(facade),
+                },
+                indent=2,
+            )
+        )
     else:
         print("native device commands")
         for command in contract.get("commands", []):
             print(f"- {command.get('id')}: {command.get('native_target_command')} ({command.get('status')})")
+        if facade:
+            print(f"routes verified against {facade}")
+        else:
+            # Say so out loud. A silent skip reads identically to a pass.
+            print("routes NOT verified: no longhouse facade found", file=sys.stderr)
     if errors:
         print(*errors, sep="\n", file=sys.stderr)
         return 1

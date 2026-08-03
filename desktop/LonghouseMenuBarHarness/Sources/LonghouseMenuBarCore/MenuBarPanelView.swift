@@ -186,6 +186,7 @@ public struct MenuBarPanelView: View {
     private let isManualRefreshing: Bool
     private let refresh: () -> Void
     private let headerSummaryVariant: HeaderSummaryVariant
+    private let dataTrust: DataTrust
 
     public init(
         snapshot: HealthSnapshot,
@@ -196,6 +197,7 @@ public struct MenuBarPanelView: View {
         actionSink: any HealthActionSink,
         isManualRefreshing: Bool,
         headerSummaryVariant: HeaderSummaryVariant = .default,
+        dataTrust: DataTrust = .current,
         refresh: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -206,13 +208,21 @@ public struct MenuBarPanelView: View {
         self.actionSink = actionSink
         self.isManualRefreshing = isManualRefreshing
         self.headerSummaryVariant = headerSummaryVariant
+        self.dataTrust = dataTrust
         self.refresh = refresh
     }
 
     public var body: some View {
-        PanelChrome(accent: presentation.promotion.accentColor) {
+        PanelChrome(accent: staleAccentOverride ?? presentation.promotion.accentColor) {
             VStack(alignment: .leading, spacing: MenuBarPanelLayout.rootSpacing) {
                 header
+
+                // Sits above the session list on purpose. Everything below it is
+                // last-known, and the user has to see that before reading it.
+                if !dataTrust.isCurrent {
+                    staleBanner
+                }
+
                 primarySurface
 
                 if let feedback {
@@ -223,6 +233,89 @@ public struct MenuBarPanelView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.panel)
+    }
+
+    /// The subheadline ends with "updated Ns" derived from `collectedAt`, which
+    /// the engine-pulse projection keeps rewriting. Left alone it would claim a
+    /// fresh update directly above a banner saying the data is days old, so the
+    /// freshness clause is dropped whenever trust is not current.
+    private var headerSummaryText: String {
+        let subheadline = presentation.subheadline
+        guard !dataTrust.isCurrent else { return subheadline }
+        let parts = subheadline
+            .components(separatedBy: " · ")
+            .filter { !$0.hasPrefix("updated ") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var staleAccentOverride: Color? {
+        switch dataTrust {
+        case .current: return nil
+        case .lastKnown: return .orange
+        case .neverLoaded: return .red
+        }
+    }
+
+    private var staleBannerHeadline: String {
+        switch dataTrust {
+        case .current:
+            return ""
+        case let .lastKnown(context):
+            guard let age = context.age(relativeTo: presentationDate) else {
+                return "Showing last known status"
+            }
+            return "Showing status from \(SnapshotAgeFormatter.compact(age)) ago"
+        case .neverLoaded:
+            return "Longhouse cannot read this Mac's status"
+        }
+    }
+
+    private var staleBannerDetail: String {
+        if let failure = dataTrust.failure {
+            return failure.message
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+        }
+        return "The status command has not completed recently."
+    }
+
+    private var staleBanner: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(staleAccentOverride ?? .orange)
+                Text(staleBannerHeadline)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.StaleBanner.headline)
+            }
+
+            Text(staleBannerDetail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.StaleBanner.detail)
+
+            if let command = dataTrust.failure?.command {
+                Text(command)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.secondary.opacity(0.85))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.StaleBanner.command)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(MenuBarPanelLayout.sectionInsets)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill((staleAccentOverride ?? .orange).opacity(0.12))
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.StaleBanner.container)
     }
 
     private var presentation: MenuBarPresentation {
@@ -274,7 +367,7 @@ public struct MenuBarPanelView: View {
                         identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
                     )
                 }
-                headerSummaryLabel(presentation.subheadline)
+                headerSummaryLabel(headerSummaryText)
             }
 
             if let updateChip = snapshot.updateAvailableChipLabel {
@@ -398,7 +491,16 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if snapshot.currentManagedSessions.isEmpty {
+            if snapshot.managedSessions == nil {
+                // Absent evidence, not an observed absence. "No managed sessions"
+                // here would be a false negative — the producer could not read
+                // session evidence at all.
+                PanelSection(title: "Sessions") {
+                    Text("Session evidence is unavailable on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+            } else if snapshot.currentManagedSessions.isEmpty {
                 PanelSection(title: "Sessions") {
                     Text("No managed sessions are running on this Mac.")
                         .font(.system(size: 12, weight: .medium))
@@ -407,6 +509,18 @@ public struct MenuBarPanelView: View {
             } else {
                 PanelSection(title: "Sessions", trailing: "\(managedSessionEntries.count)") {
                     ManagedSessionList(entries: managedSessionEntries)
+                }
+            }
+
+            if backgroundBridgeEntries.isEmpty && snapshot.orphanBridgeEvidenceMissing {
+                sectionDivider.padding(.horizontal, 4)
+
+                // Absence of entries here is not evidence of a clean machine
+                // when nothing scanned for orphaned bridges.
+                PanelSection(title: "Cleanup") {
+                    Text("Orphaned bridge evidence is unavailable on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
                 }
             }
 
