@@ -43,6 +43,20 @@ fn run_inner() -> anyhow::Result<()> {
     };
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
+    // Publish the visible answer before any local bookkeeping. Session binding
+    // touches SQLite and can wait behind the shipper on a busy machine; that
+    // work must never sit between Claude's terminal output and remote pixels.
+    if event == "Stop" && managed_session_id.is_some() {
+        enqueue_live_transcript_event(claude_live_transcript_event(
+            &session_id,
+            provider_session_id.as_deref(),
+            transcript_path.as_deref(),
+            &input,
+        ));
+        if let Some(transcript_path) = transcript_path.as_deref() {
+            wake_transcript_shipper(&session_id, provider_session_id.as_deref(), transcript_path);
+        }
+    }
     if event == "SessionStart" {
         if let (Some(managed), Some(native)) = (
             managed_session_id.as_deref(),
@@ -80,17 +94,6 @@ fn run_inner() -> anyhow::Result<()> {
         }
     }
     enqueue_presence(&longhouse_home()?.join("agent/outbox"), &payload)?;
-    if event == "Stop" && managed_session_id.is_some() {
-        enqueue_live_transcript_event(claude_live_transcript_event(
-            &session_id,
-            provider_session_id.as_deref(),
-            transcript_path.as_deref(),
-            &input,
-        ));
-        if let Some(transcript_path) = transcript_path.as_deref() {
-            wake_transcript_shipper(&session_id, provider_session_id.as_deref(), transcript_path);
-        }
-    }
     if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
         println!(
             "{}",
