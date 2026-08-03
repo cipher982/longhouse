@@ -13,6 +13,7 @@ from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
 from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
 from zerg.qa.cursor_helm_gate0 import _scrub_artifact_tree
 from zerg.qa.cursor_helm_gate0 import _snapshot_native_evidence
+from zerg.qa.cursor_helm_gate0 import find_cursor_store
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
 
@@ -56,6 +57,20 @@ def test_cursor_store_agent_id_reads_native_meta(tmp_path: Path) -> None:
     connection.close()
 
     assert _cursor_store_agent_id(path) == "provider-native-id"
+
+
+def test_find_cursor_store_honors_xdg_config_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    path = tmp_path / "config" / "cursor" / "chats" / "workspace" / "provider-session" / "store.db"
+    path.parent.mkdir(parents=True)
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    payload = json.dumps({"agentId": "provider-session"}).encode("utf-8").hex()
+    connection.execute("INSERT INTO meta(key, value) VALUES ('0', ?)", [payload])
+    connection.commit()
+    connection.close()
+
+    assert find_cursor_store("provider-session") == path
 
 
 def test_project_hooks_cover_identity_transcript_and_control_events(tmp_path: Path) -> None:

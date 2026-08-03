@@ -233,8 +233,14 @@ def _cursor_store_agent_id(path: Path) -> str | None:
     return value or None
 
 
+def _cursor_chats_root() -> Path:
+    configured = str(os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    config_home = Path(configured).expanduser() if configured else Path.home() / ".config"
+    return config_home / "cursor" / "chats"
+
+
 def find_cursor_store(agent_id: str, *, root: Path | None = None) -> Path | None:
-    chats_root = root or (Path.home() / ".cursor" / "chats")
+    chats_root = root or _cursor_chats_root()
     if not chats_root.exists():
         return None
     for path in chats_root.glob("*/*/store.db"):
