@@ -1987,11 +1987,13 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
         # projector will never see the historical corpus.
         engine = create_catalog_engine(database_path)
         with engine.begin() as connection:
-            # Session metadata can advance after the render/search revision.
-            # A newly introduced embedding projector must inherit the search
-            # revision, not this unrelated catalog commit sequence.
+            # Session metadata can advance after the render/search revision,
+            # including a transition back to pending for semantic repair. A
+            # newly introduced embedding projector must still mirror the
+            # already-published search ledger and inherit its revision, not
+            # this unrelated catalog commit sequence.
             connection.exec_driver_sql(
-                "UPDATE sessions SET commit_seq = commit_seq + 10 WHERE session_id = ?",
+                "UPDATE sessions SET commit_seq = commit_seq + 10, render_state = 'pending' WHERE session_id = ?",
                 (str(session_id),),
             )
             connection.exec_driver_sql(

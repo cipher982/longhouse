@@ -457,7 +457,14 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
 
 class CatalogStore:
     def ensure_known_projector_states(self) -> dict[str, int]:
-        """Backfill newly introduced projector identities for current sessions."""
+        """Backfill projector identities and preserve the search-derived chain.
+
+        Embeddings consume searchd's published render, so every search-v2
+        ledger row needs a matching active embedding row even when the catalog
+        session has since moved from ``ready`` to ``pending`` for semantic
+        repair. Restricting a newly bumped embedding identity to currently
+        ready sessions left already-served search rows outside dense coverage.
+        """
 
         sessions = StorageSession.__table__
         states = ProjectorState.__table__
@@ -477,18 +484,26 @@ class CatalogStore:
                     )
                 )
             }
-            missing = []
+            missing: dict[tuple[str, str], int] = {}
             for session_id, session_revision in eligible:
                 session_key = str(session_id)
-                for projector in KNOWN_PROJECTORS:
-                    if (projector, session_key) in existing:
-                        continue
-                    revision = (
-                        existing.get(("search-v2", session_key), int(session_revision))
-                        if projector == EMBEDDING_PROJECTOR_ID
-                        else int(session_revision)
-                    )
-                    missing.append((projector, session_key, revision))
+                search_key = ("search-v2", session_key)
+                embedding_key = (EMBEDDING_PROJECTOR_ID, session_key)
+                search_revision = existing.get(search_key, int(session_revision))
+                if search_key not in existing:
+                    missing[search_key] = search_revision
+                if embedding_key not in existing:
+                    missing[embedding_key] = search_revision
+
+            # A search row is the durable certificate that this session has
+            # entered the served corpus. Mirror that ledger directly instead
+            # of relying only on the session's current render_state: semantic
+            # repair can make a session pending after its prior revision was
+            # already published and remains queryable in searchd.
+            for (projector, session_id), revision in existing.items():
+                embedding_key = (EMBEDDING_PROJECTOR_ID, session_id)
+                if projector == "search-v2" and embedding_key not in existing:
+                    missing.setdefault(embedding_key, revision)
             now = datetime.now(UTC)
             commit_seq = _current_commit_seq(connection)
             if missing:
@@ -506,7 +521,7 @@ class CatalogStore:
                             "created_at": now,
                             "updated_at": now,
                         }
-                        for projector, session_id, revision in missing
+                        for (projector, session_id), revision in missing.items()
                     ],
                 )
             search_alignment = states.alias("search_alignment")
