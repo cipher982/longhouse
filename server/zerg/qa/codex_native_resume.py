@@ -239,6 +239,9 @@ def _attempt_concurrent_resume(
     session_id: str,
     thread_id: str,
     thread_path: Path,
+    active_state_file: Path,
+    active_run_id: str,
+    active_bridge_pid: int,
 ) -> dict[str, Any]:
     attempt_root = root / "concurrent-resume-attempt"
     attempt_root.mkdir()
@@ -254,7 +257,14 @@ def _attempt_concurrent_resume(
             resume_thread_path=str(thread_path),
         )
     except RuntimeError as exc:
-        return {"rejected": True, "error": str(exc)}
+        try:
+            active_state = bridge_canary._read_json(active_state_file)
+        except (OSError, json.JSONDecodeError):
+            active_state = {}
+        owner_preserved = (
+            active_state.get("run_id") == active_run_id and active_state.get("pid") == active_bridge_pid and _pid_alive(active_bridge_pid)
+        )
+        return {"rejected": owner_preserved, "owner_preserved": owner_preserved, "error": str(exc)}
     cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
     return {"rejected": False, "unexpected_start": summary, "cleanup": cleanup}
 
@@ -389,6 +399,12 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         post_marker = f"LONGHOUSE_CODEX_RESUME_POST_{uuid.uuid4().hex}"
         send_summary = _send_marker(args, isolation_root, session_id, post_marker)
         resumed_state, resumed_thread_path = _wait_for_marker(resumed_state_file, post_marker, timeout=args.live_send_timeout_secs)
+        stale_generation_dispatched = bridge_canary._assistant_transcript_contains(
+            resumed_thread_path,
+            str(stale_input_receipt["marker"]),
+        )
+        stale_input_receipt["assistant_marker_observed_after_resume"] = stale_generation_dispatched
+        _write_json(root / "stale-input-receipt.json", stale_input_receipt)
         _write_json(root / "resumed-bridge-state.json", resumed_state)
         _write_json(root / "post-resume-send.json", send_summary)
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")
@@ -399,6 +415,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             session_id=session_id,
             thread_id=thread_id,
             thread_path=resumed_thread_path,
+            active_state_file=resumed_state_file,
+            active_run_id=str(resumed_state.get("run_id") or ""),
+            active_bridge_pid=int(resumed_state.get("pid") or 0),
         )
         _write_json(root / "concurrent-resume-receipt.json", concurrent_resume_receipt)
 
@@ -442,7 +461,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "post_resume_provider_activity": resumed_state.get("last_turn_status") == "completed",
             "post_resume_marker_in_assistant_transcript": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),
             "stale_input_rejected": stale_input_receipt["rejected"] is True,
-            "stale_generation_dispatched": stale_input_receipt["rejected"] is not True,
+            "stale_generation_dispatched": stale_generation_dispatched,
             "concurrent_resume_refused": concurrent_resume_receipt["rejected"] is True,
             "artifact_secret_scan_passed": not redacted_secret_files,
             "clean_stop_verified": args.variant == "clean_exit" and bool((process_transition.get("verification") or {}).get("verified")),

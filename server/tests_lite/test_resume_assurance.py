@@ -221,6 +221,9 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
         "clean_stop_verified": True,
     }
     assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": True}
+    observation["stale_generation_dispatched"] = True
+    assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": False}
+    observation["stale_generation_dispatched"] = False
     observation["post_resume_provider_activity"] = False
     assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": False}
 
