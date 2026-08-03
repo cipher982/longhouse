@@ -7845,13 +7845,12 @@ class CatalogStore:
                     .all()
                 )
             else:
-                claim_order = (
-                    (table.c.desired_revision.desc(), table.c.session_id.asc())
-                    if projector == "search-v2"
-                    else (table.c.updated_at.asc(), table.c.session_id.asc())
-                )
                 eligible = (
-                    connection.execute(select(table).where(*eligible_predicates).order_by(*claim_order).limit(limit)).mappings().all()
+                    connection.execute(
+                        select(table).where(*eligible_predicates).order_by(table.c.updated_at.asc(), table.c.session_id.asc()).limit(limit)
+                    )
+                    .mappings()
+                    .all()
                 )
             if not eligible:
                 return {

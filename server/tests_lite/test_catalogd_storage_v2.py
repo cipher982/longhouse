@@ -925,6 +925,72 @@ async def test_storage_session_delete_fences_replay_retires_manifests_and_queues
 
 
 @pytest.mark.asyncio
+async def test_search_projector_claims_oldest_lag_before_hotter_revision(daemon_paths):
+    """Live ingest must not starve the stable corpus behind a coverage gate."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    stable_session = uuid4()
+    hot_session = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        stable = _raw_params(
+            epoch=uuid4(),
+            session_id=stable_session,
+            start=0,
+            end=6,
+            records=(b"stable backlog\n",),
+            sealed_at=now,
+        )
+        stable.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"stable-backlog"),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", stable)
+
+        hot_epoch = uuid4()
+        hot = _raw_params(
+            epoch=hot_epoch,
+            session_id=hot_session,
+            start=0,
+            end=6,
+            records=(b"new live revision\n",),
+            sealed_at=now + timedelta(seconds=1),
+            opaque_source_id="hot-history.jsonl",
+        )
+        hot.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                uuid4(),
+                seed=b"hot-revision",
+                opaque_source_id="hot-history.jsonl",
+                source_epoch=hot_epoch,
+            ),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", hot)
+
+        claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert [row["session_id"] for row in claim["claimed"]] == [str(stable_session)]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_render_object_projection_pages_are_frozen_at_claimed_revision(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
