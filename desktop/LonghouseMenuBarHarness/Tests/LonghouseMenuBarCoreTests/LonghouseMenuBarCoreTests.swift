@@ -218,6 +218,21 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func staleNativeShipFailuresDoNotClaimActiveRetrying() {
+        let snapshot = presentationSnapshot(
+            reasons: ["engine_status_stale"], sessions: [], shipFailures: 5, engineFresh: false
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let transport = presentation.facts.first(where: { $0.id == "transport" })
+
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.headline == "Current local status unavailable")
+        #expect(transport?.value == "Unknown")
+        #expect(transport?.promotion == .unavailable)
+    }
+
+    @Test
     func freshNativeEngineCountsAsRunningWhenServiceEvidenceIsAbsent() {
         let snapshot = presentationSnapshot(sessions: [], serviceStatus: nil)
 

@@ -91,7 +91,9 @@ extension HealthSnapshot {
             "consecutive_failures", "connect_errors", "server_errors",
             "rate_limited", "retryable_client_errors",
         ]
-        let shippingFailures = engineStatus?.payload?.consecutiveShipFailures ?? 0
+        let shippingFailures = engineStatus?.fresh == false
+            ? 0
+            : engineStatus?.payload?.consecutiveShipFailures ?? 0
 
         let promotion: MenuBarPromotion
         if storageBlockedCount > 0 || !repairReasons.isDisjoint(with: reasons) || isSetupRequired || isInstallLocationBlocked {
@@ -100,7 +102,9 @@ extension HealthSnapshot {
             promotion = .needsUser
         } else if degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
-        } else if !unavailableReasons.isDisjoint(with: reasons) || engineStatus?.error != nil {
+        } else if !unavailableReasons.isDisjoint(with: reasons)
+            || engineStatus?.error != nil
+            || engineStatus?.fresh == false {
             promotion = .unavailable
         } else {
             promotion = .normal
@@ -208,10 +212,16 @@ extension HealthSnapshot {
         let transportValue: String
         let transportDetail: String?
         let transportPromotion: MenuBarPromotion
-        let shippingFailures = engineStatus?.payload?.consecutiveShipFailures ?? 0
+        let shippingFailures = engineStatus?.fresh == false
+            ? 0
+            : engineStatus?.payload?.consecutiveShipFailures ?? 0
         if !hasEngineEvidence {
             transportValue = "Unknown"
             transportDetail = "no engine evidence"
+            transportPromotion = .unavailable
+        } else if engineStatus?.fresh == false {
+            transportValue = "Unknown"
+            transportDetail = "engine evidence is stale"
             transportPromotion = .unavailable
         } else if engineStatus?.payload?.isOffline == true {
             transportValue = "Offline"
