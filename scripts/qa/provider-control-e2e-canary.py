@@ -1407,6 +1407,16 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
     )
     for database in databases:
         try:
+            connection = sqlite3.connect(database, timeout=2)
+            try:
+                checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            finally:
+                connection.close()
+            if not checkpoint or checkpoint[0] != 0:
+                continue
+            wal = Path(f"{database}-wal")
+            if wal.exists() and wal.stat().st_size:
+                continue
             connection = sqlite3.connect(
                 f"file:{database.resolve()}?mode=ro",
                 uri=True,
