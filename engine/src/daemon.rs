@@ -942,8 +942,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
-    let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
-    let mut runtime_outbox_drain_pending = true;
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
@@ -965,14 +963,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // measured cold-path miss and never disables the control channel.
     tokio::spawn(crate::codex_exec::prewarm_codex_console_workers());
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
-    let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
+    let (runtime_event_wake_tx, runtime_event_wake_rx) = mpsc::unbounded_channel();
+    let runtime_event_drain_task = spawn_runtime_event_drain_loop(
+        runtime_event_wake_rx,
+        runtime_events_outbox_dir.clone(),
+        client.clone(),
+    );
+    let transcript_wake_task =
+        spawn_transcript_wake_listener(transcript_wake_tx, runtime_event_wake_tx)?;
     loop {
-        maybe_drain_runtime_outbox(
-            &mut runtime_outbox_drain_pending,
-            &mut runtime_outbox_post_tasks,
-            client.clone(),
-            &runtime_events_outbox_dir,
-        );
         if !startup_archive_replay_pending {
             match queue_failed_shipment_retries_if_idle(
                 &mut scheduler,
@@ -1053,13 +1052,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     });
                 }
-                runtime_outbox_drain_pending = true;
-                maybe_drain_runtime_outbox(
-                    &mut runtime_outbox_drain_pending,
-                    &mut runtime_outbox_post_tasks,
-                    client.clone(),
-                    &runtime_events_outbox_dir,
-                );
             }
 
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
@@ -1346,43 +1338,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Outbox presence POST task failed: {}", err);
-                    }
-                    None => {}
-                }
-            }
-
-            runtime_outbox_post_result = runtime_outbox_post_tasks.join_next(), if !runtime_outbox_post_tasks.is_empty() => {
-                match runtime_outbox_post_result {
-                    Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
-                        let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
-                        if kept > 0 {
-                            tracing::warn!(
-                                sent,
-                                kept,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Outbox runtime-event POST kept files for retry"
-                            );
-                        } else if join_elapsed_ms > 1_000 {
-                            tracing::warn!(
-                                sent,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Outbox runtime-event POST was slow"
-                            );
-                        } else if sent > 0 {
-                            tracing::debug!(
-                                sent,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                "Outbox runtime-event POST sent files"
-                            );
-                        }
-                    }
-                    Some(Err(err)) => {
-                        tracing::warn!("Outbox runtime-event POST task failed: {}", err);
                     }
                     None => {}
                 }
@@ -1967,7 +1922,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // WorkPriority::Live. Managed wake signals can pre-empt the small
             // filesystem coalescing window.
             Some(first_event) = watcher.next_event() => {
-                let (managed_state_changes, managed_wake_observed) = handle_live_transcript_file_events(
+                let managed_state_changes = handle_live_transcript_file_events(
                     &mut watcher,
                     first_event,
                     &providers,
@@ -1981,15 +1936,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     offline.is_offline,
                     archive_repair_is_paused(config.archive_repair_mode),
                 ).await;
-                if managed_wake_observed {
-                    runtime_outbox_drain_pending = true;
-                    maybe_drain_runtime_outbox(
-                        &mut runtime_outbox_drain_pending,
-                        &mut runtime_outbox_post_tasks,
-                        client.clone(),
-                        &runtime_events_outbox_dir,
-                    );
-                }
                 if !managed_state_changes.is_empty() {
                     let requires_discovery = managed_state_changes_require_full_reconciliation(
                         &last_managed_observations,
@@ -2113,13 +2059,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     });
                 }
-                runtime_outbox_drain_pending = true;
-                maybe_drain_runtime_outbox(
-                    &mut runtime_outbox_drain_pending,
-                    &mut runtime_outbox_post_tasks,
-                    client.clone(),
-                    &runtime_events_outbox_dir,
-                );
             }
 
             // Wake the loop when delayed local retry work may now be ready.
@@ -2286,6 +2225,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     if let Some(task) = transcript_wake_task {
         task.abort();
     }
+    runtime_event_drain_task.abort();
     crate::codex_exec::shutdown_codex_console_worker_pool().await;
     tracing::info!("Daemon shutdown complete");
     Ok(())
@@ -2898,42 +2838,52 @@ fn start_inventory_task(
     });
 }
 
-fn maybe_drain_runtime_outbox(
-    drain_pending: &mut bool,
-    post_tasks: &mut JoinSet<(usize, usize, u64, u64)>,
+fn spawn_runtime_event_drain_loop(
+    mut wake_rx: mpsc::UnboundedReceiver<()>,
+    runtime_events_outbox_dir: PathBuf,
     client: ShipperClient,
-    runtime_events_outbox_dir: &Path,
-) {
-    if !*drain_pending || !post_tasks.is_empty() {
-        return;
-    }
-    *drain_pending = false;
-    let started = Instant::now();
-    let posts = outbox::collect_runtime_event_outbox(runtime_events_outbox_dir);
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    if elapsed_ms > 25 {
-        tracing::warn!(
-            elapsed_ms,
-            runtime_posts = posts.len(),
-            "Runtime-event outbox collection was slow"
-        );
-    }
-    if !posts.is_empty() {
-        start_runtime_outbox_post(post_tasks, client, posts);
-    }
-}
-
-fn start_runtime_outbox_post(
-    tasks: &mut JoinSet<(usize, usize, u64, u64)>,
-    client: ShipperClient,
-    posts: Vec<outbox::PendingRuntimeEventPost>,
-) {
-    tasks.spawn(async move {
-        let started = Instant::now();
-        let (sent, kept) = outbox::post_pending_runtime_event_files(&client, posts).await;
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        (sent, kept, elapsed_ms, elapsed_ms)
-    });
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut fallback = tokio::time::interval(Duration::from_secs(2));
+        fallback.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                signal = wake_rx.recv() => {
+                    if signal.is_none() {
+                        break;
+                    }
+                }
+                _ = fallback.tick() => {}
+            }
+            // This directory contains tiny, atomically-renamed live event
+            // files. Keep it on its own Send task so transcript parsing,
+            // archive reconciliation, and local SQLite work cannot delay UI.
+            let started = Instant::now();
+            let posts = outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
+            if posts.is_empty() {
+                continue;
+            }
+            let post_count = posts.len();
+            let (sent, kept) = outbox::post_pending_runtime_event_files(&client, posts).await;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            if kept > 0 {
+                tracing::warn!(
+                    sent,
+                    kept,
+                    elapsed_ms,
+                    "Runtime-event fast-lane POST kept files for retry"
+                );
+            } else {
+                tracing::debug!(
+                    sent,
+                    post_count,
+                    elapsed_ms,
+                    "Runtime-event fast-lane POST sent files"
+                );
+            }
+        }
+    })
 }
 
 fn maybe_start_reconciliation_scan(
@@ -2997,18 +2947,16 @@ async fn handle_live_transcript_file_events(
     task_context: &PathTaskContext,
     offline: bool,
     background_paused: bool,
-) -> (Vec<PathBuf>, bool) {
+) -> Vec<PathBuf> {
     // Keep the coalescing wait cancellable by transcript wakes. The wake socket
     // is the managed-session completion lane, so it should not sit behind
     // filesystem batching.
     let flush = tokio::time::sleep(WATCHER_FLUSH_INTERVAL);
     tokio::pin!(flush);
-    let mut managed_wake_observed = false;
     loop {
         tokio::select! {
             biased;
             Some(signal) = transcript_wake_rx.recv() => {
-                managed_wake_observed = true;
                 if let Some(path) = enqueue_transcript_wake_signal(
                     scheduler,
                     latest_transcript_wake_observed,
@@ -3103,7 +3051,7 @@ async fn handle_live_transcript_file_events(
             session_event.latest_observed_at_ms,
         );
     }
-    (managed_state_changes, managed_wake_observed)
+    managed_state_changes
 }
 
 fn partition_managed_state_events(
@@ -3495,6 +3443,7 @@ fn defer_managed_pair_retry(projection_generation: &mut u64, pending_full: &mut 
 #[cfg(unix)]
 fn spawn_transcript_wake_listener(
     tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
+    runtime_event_wake_tx: mpsc::UnboundedSender<()>,
 ) -> Result<Option<tokio::task::JoinHandle<()>>> {
     let socket_path = config::get_agent_transcript_wake_socket_path()?;
     if let Some(parent) = socket_path.parent() {
@@ -3512,6 +3461,7 @@ fn spawn_transcript_wake_listener(
                 break;
             };
             let tx = tx.clone();
+            let runtime_event_wake_tx = runtime_event_wake_tx.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::with_capacity(1024);
                 if stream.read_to_end(&mut buf).await.is_err() {
@@ -3521,6 +3471,9 @@ fn spawn_transcript_wake_listener(
                     return;
                 };
                 signal.received_at_ms = Some(now_ms());
+                // Provider hooks enqueue the live text before writing this
+                // wake. Notify the independent egress lane before archive work.
+                let _ = runtime_event_wake_tx.send(());
                 let _ = tx.send(signal);
             });
         }
@@ -3530,6 +3483,7 @@ fn spawn_transcript_wake_listener(
 #[cfg(not(unix))]
 fn spawn_transcript_wake_listener(
     _tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
+    _runtime_event_wake_tx: mpsc::UnboundedSender<()>,
 ) -> Result<Option<tokio::task::JoinHandle<()>>> {
     Ok(None)
 }
