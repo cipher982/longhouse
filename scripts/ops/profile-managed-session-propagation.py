@@ -361,7 +361,9 @@ class Profiler:
             self.observations.append(row)
             with self.observations_path.open("a") as fh:
                 fh.write(json.dumps(row, sort_keys=True) + "\n")
-        if event == "session_id_observed" and session_id and self.args.ios_device:
+        if event == "session_id_observed" and session_id and (
+            self.args.ios_device or self.args.ios_simulator
+        ):
             self.open_ios_session(
                 case_id=case_id,
                 ownership=ownership,
@@ -382,19 +384,26 @@ class Profiler:
                 return
             self._ios_opened_sessions.add(session_id)
         deep_link = f"ai.longhouse.ios://session/{session_id}"
-        command = [
-            "xcrun",
-            "devicectl",
-            "device",
-            "process",
-            "launch",
-            "--device",
-            self.args.ios_device,
-            "--terminate-existing",
-            "--payload-url",
-            deep_link,
-            self.args.ios_bundle_id,
-        ]
+        if self.args.ios_simulator:
+            target = self.args.ios_simulator
+            command = ["xcrun", "simctl", "openurl", target, deep_link]
+            observation_source = "ios_simulator"
+        else:
+            target = self.args.ios_device
+            command = [
+                "xcrun",
+                "devicectl",
+                "device",
+                "process",
+                "launch",
+                "--device",
+                target,
+                "--terminate-existing",
+                "--payload-url",
+                deep_link,
+                self.args.ios_bundle_id,
+            ]
+            observation_source = "ios_device"
         started = monotonic_ms()
         try:
             completed = subprocess.run(
@@ -405,7 +414,7 @@ class Profiler:
                 check=False,
             )
             payload = {
-                "device": self.args.ios_device,
+                "device": target,
                 "bundle_id": self.args.ios_bundle_id,
                 "deep_link": deep_link,
                 "elapsed_ms": monotonic_ms() - started,
@@ -417,7 +426,7 @@ class Profiler:
                 case_id=case_id,
                 provider=self.args.provider,
                 ownership=ownership,
-                source="ios_device",
+                source=observation_source,
                 event="ios_session_opened"
                 if completed.returncode == 0
                 else "ios_session_open_failed",
@@ -431,11 +440,11 @@ class Profiler:
                 case_id=case_id,
                 provider=self.args.provider,
                 ownership=ownership,
-                source="ios_device",
+                source=observation_source,
                 event="ios_session_open_failed",
                 session_id=session_id,
                 payload={
-                    "device": self.args.ios_device,
+                    "device": target,
                     "bundle_id": self.args.ios_bundle_id,
                     "deep_link": deep_link,
                     "elapsed_ms": monotonic_ms() - started,
@@ -6657,6 +6666,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--ios-device",
         help="Optional physical iPhone identifier/name to open on each measured session.",
     )
+    parser.add_argument(
+        "--ios-simulator",
+        help="Optional booted iOS Simulator identifier/name to open on each measured session.",
+    )
     parser.add_argument("--ios-bundle-id", default="ai.longhouse.ios")
     parser.add_argument(
         "--ios-ready-delay-ms",
@@ -6708,6 +6721,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def normalize_args(args: argparse.Namespace) -> None:
     if args.ios_ready_delay_ms < 0:
         raise SystemExit("--ios-ready-delay-ms must be >= 0")
+    if args.ios_device and args.ios_simulator:
+        raise SystemExit("choose only one of --ios-device or --ios-simulator")
     if args.profile in {"cold-timeline", "warm-live"}:
         if args.skip_browser_ui:
             raise SystemExit(
@@ -6738,7 +6753,8 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             "browser_ui_enabled": not args.skip_browser_ui,
             "browser_transport": args.browser_transport,
             "ios_device": args.ios_device,
-            "ios_bundle_id": args.ios_bundle_id if args.ios_device else None,
+            "ios_simulator": args.ios_simulator,
+            "ios_bundle_id": args.ios_bundle_id if (args.ios_device or args.ios_simulator) else None,
             "profile_class": profiler.profile_class,
             "sla_case_id": profiler.sla_case.get("id") if profiler.sla_case else None,
             "sla_status": profiler.sla_case.get("status")

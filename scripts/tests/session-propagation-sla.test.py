@@ -362,6 +362,8 @@ def test_provider_to_pixel_matrix_covers_every_launch_provider() -> None:
     args = matrix_profiler.parse_args(["--ios-device", "olive"])
     assert args.ios_device == "olive"
     assert args.ios_bundle_id == "ai.longhouse.ios"
+    simulator_args = matrix_profiler.parse_args(["--ios-simulator", "booted"])
+    assert simulator_args.ios_simulator == "booted"
     profiler_args = profiler.parse_args(
         ["--profile", "warm-live", "--provider-to-pixel-only"]
     )

@@ -231,6 +231,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="disable-quic",
     )
     parser.add_argument("--ios-device")
+    parser.add_argument("--ios-simulator")
     parser.add_argument("--ios-bundle-id", default="ai.longhouse.ios")
     parser.add_argument("--ios-ready-delay-ms", type=int, default=750)
     return parser.parse_args(argv)
@@ -316,11 +317,11 @@ def main(argv: list[str]) -> int:
             command.extend(["--expected-hosted-commit", args.expected_hosted_commit])
         if args.container:
             command.extend(["--container", args.container])
-        if args.ios_device:
+        if args.ios_device or args.ios_simulator:
             command.extend(
                 [
-                    "--ios-device",
-                    args.ios_device,
+                    "--ios-device" if args.ios_device else "--ios-simulator",
+                    args.ios_device or args.ios_simulator,
                     "--ios-bundle-id",
                     args.ios_bundle_id,
                     "--ios-ready-delay-ms",
