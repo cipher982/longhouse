@@ -110,6 +110,7 @@ jobs:
       SESSION_PROPAGATION_OUTPUT_ROOT: ${{ github.workspace }}/artifacts/session-propagation-sla/gha-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.case }}
       SESSION_PROPAGATION_CODEX_EFFORT: low
       SESSION_PROPAGATION_PROVIDER_TO_PIXEL_ONLY: ${{ matrix.provider_to_pixel_only || false }}
+      SESSION_PROPAGATION_EXPECTED_HOSTED_COMMIT: ${{ github.sha }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       INCLUDE_EXPERIMENTAL: ${{ inputs.include_experimental || 'false' }}
 
