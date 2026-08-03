@@ -6,6 +6,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 from zerg.qa.provider_observed_install_qualification import observed_closure
 from zerg.qa.provider_observed_install_qualification import qualify_cursor_observed_install
 
@@ -107,6 +109,7 @@ def test_observed_closure_ignores_cursor_pid_leases(tmp_path: Path) -> None:
     assert observed_closure(root) == before
 
 
+@pytest.mark.timeout(60)
 def test_cursor_observed_install_runs_full_exact_column(tmp_path: Path) -> None:
     root, binary, identity = _fake_cursor_install(tmp_path)
     gate0 = _gate0_artifact(tmp_path, identity=identity)

@@ -79,9 +79,19 @@ async function mintDeviceToken(
   request: import('@playwright/test').APIRequestContext,
   deviceId: string,
 ): Promise<string> {
-  const response = await request.post('/api/devices/tokens', {
-    data: { device_id: deviceId },
-  });
+  let response: import('@playwright/test').APIResponse | undefined;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      response = await request.post('/api/devices/tokens', {
+        data: { device_id: deviceId },
+      });
+      break;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      await new Promise(resolve => setTimeout(resolve, 100 * attempt));
+    }
+  }
+  if (!response) throw new Error('Failed to mint device token after transport retries');
   if (!response.ok()) {
     throw new Error(
       `Failed to mint device token for E2E context: ${response.status()} ${await response.text()}`,
