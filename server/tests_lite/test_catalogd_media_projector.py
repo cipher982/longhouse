@@ -290,6 +290,96 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
 
 
 @pytest.mark.asyncio
+async def test_catalog_restart_releases_projector_claim_without_losing_completed_revision(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    projector = "render-v2"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    first_token = str(uuid4())
+    try:
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "desired_revision": 5,
+                "observed_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "old-runtime",
+                "claim_token": first_token,
+                "now": now.isoformat(),
+                "lease_seconds": 3_600,
+                "limit": 1,
+            },
+        )
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": first_token,
+                "completed_revision": 5,
+                "completed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "desired_revision": 9,
+                "observed_at": (now + timedelta(seconds=2)).isoformat(),
+            },
+        )
+        second_token = str(uuid4())
+        claimed = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "old-runtime",
+                "claim_token": second_token,
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 3_600,
+                "limit": 1,
+            },
+        )
+        assert claimed["claimed"][0]["completed_revision"] == "5"
+    finally:
+        await client.close()
+        await daemon.close()
+
+    restarted = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await restarted.start()
+    restarted_client = CatalogClient(socket_path)
+    try:
+        reclaimed = await restarted_client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "new-runtime",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=3)).isoformat(),
+                "lease_seconds": 3_600,
+                "limit": 1,
+            },
+        )
+        assert reclaimed["claimed"][0]["session_id"] == session_id
+        assert reclaimed["claimed"][0]["completed_revision"] == "5"
+        assert reclaimed["claimed"][0]["claimed_revision"] == "9"
+    finally:
+        await restarted_client.close()
+        await restarted.close()
+
+
+@pytest.mark.asyncio
 async def test_projectors_claim_oldest_update_first(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

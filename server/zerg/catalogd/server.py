@@ -94,6 +94,11 @@ class CatalogDaemon:
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
             self._store.ensure_known_projector_states()
+            # Projector workers live in the supervising Runtime Host process.
+            # If catalogd is starting, no worker that owned a durable claim can
+            # still prove ownership of it. Release those claims immediately
+            # instead of waiting through 15-minute/hour-long work leases.
+            self._store.release_projector_claims_on_startup(observed_at=datetime.now(UTC))
             self._meta = read_catalog_meta(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)

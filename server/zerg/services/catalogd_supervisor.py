@@ -22,12 +22,13 @@ from zerg.config import sqlite_file_path
 
 logger = logging.getLogger(__name__)
 
-# Large hosted catalogs can spend more than the generic 15-second daemon
-# default warming SQLite/schema pages after a container replacement. The
-# runtime health check already grants a 60-second start period, so let the
-# indispensable catalog owner finish that bounded cold start instead of
-# terminating it and relying on a warm crash-loop retry.
-CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS = 45.0
+# Large hosted catalogs can spend tens of seconds warming SQLite/schema pages
+# after a container replacement. The 4.8 GB hosted catalog measured 47.5
+# seconds and crossed the former 45-second bound, forcing a needless warm
+# crash-loop retry. Health checks have a 60-second start period plus three
+# 30-second retries, so let the indispensable catalog owner finish one bounded
+# cold start.
+CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS = 90.0
 # Projector catalog mutations share the single ordered writer with ingest. On
 # the hosted 4.8 GB catalog, the embedding claim SQL itself measured 52 ms but
 # waited longer than the generic one-second interactive deadline during active

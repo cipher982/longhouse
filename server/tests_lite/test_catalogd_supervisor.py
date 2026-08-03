@@ -103,7 +103,7 @@ async def test_runtime_wrapper_grants_catalogd_the_container_cold_start_budget(m
 
     assert await catalogd_supervisor_module.start_catalogd_supervisor() == {"ready": True}
     assert observed == [CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS]
-    assert CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS == 45.0
+    assert CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS == 90.0
 
 
 def test_supervisor_keeps_interactive_and_projector_deadlines_separate(supervisor_paths):
