@@ -186,6 +186,7 @@ async def _search_storage_v2_timeline(
                 "window_start_us": int((now - timedelta(days=params.days_back)).timestamp() * 1_000_000),
                 "window_end_us": None,
                 "limit": min(200, max(params.limit + params.offset, params.limit)),
+                "include_snippets": True,
             },
         )
     except (CatalogRemoteError, CatalogUnavailable) as exc:

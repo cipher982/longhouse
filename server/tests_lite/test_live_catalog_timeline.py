@@ -26,14 +26,14 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.live_catalog_timeline import _timeline_card_signature
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_catalog_sessions_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_catalog_timeline import read_live_catalog_session
-from zerg.services.live_catalog_timeline import _timeline_card_signature
-from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.session_views import SessionResponse
+from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
 def _params(**overrides):
@@ -367,6 +367,18 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
         async def call(self, method, params):
             assert method == "search.query.v2"
             assert params["owner_id"] == "7"
+            assert set(params) == {
+                "owner_id",
+                "query",
+                "project",
+                "provider",
+                "environment",
+                "window_start_us",
+                "window_end_us",
+                "limit",
+                "include_snippets",
+            }
+            assert params["include_snippets"] is True
             return {
                 "results": [
                     {
