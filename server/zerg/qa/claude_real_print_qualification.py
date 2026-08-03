@@ -144,11 +144,26 @@ def _execute(binary: Path, evidence_root: Path):
         overall = "blocked"
     live_model_evidence = None
     if isinstance(live, dict):
+        source_artifacts = [
+            {
+                "path": live[path_key],
+                "sha256": live[digest_key],
+                "kind": "provider_jsonl_stream" if path_key == "stdout_path" else "provider_stderr",
+                **({"event_type": (live.get("result_event") or {}).get("type")} if path_key == "stdout_path" else {}),
+                **({"event_sha256": (live.get("result_event") or {}).get("native_event_sha256")} if path_key == "stdout_path" else {}),
+            }
+            for path_key, digest_key in (("stdout_path", "stdout_sha256"), ("stderr_path", "stderr_sha256"))
+            if isinstance(live.get(path_key), str) and isinstance(live.get(digest_key), str) and live.get(digest_key)
+        ]
+        result_event = live.get("result_event")
+        if isinstance(result_event, dict) and live.get("model") and not result_event.get("model_source"):
+            result_event = {**result_event, "model_source": "invocation"}
         live_model_evidence = {
             "source_canary": "real_print_canary",
             "operation_evidence": live.get("operation_evidence"),
             "model": live.get("model"),
-            "result_event": live.get("result_event"),
+            "result_event": result_event,
+            "source_artifacts": source_artifacts,
         }
     return (
         {

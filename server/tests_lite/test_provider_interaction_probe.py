@@ -126,6 +126,16 @@ def test_cursor_stream_json_parser_keeps_native_init_and_result_records() -> Non
     assert events[1]["request_id"] == "r"
 
 
+def test_cursor_model_probe_selects_the_first_model_bearing_init_event() -> None:
+    events = [
+        {"type": "system", "subtype": "init"},
+        {"type": "system", "subtype": "init", "model": "grok-4.5"},
+        {"type": "result", "subtype": "success"},
+    ]
+
+    assert provider_interaction_probe._cursor_init_event(events) is events[1]  # noqa: SLF001
+
+
 @pytest.mark.parametrize(
     ("requested", "observed"),
     (("cursor-grok-4.5-high", "Cursor Grok 4.5 High"), ("gpt-5.6-sol", "gpt-5.6-sol")),
@@ -189,6 +199,11 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
     assert evaluation["verification_scope"] == "provider_native"
     assert evaluation["assertions"][-1]["probe_id"] == "shared_title_boundary"
     assert row["live_model_evidence"]["result_event"]["usage"]["input_tokens"] == 12
+    assert row["live_model_evidence"]["result_event"]["model"] == "grok-4.5"
+    assert row["live_model_evidence"]["model"] == "grok-4.5"
+    assert row["live_model_evidence"]["result_event"]["model_source_event_sha256"] == provider_interaction_semantics.raw_event_digest(
+        row["raw_events"][0]
+    )
     assert runtime_homes and not runtime_homes[0].exists()
     assert all(b"fixture-token" not in path.read_bytes() for path in artifact_root.rglob("*") if path.is_file())
 
@@ -298,10 +313,13 @@ def test_transcript_quiescence_detects_an_unparsed_partial_record(tmp_path: Path
     transcript.parent.mkdir(parents=True)
     transcript.write_bytes(b'{"type":"user","message":{"role":"user"}}\n{"partial":')
 
-    assert provider_interaction_probe._transcript_has_unparsed_new_bytes(  # noqa: SLF001
-        {},
-        config_dir=tmp_path,
-    ) is True
+    assert (
+        provider_interaction_probe._transcript_has_unparsed_new_bytes(  # noqa: SLF001
+            {},
+            config_dir=tmp_path,
+        )
+        is True
+    )
 
 
 def test_live_producer_dispatches_one_adapter_for_every_managed_provider(monkeypatch, tmp_path: Path) -> None:

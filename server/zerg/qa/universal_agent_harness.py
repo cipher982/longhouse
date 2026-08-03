@@ -2195,6 +2195,13 @@ class UniversalProviderAdapter:
                 }
             },
         }
+        live_model_evidence = observation.get("live_model_evidence")
+        if isinstance(live_model_evidence, Mapping):
+            # Keep the provider's canonical model/usage envelope attached to
+            # the harness result. Semantic projection still comes from the
+            # interaction oracle; this is receipt provenance, not a title or
+            # transcript shortcut.
+            payload["live_model_evidence"] = dict(live_model_evidence)
         package.write_json("assertions/interaction_semantics.json", payload)
         return payload
 
@@ -6092,9 +6099,26 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
         return payload
 
     observation = run_codex_real_tool_command(binary, api_key=api_key)
+    result_event = observation.get("result_event")
+    redacted_events = observation.get("redacted_events")
+    source_artifacts: list[dict[str, Any]] = []
+    if isinstance(redacted_events, list):
+        native_path = package.write_text(
+            "raw/codex-tool-call-result-strict-events.jsonl",
+            "".join(json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n" for event in redacted_events),
+        )
+        source_artifacts.append(
+            {
+                "path": str(native_path.resolve()),
+                "sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
+                "kind": "provider_jsonl_stream",
+                "event_type": result_event.get("type") if isinstance(result_event, dict) else None,
+                "event_sha256": result_event.get("native_event_sha256") if isinstance(result_event, dict) else None,
+            }
+        )
     package.write_json(
         "raw/codex-tool-call-result-strict.json",
-        {key: value for key, value in observation.items() if key != "events"},
+        {key: value for key, value in observation.items() if key not in {"events", "redacted_events"}},
     )
     infrastructure_error = observation["returncode"] is None or observation["returncode"] != 0
     if infrastructure_error:
@@ -6123,6 +6147,20 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
         "timed_out": observation["timed_out"],
         "error": observation["error"],
     }
+    if isinstance(result_event, dict):
+        payload["live_model_evidence"] = {
+            "source_canary": "codex_tool_call_result_strict",
+            "operation_evidence": {
+                "live_token_behavior": {
+                    "status": "pass" if observation.get("model_operation_observed") else "fail",
+                    "level": "live_token",
+                    "canary": "codex_tool_call_result_strict",
+                }
+            },
+            "model": result_event.get("model"),
+            "result_event": result_event,
+            "source_artifacts": source_artifacts,
+        }
     if not passed:
         payload["failure_code"] = (
             "codex_tool_call_result_strict_timeout"

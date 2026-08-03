@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
@@ -205,19 +206,6 @@ def _event_evidence_text(event: Mapping[str, Any]) -> str:
     """Serialize one raw event for literal marker assertions."""
 
     return json.dumps(dict(event), ensure_ascii=False, sort_keys=True, default=str)
-
-
-def raw_event_digest(event: Mapping[str, Any]) -> str:
-    """Digest the parsed provider row used by the live provenance gate."""
-
-    encoded = json.dumps(
-        dict(event),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _live_raw_provenance(

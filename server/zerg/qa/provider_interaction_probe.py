@@ -1103,6 +1103,20 @@ def _opencode_interaction_probes(
     return rows, native_rows
 
 
+def _cursor_init_event(events: list[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    return next(
+        (
+            event
+            for event in events
+            if event.get("type") == "system"
+            and event.get("subtype") == "init"
+            and isinstance(event.get("model"), str)
+            and event["model"].strip()
+        ),
+        None,
+    )
+
+
 def _cursor_model_probe_with_runtime_home(
     *,
     binary: Path,
@@ -1182,10 +1196,7 @@ def _cursor_model_probe_with_runtime_home(
         native_rows.append(file_evidence)
     combined = f"{safe_stdout}\n{safe_stderr}\n{events_path.read_text(encoding='utf-8') if events_path.exists() else ''}"
     stream_events = _cursor_stream_json_events(safe_stdout)
-    init_event = next(
-        (event for event in stream_events if event.get("type") == "system" and event.get("subtype") == "init"),
-        None,
-    )
+    init_event = _cursor_init_event(stream_events)
     result_event = next(
         (
             event
@@ -1239,13 +1250,20 @@ def _cursor_model_probe_with_runtime_home(
         and cursor_usage is not None
     ):
         cursor_result_event = {
-            key: result_event[key] for key in ("session_id", "request_id", "duration_ms", "duration_api_ms") if key in result_event
+            key: result_event[key]
+            for key in ("type", "subtype", "session_id", "request_id", "duration_ms", "duration_api_ms")
+            if key in result_event
         }
+        cursor_result_event["model"] = observed_model
         cursor_result_event["usage"] = cursor_usage
         for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_write_input_tokens", "cacheRead", "cacheWrite"):
             if key in result_event:
                 cursor_result_event[key] = result_event[key]
         cursor_result_event["accounting_status"] = "subscription_aggregate_unreported"
+        cursor_result_event["accounting_status_source"] = "producer_observation_classification"
+        cursor_result_event["model_source"] = "provider_event"
+        cursor_result_event["model_source_event_sha256"] = raw_event_digest(init_event)
+        cursor_result_event["native_event_sha256"] = raw_event_digest(result_event)
         row = _probe_status_row(
             probe,
             status="observed",
@@ -1262,6 +1280,15 @@ def _cursor_model_probe_with_runtime_home(
         row["native_source_root"] = str(artifact_root.resolve())
         row["provider_model"] = observed_model
         row["api_key_source"] = api_key_source
+        source_artifacts = [
+            {
+                "path": str(capture_path.resolve()),
+                "sha256": _sha256(capture_path),
+                "kind": "provider_jsonl_stream",
+                "event_type": result_event.get("type"),
+                "event_sha256": raw_event_digest(result_event),
+            }
+        ]
         row["live_model_evidence"] = {
             "source_canary": "cursor_model_probe",
             "operation_evidence": {
@@ -1272,6 +1299,7 @@ def _cursor_model_probe_with_runtime_home(
             },
             "model": observed_model,
             "result_event": cursor_result_event,
+            "source_artifacts": source_artifacts,
         }
     elif (
         stream_events

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa import qualification_request
 from zerg.qa.codex_auth import CodexAuthError
 from zerg.qa.codex_auth import login_with_api_key
@@ -103,6 +105,45 @@ def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
 def _event_item(event: dict[str, Any]) -> dict[str, Any]:
     item = event.get("item")
     return item if isinstance(item, dict) else {}
+
+
+def _flatten_numeric_usage(value: Any, *, prefix: str = "") -> dict[str, int | float]:
+    if not isinstance(value, dict):
+        return {}
+    usage: dict[str, int | float] = {}
+    for key, item in value.items():
+        name = f"{prefix}{key}"
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            usage[name] = item
+        elif isinstance(item, dict):
+            usage.update(_flatten_numeric_usage(item, prefix=f"{name}."))
+    return usage
+
+
+def _compact_codex_result_event(events: list[dict[str, Any]], *, model: str | None) -> dict[str, Any] | None:
+    """Keep Codex's completed-turn usage while making model provenance explicit."""
+
+    event = next((item for item in reversed(events) if item.get("type") == "turn.completed"), None)
+    if event is None:
+        return None
+    compact: dict[str, Any] = {
+        "type": event.get("type"),
+        "native_event_sha256": hashlib.sha256(
+            json.dumps(dict(event), ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest(),
+        "accounting_status": "provider_reported_usage_cost_unavailable",
+        "accounting_status_source": "producer_observation_classification",
+    }
+    usage = _flatten_numeric_usage(event.get("usage"))
+    if usage:
+        compact["usage"] = usage
+    if model:
+        # codex exec pins --model in the exact argv but its JSONL completion
+        # event does not echo the selected model. Do not label this as a
+        # provider-reported field.
+        compact["model"] = model
+        compact["model_source"] = "invocation"
+    return compact
 
 
 def _command_matches_expected(observed: object, expected: str) -> bool:
@@ -270,8 +311,17 @@ def emit_proof_bundle(
         "raw_evidence_digest": raw_digest,
         "runner_git_sha": runner_sha,
     }
+    output_root.mkdir(parents=True, exist_ok=True)
     identity_bridge._atomic_json(output_root / "request.json", request)  # noqa: SLF001
     identity_bridge._atomic_json(output_root / "raw-evidence.json", observation)  # noqa: SLF001
+    semantic_observation = semantic._refresh_native_source_digests(  # noqa: SLF001
+        observation,
+        artifact_root=output_root.parent,
+    )
+    semantic_path = output_root / "semantic-evidence" / "semantic-observation.json"
+    semantic_path.parent.mkdir(parents=True, exist_ok=True)
+    identity_bridge._atomic_json(semantic_path, semantic_observation)  # noqa: SLF001
+    execution["semantic_evidence_digest"] = identity_bridge._sha256_file(semantic_path)  # noqa: SLF001
     identity_bridge._atomic_json(output_root / "execution-summary.json", execution)  # noqa: SLF001
     oracle_digest = identity_bridge._sha256(Path(__file__).read_bytes())  # noqa: SLF001
     store = ProviderCapabilityProofStore(output_root / "proof-store")
@@ -473,10 +523,13 @@ def run_codex_real_tool_command(
         if shim_path := sandbox_helper_evidence.get("shim_path"):
             sandbox_helper_evidence["shim_removed"] = not Path(shim_path).exists()
     events, invalid_lines = _jsonl_events(tool_stdout)
+    redacted_events, _ = _jsonl_events(_redact(tool_stdout, api_key, managed_package_root))
+    result_event = _compact_codex_result_event(redacted_events, model=model)
     return {
         "command": command,
         "prompt": prompt,
         "events": events,
+        "redacted_events": redacted_events,
         "invalid_lines": invalid_lines,
         "returncode": tool_result.returncode if tool_result is not None else None,
         "timed_out": tool_timed_out,
@@ -485,6 +538,8 @@ def run_codex_real_tool_command(
         "stderr": _redact(tool_stderr, api_key, managed_package_root),
         "sandbox_helper": sandbox_helper_evidence,
         "model": model,
+        "result_event": result_event,
+        "model_operation_observed": result_event is not None,
     }
 
 
