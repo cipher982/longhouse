@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 ATTEMPTS="${SESSION_PROPAGATION_ATTEMPTS:-3}"
+ITERATIONS="${SESSION_PROPAGATION_ITERATIONS:-1}"
 SUBDOMAIN="${SESSION_PROPAGATION_SUBDOMAIN:-${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}}"
 PROJECT="${SESSION_PROPAGATION_PROJECT:-zerg}"
 SLA_CASE="${SESSION_PROPAGATION_SLA_CASE:-managed_codex_warm_live_graceful_close}"
@@ -30,6 +31,7 @@ summary="$OUTPUT_ROOT/summary.md"
   echo "- Subdomain: \`$SUBDOMAIN\`"
   echo "- Project: \`$PROJECT\`"
   echo "- Attempts: \`$ATTEMPTS\`"
+  echo "- Iterations per attempt: \`$ITERATIONS\`"
   echo "- Started: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
   echo ""
   echo "## Attempts"
@@ -54,6 +56,10 @@ fi
 
 if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$ATTEMPTS" -lt 1 ]]; then
   echo "SESSION_PROPAGATION_ATTEMPTS must be a positive integer" >&2
+  exit 1
+fi
+if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || [[ "$ITERATIONS" -lt 1 ]]; then
+  echo "SESSION_PROPAGATION_ITERATIONS must be a positive integer" >&2
   exit 1
 fi
 
@@ -89,6 +95,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     --sla-case "$SLA_CASE"
     --provider "$PROVIDER"
     --ownership "$OWNERSHIP"
+    --iterations "$ITERATIONS"
     --subdomain "$SUBDOMAIN"
     --project "$PROJECT"
     --run-id "$attempt_run_id"

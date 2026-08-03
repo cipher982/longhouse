@@ -10,6 +10,11 @@ on:
         required: false
         default: '3'
         type: string
+      iterations:
+        description: 'Clean distribution samples requested per provider'
+        required: false
+        default: '20'
+        type: string
       subdomain:
         description: 'Hosted instance subdomain'
         required: false
@@ -66,19 +71,19 @@ jobs:
             profile: warm-live
             provider: claude
             ownership: managed
-            experimental: true
+            experimental: false
           - name: managed-cursor-warm-realtime
             case: managed_cursor_helm_content_promotion
             profile: warm-live
             provider: cursor
             ownership: managed
-            experimental: true
+            experimental: false
           - name: managed-opencode-warm-realtime
             case: managed_opencode_warm_lifecycle
             profile: warm-live
             provider: opencode
             ownership: managed
-            experimental: true
+            experimental: false
           - name: unmanaged-codex-baseline
             case: unmanaged_codex_direct_graceful_close
             profile: baseline
@@ -87,6 +92,7 @@ jobs:
             experimental: true
     env:
       SESSION_PROPAGATION_ATTEMPTS: ${{ inputs.attempts || '3' }}
+      SESSION_PROPAGATION_ITERATIONS: ${{ inputs.iterations || '20' }}
       SESSION_PROPAGATION_SUBDOMAIN: ${{ inputs.subdomain || vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       SESSION_PROPAGATION_PROJECT: ${{ inputs.project || 'zerg' }}
       SESSION_PROPAGATION_SLA_CASE: ${{ matrix.case }}
