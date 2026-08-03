@@ -116,12 +116,14 @@ function RecallCard({ match }: { match: RecallMatch }) {
 
 export function RecallPanel({ project, provider }: RecallPanelProps) {
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"auto" | "lexical" | "semantic">("auto");
   const debouncedQuery = useDebouncedValue(query, 400);
 
   const filters: RecallFilters = {
     query: debouncedQuery,
     project: project || undefined,
     provider: provider || undefined,
+    mode,
     since_days: 90,
     max_results: 8,
     context_turns: 2,
@@ -135,9 +137,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
     <div className="recall-panel" data-testid="recall-panel">
       <div className="recall-panel-header">
         <h3 className="recall-panel-title">Recall</h3>
-        <p className="recall-panel-description">
-          Search conversation turns by meaning — returns exact snippets with context.
-        </p>
+        <p className="recall-panel-description">Search conversation turns with explicit retrieval lanes and context.</p>
       </div>
 
       <div className="recall-panel-search">
@@ -150,6 +150,19 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
           data-testid="recall-search-input"
           aria-label="Recall search query"
         />
+        <div className="recall-mode" role="group" aria-label="Recall retrieval mode">
+          {(["auto", "semantic", "lexical"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`recall-mode-option${mode === option ? " is-active" : ""}`}
+              aria-pressed={mode === option}
+              onClick={() => setMode(option)}
+            >
+              {option === "auto" ? "Hybrid" : option === "semantic" ? "Semantic" : "Lexical"}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="recall-panel-results">

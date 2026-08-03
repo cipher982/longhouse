@@ -113,23 +113,21 @@ class _ProjectorLagPayload(BaseModel):
 
     states: list[dict[str, object]]
     lag_count: int = Field(ge=0)
-    uninitialized_count: int = Field(ge=0)
     indexed_through: str = Field(pattern=r"^[0-9]+$")
     commit_seq: str = Field(pattern=r"^[0-9]+$")
     observed_at: str = Field(min_length=1)
 
 
 async def _require_complete_projection_coverage(*, timeout_seconds: float) -> None:
-    """Reject a corpus that the active embedding projector has never covered.
+    """Reject a corpus behind catalog truth for the active embedding space.
 
     searchd's resident gate validates every row it knows about. Catalogd owns
     the authoritative eligible-session set, so a fresh or partially rebuilt
     searchd could otherwise prove an empty/partial local set complete. Projector
     completion is published only after each searchd mutation commits. Requiring
-    every eligible session to have completed this projector at least once closes
-    that outer gap. Searchd retains the current generation/revision/dimension/
-    normalization/locator proof without globally blocking ordinary revision
-    churn that has already produced a usable embedding.
+    the active projector watermark to be current closes that outer gap. Searchd
+    then proves the current generation/revision/dimension/normalization/locator
+    invariants for its published rows.
     """
 
     from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
@@ -172,7 +170,7 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> No
             ) from exc
 
     embedding_lag = await lag(EMBEDDING_PROJECTOR_ID)
-    if embedding_lag.uninitialized_count:
+    if embedding_lag.lag_count:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -543,6 +541,7 @@ async def search_storage_v2_semantic_sessions(
 ) -> list[SessionResponse]:
     """Return full session views ranked by the actual resident dense lane."""
 
+    candidate_depth = min(200, max(limit, limit * CANDIDATE_DEPTH_FACTOR))
     matches = await _semantic_recall_matches(
         query=query,
         project=project,
@@ -551,7 +550,7 @@ async def search_storage_v2_semantic_sessions(
         since_days=days_back,
         include_test=include_test,
         include_automation=False,
-        max_results=limit,
+        max_results=candidate_depth,
         timeout_seconds=RECALL_ROUTE_TIMEOUT_SECONDS,
         owner_id=owner_id,
     )
@@ -560,7 +559,7 @@ async def search_storage_v2_semantic_sessions(
     )
     sessions: list[SessionResponse] = []
     for (session, _provider_alias, _commit_seq), match in zip(projected, matches, strict=True):
-        if session is None or session.user_hidden_from_timeline or session.user_messages <= 0:
+        if session is None or session.user_hidden_from_timeline or session.user_messages <= 0 or session.is_sidechain:
             continue
         if environment is not None and session.environment != environment:
             continue
@@ -734,6 +733,8 @@ def _finalize_recall_evidence(matches: list[RecallMatch]) -> None:
             match.evidence_reason = match.evidence_reason or "context_unavailable"
         if match.evidence_status in {"partial", "unavailable"} and not match.evidence_reason:
             match.evidence_reason = f"{match.evidence_status}_without_reason"
+        if match.evidence_status == "complete":
+            match.evidence_reason = None
         if match.evidence_status == "not_requested":
             match.evidence_reason = None
 

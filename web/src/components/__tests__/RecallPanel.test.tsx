@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RecallPanel } from "../RecallPanel";
@@ -70,5 +71,19 @@ describe("RecallPanel", () => {
     expect(screen.getByText("Semantic #1 + Lexical #2")).toBeInTheDocument();
     expect(screen.getByText("The migration completed successfully.")).toBeInTheDocument();
     expect(screen.queryByText("3%")).not.toBeInTheDocument();
+  });
+
+  it("requests only the explicitly selected retrieval mode", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+
+    expect(hookMocks.useRecall).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "auto" }));
+    await user.click(screen.getByRole("button", { name: "Lexical" }));
+
+    expect(hookMocks.useRecall).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "lexical" }));
   });
 });

@@ -11,6 +11,7 @@ from starlette.requests import Request
 from zerg.routers import agents_search
 from zerg.routers import agents_sessions
 from zerg.routers import timeline
+from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 
 
@@ -190,7 +191,7 @@ def test_recall_rejects_unknown_query_parameters_before_search():
     assert exc_info.value.detail["parameters"] == ["limti"]
 
 
-def test_browser_recall_delegates_to_canonical_auto_pipeline(monkeypatch):
+def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
     observed = {}
 
     async def canonical_recall(**kwargs):
@@ -217,14 +218,67 @@ def test_browser_recall_delegates_to_canonical_auto_pipeline(monkeypatch):
             max_results=5,
             context_turns=2,
             context_mode="forensic",
+            mode="lexical",
             current_user=SimpleNamespace(id=7),
         )
     )
 
     assert response.lanes == ["lexical", "dense"]
-    assert observed["mode"] == "auto"
+    assert observed["mode"] == "lexical"
     assert observed["include_automation"] is False
     assert observed["_auth"].owner_id == 7
+
+
+def test_semantic_session_search_overfetches_and_filters_hidden_autonomous_hits(monkeypatch):
+    observed = {}
+    session_ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(1, 6)]
+
+    async def dense_matches(**kwargs):
+        observed.update(kwargs)
+        return [RecallMatch(session_id=session_id, chunk_index=0, score=1.0 - index / 10) for index, session_id in enumerate(session_ids)]
+
+    class FakeSession:
+        def __init__(self, session_id, *, hidden=False, user_messages=1, sidechain=False):
+            self.id = session_id
+            self.user_hidden_from_timeline = hidden
+            self.user_messages = user_messages
+            self.is_sidechain = sidechain
+            self.environment = "production"
+
+        def model_copy(self, *, update):
+            self.match_score = update["match_score"]
+            return self
+
+    sessions = {
+        session_ids[0]: FakeSession(session_ids[0], hidden=True),
+        session_ids[1]: FakeSession(session_ids[1], user_messages=0),
+        session_ids[2]: FakeSession(session_ids[2], sidechain=True),
+        session_ids[3]: FakeSession(session_ids[3]),
+        session_ids[4]: FakeSession(session_ids[4]),
+    }
+
+    def read_session(session_id, *, owner_id):
+        assert owner_id == 7
+        return sessions[str(session_id)], None, "10"
+
+    monkeypatch.setattr(agents_search, "_semantic_recall_matches", dense_matches)
+    monkeypatch.setattr(agents_search, "read_live_catalog_session", read_session)
+
+    result = asyncio.run(
+        agents_search.search_storage_v2_semantic_sessions(
+            owner_id=7,
+            query="migration",
+            project=None,
+            provider=None,
+            environment=None,
+            days_back=14,
+            limit=2,
+            include_test=False,
+        )
+    )
+
+    assert observed["max_results"] == 10
+    assert [session.id for session in result] == session_ids[-2:]
 
 
 def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):

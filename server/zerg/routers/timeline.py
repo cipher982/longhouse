@@ -19,6 +19,7 @@ from datetime import timezone
 from threading import Lock
 from time import monotonic
 from types import SimpleNamespace
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 
@@ -363,6 +364,10 @@ async def recall_timeline_sessions(
     max_results: int = Query(5, ge=1, le=25, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    mode: Literal["auto", "lexical", "semantic"] = Query(
+        "auto",
+        description="Recall lane: auto fuses lexical and semantic; lexical and semantic run one lane only.",
+    ),
     current_user=Depends(get_current_browser_user),
 ):
     # The browser is a presentation client of the canonical machine surface.
@@ -382,7 +387,7 @@ async def recall_timeline_sessions(
         context_turns=context_turns,
         context_mode=context_mode,
         include_automation=False,
-        mode="auto",
+        mode=mode,
         _auth=SimpleNamespace(owner_id=current_user.id),
         _single=None,
     )

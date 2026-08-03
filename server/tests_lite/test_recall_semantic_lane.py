@@ -102,7 +102,7 @@ async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_uninitialized_embedding_projection_closes_the_outer_coverage_gate(monkeypatch):
+async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(monkeypatch):
     from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
     from zerg.services import catalogd_supervisor
 
@@ -116,7 +116,6 @@ async def test_uninitialized_embedding_projection_closes_the_outer_coverage_gate
             return {
                 "states": [],
                 "lag_count": 1,
-                "uninitialized_count": 1,
                 "indexed_through": "9",
                 "commit_seq": "10",
                 "observed_at": "2026-08-02T00:00:00+00:00",
@@ -138,7 +137,7 @@ async def test_uninitialized_embedding_projection_closes_the_outer_coverage_gate
 
 
 @pytest.mark.asyncio
-async def test_completed_embedding_projection_allows_ordinary_revision_lag(monkeypatch):
+async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkeypatch):
     from zerg.services import catalogd_supervisor
 
     class FakeCatalog:
@@ -146,9 +145,8 @@ async def test_completed_embedding_projection_allows_ordinary_revision_lag(monke
             assert timeout_seconds == 1.0
             return {
                 "states": [],
-                "lag_count": 1,
-                "uninitialized_count": 0,
-                "indexed_through": "9",
+                "lag_count": 0,
+                "indexed_through": "10",
                 "commit_seq": "10",
                 "observed_at": "2026-08-02T00:00:00+00:00",
             }

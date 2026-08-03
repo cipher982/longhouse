@@ -1437,7 +1437,6 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert projector_lag["states"][0]["session_id"] == str(session_id)
         assert projector_lag["states"][0]["desired_revision"] == committed["receipt"]["commit_seq"]
         assert projector_lag["lag_count"] == 1
-        assert projector_lag["uninitialized_count"] == 1
         assert projector_lag["indexed_through"] == str(int(committed["receipt"]["commit_seq"]) - 1)
 
         derived_drift = {

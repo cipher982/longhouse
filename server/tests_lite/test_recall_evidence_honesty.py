@@ -91,9 +91,24 @@ def test_finalizer_normalizes_evidence_states_into_one_truthful_algebra():
         score=0.2,
         evidence_status="complete",
     )
+    complete_with_stale_reason = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.1,
+        evidence="matching snippet",
+        context=[{"role": "assistant", "content_text": "matching snippet"}],
+        evidence_status="complete",
+        evidence_reason="stale_store_reason",
+    )
 
     agents_search._finalize_recall_evidence(
-        [complete_without_context, unavailable_with_material, partial_without_material, complete_without_material]
+        [
+            complete_without_context,
+            unavailable_with_material,
+            partial_without_material,
+            complete_without_material,
+            complete_with_stale_reason,
+        ]
     )
 
     assert (complete_without_context.evidence_status, complete_without_context.evidence_reason) == (
@@ -103,6 +118,7 @@ def test_finalizer_normalizes_evidence_states_into_one_truthful_algebra():
     assert unavailable_with_material.evidence_status == "partial"
     assert partial_without_material.evidence_status == "unavailable"
     assert complete_without_material.evidence_status == "unavailable"
+    assert complete_with_stale_reason.evidence_reason is None
 
 
 def test_recall_response_enforces_lane_space_and_evidence_consistency():

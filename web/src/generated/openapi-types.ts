@@ -6542,6 +6542,16 @@ export interface components {
              * @description Optional client-minted session UUID for Degraded Helm. Retries and later convergence must reuse this identity instead of minting a replacement.
              */
             session_id?: string | null;
+            /**
+             * Resume Attempt Id
+             * @description Idempotency identity for an explicit managed-session resume
+             */
+            resume_attempt_id?: string | null;
+            /**
+             * Provider Thread Id
+             * @description Provider thread identity that the resumed run must retain
+             */
+            provider_thread_id?: string | null;
         };
         /** ManagedSessionLeaseIn */
         ManagedSessionLeaseIn: {
@@ -15561,6 +15571,8 @@ export interface operations {
                 context_turns?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
+                /** @description Recall lane: auto fuses lexical and semantic; lexical and semantic run one lane only. */
+                mode?: "auto" | "lexical" | "semantic";
             };
             header?: never;
             path?: never;

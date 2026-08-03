@@ -7701,13 +7701,10 @@ class CatalogStore:
             lag_count, first_lag_revision = connection.execute(
                 select(func.count(), func.min(table.c.desired_revision)).where(*lag_predicate)
             ).one()
-            never_completed_predicate = [*lag_predicate, table.c.completed_revision == 0]
-            uninitialized_count = connection.execute(select(func.count()).where(*never_completed_predicate)).scalar_one()
             commit_seq = _current_commit_seq(connection)
             return {
                 "states": [_projector_state_dto(row) for row in rows],
                 "lag_count": int(lag_count),
-                "uninitialized_count": int(uninitialized_count),
                 "indexed_through": (str(int(first_lag_revision) - 1) if first_lag_revision is not None else str(commit_seq)),
                 "commit_seq": str(commit_seq),
                 "observed_at": observed_at.isoformat(),
