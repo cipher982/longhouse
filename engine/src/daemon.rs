@@ -315,7 +315,11 @@ struct MachinePresencePostResult {
 
 struct OutboxCollectResult {
     presence: outbox::OutboxLocalDrainResult,
-    runtime_posts: Vec<outbox::PendingRuntimeEventPost>,
+    elapsed_ms: u64,
+}
+
+struct RuntimeOutboxCollectResult {
+    posts: Vec<outbox::PendingRuntimeEventPost>,
     elapsed_ms: u64,
 }
 
@@ -942,8 +946,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
+    let mut runtime_outbox_collect_tasks: JoinSet<RuntimeOutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
+    let mut runtime_outbox_drain_pending = true;
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
@@ -967,6 +973,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
     loop {
+        maybe_start_runtime_outbox_collect(
+            &mut runtime_outbox_drain_pending,
+            &mut runtime_outbox_collect_tasks,
+            &runtime_outbox_post_tasks,
+            &runtime_events_outbox_dir,
+        );
         if !startup_archive_replay_pending {
             match queue_failed_shipment_retries_if_idle(
                 &mut scheduler,
@@ -1034,7 +1046,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // front of an otherwise ready provider-to-pixel update.
                 if outbox_collect_tasks.is_empty() {
                     let outbox_dir = outbox_dir.clone();
-                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     let db_path = config.shipper_config.db_path.clone();
                     outbox_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();
@@ -1042,15 +1053,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &outbox_dir,
                             db_path.as_deref(),
                         );
-                        let runtime_posts =
-                            outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
                         OutboxCollectResult {
                             presence,
-                            runtime_posts,
                             elapsed_ms: started.elapsed().as_millis() as u64,
                         }
                     });
                 }
+                runtime_outbox_drain_pending = true;
+                maybe_start_runtime_outbox_collect(
+                    &mut runtime_outbox_drain_pending,
+                    &mut runtime_outbox_collect_tasks,
+                    &runtime_outbox_post_tasks,
+                    &runtime_events_outbox_dir,
+                );
             }
 
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
@@ -1238,7 +1253,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             tracing::warn!(
                                 elapsed_ms = result.elapsed_ms,
                                 presence_posts = result.presence.posts.len(),
-                                runtime_posts = result.runtime_posts.len(),
                                 "Outbox collection was slow"
                             );
                         }
@@ -1298,52 +1312,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         }
-                        if !result.runtime_posts.is_empty() {
-                            if runtime_outbox_post_tasks.is_empty() {
-                                let client = client.clone();
-                                let runtime_posts = result.runtime_posts;
-                                let post_count = runtime_posts.len();
-                                runtime_outbox_post_tasks.spawn_local(async move {
-                                    let join_started = Instant::now();
-                                    let post_task = tokio::spawn(async move {
-                                        let task_started = Instant::now();
-                                        let (sent, kept) =
-                                            outbox::post_pending_runtime_event_files(&client, runtime_posts)
-                                                .await;
-                                        (sent, kept, task_started.elapsed().as_millis() as u64)
-                                    });
-                                    match post_task.await {
-                                        Ok((sent, kept, task_elapsed_ms)) => (
-                                            sent,
-                                            kept,
-                                            join_started.elapsed().as_millis() as u64,
-                                            task_elapsed_ms,
-                                        ),
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                post_count,
-                                                "Outbox runtime-event POST worker task failed: {}",
-                                                err
-                                            );
-                                            (
-                                                0,
-                                                post_count,
-                                                join_started.elapsed().as_millis() as u64,
-                                                join_started.elapsed().as_millis() as u64,
-                                            )
-                                        }
-                                    }
-                                });
-                            } else {
-                                tracing::debug!(
-                                    pending_posts = result.runtime_posts.len(),
-                                    "Skipping outbox runtime-event POST while previous POST is still in flight"
-                                );
-                            }
-                        }
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Outbox collection task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            runtime_outbox_collect_result = runtime_outbox_collect_tasks.join_next(), if !runtime_outbox_collect_tasks.is_empty() => {
+                match runtime_outbox_collect_result {
+                    Some(Ok(result)) => {
+                        if result.elapsed_ms > 25 {
+                            tracing::warn!(
+                                elapsed_ms = result.elapsed_ms,
+                                runtime_posts = result.posts.len(),
+                                "Runtime-event outbox collection was slow"
+                            );
+                        }
+                        if !result.posts.is_empty() {
+                            start_runtime_outbox_post(
+                                &mut runtime_outbox_post_tasks,
+                                client.clone(),
+                                result.posts,
+                            );
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Runtime-event outbox collection task failed: {}", err);
+                        runtime_outbox_drain_pending = true;
                     }
                     None => {}
                 }
@@ -2002,7 +1999,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // WorkPriority::Live. Managed wake signals can pre-empt the small
             // filesystem coalescing window.
             Some(first_event) = watcher.next_event() => {
-                let managed_state_changes = handle_live_transcript_file_events(
+                let (managed_state_changes, managed_wake_observed) = handle_live_transcript_file_events(
                     &mut watcher,
                     first_event,
                     &providers,
@@ -2016,6 +2013,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     offline.is_offline,
                     archive_repair_is_paused(config.archive_repair_mode),
                 ).await;
+                if managed_wake_observed {
+                    runtime_outbox_drain_pending = true;
+                    maybe_start_runtime_outbox_collect(
+                        &mut runtime_outbox_drain_pending,
+                        &mut runtime_outbox_collect_tasks,
+                        &runtime_outbox_post_tasks,
+                        &runtime_events_outbox_dir,
+                    );
+                }
                 if !managed_state_changes.is_empty() {
                     let requires_discovery = managed_state_changes_require_full_reconciliation(
                         &last_managed_observations,
@@ -2126,7 +2132,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
                 if outbox_collect_tasks.is_empty() {
                     let outbox_dir = outbox_dir.clone();
-                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     let db_path = config.shipper_config.db_path.clone();
                     outbox_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();
@@ -2134,15 +2139,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &outbox_dir,
                             db_path.as_deref(),
                         );
-                        let runtime_posts =
-                            outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
                         OutboxCollectResult {
                             presence,
-                            runtime_posts,
                             elapsed_ms: started.elapsed().as_millis() as u64,
                         }
                     });
                 }
+                runtime_outbox_drain_pending = true;
+                maybe_start_runtime_outbox_collect(
+                    &mut runtime_outbox_drain_pending,
+                    &mut runtime_outbox_collect_tasks,
+                    &runtime_outbox_post_tasks,
+                    &runtime_events_outbox_dir,
+                );
             }
 
             // Wake the loop when delayed local retry work may now be ready.
@@ -2921,6 +2930,64 @@ fn start_inventory_task(
     });
 }
 
+fn maybe_start_runtime_outbox_collect(
+    drain_pending: &mut bool,
+    collect_tasks: &mut JoinSet<RuntimeOutboxCollectResult>,
+    post_tasks: &JoinSet<(usize, usize, u64, u64)>,
+    runtime_events_outbox_dir: &Path,
+) {
+    if !*drain_pending || !collect_tasks.is_empty() || !post_tasks.is_empty() {
+        return;
+    }
+    *drain_pending = false;
+    let runtime_events_outbox_dir = runtime_events_outbox_dir.to_path_buf();
+    collect_tasks.spawn_blocking(move || {
+        let started = Instant::now();
+        let posts = outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
+        RuntimeOutboxCollectResult {
+            posts,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        }
+    });
+}
+
+fn start_runtime_outbox_post(
+    tasks: &mut JoinSet<(usize, usize, u64, u64)>,
+    client: ShipperClient,
+    posts: Vec<outbox::PendingRuntimeEventPost>,
+) {
+    let post_count = posts.len();
+    tasks.spawn_local(async move {
+        let join_started = Instant::now();
+        let post_task = tokio::spawn(async move {
+            let task_started = Instant::now();
+            let (sent, kept) = outbox::post_pending_runtime_event_files(&client, posts).await;
+            (sent, kept, task_started.elapsed().as_millis() as u64)
+        });
+        match post_task.await {
+            Ok((sent, kept, task_elapsed_ms)) => (
+                sent,
+                kept,
+                join_started.elapsed().as_millis() as u64,
+                task_elapsed_ms,
+            ),
+            Err(err) => {
+                tracing::warn!(
+                    post_count,
+                    "Outbox runtime-event POST worker task failed: {}",
+                    err
+                );
+                (
+                    0,
+                    post_count,
+                    join_started.elapsed().as_millis() as u64,
+                    join_started.elapsed().as_millis() as u64,
+                )
+            }
+        }
+    });
+}
+
 fn maybe_start_reconciliation_scan(
     discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
     providers: &[ProviderConfig],
@@ -2982,16 +3049,18 @@ async fn handle_live_transcript_file_events(
     task_context: &PathTaskContext,
     offline: bool,
     background_paused: bool,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, bool) {
     // Keep the coalescing wait cancellable by transcript wakes. The wake socket
     // is the managed-session completion lane, so it should not sit behind
     // filesystem batching.
     let flush = tokio::time::sleep(WATCHER_FLUSH_INTERVAL);
     tokio::pin!(flush);
+    let mut managed_wake_observed = false;
     loop {
         tokio::select! {
             biased;
             Some(signal) = transcript_wake_rx.recv() => {
+                managed_wake_observed = true;
                 if let Some(path) = enqueue_transcript_wake_signal(
                     scheduler,
                     latest_transcript_wake_observed,
@@ -3007,6 +3076,10 @@ async fn handle_live_transcript_file_events(
                         background_paused,
                     );
                 }
+                // The provider wrote its live runtime event before this wake.
+                // Return to the daemon loop immediately so that tiny event is
+                // not held behind the filesystem coalescing window.
+                break;
             }
             _ = &mut flush => {
                 break;
@@ -3082,7 +3155,7 @@ async fn handle_live_transcript_file_events(
             session_event.latest_observed_at_ms,
         );
     }
-    managed_state_changes
+    (managed_state_changes, managed_wake_observed)
 }
 
 fn partition_managed_state_events(
@@ -4859,6 +4932,34 @@ mod tests {
         );
     }
     use super::*;
+
+    #[tokio::test]
+    async fn runtime_event_drain_starts_without_presence_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        outbox::enqueue_runtime_event(
+            dir.path(),
+            &serde_json::json!({
+                "session_id": "speed-of-light",
+                "provider": "cursor",
+                "kind": "progress_signal"
+            }),
+        )
+        .unwrap();
+        let mut pending = true;
+        let mut collect_tasks = JoinSet::new();
+        let post_tasks = JoinSet::new();
+
+        maybe_start_runtime_outbox_collect(
+            &mut pending,
+            &mut collect_tasks,
+            &post_tasks,
+            dir.path(),
+        );
+
+        assert!(!pending);
+        let result = collect_tasks.join_next().await.unwrap().unwrap();
+        assert_eq!(result.posts.len(), 1);
+    }
 
     #[tokio::test]
     async fn startup_inventory_discovers_sources_without_enqueuing_import_work() {
