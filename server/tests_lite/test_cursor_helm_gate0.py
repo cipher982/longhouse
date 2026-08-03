@@ -13,6 +13,8 @@ from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
 from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
 from zerg.qa.cursor_helm_gate0 import _scrub_artifact_tree
 from zerg.qa.cursor_helm_gate0 import _snapshot_native_evidence
+from zerg.qa.cursor_helm_gate0 import _storage_v2_capabilities_payload
+from zerg.qa.cursor_helm_gate0 import _storage_v2_receipt_payload
 from zerg.qa.cursor_helm_gate0 import find_cursor_store
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
@@ -208,3 +210,32 @@ def test_reset_registration_stub_matches_cursor_helm_contract() -> None:
 
 def test_reset_registration_stub_acknowledges_launch_outcome() -> None:
     assert _managed_reset_outcome_payload() == {"recorded": True}
+
+
+def test_storage_v2_gate_stub_advertises_the_real_ship_contract() -> None:
+    payload = _storage_v2_capabilities_payload()
+
+    assert payload["protocol_version"] == 2
+    assert payload["cutover"] is True
+    assert payload["tenant_id"] == "cursor-gate0"
+    assert payload["machine_id"] == "cursor-gate0"
+    assert payload["ingest_path"] == "/api/agents/storage/v2/envelopes"
+    assert payload["lanes"] == ["live", "repair"]
+
+
+def test_storage_v2_gate_stub_returns_a_durable_receipt() -> None:
+    envelope_id = "a" * 64
+
+    receipt = _storage_v2_receipt_payload(
+        json.dumps({"expected_envelope_id": envelope_id, "render": {"records": 1}}).encode()
+    )
+
+    assert receipt["v"] == 2
+    assert receipt["envelope_id"] == envelope_id
+    assert receipt["raw_state"] == "durable"
+    assert receipt["render_state"] == "ready"
+
+
+def test_storage_v2_gate_stub_rejects_an_invalid_envelope_id() -> None:
+    with pytest.raises(ValueError, match="canonical expected envelope id"):
+        _storage_v2_receipt_payload(b'{"expected_envelope_id":"not-a-hash"}')

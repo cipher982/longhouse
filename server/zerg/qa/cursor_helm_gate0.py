@@ -905,6 +905,114 @@ def _managed_reset_outcome_payload() -> dict[str, bool]:
     return {"recorded": True}
 
 
+_GATE0_MACHINE_ID = "cursor-gate0"
+
+
+def _storage_v2_capabilities_payload() -> dict[str, Any]:
+    """Return the narrow storage-v2 contract used by the local Gate 0 host.
+
+    Gate 0 runs inside the provider qualification sandbox, so it cannot use a
+    user's Runtime Host.  It still needs the real Machine Agent source path to
+    run: the exact engine must open its shipper DB, observe the Cursor store,
+    and receive a durable receipt.  This local contract stub supplies only
+    that wire boundary; it does not synthesize source-epoch rows or transcript
+    content.
+    """
+
+    return {
+        "protocol_version": 2,
+        "cutover": True,
+        "tenant_id": "cursor-gate0",
+        "machine_id": _GATE0_MACHINE_ID,
+        "ingest_path": "/api/agents/storage/v2/envelopes",
+        "max_wire_body_bytes": 48 * 1024 * 1024,
+        "max_raw_record_bytes": 32 * 1024 * 1024,
+        "max_records": 10_000,
+        "media_claim_path": "/api/agents/storage/v2/media/claims",
+        "media_upload_path_template": "/api/agents/storage/v2/media/{sha256}",
+        "max_media_bytes": 32 * 1024 * 1024,
+        "max_media_claims": 512,
+        "range_kinds": ["byte_offset", "record_ordinal"],
+        "lanes": ["live", "repair"],
+        "lane_header": "X-Longhouse-Storage-Lane",
+    }
+
+
+def _storage_v2_receipt_payload(body: bytes) -> dict[str, Any]:
+    try:
+        envelope = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("storage-v2 envelope is not JSON") from exc
+    envelope_id = str(envelope.get("expected_envelope_id") or "").strip()
+    if len(envelope_id) != 64 or any(char not in "0123456789abcdef" for char in envelope_id):
+        raise ValueError("storage-v2 envelope has no canonical expected envelope id")
+    return {
+        "v": 2,
+        "envelope_id": envelope_id,
+        "object_hash": "a" * 64,
+        "commit_seq": "1",
+        "raw_state": "durable",
+        "render_state": "ready" if envelope.get("render") else "pending",
+        "media_state": "complete",
+        "missing_media_hashes": [],
+    }
+
+
+def _ship_cursor_store(
+    *,
+    engine: str,
+    store: Path,
+    workspace: Path,
+    events_path: Path,
+    registration_url: str,
+    timeout: float,
+) -> dict[str, Any]:
+    """Run the real engine ship path against Gate 0's local host contract."""
+
+    db_path = Path.home() / ".longhouse" / "agent" / "longhouse-shipper.db"
+    result = subprocess.run(
+        [
+            engine,
+            "ship",
+            "--file",
+            str(store),
+            "--provider",
+            "cursor",
+            "--url",
+            registration_url,
+            "--token",
+            "test-device-authority",
+            "--db",
+            str(db_path),
+            "--machine-name",
+            _GATE0_MACHINE_ID,
+            "--json",
+        ],
+        cwd=workspace,
+        env=_child_env("", events_path),
+        text=True,
+        capture_output=True,
+        timeout=max(timeout, 30.0),
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"Longhouse Cursor source ship failed ({result.returncode}): {detail[-2000:]}")
+    try:
+        summary = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Longhouse Cursor source ship returned invalid JSON") from exc
+    if not isinstance(summary, dict) or summary.get("status") != "ok":
+        raise RuntimeError(f"Longhouse Cursor source ship returned an invalid result: {summary!r}")
+    return {
+        "engine": engine,
+        "store": str(store),
+        "shipper_db": str(db_path),
+        "protocol": summary.get("protocol"),
+        "events_shipped": summary.get("events_shipped"),
+    }
+
+
 def _managed_conversation_reset_scenario(
     *,
     binary: str,
@@ -936,10 +1044,31 @@ def _managed_conversation_reset_scenario(
     registration_run_id = str(uuid4())
 
     class RegistrationHandler(BaseHTTPRequestHandler):
+        def _json_response(self, status: int, payload: dict[str, Any]) -> None:
+            encoded = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+            if self.path == "/api/agents/storage/v2/capabilities":
+                self._json_response(200, _storage_v2_capabilities_payload())
+            else:
+                self._json_response(404, {"detail": "not found"})
+
         def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
             length = int(self.headers.get("content-length") or 0)
+            body = self.rfile.read(length) if length else b""
+            if self.path == "/api/agents/storage/v2/envelopes":
+                try:
+                    self._json_response(200, _storage_v2_receipt_payload(body))
+                except ValueError as exc:
+                    self._json_response(422, {"detail": str(exc)})
+                return
             try:
-                body = json.loads(self.rfile.read(length)) if length else {}
+                body = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 body = {}
             if self.path == "/api/sessions/managed-local/this-device":
@@ -1059,6 +1188,14 @@ def _managed_conversation_reset_scenario(
             timeout=timeout,
         )
         old_store = wait_for_store(provider_id, timeout=timeout)
+        old_ship = _ship_cursor_store(
+            engine=engine,
+            store=old_store,
+            workspace=workspace,
+            events_path=events_path,
+            registration_url=registration_url,
+            timeout=timeout,
+        )
         reset_start = len(read_hook_events(events_path))
         session.submit_idle("/clear")
         eager_deadline = time.monotonic() + min(3.0, timeout)
@@ -1110,6 +1247,14 @@ def _managed_conversation_reset_scenario(
             timeout=timeout,
         )
         new_store = wait_for_store(new_provider_id, timeout=timeout)
+        new_ship = _ship_cursor_store(
+            engine=engine,
+            store=new_store,
+            workspace=workspace,
+            events_path=events_path,
+            registration_url=registration_url,
+            timeout=timeout,
+        )
 
         def rotated_state():
             try:
@@ -1191,6 +1336,12 @@ def _managed_conversation_reset_scenario(
                 "source_identity_preserved": old_store != new_store,
                 "archive_evidence_source": "cursor_hooks_binding_claim_and_store",
                 "archive_artifact": str(events_path),
+            },
+            "machine_agent": {
+                "source_ship_protocol": "storage-v2",
+                "old_source": old_ship,
+                "new_source": new_ship,
+                "source_binding_checked_in": "longhouse-shipper.db",
             },
             "longhouse": {
                 "provider_alias_ids": list(aliases),
