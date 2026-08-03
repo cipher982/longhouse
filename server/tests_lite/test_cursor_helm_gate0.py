@@ -99,6 +99,7 @@ def test_gate0_snapshots_native_cursor_store_and_hook_evidence(tmp_path: Path) -
     store_receipt = next(item for item in receipts if item["kind"] == "cursor_store_db")
     retained_store = artifact / store_receipt["path"]
     assert retained_store.read_bytes() == source_store.read_bytes()
+    assert store_receipt["source_sha256"] == store_receipt["sha256"]
     assert store_receipt["byte_exact"] is True
 
 

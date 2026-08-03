@@ -1542,7 +1542,11 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
             if receipt is None:
                 native_root.mkdir(parents=True, exist_ok=True)
                 destination = native_root / f"store-{hashlib.sha256(source_key.encode()).hexdigest()[:20]}.db"
+                source_sha256 = _file_sha256(source)
                 shutil.copy2(source, destination)
+                retained_sha256 = _file_sha256(destination)
+                if source_sha256 != retained_sha256:
+                    raise RuntimeError("Cursor native store copy is not byte-exact")
                 payload = destination.read_bytes()
                 exact_secrets = _artifact_secret_values()
                 if any(secret in payload for secret in exact_secrets) or any(
@@ -1565,7 +1569,8 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
                 receipt = {
                     "kind": "cursor_store_db",
                     "path": str(destination.relative_to(artifact_root)),
-                    "sha256": _file_sha256(destination),
+                    "sha256": retained_sha256,
+                    "source_sha256": source_sha256,
                     "size": destination.stat().st_size,
                     "source_scenarios": [],
                     "provider_session_ids": [store_agent_id],
