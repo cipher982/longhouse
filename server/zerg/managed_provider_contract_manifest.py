@@ -347,6 +347,9 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
                 raise ValueError(f"{prefix}.required_assertions entries must be objects")
             for field in ("id", "scenario_id"):
                 _validate_capability_string(f"{prefix}.required_assertions", assertion, field)
+            variant = assertion.get("variant")
+            if variant is not None and (not isinstance(variant, str) or not variant.strip()):
+                raise ValueError(f"{prefix}.required_assertions variant must be a non-empty string when present")
             _validate_capability_string(f"{prefix}.required_assertions", assertion, "oracle_source")
             revision = assertion.get("minimum_scenario_revision")
             if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:

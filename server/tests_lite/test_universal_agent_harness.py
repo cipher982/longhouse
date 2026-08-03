@@ -3960,10 +3960,17 @@ def test_scenario_runner_does_not_branch_on_provider_names() -> None:
 
 
 @pytest.mark.parametrize(
-    ("native_status", "expected"),
-    [("pass", "pass"), ("fail", "fail"), ("unsupported_gap", "unsupported_gap")],
+    ("native_status", "evidence_level", "expected"),
+    [
+        ("pass", "live_token", "pass"),
+        ("pass", "hermetic", "fail"),
+        ("fail", "live_token", "fail"),
+        ("unsupported_gap", "live_token", "unsupported_gap"),
+    ],
 )
-def test_cold_resume_factory_requires_native_adapter_proof(tmp_path: Path, monkeypatch, native_status: str, expected: str) -> None:
+def test_cold_resume_factory_requires_direct_live_token_adapter_proof(
+    tmp_path: Path, monkeypatch, native_status: str, evidence_level: str, expected: str
+) -> None:
     adapter = uah.UniversalProviderAdapter(uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None))
     monkeypatch.setattr(
         adapter,
@@ -3971,14 +3978,16 @@ def test_cold_resume_factory_requires_native_adapter_proof(tmp_path: Path, monke
         lambda _package: {
             "status": native_status,
             "failure_code": None if native_status == "pass" else "native_failed",
-            "operation_evidence": {"resume": {"status": native_status, "level": "hermetic"}},
+            "operation_evidence": {"resume": {"status": native_status, "level": evidence_level}},
         },
     )
     package = uah.EvidencePackage(root=tmp_path, provider="codex", scenario="helm_cold_resume")
     result = uah.run_provider_resume_factory(adapter, package)
     assert result.status == expected
     assert result.data is not None
-    assert result.data["assertions"]["native_provider_resume_proven"] is (native_status == "pass")
+    assert result.data["assertions"]["native_provider_resume_proven"] is (
+        native_status == "pass" and evidence_level == "live_token"
+    )
 
 
 def test_script_entrypoint_emits_normalized_artifact(tmp_path: Path) -> None:

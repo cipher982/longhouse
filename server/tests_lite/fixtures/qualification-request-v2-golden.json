@@ -5,6 +5,7 @@
   "expected_provider_build_granularity": "single_asset",
   "expected_provider_build_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "expected_provider_version": "2.1.219",
+  "factory_source_sha": "dddddddddddddddddddddddddddddddddddddddd",
   "invocation_id": "fixture-run-001",
   "kind": "provider_qualification",
   "longhouse_git_sha": "cccccccccccccccccccccccccccccccccccccccc",
@@ -24,7 +25,11 @@
     "claude_real_print_v1",
     "interaction_semantics"
   ],
+  "selection_input_digests": {
+    "provider_factory/paired_public_revision.txt": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "provider_factory/registry.py": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
   "schema_version": 2,
-  "semantic_digest": "sha256:718686e24c0053df9f799511724602f6e10b87c04f1ca060dd332a7c9c576f79",
+  "semantic_digest": "sha256:97a6a84f845d967384ccdd8d7dd7526699849a9df8f00601158edae3aef9e48a",
   "trigger": "release_poll"
 }

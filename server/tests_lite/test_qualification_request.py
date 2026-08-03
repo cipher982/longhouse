@@ -27,6 +27,8 @@ def _request() -> dict:
         "expected_executable_identity": "sha256:" + "a" * 64,
         "expected_provider_build_identity": "sha256:" + "b" * 64,
         "expected_provider_build_granularity": "single_asset",
+        "factory_source_sha": "d" * 40,
+        "selection_input_digests": {"schemas/managed_providers.yml": "sha256:" + "e" * 64},
         "provider_bin": "/tmp/provider",
         "invocation_id": "run-1",
         "producer_class": "release_factory",
@@ -75,6 +77,15 @@ def test_v2_request_rejects_unknown_build_granularity() -> None:
     request["expected_provider_build_granularity"] = "unknown"
 
     with pytest.raises(QualificationRequestError, match="granularity"):
+        validate(request)
+
+
+def test_v2_request_requires_full_factory_source_sha() -> None:
+    request = _request()
+    request["factory_source_sha"] = "d9577c7cd"
+    request["semantic_digest"] = semantic_digest(request)
+
+    with pytest.raises(QualificationRequestError, match="full 40-character"):
         validate(request)
 
 

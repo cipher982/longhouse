@@ -31,7 +31,9 @@ def test_capability_assertions_match_schema_scenario_count(facts) -> None:
     # unsupported-provider invariant across the five provider columns.
     scenario_ids = {a.scenario_id for a in facts.capability_assertions}
     assert len(scenario_ids) == 25
-    assert len(facts.capability_assertions) == 61
+    # 61 -> 65 on 2026-08-03: native Resume split into clean-exit and
+    # process-loss variants for each supported provider.
+    assert len(facts.capability_assertions) == 65
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:
@@ -194,7 +196,16 @@ def test_weekly_cron_runs_the_full_default_scenario_set_for_scheduled_providers(
         }
     ]
     assert resume_statuses
-    assert all(status.satisfiable for status in resume_statuses)
+    native = [status for status in resume_statuses if status.assertion_id == "native_provider_resume_proven"]
+    assert len(native) == 2
+    assert {status.variant for status in native} == {"clean_exit", "process_loss"}
+    assert all(status.minimum_scenario_revision == 2 for status in native)
+    assert all(not status.satisfiable for status in native)
+    assert all(
+        status.satisfiable
+        for status in resume_statuses
+        if status.assertion_id != "native_provider_resume_proven"
+    )
 
 
 def test_weekly_cron_does_not_run_antigravity_maintenance_lane(facts) -> None:
@@ -221,23 +232,32 @@ def test_manual_trigger_never_runs_for_codex_without_an_evidence_producer(facts)
     cell = plan_run(facts, "codex", "observed_install", "manual")
     assert cell.status == "never_run"
     assert "no registered evidence producer" in cell.reason
-    assert "helm_cold_resume" not in cell.scenario_ids
+    assert "helm_cold_resume" in cell.scenario_ids
 
 
 @pytest.mark.parametrize("provider", ("codex", "claude", "opencode", "cursor"))
-def test_resume_factory_assertions_have_registered_evidence_producers(facts, provider: str) -> None:
-    resume_assertions = {
-        assertion.assertion_id: assertion
+def test_native_resume_has_no_legacy_eligible_evidence_producer(facts, provider: str) -> None:
+    native = [
+        assertion
         for assertion in facts.capability_assertions
-        if assertion.provider == provider and assertion.capability == "session.resume.helm"
-    }
+        if assertion.provider == provider and assertion.assertion_id == "native_provider_resume_proven"
+    ]
 
-    assert resume_assertions
-    assert all(
-        set(assertion.acceptable_evidence)
-        & set(KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION[assertion_id])
-        for assertion_id, assertion in resume_assertions.items()
-    )
+    assert {assertion.variant for assertion in native} == {"clean_exit", "process_loss"}
+    assert all(assertion.acceptable_evidence == ("live_token",) for assertion in native)
+    assert all(assertion.minimum_scenario_revision == 2 for assertion in native)
+    assert KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION["native_provider_resume_proven"] == ()
+
+
+def test_codex_direct_resume_registration_is_non_executable_until_phase1_compiles_it() -> None:
+    from zerg.qa.provider_factory_model import DIRECT_RESUME_PRODUCERS
+
+    assert len(DIRECT_RESUME_PRODUCERS) == 1
+    producer = DIRECT_RESUME_PRODUCERS[0]
+    assert producer.provider == "codex"
+    assert producer.variants == ("clean_exit", "process_loss")
+    assert producer.evidence_classes == ("live_token",)
+    assert producer.executable is False
 
 
 def test_manual_trigger_never_runs_for_antigravity_without_an_evidence_producer(facts) -> None:

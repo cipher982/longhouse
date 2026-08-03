@@ -6301,7 +6301,10 @@ def run_provider_resume_factory(adapter: AgentHarnessAdapter, package: EvidenceP
     payload = run_provider_resume_scenario(adapter.config.provider, package.scenario)
     if package.scenario == "helm_cold_resume" and payload.get("status") == STATUS_PASS:
         native = adapter.cold_resume(package)
-        native_passed = native.get("status") == STATUS_PASS
+        operation_evidence = native.get("operation_evidence")
+        resume_evidence = operation_evidence.get("resume") if isinstance(operation_evidence, dict) else None
+        evidence_level = resume_evidence.get("level") if isinstance(resume_evidence, dict) else None
+        native_passed = native.get("status") == STATUS_PASS and evidence_level == "live_token"
         payload["native_resume_evidence"] = {
             "status": native.get("status"),
             "failure_code": native.get("failure_code"),
@@ -6315,7 +6318,11 @@ def run_provider_resume_factory(adapter: AgentHarnessAdapter, package: EvidenceP
             payload["status"] = (
                 native_status if native_status in {STATUS_UNSUPPORTED_GAP, STATUS_NOT_APPLICABLE, STATUS_BLOCKED} else STATUS_FAIL
             )
-            payload["failure_code"] = native.get("failure_code") or "native_provider_resume_not_proven"
+            payload["failure_code"] = (
+                "native_provider_resume_requires_live_token"
+                if native.get("status") == STATUS_PASS
+                else native.get("failure_code") or "native_provider_resume_not_proven"
+            )
     elif package.scenario == "resume_unsupported" and payload.get("status") == STATUS_PASS:
         native = adapter.cold_resume(package)
         refused = native.get("status") in {STATUS_UNSUPPORTED_GAP, STATUS_NOT_APPLICABLE}

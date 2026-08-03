@@ -121,6 +121,37 @@ class Trigger(StrEnum):
     MANUAL = "manual"  # human-run, for scenarios no automated trigger can produce acceptable evidence for
 
 
+@dataclass(frozen=True)
+class ProducerRegistration:
+    producer_id: str
+    provider: str
+    scenario_id: str
+    assertion_id: str
+    variants: tuple[str, ...]
+    evidence_classes: tuple[str, ...]
+    observed_activity: tuple[str, ...]
+    implementation: str
+    executable: bool
+
+
+# Transition registration only. Phase 1's accepted-epoch compiler is the
+# authority that will decide whether a deployed worker can execute it. Keeping
+# executable=False prevents this declaration from becoming proof by itself.
+DIRECT_RESUME_PRODUCERS: tuple[ProducerRegistration, ...] = (
+    ProducerRegistration(
+        producer_id="codex.native_resume.v1",
+        provider="codex",
+        scenario_id="helm_cold_resume",
+        assertion_id="native_provider_resume_proven",
+        variants=("clean_exit", "process_loss"),
+        evidence_classes=("live_token",),
+        observed_activity=("native_resume_command", "post_resume_provider_activity"),
+        implementation="server/zerg/qa/codex_native_resume.py",
+        executable=False,
+    ),
+)
+
+
 ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor")
 
 # The release lane's actual deployed profiles per provider. Codex deliberately
@@ -192,7 +223,10 @@ PUSH_CODEX_COORDINATION_SCENARIO_ID = "codex_coordination_awareness_post_compact
 KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION: dict[str, tuple[str, ...]] = {
     # provider-complete managed Helm Resume (weekly/release full column)
     "cold_resume_registers_continuous_thread": ("hermetic",),
-    "native_provider_resume_proven": ("hermetic", "live_no_token", "live_token"),
+    # The legacy universal harness only emits adjacent/hermetic evidence.
+    # A direct native producer is registered below, but does not become an
+    # eligible current proof producer until the accepted epoch compiler ships.
+    "native_provider_resume_proven": (),
     "live_reattach_does_not_spawn_owner": ("hermetic",),
     "console_continuation_is_distinct": ("hermetic",),
     "session_thread_and_machine_identity_continue": ("hermetic",),
@@ -235,7 +269,9 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
 @dataclass(frozen=True)
 class AssertionStatus:
     assertion_id: str
+    variant: str | None
     scenario_id: str
+    minimum_scenario_revision: int
     acceptable_evidence: tuple[str, ...]
     producible_evidence: tuple[str, ...]
     satisfiable: bool
@@ -338,7 +374,9 @@ def _assertion_statuses(assertions: tuple[CapabilityAssertion, ...]) -> tuple[As
         out.append(
             AssertionStatus(
                 assertion_id=assertion.assertion_id,
+                variant=assertion.variant,
                 scenario_id=assertion.scenario_id,
+                minimum_scenario_revision=assertion.minimum_scenario_revision,
                 acceptable_evidence=assertion.acceptable_evidence,
                 producible_evidence=producible,
                 satisfiable=satisfiable,
@@ -541,7 +579,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             status="never_run",
             reason=(
                 f"remaining capability-proof assertions for {provider} have no registered evidence producer: "
-                f"{sorted(status.assertion_id for status in manual_statuses)}"
+                f"{sorted(status.assertion_id + (':' + status.variant if status.variant else '') for status in manual_statuses)}"
             ),
             scenario_ids=tuple(sorted({a.scenario_id for a in manual_assertions})),
             assertion_status=manual_statuses,

@@ -110,7 +110,7 @@ def test_observed_closure_ignores_cursor_pid_leases(tmp_path: Path) -> None:
 
 
 @pytest.mark.timeout(60)
-def test_cursor_observed_install_runs_full_exact_column(tmp_path: Path) -> None:
+def test_cursor_observed_install_keeps_native_resume_unqualified_until_direct_producer(tmp_path: Path) -> None:
     root, binary, identity = _fake_cursor_install(tmp_path)
     gate0 = _gate0_artifact(tmp_path, identity=identity)
 
@@ -122,16 +122,21 @@ def test_cursor_observed_install_runs_full_exact_column(tmp_path: Path) -> None:
         output_root=tmp_path / "output",
     )
 
-    assert result["status"] == "pass"
+    assert result["status"] == "fail"
     assert result["build_provenance"] == "observed_install"
-    assert result["full_column_gate"]["status"] == "pass"
+    assert result["full_column_gate"]["status"] == "fail"
     assert result["full_column_gate"]["captured_scenario_count"] == 32
     assert result["full_column_gate"]["coverage_gap_kind_counts"] == {
         "passed": 28,
         "no_token_safety_gate": 1,
-        "not_applicable": 3,
+        "not_applicable": 2,
         "provider_contract_unsupported": 1,
+        "unexpected_failure": 1,
     }
+    assert any(
+        item.get("actual_failure_code") == "native_provider_resume_requires_live_token"
+        for item in result["full_column_gate"]["unexpected_results"]
+    )
     assert Path(result["artifact_path"]).is_file()
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 from typing import Mapping
@@ -25,6 +26,7 @@ SEMANTIC_KEYS = (
     "expected_provider_build_granularity",
     "expected_provider_build_identity",
     "expected_provider_version",
+    "factory_source_sha",
     "kind",
     "longhouse_git_sha",
     "profile",
@@ -33,6 +35,7 @@ SEMANTIC_KEYS = (
     "release_tag",
     "scenario_evidence",
     "scenario_ids",
+    "selection_input_digests",
     "schema_version",
 )
 REQUEST_KEYS = frozenset(
@@ -60,6 +63,7 @@ def semantic_payload(request: Mapping[str, Any]) -> dict[str, Any]:
         raise QualificationRequestError(f"qualification request is missing {exc.args[0]}") from exc
     payload["scenario_ids"] = list(payload["scenario_ids"])
     payload["scenario_evidence"] = dict(sorted(payload["scenario_evidence"].items()))
+    payload["selection_input_digests"] = dict(sorted(payload["selection_input_digests"].items()))
     return payload
 
 
@@ -139,6 +143,7 @@ def validate(
         "expected_executable_identity",
         "expected_provider_build_identity",
         "expected_provider_build_granularity",
+        "factory_source_sha",
         "provider_bin",
         "invocation_id",
         "producer_class",
@@ -150,6 +155,18 @@ def validate(
     ):
         if not isinstance(request.get(key), str) or not request[key].strip():
             raise QualificationRequestError(f"{key} must be a non-empty string")
+    if re.fullmatch(r"[0-9a-f]{40}", request["factory_source_sha"]) is None:
+        raise QualificationRequestError("factory_source_sha must be a full 40-character lowercase Git SHA")
+    selection_input_digests = request.get("selection_input_digests")
+    if (
+        not isinstance(selection_input_digests, dict)
+        or not selection_input_digests
+        or any(not isinstance(key, str) or not key.strip() for key in selection_input_digests)
+        or any(
+            not isinstance(value, str) or not value.startswith("sha256:") or len(value) != 71 for value in selection_input_digests.values()
+        )
+    ):
+        raise QualificationRequestError("selection_input_digests must be a non-empty sha256 digest mapping")
     scenario_ids = request.get("scenario_ids")
     if (
         not isinstance(scenario_ids, list)

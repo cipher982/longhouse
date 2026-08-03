@@ -45,6 +45,7 @@ class CapabilityProjection:
     provider: str
     capability: str
     assertion_id: str
+    variant: str | None
     scenario_id: str
     declared: bool
     proof_status: str
@@ -115,6 +116,7 @@ def project_capabilities(
                     provider=assertion.provider,
                     capability=assertion.capability,
                     assertion_id=assertion.assertion_id,
+                    variant=assertion.variant,
                     scenario_id=assertion.scenario_id,
                     declared=True,
                     proof_status=NEVER_PROVEN,
@@ -133,7 +135,12 @@ def project_capabilities(
         else:
             age_seconds = (moment - parsed).total_seconds()
             is_stale = age_seconds > assertion.max_age_seconds
-        if latest.evidence_class.value not in assertion.acceptable_evidence:
+        if assertion.variant is not None:
+            # Proof records before v3 have no assertion-variant identity.
+            # Keep them visible as historical evidence, but never let one
+            # satisfy either native Resume variant by adjacency.
+            proof_status = UNACCEPTABLE_EVIDENCE
+        elif latest.evidence_class.value not in assertion.acceptable_evidence:
             # Wrong evidence class outranks both outcome and staleness: a
             # hermetic "pass" for an assertion that only accepts live_token
             # never counted as proof in the first place, regardless of how
@@ -152,6 +159,7 @@ def project_capabilities(
                 provider=assertion.provider,
                 capability=assertion.capability,
                 assertion_id=assertion.assertion_id,
+                variant=assertion.variant,
                 scenario_id=assertion.scenario_id,
                 declared=True,
                 proof_status=proof_status,
