@@ -1235,6 +1235,54 @@ def _compact_opencode_tool_event(event: dict[str, Any], *, marker: str) -> dict[
     }
 
 
+def _compact_opencode_result_event(
+    events: list[dict[str, Any]],
+    *,
+    marker: str,
+    requested_model: str,
+) -> dict[str, Any] | None:
+    """Keep OpenCode's native step-finish accounting without retaining text."""
+
+    finish_event: dict[str, Any] | None = None
+    for event in reversed(events):
+        part = _event_part(event)
+        if event.get("type") in {"step_finish", "step-finish"} or part.get("type") == "step-finish":
+            finish_event = event
+            break
+    if finish_event is None:
+        return None
+    part = _event_part(finish_event)
+    usage = _flatten_numeric_usage(part.get("tokens"))
+    compact: dict[str, Any] = {
+        "type": finish_event.get("type"),
+        "part_type": part.get("type"),
+        "session_id_present": bool(_event_session_id(finish_event)),
+        "result_exact_match": any(
+            isinstance(event, dict)
+            and event.get("type") == "text"
+            and _event_part(event).get("type") == "text"
+            and str(_event_part(event).get("text") or "").strip() == marker
+            for event in events
+        ),
+        "accounting_status": "provider_reported",
+    }
+    provider_model = part.get("modelID") or part.get("model")
+    if isinstance(provider_model, str) and provider_model.strip():
+        compact["model"] = provider_model.strip()
+        compact["model_source"] = "provider_event"
+    elif requested_model:
+        # OpenCode's step-finish event does not always echo the selected model;
+        # bind the exact CLI selection while keeping its provenance explicit.
+        compact["model"] = requested_model
+        compact["model_source"] = "invocation"
+    if usage:
+        compact["usage"] = usage
+    cost = part.get("cost")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        compact["total_cost_usd"] = cost
+    return compact
+
+
 def _opencode_text_done_event(events: list[dict[str, Any]], *, session_id: str) -> dict[str, Any] | None:
     for event in events:
         part = _event_part(event)
@@ -1342,6 +1390,12 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
 
     text_events = [event for event in events if event.get("type") == "text" and _event_part(event).get("type") == "text"]
     marker_event = _opencode_text_marker_event(events, marker=marker)
+    requested_model = _opencode_qualification_model()
+    result_event = _compact_opencode_result_event(
+        events,
+        marker=marker,
+        requested_model=requested_model,
+    )
     session_ids = sorted({_event_session_id(event) for event in events if _event_session_id(event)})
     evidence = {
         "provider_version": version,
@@ -1364,6 +1418,9 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         "marker_in_prompt": marker in prompt,
         "matching_text_event": marker_event,
+        "model": result_event.get("model") if result_event else requested_model,
+        "model_source": result_event.get("model_source") if result_event else "invocation",
+        "result_event": result_event,
     }
     if result.returncode != 0 or timed_out:
         return _fail(
@@ -1381,6 +1438,12 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
         return _fail(
             "opencode_real_print_marker_missing",
             "real opencode run did not emit the requested marker text",
+            **evidence,
+        )
+    if result_event is None:
+        return _fail(
+            "opencode_real_print_result_missing",
+            "real opencode run did not emit a step-finish accounting event",
             **evidence,
         )
 

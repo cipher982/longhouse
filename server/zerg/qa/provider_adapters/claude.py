@@ -258,6 +258,21 @@ def claude_real_print_operation_evidence(canary: Mapping[str, Any]) -> dict[str,
     )
 
 
+def claude_real_print_model_evidence(canary: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return one canonical model-backed envelope for receipt derivation."""
+
+    result_event = canary.get("result_event")
+    if not isinstance(result_event, Mapping):
+        return None
+    model = _clean_optional_str(result_event.get("model") or canary.get("model"))
+    return {
+        "source_canary": "claude_real_print",
+        "operation_evidence": claude_real_print_operation_evidence(canary),
+        "model": model,
+        "result_event": dict(result_event),
+    }
+
+
 @register_adapter("claude")
 class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
     """Claude Code concrete adapter for the universal Longhouse action contract.
@@ -818,6 +833,8 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
+        if model_evidence := claude_real_print_model_evidence(claude):
+            payload["live_model_evidence"] = model_evidence
         if verdict != "green" or live_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
             payload["failure_code"] = failure_code or "claude_live_token_streaming_failed"

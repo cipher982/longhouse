@@ -559,6 +559,9 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
         "probe_identity": probe_result,
         "codex_tool_call_result_strict": strict_result,
     }
+    strict_model_evidence = (strict_result.get("data") or {}).get("live_model_evidence")
+    if isinstance(strict_model_evidence, Mapping):
+        observation["live_model_evidence"] = dict(strict_model_evidence)
     return codex_tool_call_result.emit_proof_bundle(
         request=request,
         output_root=output_root,
@@ -756,6 +759,9 @@ def _claude_full_column_executor(
         LIVE_TOKEN_HARNESS_SCENARIO: live_result,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
+    live_model_evidence = (live_result.get("data") or {}).get("live_model_evidence")
+    if isinstance(live_model_evidence, Mapping):
+        observation["live_model_evidence"] = dict(live_model_evidence)
     return observation, assertions, secrets
 
 
@@ -886,6 +892,9 @@ def _opencode_full_column_executor(
         "release_gate_failures": release_gate_failures,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
+    live_model_evidence = (live_result.get("data") or {}).get("live_model_evidence")
+    if isinstance(live_model_evidence, Mapping):
+        observation["live_model_evidence"] = dict(live_model_evidence)
     return observation, assertions, secrets
 
 
@@ -1072,6 +1081,11 @@ def _cursor_observed_install_executor(
         provider="cursor",
         scenario=LIVE_TOKEN_HARNESS_SCENARIO,
     )
+    interaction_result = _scenario_result(
+        harness_payload,
+        provider="cursor",
+        scenario="interaction_semantics",
+    )
     gate_status = full_column_gate.get("status")
     provider_status = full_column_gate.get("provider_status")
     gate0_passed = gate0 is not None and gate0.get("status") == "passed"
@@ -1105,6 +1119,13 @@ def _cursor_observed_install_executor(
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
         "cursor_gate0": gate0,
     }
+    interaction_model_evidence = (interaction_result.get("data") or {}).get("live_model_evidence")
+    if isinstance(interaction_model_evidence, Mapping):
+        # Cursor's native stream probe is the authoritative source for model,
+        # token usage, and subscription accounting. Gate 0 proves the wider
+        # managed-session surface, while this envelope proves one bounded
+        # model-backed request without copying a daily Cursor profile.
+        observation["live_model_evidence"] = dict(interaction_model_evidence)
     secrets = tuple(value for name in ("CURSOR_API_KEY",) if (value := str(os.environ.get(name) or "").strip()))
     return observation, (assertion,), secrets
 

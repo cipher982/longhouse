@@ -3016,6 +3016,9 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
                     "result_event": {
                         "result_exact_match": True,
                         "session_id_present": True,
+                        "model": "claude-haiku-test",
+                        "usage": {"input_tokens": 12, "output_tokens": 3},
+                        "total_cost_usd": 0.001,
                     },
                     "operation_evidence": {
                         "run_once": {
@@ -3055,6 +3058,8 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
     assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
     assert result["data"]["operation_evidence"]["run_once"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
+    assert result["data"]["live_model_evidence"]["model"] == "claude-haiku-test"
+    assert result["data"]["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
@@ -3104,6 +3109,14 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
                         "sessionID": "fake-opencode-print-session",
                         "text_exact_match": True,
                     },
+                    "model": "openrouter/deepseek/deepseek-v4-flash",
+                    "result_event": {
+                        "type": "step_finish",
+                        "model": "openrouter/deepseek/deepseek-v4-flash",
+                        "usage": {"input": 8, "output": 2},
+                        "total_cost_usd": 0.0002,
+                        "accounting_status": "provider_reported",
+                    },
                     "operation_evidence": {
                         "run_once": {
                             "status": "pass",
@@ -3142,6 +3155,8 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
     assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
     assert result["data"]["operation_evidence"]["run_once"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
+    assert result["data"]["live_model_evidence"]["model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert result["data"]["live_model_evidence"]["result_event"]["usage"]["output"] == 2
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])

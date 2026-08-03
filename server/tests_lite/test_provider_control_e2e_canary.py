@@ -33,3 +33,54 @@ def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> 
 
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/fixture/model")
     assert canary._opencode_qualification_model() == "openrouter/fixture/model"  # noqa: SLF001
+
+
+def test_opencode_result_event_preserves_native_usage_cost_and_model_provenance() -> None:
+    canary = _load_canary()
+    events = [
+        {
+            "type": "text",
+            "sessionID": "ses_fixture",
+            "part": {"type": "text", "text": "LONGHOUSE_MARKER"},
+        },
+        {
+            "type": "step_finish",
+            "sessionID": "ses_fixture",
+            "part": {
+                "type": "step-finish",
+                "tokens": {
+                    "total": 7393,
+                    "input": 7318,
+                    "output": 11,
+                    "reasoning": 0,
+                    "cache": {"write": 0, "read": 64},
+                },
+                "cost": 0.001029392,
+            },
+        },
+    ]
+
+    result = canary._compact_opencode_result_event(  # noqa: SLF001
+        events,
+        marker="LONGHOUSE_MARKER",
+        requested_model="openrouter/deepseek/deepseek-v4-flash",
+    )
+
+    assert result == {
+        "type": "step_finish",
+        "part_type": "step-finish",
+        "session_id_present": True,
+        "result_exact_match": True,
+        "accounting_status": "provider_reported",
+        "model": "openrouter/deepseek/deepseek-v4-flash",
+        "model_source": "invocation",
+        "usage": {
+            "total": 7393,
+            "input": 7318,
+            "output": 11,
+            "reasoning": 0,
+            "cache.write": 0,
+            "cache.read": 64,
+        },
+        "total_cost_usd": 0.001029392,
+    }

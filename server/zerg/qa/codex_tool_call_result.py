@@ -105,6 +105,41 @@ def _event_item(event: dict[str, Any]) -> dict[str, Any]:
     return item if isinstance(item, dict) else {}
 
 
+def _flatten_numeric_usage(value: Any, *, prefix: str = "") -> dict[str, int | float]:
+    if not isinstance(value, dict):
+        return {}
+    usage: dict[str, int | float] = {}
+    for key, item in value.items():
+        name = f"{prefix}{key}"
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            usage[name] = item
+        elif isinstance(item, dict):
+            usage.update(_flatten_numeric_usage(item, prefix=f"{name}."))
+    return usage
+
+
+def _compact_codex_result_event(events: list[dict[str, Any]], *, model: str | None) -> dict[str, Any] | None:
+    """Keep Codex's completed-turn usage while making model provenance explicit."""
+
+    event = next((item for item in reversed(events) if item.get("type") == "turn.completed"), None)
+    if event is None:
+        return None
+    compact: dict[str, Any] = {
+        "type": event.get("type"),
+        "accounting_status": "provider_reported_usage_cost_unavailable",
+    }
+    usage = _flatten_numeric_usage(event.get("usage"))
+    if usage:
+        compact["usage"] = usage
+    if model:
+        # codex exec pins --model in the exact argv but its JSONL completion
+        # event does not echo the selected model. Do not label this as a
+        # provider-reported field.
+        compact["model"] = model
+        compact["model_source"] = "invocation"
+    return compact
+
+
 def _command_matches_expected(observed: object, expected: str) -> bool:
     if not isinstance(observed, str):
         return False
@@ -473,6 +508,7 @@ def run_codex_real_tool_command(
         if shim_path := sandbox_helper_evidence.get("shim_path"):
             sandbox_helper_evidence["shim_removed"] = not Path(shim_path).exists()
     events, invalid_lines = _jsonl_events(tool_stdout)
+    result_event = _compact_codex_result_event(events, model=model)
     return {
         "command": command,
         "prompt": prompt,
@@ -485,6 +521,8 @@ def run_codex_real_tool_command(
         "stderr": _redact(tool_stderr, api_key, managed_package_root),
         "sandbox_helper": sandbox_helper_evidence,
         "model": model,
+        "result_event": result_event,
+        "model_operation_observed": result_event is not None,
     }
 
 

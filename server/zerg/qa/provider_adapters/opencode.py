@@ -231,6 +231,22 @@ def opencode_real_print_operation_evidence(artifact: Mapping[str, Any]) -> dict[
     )
 
 
+def opencode_real_print_model_evidence(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return one canonical model-backed envelope for receipt derivation."""
+
+    canary = _opencode_control_canary(artifact)
+    result_event = canary.get("result_event")
+    if not isinstance(result_event, Mapping):
+        return None
+    model = _clean_optional_str(result_event.get("model") or canary.get("model"))
+    return {
+        "source_canary": "opencode_real_print",
+        "operation_evidence": opencode_real_print_operation_evidence(artifact),
+        "model": model,
+        "result_event": dict(result_event),
+    }
+
+
 @register_adapter("opencode")
 class OpenCodeHarnessAdapter(UniversalProviderAdapter):
     """OpenCode concrete adapter for the universal Longhouse action contract.
@@ -611,6 +627,8 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
+        if model_evidence := opencode_real_print_model_evidence(control_artifact):
+            payload["live_model_evidence"] = model_evidence
         if verdict != "green" or live_status != STATUS_PASS or run_once_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or opencode.get("failure_code")
             payload["failure_code"] = failure_code or "opencode_live_token_streaming_failed"

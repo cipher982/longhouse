@@ -2195,6 +2195,13 @@ class UniversalProviderAdapter:
                 }
             },
         }
+        live_model_evidence = observation.get("live_model_evidence")
+        if isinstance(live_model_evidence, Mapping):
+            # Keep the provider's canonical model/usage envelope attached to
+            # the harness result. Semantic projection still comes from the
+            # interaction oracle; this is receipt provenance, not a title or
+            # transcript shortcut.
+            payload["live_model_evidence"] = dict(live_model_evidence)
         package.write_json("assertions/interaction_semantics.json", payload)
         return payload
 
@@ -6123,6 +6130,20 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
         "timed_out": observation["timed_out"],
         "error": observation["error"],
     }
+    result_event = observation.get("result_event")
+    if isinstance(result_event, dict):
+        payload["live_model_evidence"] = {
+            "source_canary": "codex_tool_call_result_strict",
+            "operation_evidence": {
+                "live_token_behavior": {
+                    "status": "pass" if observation.get("model_operation_observed") else "fail",
+                    "level": "live_token",
+                    "canary": "codex_tool_call_result_strict",
+                }
+            },
+            "model": result_event.get("model"),
+            "result_event": result_event,
+        }
     if not passed:
         payload["failure_code"] = (
             "codex_tool_call_result_strict_timeout"
