@@ -48,7 +48,7 @@ summary="$OUTPUT_ROOT/summary.md"
 } > "$summary"
 
 missing=0
-required_cmds=(python3 bun longhouse longhouse-engine "$PROVIDER")
+required_cmds=(python3 uv bun longhouse longhouse-engine "$PROVIDER")
 for required_cmd in "${required_cmds[@]}"; do
   if ! command -v "$required_cmd" >/dev/null 2>&1; then
     echo "Missing required command: $required_cmd" >&2
@@ -180,8 +180,11 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   attempt_dir="$OUTPUT_ROOT/$attempt_run_id"
   mkdir -p "$attempt_dir"
 
+  # The profiler imports `zerg` for several provider lanes (opencode and cursor
+  # pull from zerg.qa), so it has to run inside the server project environment
+  # rather than a bare interpreter.
   cmd=(
-    python3 "$PROFILER"
+    uv run --project "$ROOT_DIR/server" python "$PROFILER"
     --profile "$PROFILE"
     --sla-case "$SLA_CASE"
     --provider "$PROVIDER"

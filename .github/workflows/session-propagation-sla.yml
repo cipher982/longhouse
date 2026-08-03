@@ -189,6 +189,8 @@ jobs:
       - name: Ensure make available
         run: ./scripts/ci/ensure-make.sh
 
+      - uses: astral-sh/setup-uv@v7
+
       - name: Install JS deps
         run: bun install --frozen-lockfile
 
