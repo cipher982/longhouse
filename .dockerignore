@@ -21,6 +21,18 @@ config/*
 schemas/*
 !schemas/managed_providers.yml
 
+# The provider-factory image uses a named Longhouse context to verify the
+# exact native control-path sources. Keep that context narrow; never send the
+# Rust build tree or the rest of the engine into a container build.
+!engine/
+!engine/src/
+!engine/src/codex_bridge.rs
+!engine/src/config.rs
+!engine/src/longhouse.rs
+!engine/src/main.rs
+!engine/src/managed_bridge_scan.rs
+!engine/src/managed_resume_scan.rs
+
 !docker/
 docker/*
 !docker/backend.dockerfile
