@@ -145,13 +145,15 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
     app_server_command = _proc_command(app_server_pid)
     bridge_start_time = _process_start_time(bridge_pid)
     app_server_start_time = _process_start_time(app_server_pid)
+    if not state.get("bridge_process_start_time") or not state.get("app_server_process_start_time"):
+        raise RuntimeError("recorded process start identity is unavailable")
     if not _pid_alive(bridge_pid) or "longhouse-engine" not in bridge_command:
         raise RuntimeError("recorded bridge process identity is not live")
     if not _pid_alive(app_server_pid) or codex_bin.name not in app_server_command:
         raise RuntimeError("recorded Codex app-server process identity is not live")
-    if state.get("bridge_process_start_time") and state["bridge_process_start_time"] != bridge_start_time:
+    if state["bridge_process_start_time"] != bridge_start_time:
         raise RuntimeError("recorded bridge process start identity no longer matches")
-    if state.get("app_server_process_start_time") and state["app_server_process_start_time"] != app_server_start_time:
+    if state["app_server_process_start_time"] != app_server_start_time:
         raise RuntimeError("recorded Codex app-server process start identity no longer matches")
     os.kill(bridge_pid, signal.SIGKILL)
     if _pid_alive(app_server_pid):
