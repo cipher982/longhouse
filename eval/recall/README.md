@@ -62,9 +62,10 @@ Requires a device token at `~/.longhouse/machine/device-token`, or
 
 The command is a release gate, not a reporting-only benchmark. It requests 25
 results and exits nonzero for any request error, incorrect lane attribution,
-false-negative rate above the recorded hybrid baseline, recall@5 below that
-baseline, or a regression against the full-corpus Qwen3-8B @256d category floors
-at k=25 (exact 11, paraphrase 16, causal 7, supersession 6). JSON output includes
+false-negative rate above the full-corpus Qwen3-8B @256d baseline (36 misses in
+76 answerable queries, or 47.4%), recall@5 below that baseline, or a regression
+against its category floors at k=25 (exact 11, paraphrase 16, causal 7,
+supersession 6). JSON output includes
 the exact endpoint, git SHA, query-set digest, thresholds, lane contract, and
 embedding model/revision observed from the live response.
 For dense strategies it also requires a complete corpus certificate on every
@@ -88,9 +89,10 @@ those sessions match everything about retrieval and would inflate every score.
 id and recall gets stricter — a session can be 8,000 events, so finding the right
 session is a weaker claim than finding the right moment.
 
-## Results: lexical-only vs. hybrid (dense embeddings, 2026-07-26)
+## Historical results: partial-corpus lexical vs. hybrid (2026-07-26)
 
-The `mode=auto` endpoint default fuses lexical (storage-v2/searchd FTS) with dense
+These measurements predate the full-corpus 89-query gate above. The
+`mode=auto` endpoint default fuses lexical (storage-v2/searchd FTS) with dense
 episode embeddings (Qwen3-8B, 256 dims, one vector per user-request episode) via
 reciprocal rank fusion. `run_eval.py` always calls the endpoint default, so both
 rows below come from the same script — the only variable is whether the dense

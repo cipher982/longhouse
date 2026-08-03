@@ -104,7 +104,7 @@ def iter_clean_transcript_events(
     """Yield semantic content events in the clean index space.
 
     The raw event list is intentionally untouched. This is the projection used
-    by embeddings, turn boundaries, and locator backfills, so provider-local
+    by embedding and search projections plus turn boundaries, so provider-local
     control rows must be removed before assigning clean indices.
     """
     ordered = sorted(events, key=event_sort_key)

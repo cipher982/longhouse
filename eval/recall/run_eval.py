@@ -28,7 +28,11 @@ from pathlib import Path
 QUERIES_PATH = Path(__file__).with_name("queries.jsonl")
 DEFAULT_URL = "https://david010.longhouse.ai"
 TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
-DEFAULT_MAX_FALSE_NEGATIVE_RATE = 0.671
+# Full-corpus Qwen3-8B @256d returned a gold session for 40/76 answerable
+# queries at k=25, so the replacement may miss at most 36/76. The previous
+# 0.671 ceiling came from an older partial-corpus k=5 run and no longer matched
+# the evaluator's real result depth or the baseline named by this release gate.
+DEFAULT_MAX_FALSE_NEGATIVE_RATE = 0.474
 DEFAULT_MIN_RECALL_AT_5 = 0.329
 # Full-corpus Qwen3-8B @256d baseline measured at k=25. The replacement must
 # improve aggregate recall without buying that gain by regressing any one of

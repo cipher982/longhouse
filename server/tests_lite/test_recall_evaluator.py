@@ -35,6 +35,12 @@ def _module():
     return module
 
 
+def test_default_false_negative_gate_matches_full_corpus_qwen_baseline():
+    evaluator = _module()
+
+    assert evaluator.DEFAULT_MAX_FALSE_NEGATIVE_RATE == 0.474
+
+
 def test_all_error_run_fails_every_quality_signal_and_the_gate():
     evaluator = _module()
     answerable = evaluator.Query("answer", "paraphrase", "where is it", ["gold"])

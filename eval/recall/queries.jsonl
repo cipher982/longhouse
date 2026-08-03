@@ -92,7 +92,7 @@
 {"id": "absent-graph-db", "category": "absent", "query": "using a graph database like Neo4j to store session relationships", "gold_sessions": [], "note": "no graph database anywhere in the stack"}
 {"id": "absent-tenant-switch-ui", "category": "absent", "query": "a self-service admin UI for switching between hosted billing tenants", "gold_sessions": [], "note": "no such UI exists"}
 {"id": "absent-rust-frontend", "category": "absent", "query": "rewriting the web frontend in Rust", "gold_sessions": [], "note": "frontend is TypeScript, only the engine is Rust"}
-{"id": "absent-vector-database", "category": "absent", "query": "standing up a dedicated vector database service for embeddings", "gold_sessions": [], "note": "explicit decision against a separate vector DB; brute-force in sqlite instead"}
+{"id": "absent-vector-database", "category": "absent", "query": "standing up a dedicated vector database service for embeddings", "gold_sessions": [], "note": "explicit decision against a separate vector DB; resident in-process matrix backed by SQLite"}
 
 // --- third pass, added to reach the 80+ target. Mined from launch/companion/
 // provider-proof/data-plane project memories, verified against real working
