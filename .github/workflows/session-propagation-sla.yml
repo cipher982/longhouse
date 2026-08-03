@@ -55,6 +55,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config
       - name: Build native pair once
         run: |
+          python3 scripts/build/generate_build_identity.py
           cargo build --manifest-path engine/Cargo.toml --profile ci --bin longhouse --bin longhouse-engine
           mkdir -p .build/session-propagation-native
           install -m 755 engine/target/ci/longhouse .build/session-propagation-native/longhouse
