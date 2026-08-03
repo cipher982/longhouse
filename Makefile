@@ -568,6 +568,9 @@ validate-no-python-device-path: ## @internal Inventory Python still on the devic
 	@python3 scripts/tests/no-python-device-path.test.py
 
 validate-native-device-entrypoints: ## @internal Guard native replacements for Python device entrypoints
+	@# Resolves an installed facade and parse-checks every available route
+	@# against it. Without one the checker says so on stderr instead of
+	@# reporting a silent pass.
 	@python3 scripts/qa/check-native-device-entrypoints.py
 	@python3 scripts/tests/native-device-entrypoints.test.py
 

@@ -58,8 +58,12 @@ def test_build_snapshot_command_falls_back_to_stable_user_local_cli(monkeypatch,
 
     arguments = desktop_app.build_snapshot_arguments(claude_dir="/tmp/claude")
 
-    assert arguments[:4] == [str(cli_path), "local-health", "--fast", "--json"]
-    assert arguments[-2:] == ["--claude-dir", "/tmp/claude"]
+    # The native facade's local-health accepts only --fast and --json. Appending
+    # --claude-dir to it produced a command that exits non-zero on argument
+    # parsing, so the plist regenerated after the Python entrypoint was removed
+    # would have been broken in a new way.
+    assert arguments == [str(cli_path), "local-health", "--fast", "--json"]
+    assert "--claude-dir" not in arguments
 
 
 def test_build_snapshot_command_falls_back_to_fast_module_when_cli_missing(monkeypatch, tmp_path: Path):
@@ -71,6 +75,36 @@ def test_build_snapshot_command_falls_back_to_fast_module_when_cli_missing(monke
     arguments = desktop_app.build_snapshot_arguments()
 
     assert arguments[:4] == [arguments[0], "-m", "zerg.cli.local_health_fast", "--fast"]
+
+
+def test_native_facade_health_command_is_runnable(monkeypatch, tmp_path: Path):
+    """Whatever the resolver picks must be a command that can actually run.
+
+    The regression this pins: after the Python entrypoint was removed the
+    resolver fell through to the native facade but kept appending --claude-dir,
+    which that command rejects. Any plist written from it would fail on argument
+    parsing rather than produce a snapshot.
+    """
+    home = tmp_path / "home"
+    cli_path = home / ".local" / "bin" / "longhouse"
+    cli_path.parent.mkdir(parents=True)
+    cli_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    cli_path.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(desktop_app.shutil, "which", lambda _name: None)
+
+    prefix, accepts_claude_dir = desktop_app._default_cli_snapshot_prefix()
+
+    assert prefix == [str(cli_path), "local-health"]
+    assert accepts_claude_dir is False
+    # And the claude_dir argument is dropped rather than silently producing an
+    # unrunnable command.
+    assert desktop_app.build_snapshot_arguments(claude_dir="/tmp/claude") == [
+        str(cli_path),
+        "local-health",
+        "--fast",
+        "--json",
+    ]
 
 
 def test_default_install_desktop_app_respects_env(monkeypatch):
