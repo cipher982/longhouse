@@ -2288,6 +2288,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/resume-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Timeline Session Resume Intent */
+        post: operations["create_timeline_session_resume_intent_timeline_sessions__session_id__resume_intent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/thread": {
         parameters: {
             query?: never;
@@ -3377,6 +3394,26 @@ export interface paths {
         get: operations["get_session_agents_sessions__session_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/resume-intent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Session Resume Intent
+         * @description Return an exact local terminal handoff when cold Helm Resume is proven.
+         */
+        post: operations["create_session_resume_intent_agents_sessions__session_id__resume_intent_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5034,6 +5071,46 @@ export interface components {
             /** State */
             state: string;
         };
+        /** ContinuationEvidenceIn */
+        ContinuationEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "retained_launch_contract" | null;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "codex" | "claude" | "cursor" | "opencode";
+            /** Session Id */
+            session_id: string;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /**
+             * Contract State
+             * @enum {string}
+             */
+            contract_state: "valid" | "invalid";
+            /** Unavailable Reason */
+            unavailable_reason?: ("contract_invalid" | "workspace_missing" | "provider_incompatible" | "provider_state_missing") | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Valid Until
+             * Format: date-time
+             */
+            valid_until: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "managed_resume_contract_scan";
+            /** Raw Locator */
+            raw_locator: string;
+        };
         /** ControlEvidenceIn */
         ControlEvidenceIn: {
             /** Authority Class */
@@ -5502,7 +5579,7 @@ export interface components {
              * Fact Family
              * @enum {string}
              */
-            fact_family: "run" | "process" | "activity" | "control" | "transcript" | "readiness";
+            fact_family: "run" | "process" | "activity" | "control" | "transcript" | "readiness" | "continuation";
             /** Fact Index */
             fact_index: number;
             /** Subject Key */
@@ -6014,6 +6091,8 @@ export interface components {
             process_snapshot_scopes?: components["schemas"]["ProcessSnapshotScopeIn"][];
             /** Readiness */
             readiness?: components["schemas"]["ReadinessEvidenceIn"][];
+            /** Continuation */
+            continuation?: components["schemas"]["ContinuationEvidenceIn"][];
         };
         /** MachineHealthItemResponse */
         MachineHealthItemResponse: {
@@ -9881,6 +9960,33 @@ export interface components {
             launch_error_message?: string | null;
             /** @description Attribution for the user whose signed share token or legacy ?shared_by=<id> link surfaced this session. Null when attribution is absent, the user is gone, or the sharer is the current viewer. */
             sharer?: components["schemas"]["SessionSharerResponse"] | null;
+        };
+        /** SessionResumeIntentResponse */
+        SessionResumeIntentResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Provider */
+            provider: string;
+            /** Machine Id */
+            machine_id?: string | null;
+            /** Machine Label */
+            machine_label?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Argv */
+            argv?: string[];
+            /** Command */
+            command?: string | null;
+            /**
+             * Handoff
+             * @default terminal_command
+             * @constant
+             */
+            handoff: "terminal_command";
         };
         /** SessionRunFacts */
         SessionRunFacts: {
@@ -16071,6 +16177,37 @@ export interface operations {
             };
         };
     };
+    create_timeline_session_resume_intent_timeline_sessions__session_id__resume_intent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResumeIntentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_thread_timeline_sessions__session_id__thread_get: {
         parameters: {
             query?: never;
@@ -18087,6 +18224,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_session_resume_intent_agents_sessions__session_id__resume_intent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResumeIntentResponse"];
                 };
             };
             /** @description Validation Error */

@@ -81,6 +81,8 @@ _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
         "unsupported_gap",
         "codex_managed_bridge_credentials_missing",
     ),
+    "helm_cold_resume": ("unsupported_gap", "codex_cold_resume_canary_missing"),
+    "resume_unsupported": ("not_applicable", None),
 }
 
 _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
@@ -90,6 +92,7 @@ _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
     "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
+    "resume_unsupported": ("not_applicable", None),
 }
 
 _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
@@ -98,6 +101,7 @@ _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+    "resume_unsupported": ("not_applicable", None),
 }
 
 _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
@@ -106,6 +110,14 @@ _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
     "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
+    "helm_cold_resume": ("not_applicable", None),
+    "helm_live_reattach": ("not_applicable", None),
+    "console_thread_continue": ("not_applicable", None),
+    "resume_identity_continuity": ("not_applicable", None),
+    "resume_attempt_idempotency": ("not_applicable", None),
+    "resume_single_owner": ("not_applicable", None),
+    "resume_input_safety": ("not_applicable", None),
+    "resume_failure_cleanup": ("not_applicable", None),
 }
 
 _EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
@@ -114,6 +126,7 @@ _EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+    "resume_unsupported": ("not_applicable", None),
 }
 
 _FULL_COLUMN_LIMITS = {
@@ -136,8 +149,8 @@ _LIVE_INTERACTION_ALLOWED_BLOCKED_CODES = frozenset(
 )
 
 _FULL_COLUMN_ALLOWED_GAP_KINDS = {
-    "codex": frozenset({"passed", "provider_contract_unsupported", "missing_live_canary"}),
-    "claude": frozenset({"passed", "no_token_safety_gate", "missing_live_canary"}),
+    "codex": frozenset({"passed", "not_applicable", "provider_contract_unsupported", "missing_live_canary"}),
+    "claude": frozenset({"passed", "no_token_safety_gate", "not_applicable", "missing_live_canary"}),
     "opencode": frozenset(
         {
             "passed",

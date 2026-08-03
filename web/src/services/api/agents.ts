@@ -230,6 +230,19 @@ export interface SessionCapabilities {
   attach_images?: boolean;
 }
 
+export interface SessionResumeIntent {
+  session_id: string;
+  provider: string;
+  machine_id: string | null;
+  machine_label: string | null;
+  cwd: string | null;
+  available: boolean;
+  reason: string | null;
+  argv: string[];
+  command: string | null;
+  handoff: "terminal_command";
+}
+
 export interface AgentSessionsListResponse {
   sessions: AgentSession[];
   total: number;
@@ -963,6 +976,16 @@ export async function fetchAgentSession(
   return request<AgentSession>(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}`, {
     method: "GET",
   });
+}
+
+/** Re-check ended Helm Resume eligibility and return its terminal handoff. */
+export async function createSessionResumeIntent(
+  sessionId: string,
+): Promise<SessionResumeIntent> {
+  return request<SessionResumeIntent>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/resume-intent`,
+    { method: "POST" },
+  );
 }
 
 export async function fetchAgentSessionThread(

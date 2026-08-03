@@ -30,6 +30,7 @@ pub struct StartConfig {
     pub opencode_bin: Option<String>,
     pub claude_dir: Option<PathBuf>,
     pub launch_mode: String,
+    pub resume_provider_session_id: Option<String>,
     pub coordination_token: String,
 }
 
@@ -87,7 +88,9 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
                     server_url: existing.server_url,
                 });
             }
-            bail!("managed OpenCode bridge already has a live state for {session_id}; stop it before starting again");
+            bail!(
+                "managed OpenCode bridge already has a live state for {session_id}; stop it before starting again"
+            );
         } else {
             unreachable!("live OpenCode state was handled above");
         }
@@ -148,12 +151,23 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     };
     let result = (|| -> Result<StartResult> {
         let runtime = tokio::runtime::Runtime::new()?;
-        let provider_session_id = runtime.block_on(create_session(
-            &server_url,
-            &password,
-            &cwd,
-            config.display_name.as_deref(),
-        ))?;
+        let provider_session_id = match config.resume_provider_session_id.as_deref() {
+            Some(provider_session_id) => {
+                runtime.block_on(assert_session_exists(
+                    &server_url,
+                    &password,
+                    &cwd,
+                    provider_session_id,
+                ))?;
+                provider_session_id.to_owned()
+            }
+            None => runtime.block_on(create_session(
+                &server_url,
+                &password,
+                &cwd,
+                config.display_name.as_deref(),
+            ))?,
+        };
         let (process_start_time, process_command) = process_identity(pid).unwrap_or_default();
         let now = chrono::Utc::now().to_rfc3339();
         let payload = json!({
@@ -163,7 +177,8 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             "pid": pid, "cwd": cwd, "username": USERNAME, "password": password,
             "log_path": log_path, "started_at": now, "updated_at": now,
             "process_start_time": process_start_time, "process_command": process_command,
-            "launch_mode": config.launch_mode, "owner_wrapper_pid": 0, "owner_wrapper_start_time": ""
+            "launch_mode": config.launch_mode, "provider_binary": binary,
+            "owner_wrapper_pid": 0, "owner_wrapper_start_time": ""
         });
         write_private_json(&state_path, &payload)?;
         write_provider_binding(&provider_binding_path(&session_id)?, &payload)?;
@@ -609,6 +624,8 @@ fn write_provider_binding(path: &Path, state: &Value) -> Result<()> {
                 .cloned()
                 .unwrap_or_else(|| json!([])),
             "cwd": state.get("cwd").cloned().unwrap_or(Value::Null),
+            "provider_binary": state.get("provider_binary").cloned().unwrap_or(Value::Null),
+            "launch_mode": state.get("launch_mode").cloned().unwrap_or(Value::Null),
             "updated_at": state.get("updated_at").cloned().unwrap_or(Value::Null),
         }),
     )
@@ -722,6 +739,46 @@ async fn create_session(
         .filter(|id| !id.trim().is_empty())
         .map(str::to_owned)
         .context("OpenCode session creation returned no id")
+}
+
+async fn assert_session_exists(
+    server_url: &str,
+    password: &str,
+    cwd: &Path,
+    provider_session_id: &str,
+) -> Result<()> {
+    if provider_session_id.trim().is_empty() {
+        bail!("OpenCode retained provider session is empty");
+    }
+    let base = Url::parse(server_url)?;
+    if base.host_str() != Some("127.0.0.1") {
+        bail!("OpenCode server must listen on localhost");
+    }
+    assert_health(server_url, password).await?;
+    let mut session_url = Url::parse(&format!("{server_url}/session"))?;
+    session_url
+        .query_pairs_mut()
+        .append_pair("directory", &cwd.to_string_lossy());
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?
+        .get(session_url)
+        .basic_auth(USERNAME, Some(password))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        bail!("OpenCode session lookup failed ({})", response.status());
+    }
+    let sessions: Value = response.json().await?;
+    let found = sessions.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(provider_session_id))
+    });
+    if !found {
+        bail!("OpenCode retained provider session is unavailable in its native store");
+    }
+    Ok(())
 }
 
 async fn assert_health(server_url: &str, password: &str) -> Result<()> {

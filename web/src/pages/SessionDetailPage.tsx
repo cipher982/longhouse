@@ -28,6 +28,10 @@ import { LoopModePill } from "../components/session-workspace/LoopModePill";
 import { RenderTelemetryPanel } from "../components/session-workspace/RenderTelemetryPanel";
 import { SessionPauseRequestPanel } from "../components/session-workspace/SessionPauseRequestPanel";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
+import {
+  isUnexpectedResumeStop,
+  ResumeSessionModal,
+} from "../components/session-workspace/ResumeSessionModal";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
@@ -42,11 +46,13 @@ import { buildSessionShareUrl, copyToClipboard } from "../lib/clipboard";
 import { useMarkSessionRead } from "../hooks/useMarkSessionRead";
 import {
   createSessionShare,
+  createSessionResumeIntent,
   respondToPauseRequest,
   setSessionAction,
   setSessionTimelineVisibility,
   type AgentEventId,
   type PauseRequestResponseRequest,
+  type SessionResumeIntent,
 } from "../services/api/agents";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
@@ -132,6 +138,8 @@ function SessionDetailWorkspaceRoute({
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [hidingSession, setHidingSession] = useState(false);
   const [copyingShareLink, setCopyingShareLink] = useState(false);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeIntent, setResumeIntent] = useState<SessionResumeIntent | null>(null);
 
   const handleArchiveConfirm = useCallback(async () => {
     if (!session) return;
@@ -199,6 +207,18 @@ function SessionDetailWorkspaceRoute({
       setCopyingShareLink(false);
     }
   }, [session, currentUser]);
+
+  const handleResume = useCallback(async () => {
+    if (!session || resumeLoading) return;
+    setResumeLoading(true);
+    try {
+      setResumeIntent(await createSessionResumeIntent(session.id));
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't prepare Resume");
+    } finally {
+      setResumeLoading(false);
+    }
+  }, [session, resumeLoading]);
 
   const sessionLaunchState = session?.launch_state ?? null;
   const effectiveLaunchState = sessionLaunchState;
@@ -304,6 +324,9 @@ function SessionDetailWorkspaceRoute({
     "host";
   const runtime = resolveSessionRuntimeState(displaySession);
   const sessionEnded = Boolean(session && isSessionClosed(session));
+  const resumeAvailable =
+    isViewingHead &&
+    branchSourceSession.session_state.control.actions.resume.state === "available";
   const workspaceClassName = [
     "session-workspace-route",
     "session-workspace-route--single-column",
@@ -371,6 +394,17 @@ function SessionDetailWorkspaceRoute({
 
   const headerRight = (
     <div className="session-workspace-header__actions">
+      {resumeAvailable ? (
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void handleResume()}
+          disabled={resumeLoading}
+          data-testid="session-resume-button"
+        >
+          {resumeLoading ? "Checking…" : `Resume on ${runtimeHostLabel}`}
+        </Button>
+      ) : null}
       {shouldShowCopyLinkButton ? (
         <Button
           variant="ghost"
@@ -590,6 +624,16 @@ function SessionDetailWorkspaceRoute({
           hideHero
         />
       </SessionInfoDrawer>
+      {resumeIntent ? (
+        <ResumeSessionModal
+          intent={resumeIntent}
+          unexpectedStop={isUnexpectedResumeStop(
+            displaySession.runtime_display?.terminal_reason ??
+              displaySession.session_state.disposition.close_reason,
+          )}
+          onClose={() => setResumeIntent(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -88,7 +88,11 @@ def _head(
     subject_key = (
         f"run:{value['run_id']}"
         if family == "activity"
-        else f"connection:{value['connection_id']}:{value['lease_generation']}"
+        else (
+            f"connection:{value['connection_id']}:{value['lease_generation']}"
+            if family == "control"
+            else f"resume:{value['session_id']}"
+        )
     )
     return {
         "family": family,
@@ -544,6 +548,56 @@ def test_served_projector_without_control_head_fails_actions_closed():
     assert served.control.actions.interrupt.reason == "control_unknown"
     assert served.control.actions.terminate.reason == "control_unknown"
     assert served.control.actions.reattach.state == "available"
+    assert served.control.actions.resume.state == "unavailable"
+    assert served.control.actions.resume.reason == "machine_unknown"
+
+
+def test_served_projector_offers_cold_resume_only_from_matching_machine_contract():
+    continuation = {
+        "authority_class": "retained_launch_contract",
+        "provider": "codex",
+        "session_id": "session-1",
+        "provider_session_id": "provider-thread-1",
+        "cwd": "/repo",
+        "contract_state": "valid",
+        "unavailable_reason": None,
+        "source": "managed_resume_contract_scan",
+        "raw_locator": "/state/contracts/codex/session-1.json",
+        "observed_at": NOW.isoformat(),
+        "valid_until": (NOW + timedelta(minutes=20)).isoformat(),
+    }
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=83,
+        catalog_facts={
+            "catalog": {
+                "provider": "codex",
+                "cwd": "/repo",
+                "started_at": (NOW - timedelta(hours=1)).isoformat(),
+                "origin_kind": None,
+                "launch_surface": "terminal",
+            },
+            "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(minutes=10)).isoformat(),
+                "ended_at": (NOW - timedelta(minutes=1)).isoformat(),
+                "exit_status": "user_closed",
+            },
+            "connections": [],
+            "resume": {"provider_session_id": "provider-thread-1"},
+        },
+        heads=[_head(family="continuation", value=continuation, source="managed_resume_contract_scan")],
+        supported_operations={"resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.mode == "helm"
+    assert served.run is not None and served.run.lifecycle == "ended"
+    assert served.control is not None
     assert served.control.actions.resume.state == "available"
 
 

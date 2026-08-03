@@ -116,7 +116,7 @@ describe("providers launch support", () => {
       launchAndSend: true,
       interrupt: true,
       steerMidTurn: false,
-      resume: false,
+      resume: true,
       cloudSessionStart: "live",
       hooksSupport: "none",
     });

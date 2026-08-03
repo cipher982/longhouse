@@ -219,6 +219,42 @@ private struct ComposerPreviewChrome: View {
         .preferredColorScheme(.light)
 }
 
+#Preview("Ended Helm · Resume command") {
+    ResumeCommandSheet(
+        intent: SessionResumeIntent(
+            sessionId: "019fc50b-1111-4111-8111-111111111111",
+            provider: "codex",
+            machineId: "cinder",
+            machineLabel: "cinder",
+            cwd: "/Users/example/code",
+            available: true,
+            reason: nil,
+            argv: ["longhouse", "codex", "--cwd", "/Users/example/code", "--resume-session", "019fc50b-1111-4111-8111-111111111111"],
+            command: "longhouse codex --cwd /Users/example/code --resume-session 019fc50b-1111-4111-8111-111111111111",
+            handoff: "terminal_command"
+        ),
+        unexpectedStop: false
+    )
+}
+
+#Preview("Crashed Helm · Resume command") {
+    ResumeCommandSheet(
+        intent: SessionResumeIntent(
+            sessionId: "019fc50b-1111-4111-8111-111111111111",
+            provider: "codex",
+            machineId: "cinder",
+            machineLabel: "cinder",
+            cwd: "/Users/example/code",
+            available: true,
+            reason: nil,
+            argv: ["longhouse", "codex", "--cwd", "/Users/example/code", "--resume-session", "019fc50b-1111-4111-8111-111111111111"],
+            command: "longhouse codex --cwd /Users/example/code --resume-session 019fc50b-1111-4111-8111-111111111111",
+            handoff: "terminal_command"
+        ),
+        unexpectedStop: true
+    )
+}
+
 // MARK: - Transcript load-state previews (M3: one shared overlay component)
 
 #Preview("Transcript · hard error · Dark") {

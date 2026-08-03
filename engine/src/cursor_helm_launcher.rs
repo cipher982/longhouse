@@ -130,6 +130,8 @@ fn read_claim(
     dir: &Path,
     session_id: &str,
     requested_permission_mode: Option<&str>,
+    requested_cwd: Option<&Path>,
+    cursor_bin: Option<&str>,
 ) -> anyhow::Result<ResumeClaim> {
     Uuid::parse_str(session_id).context("--resume-session must be a Longhouse session UUID")?;
     let value: Value = serde_json::from_slice(&fs::read(
@@ -159,6 +161,27 @@ fn read_claim(
             anyhow::bail!("resume policy conflict: session uses {recorded}, requested {requested}");
         }
     }
+    if let Some(requested_cwd) = requested_cwd {
+        let recorded_cwd = value
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .context("Cursor Resume is unavailable because its retained workspace is missing")?;
+        if fs::canonicalize(recorded_cwd).ok() != fs::canonicalize(requested_cwd).ok() {
+            anyhow::bail!("Cursor Resume must run from its retained workspace");
+        }
+    }
+    if let Some(cursor_bin) = cursor_bin {
+        let recorded_binary = value
+            .get("provider_binary")
+            .and_then(Value::as_str)
+            .context(
+                "Cursor Resume is unavailable because its retained provider binary is missing",
+            )?;
+        if fs::canonicalize(recorded_binary).ok() != fs::canonicalize(cursor_bin).ok() {
+            anyhow::bail!("Cursor provider binary changed since this session ended");
+        }
+    }
     Ok(ResumeClaim {
         conversation,
         permission_mode: recorded,
@@ -182,6 +205,8 @@ fn write_pending_claim(
     launch_id: &str,
     permission_mode: &str,
     registration: Option<&ManagedLaunchResponse>,
+    cwd: &Path,
+    cursor_bin: &str,
 ) -> anyhow::Result<()> {
     let target = claim_path(dir, session_id);
     let backup = claim_backup_path(dir, session_id);
@@ -210,6 +235,8 @@ fn write_pending_claim(
             "conversation_uuid": conversation,
             "launch_id": launch_id,
             "permission_policy": permission_mode,
+            "cwd": cwd,
+            "provider_binary": cursor_bin,
             "run_id": registration.map(|value| value.run_id.as_str()),
             "expires_at": (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
         }),
@@ -607,6 +634,7 @@ fn register(
     cwd: &Path,
     session_id: &str,
     permission_mode: &str,
+    resume_provider_thread_id: Option<&str>,
 ) -> anyhow::Result<ManagedLaunchResponse> {
     let (url, token, machine_name) = registration_credentials(config)?;
     let mut payload = crate::managed_launch_payload::ManagedLaunchRegistration {
@@ -623,7 +651,14 @@ fn register(
         },
         // Cursor mints its own session id before registering, so the Runtime
         // Host must be told which one to bind rather than allocating its own.
-        extra: vec![("session_id", json!(session_id))],
+        extra: match resume_provider_thread_id {
+            Some(provider_thread_id) => vec![
+                ("session_id", json!(session_id)),
+                ("resume_attempt_id", json!(Uuid::new_v4().to_string())),
+                ("provider_thread_id", json!(provider_thread_id)),
+            ],
+            None => vec![("session_id", json!(session_id))],
+        },
     }
     .to_json();
     let (launch_actor, launch_surface) =
@@ -639,7 +674,11 @@ fn register(
         &runtime,
         &url,
         &token,
-        "Cursor",
+        if resume_provider_thread_id.is_some() {
+            "Cursor resume"
+        } else {
+            "Cursor"
+        },
         &payload,
         Some(session_id),
     )?;
@@ -905,7 +944,13 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let (resume_conversation, permission_mode) = if config.resume_session.is_some() {
-        let claim = read_claim(&dir, &session_id, config.permission_mode.as_deref())?;
+        let claim = read_claim(
+            &dir,
+            &session_id,
+            config.permission_mode.as_deref(),
+            Some(&cwd),
+            Some(&bin),
+        )?;
         (Some(claim.conversation), claim.permission_mode)
     } else {
         (
@@ -923,42 +968,25 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         anyhow::bail!("Cursor Helm session {session_id} is already attached");
     }
     let launch_id = Uuid::new_v4().to_string();
-    // A new Helm launch is a transaction: authority must exist before Cursor
-    // creates a conversation. Resume can still recover authority through the
-    // dedicated coordination-token route when replay registration is stale.
-    let registered = match register(&config, &cwd, &session_id, &permission_mode) {
-        Ok(value) => Some(value),
-        Err(error) if config.resume_session.is_some() => {
-            if config.verbose {
-                eprintln!("Longhouse warning: replay registration failed; using resume authority: {error:#}");
-            }
-            None
-        }
-        Err(error) => return Err(error).context("register Cursor Helm launch"),
-    };
-    let lifecycle_credentials = if config.resume_session.is_some() {
-        None
-    } else {
-        let (url, token, _) = registration_credentials(&config)?;
-        Some((url, token))
-    };
-    let lifecycle_runtime = lifecycle_credentials
-        .as_ref()
-        .map(|_| tokio::runtime::Runtime::new())
-        .transpose()?;
-    let mut launch_transaction = match (&lifecycle_runtime, &lifecycle_credentials, &registered) {
-        (Some(runtime), Some((url, token)), Some(registration)) => Some(
-            crate::managed_launch_lifecycle::ManagedLaunchTransaction::new(
-                runtime,
-                url,
-                token,
-                &registration.session_id,
-                &registration.run_id,
-            ),
-        ),
-        (None, None, _) => None,
-        _ => anyhow::bail!("new Cursor Helm launch is missing registration"),
-    };
+    // Creation and cold Resume use the same server transaction. A failed
+    // registration must stop before cursor-agent owns the provider thread.
+    let registered = register(
+        &config,
+        &cwd,
+        &session_id,
+        &permission_mode,
+        resume_conversation.as_deref(),
+    )
+    .context("register Cursor Helm launch")?;
+    let (lifecycle_url, lifecycle_token, _) = registration_credentials(&config)?;
+    let lifecycle_runtime = tokio::runtime::Runtime::new()?;
+    let mut launch_transaction = crate::managed_launch_lifecycle::ManagedLaunchTransaction::new(
+        &lifecycle_runtime,
+        &lifecycle_url,
+        &lifecycle_token,
+        &registered.session_id,
+        &registered.run_id,
+    );
     let hook_url = config.url.clone().or_else(|| {
         home(config.config_dir.as_deref()).ok().and_then(|root| {
             fs::read(root.join("machine/state.json"))
@@ -987,14 +1015,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     };
     if matches!(permission_mode.as_str(), "remote_human")
         && registered
-            .as_ref()
-            .and_then(|value| value.hook_token.as_deref())
+            .hook_token
+            .as_deref()
             .filter(|value| !value.is_empty())
             .is_none()
     {
         anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
     }
-    let coordination_token = coordination_token(&config, registered.as_ref(), &session_id)?;
+    let coordination_token = coordination_token(&config, Some(&registered), &session_id)?;
     let _mcp_config = write_cursor_mcp_config(&dir, &cwd, &session_id)?;
     write_pending_claim(
         &dir,
@@ -1002,7 +1030,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         &conversation,
         &launch_id,
         &permission_mode,
-        registered.as_ref(),
+        Some(&registered),
+        &cwd,
+        &bin,
     )?;
     let socket = match socket_path(&session_id) {
         Ok(socket) => socket,
@@ -1066,12 +1096,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             },
         ),
     ]);
-    if registered.is_some() {
-        env_pairs.push((
-            b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
-            b"1".to_vec(),
-        ));
-    }
+    env_pairs.push((
+        b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
+        b"1".to_vec(),
+    ));
     for key in [
         b"CI".as_slice(),
         b"CONTINUOUS_INTEGRATION",
@@ -1102,10 +1130,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     if let Some(url) = hook_url.as_deref() {
         env_pairs.push((b"LONGHOUSE_HOOK_URL".to_vec(), url.as_bytes().to_vec()));
     }
-    if let Some(token) = registered
-        .as_ref()
-        .and_then(|value| value.hook_token.as_deref())
-    {
+    if let Some(token) = registered.hook_token.as_deref() {
         env_pairs.push((b"LONGHOUSE_HOOK_TOKEN".to_vec(), token.as_bytes().to_vec()));
     }
     let env: Vec<CString> = env_pairs
@@ -1174,7 +1199,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         let now = Utc::now().to_rfc3339();
         write_json(
             &dir.join(format!("{session_id}.json")),
-            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.as_ref().map(|value| value.run_id.as_str()),"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if registered.is_some() {"registered"} else {"degraded"},"started_at":now,"updated_at":now}),
+            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":"registered","started_at":now,"updated_at":now}),
         )?;
         let terminal = Terminal(0, raw(0)?);
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
@@ -1197,19 +1222,17 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             return Err(error);
         }
     };
-    if let Some(transaction) = launch_transaction.as_mut() {
-        if let Err(error) = transaction.confirm() {
-            drop(terminal);
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-                if slave_hold >= 0 {
-                    libc::close(slave_hold);
-                }
-                libc::close(master);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
+    if let Err(error) = launch_transaction.confirm() {
+        drop(terminal);
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            if slave_hold >= 0 {
+                libc::close(slave_hold);
             }
-            return Err(error);
+            libc::close(master);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
         }
+        return Err(error);
     }
     sync_winsize(master);
     let socket_stop = stop.clone();
@@ -1337,7 +1360,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     enqueue_terminal_event(
         &config,
         &session_id,
-        registered.as_ref().map(|value| value.run_id.as_str()),
+        Some(&registered.run_id),
         exit_code,
         requested_session_end.load(Ordering::Relaxed),
     );
@@ -1568,10 +1591,10 @@ mod tests {
     fn resume_retains_recorded_policy_and_rejects_conflicts() {
         let root = tempfile::tempdir().unwrap();
         let session_id = observed_claim(root.path(), Some("remote_human"));
-        let claim = read_claim(root.path(), &session_id, None).unwrap();
+        let claim = read_claim(root.path(), &session_id, None, None, None).unwrap();
         assert_eq!(claim.permission_mode, "remote_human");
-        assert!(read_claim(root.path(), &session_id, Some("auto_approve")).is_err());
-        assert!(read_claim(root.path(), &session_id, Some("remote_approve")).is_ok());
+        assert!(read_claim(root.path(), &session_id, Some("auto_approve"), None, None).is_err());
+        assert!(read_claim(root.path(), &session_id, Some("remote_approve"), None, None).is_ok());
     }
 
     #[test]
@@ -1579,7 +1602,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let session_id = observed_claim(root.path(), None);
         assert_eq!(
-            read_claim(root.path(), &session_id, None)
+            read_claim(root.path(), &session_id, None, None, None)
                 .unwrap()
                 .permission_mode,
             "provider_local"
@@ -1598,6 +1621,8 @@ mod tests {
             "resume-launch",
             "provider_local",
             None,
+            root.path(),
+            "/bin/cursor-agent",
         )
         .unwrap();
         rollback_pending_claim(root.path(), &session_id, "resume-launch");
@@ -1614,6 +1639,8 @@ mod tests {
             "new-launch",
             "auto_approve",
             None,
+            root.path(),
+            "/bin/cursor-agent",
         )
         .unwrap();
         rollback_pending_claim(root.path(), &new_session, "new-launch");

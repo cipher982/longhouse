@@ -1178,6 +1178,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     presentationPolicyVersion: 1,
                     mode: "helm",
                     dispositionState: "open",
+                    dispositionCloseReason: nil,
                     launchState: nil,
                     runLifecycle: "running",
                     activityState: "quiescent",

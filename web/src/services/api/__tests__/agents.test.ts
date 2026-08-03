@@ -8,6 +8,7 @@ const baseMocks = vi.hoisted(() => ({
 vi.mock("../base", () => baseMocks);
 
 import {
+  createSessionResumeIntent,
   createSessionShare,
   fetchAgentSessions,
   fetchAgentSessionProjection,
@@ -144,6 +145,15 @@ describe("live session fetches", () => {
     expect(baseMocks.request).toHaveBeenCalledWith(
       "/timeline/sessions/session-1/projection?limit=200&offset=20&branch_mode=head",
       { method: "GET", cache: "no-store" },
+    );
+  });
+
+  it("requests a fresh Resume terminal handoff", async () => {
+    await createSessionResumeIntent("session-1");
+
+    expect(baseMocks.request).toHaveBeenCalledWith(
+      "/timeline/sessions/session-1/resume-intent",
+      { method: "POST" },
     );
   });
 });

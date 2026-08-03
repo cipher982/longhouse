@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 233,
+  "file_count": 237,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -147,6 +147,15 @@
     },
     {
       "path": "engine/src/managed_launch_payload.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/managed_resume_scan.rs",
       "providers": [
         "claude",
         "codex",
@@ -1137,6 +1146,16 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_provider_resume_factory.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_provider_semantic_qualification.py",
       "providers": [
         "antigravity",
@@ -1155,6 +1174,7 @@
     {
       "path": "server/tests_lite/test_render_provider_factory_status.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -1309,6 +1329,15 @@
       "providers": [
         "claude",
         "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_resume.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
         "opencode"
       ]
     },
@@ -1783,6 +1812,15 @@
     {
       "path": "server/zerg/services/session_live_previews.py",
       "providers": [
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_resume.py",
+      "providers": [
+        "claude",
         "codex",
         "cursor",
         "opencode"

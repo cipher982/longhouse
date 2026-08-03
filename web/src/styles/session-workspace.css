@@ -611,6 +611,39 @@
     line-height: var(--font-line-height-relaxed);
   }
 
+  .resume-session-modal {
+    max-width: 620px;
+  }
+
+  .resume-session-modal .modal-header > div {
+    min-width: 0;
+  }
+
+  .resume-session-modal .modal-header h2 {
+    margin: 0;
+  }
+
+  .resume-session-modal .modal-header p,
+  .resume-session-modal__copy {
+    margin: 4px 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .resume-session-modal__recovery {
+    margin: 0 0 14px;
+    color: var(--color-intent-warning);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .resume-session-modal .inspector-code-block {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
   .session-context-provider {
     display: inline-flex;
     align-items: center;

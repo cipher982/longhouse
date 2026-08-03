@@ -800,6 +800,19 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             require_operation="reattach",
         )
 
+    def cold_resume(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._run_codex_managed_session_canary_projection(
+            package,
+            scenario="helm_cold_resume_native",
+            assertion_name="helm_cold_resume_native",
+            require_operation="reattach",
+        )
+        if payload.get("status") == STATUS_UNSUPPORTED_GAP and payload.get("failure_code") == "codex_managed_bridge_credentials_missing":
+            payload["failure_code"] = "codex_cold_resume_canary_missing"
+            payload["message"] = "Codex cold Resume needs a managed-live canary with Runtime Host credentials."
+            package.write_json("assertions/helm_cold_resume_native.json", payload)
+        return payload
+
     def _run_codex_interrupt_dispatch_proof(
         self,
         package: EvidencePackage,

@@ -665,11 +665,34 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         return payload
 
     def resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._claude_resume_command_proof(
+            package,
+            scenario="resume_reattach",
+            operation="reattach",
+            proof_scope="claude_channel_resume_command_shape",
+        )
+
+    def cold_resume(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._claude_resume_command_proof(
+            package,
+            scenario="helm_cold_resume_native",
+            operation="resume",
+            proof_scope="claude_native_cold_resume_command",
+        )
+
+    def _claude_resume_command_proof(
+        self,
+        package: EvidencePackage,
+        *,
+        scenario: str,
+        operation: str,
+        proof_scope: str,
+    ) -> dict[str, Any]:
         from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_DEVELOPMENT_FLAG
         from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
         from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 
-        binary, failure = self._require_binary(package, "resume_reattach")
+        binary, failure = self._require_binary(package, scenario)
         if failure is not None:
             return failure
         assert binary is not None
@@ -704,10 +727,14 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             },
         )
         operations = {
-            "reattach": {
+            operation: {
                 "status": STATUS_PASS if passed else STATUS_FAIL,
                 "level": "hermetic",
-                "canary": "claude_channel_resume_command_shape",
+                "canary": (
+                    "claude_native_cold_resume_command_shape"
+                    if scenario == "helm_cold_resume_native"
+                    else "claude_channel_resume_command_shape"
+                ),
                 "failure_code": None if passed else "claude_resume_command_shape_failed",
                 "source": "zerg.services.claude_channel_bridge.build_claude_channel_exec_command",
             }
@@ -731,10 +758,10 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         payload.update(
             {
                 "status": STATUS_PASS if passed else STATUS_FAIL,
-                "scenario": "resume_reattach",
+                "scenario": scenario,
                 "assertions": assertions,
                 "raw_resume_command_path": str(raw_path),
-                "proof_scope": "claude_channel_resume_command_shape",
+                "proof_scope": proof_scope,
                 "synthetic": False,
                 "next": next_gate,
             }
@@ -742,7 +769,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         if not passed:
             payload["failure_code"] = "claude_resume_command_shape_failed"
             payload["message"] = "Claude resume command shape did not pass."
-        package.write_json("assertions/resume_reattach.json", payload)
+        package.write_json(f"assertions/{scenario}.json", payload)
         return payload
 
     def live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:

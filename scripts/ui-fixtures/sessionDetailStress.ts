@@ -753,3 +753,45 @@ export function buildSessionDetailStressFixture(): {
 
   return { session, thread, projection, workspace, turns };
 }
+
+export function buildSessionResumeFixture(): ReturnType<typeof buildSessionDetailStressFixture> {
+  const fixture = buildSessionDetailStressFixture();
+  const endedAt = "2026-04-15T16:12:00Z";
+  fixture.session.ended_at = endedAt;
+  fixture.session.status = "finished";
+  fixture.session.presence_state = null;
+  fixture.session.active_tool = null;
+  fixture.session.runtime_display = null;
+  fixture.session.runtime_facts = null;
+  fixture.session.capabilities = {
+    live_control_available: false,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    display_label: "Ended on cinder",
+    display_tone: "neutral",
+  };
+  fixture.session.session_state = makeSessionState({
+    disposition: { state: "closed", closed_at: endedAt, close_reason: "provider_exit" },
+    run: { lifecycle: "ended", started_at: "2026-04-15T15:15:00Z", ended_at: endedAt },
+    activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: endedAt, valid_until: null },
+    control: {
+      ownership: "owned",
+      connection: "disconnected",
+      actions: {
+        send_input: { state: "unavailable", reason: "run_ended" },
+        interrupt: { state: "unavailable", reason: "run_ended" },
+        terminate: { state: "unavailable", reason: "run_ended" },
+        reattach: { state: "unavailable", reason: "run_ended" },
+        resume: { state: "available" },
+      },
+    },
+    host: { state: "online", observed_at: endedAt },
+    presentation: {
+      primary: { key: "ended", label: "Ended", tone: "neutral", observed_at: endedAt },
+      access: { key: "resume_available", label: "Resume available", tone: "success", observed_at: endedAt },
+      transcript: null,
+    },
+  });
+  fixture.turns = { turns: [], total: 0 };
+  return fixture;
+}

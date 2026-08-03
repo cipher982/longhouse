@@ -158,6 +158,15 @@ struct SessionView: View {
             }
         }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
+        .sheet(item: $viewModel.resumeIntent) { intent in
+            ResumeCommandSheet(
+                intent: intent,
+                unexpectedStop: isUnexpectedResumeStop(
+                    viewModel.detail?.runtimeDisplay.terminalReason
+                        ?? viewModel.detail?.stateFacts.dispositionCloseReason
+                )
+            )
+        }
     }
 
     // The fused floating control card: status line + composer (or the
@@ -632,21 +641,49 @@ struct SessionView: View {
     // explanatory row. Copy comes straight from the capability model — no
     // invented state strings (canSendLive remains the hard gate upstream).
     private func unavailableComposerFooter(detail: SessionDetail) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: detail.isControlOffline ? "wifi.slash" : "eye")
-                .font(.body)
-                .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(detail.runtimeCapabilityLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                if let message = detail.controlHealthMessage {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: detail.isControlOffline ? "wifi.slash" : "eye")
+                    .font(.body)
+                    .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(detail.runtimeCapabilityLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    if let message = detail.controlHealthMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            if detail.stateFacts.resume.isAvailable {
+                Button {
+                    Task {
+                        await viewModel.prepareResume(sessionId: detail.id, appState: appState)
+                    }
+                } label: {
+                    Label(
+                        "Resume on \(detail.homeLabel ?? detail.originLabel ?? "its machine")",
+                        systemImage: "terminal"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isPreparingResume)
+                .accessibilityIdentifier("session-resume-button")
+            } else if detail.isClosed && detail.stateFacts.mode == "helm",
+                      let reason = detail.stateFacts.resume.reason {
+                Text("Resume unavailable: \(resumeReasonLabel(reason)).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let error = viewModel.resumeErrorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
@@ -1600,6 +1637,80 @@ struct SubmittedInput: Identifiable, Sendable {
     }
 }
 
+struct ResumeCommandSheet: View {
+    let intent: SessionResumeIntent
+    let unexpectedStop: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Continue this Helm in a terminal with the same session and provider thread. Longhouse starts a new Helm run.")
+                    .foregroundStyle(.secondary)
+                if unexpectedStop {
+                    Label(
+                        "This Helm stopped unexpectedly. Resume continues from the provider's last recorded event.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                }
+                if intent.available, let command = intent.command {
+                    Text(command)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    Button {
+                        UIPasteboard.general.string = command
+                        copied = true
+                    } label: {
+                        Label(copied ? "Copied" : "Copy command", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Text("Resume is no longer available: \(resumeReasonLabel(intent.reason)).")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Resume on \(intent.machineLabel ?? intent.machineId ?? "its machine")")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+private func isUnexpectedResumeStop(_ reason: String?) -> Bool {
+    reason == "provider_exit" || reason == "process_gone"
+}
+
+private func resumeReasonLabel(_ reason: String?) -> String {
+    switch reason {
+    case "run_active": return "the Helm is still running; use Reattach"
+    case "machine_offline": return "the machine is offline"
+    case "machine_unknown": return "the machine has not reported current state"
+    case "contract_missing": return "the retained launch contract is missing"
+    case "contract_invalid": return "the retained launch contract is invalid"
+    case "provider_state_missing": return "the provider's saved thread state is missing"
+    case "workspace_mismatch", "workspace_missing": return "the original workspace is unavailable"
+    case "provider_identity_mismatch": return "the retained provider thread no longer matches"
+    case "provider_incompatible": return "the installed provider CLI no longer matches"
+    case "not_helm": return "this was not a Helm session"
+    case "unsupported": return "this provider does not support native Helm Resume"
+    default: return "eligibility could not be confirmed"
+    }
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -1635,6 +1746,9 @@ final class SessionViewModel: ObservableObject {
     @Published var draftErrorMessage: String?
     @Published var loopModeErrorMessage: String?
     @Published var pauseResponseErrorMessage: String?
+    @Published var resumeIntent: SessionResumeIntent?
+    @Published var isPreparingResume = false
+    @Published var resumeErrorMessage: String?
     private var transcriptDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
     /// Most recent send outcome so the UI can distinguish an immediate
     /// dispatch from a queued input without pretending the latter was sent.
@@ -1915,6 +2029,22 @@ final class SessionViewModel: ObservableObject {
             }
         }
         isInitialLoading = false
+    }
+
+    func prepareResume(sessionId: String, appState: AppState) async {
+        guard !isPreparingResume else { return }
+        guard let api = apiFactory(appState.serverURL) else {
+            resumeErrorMessage = "The Longhouse server URL is invalid."
+            return
+        }
+        isPreparingResume = true
+        resumeErrorMessage = nil
+        defer { isPreparingResume = false }
+        do {
+            resumeIntent = try await api.sessionResumeIntent(id: sessionId)
+        } catch {
+            resumeErrorMessage = "Could not prepare Resume. Refresh and try again."
+        }
     }
 
     func markBenchmarkSource(revision: Int, operation: String) {

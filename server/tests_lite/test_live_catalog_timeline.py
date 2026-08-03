@@ -603,7 +603,7 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.session_state.mode == "helm"
     assert card.head.capabilities.observe_only is False
     assert card.head.session_state.control.actions.send_input.state == "unavailable"
-    assert card.head.session_state.control.actions.resume.state == "available"
+    assert card.head.session_state.control.actions.resume.state == "unavailable"
 
 
 def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):

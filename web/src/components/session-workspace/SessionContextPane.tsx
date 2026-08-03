@@ -16,6 +16,7 @@ import { ContinuationsList } from "./ContinuationsList";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
 import { ProviderGlyph } from "../ProviderGlyph";
+import { formatResumeReason } from "./ResumeSessionModal";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -73,8 +74,14 @@ export function SessionContextPane({
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
+  const resumeAction = session.session_state.control.actions.resume;
+  const showResumeUnavailable =
+    isViewingHead &&
+    session.session_state.mode === "helm" &&
+    session.session_state.disposition.state === "closed" &&
+    resumeAction.state !== "available";
   const showStateSection =
-    shouldShowNotice || interaction.managedLaunchSuggestion;
+    shouldShowNotice || interaction.managedLaunchSuggestion || showResumeUnavailable;
 
   const durationStr = formatDuration(
     session.started_at,
@@ -166,6 +173,17 @@ export function SessionContextPane({
               </div>
               <div className="session-pane-callout-copy">
                 {continuationNotice.body}
+              </div>
+            </div>
+          ) : null}
+          {showResumeUnavailable ? (
+            <div
+              className="session-pane-callout session-pane-callout--muted"
+              data-testid="session-resume-unavailable"
+            >
+              <div className="session-pane-callout-title">Resume unavailable</div>
+              <div className="session-pane-callout-copy">
+                {formatResumeReason(resumeAction.reason)}.
               </div>
             </div>
           ) : null}

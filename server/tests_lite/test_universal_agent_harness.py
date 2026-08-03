@@ -1214,6 +1214,10 @@ def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path
         )
     )
 
+    # The full suite now includes provider-native cold Resume. This focused
+    # old/new artifact test does not supply the installed live canary, so that
+    # unrelated evidence gap is explicit without turning a passing proof diff
+    # into a semantic failure.
     assert payload["verdict"] == "yellow"
     execution_rows = {row["action_id"]: row for row in payload["provider_execution_coverage_matrix"]["actions"]}
     assert execution_rows["old_new_release_diff"]["coverage_status_counts"] == {"pass": len(providers)}
@@ -3843,6 +3847,32 @@ def test_scenario_runner_does_not_branch_on_provider_names() -> None:
 
     for provider in uah.SUPPORTED_PROVIDERS:
         assert provider not in sources
+
+
+@pytest.mark.parametrize(
+    ("native_status", "expected"),
+    [("pass", "pass"), ("fail", "fail"), ("unsupported_gap", "unsupported_gap")],
+)
+def test_cold_resume_factory_requires_native_adapter_proof(
+    tmp_path: Path, monkeypatch, native_status: str, expected: str
+) -> None:
+    adapter = uah.UniversalProviderAdapter(
+        uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None)
+    )
+    monkeypatch.setattr(
+        adapter,
+        "cold_resume",
+        lambda _package: {
+            "status": native_status,
+            "failure_code": None if native_status == "pass" else "native_failed",
+            "operation_evidence": {"resume": {"status": native_status, "level": "hermetic"}},
+        },
+    )
+    package = uah.EvidencePackage(root=tmp_path, provider="codex", scenario="helm_cold_resume")
+    result = uah.run_provider_resume_factory(adapter, package)
+    assert result.status == expected
+    assert result.data is not None
+    assert result.data["assertions"]["native_provider_resume_proven"] is (native_status == "pass")
 
 
 def test_script_entrypoint_emits_normalized_artifact(tmp_path: Path) -> None:

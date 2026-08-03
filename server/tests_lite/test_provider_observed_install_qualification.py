@@ -122,11 +122,11 @@ def test_cursor_observed_install_runs_full_exact_column(tmp_path: Path) -> None:
     assert result["status"] == "pass"
     assert result["build_provenance"] == "observed_install"
     assert result["full_column_gate"]["status"] == "pass"
-    assert result["full_column_gate"]["captured_scenario_count"] == 23
+    assert result["full_column_gate"]["captured_scenario_count"] == 32
     assert result["full_column_gate"]["coverage_gap_kind_counts"] == {
-        "passed": 29,
+        "passed": 28,
         "no_token_safety_gate": 1,
-        "not_applicable": 2,
+        "not_applicable": 3,
         "provider_contract_unsupported": 1,
     }
     assert Path(result["artifact_path"]).is_file()

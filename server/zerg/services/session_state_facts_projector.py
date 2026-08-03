@@ -57,6 +57,7 @@ SHADOW_UNSUPPORTED_FAMILIES: tuple[UnsupportedFactFamily, ...] = (
 _AUTHORITY_RANK = {
     ("activity", "provider_runtime"): 1,
     ("control", "provider_control"): 1,
+    ("continuation", "retained_launch_contract"): 1,
 }
 _ACTIVITY_STATE = {
     "thinking": "thinking",
@@ -203,6 +204,18 @@ def project_served_session_state_facts(
         mode=served_mode,
         catalog_facts=catalog_facts,
         supported_operations=set(supported_operations),
+        resume=_resume_action_availability(
+            session_id=session_id,
+            provider=_text(_mapping(catalog_facts.get("catalog")).get("provider")),
+            cwd=_text(_mapping(catalog_facts.get("catalog")).get("cwd")),
+            provider_session_id=_text(_mapping(catalog_facts.get("resume")).get("provider_session_id")),
+            mode=served_mode,
+            run=shadow.run,
+            host=host,
+            heads=heads,
+            supported_operations=set(supported_operations),
+            now=_aware(now, "now"),
+        ),
     )
     catalog = _mapping(catalog_facts.get("catalog"))
     return assemble_session_state_facts(
@@ -284,6 +297,7 @@ def _served_control(
     mode: SessionMode,
     catalog_facts: Mapping[str, Any],
     supported_operations: set[str],
+    resume: SessionActionAvailability,
 ) -> SessionControlFacts:
     def availability(available: bool, reason: str) -> SessionActionAvailability:
         if available:
@@ -301,12 +315,6 @@ def _served_control(
         supported_operations=supported_operations,
         operation="reattach",
     )
-    resume_available, resume_reason = _durable_action_availability(
-        catalog_facts,
-        mode=mode,
-        supported_operations=supported_operations,
-        operation="resume",
-    )
     if observed is not None:
         reattach = availability(
             observed.connection != "connected" and reattach_available,
@@ -316,7 +324,7 @@ def _served_control(
             update={
                 "control_plane": _control_plane_for_observation(catalog_facts, observed),
                 "actions": observed.actions.model_copy(
-                    update={"start_turn": start_turn, "reattach": reattach},
+                    update={"start_turn": start_turn, "reattach": reattach, "resume": resume},
                 ),
             }
         )
@@ -325,7 +333,6 @@ def _served_control(
     connection = "not_applicable" if mode in {"shadow", "console"} else "unknown"
     unavailable_reason = "observe_only" if not owned else "control_unknown"
     reattach = availability(mode == "helm" and reattach_available, reattach_reason)
-    resume = availability(mode == "helm" and resume_available, resume_reason)
     return SessionControlFacts(
         ownership="owned" if owned else "unowned",
         connection=connection,
@@ -346,7 +353,7 @@ def _durable_action_availability(
     *,
     mode: SessionMode,
     supported_operations: set[str],
-    operation: Literal["reattach", "resume"],
+    operation: Literal["reattach"],
 ) -> tuple[bool, str]:
     if mode != "helm" or operation not in supported_operations:
         return False, "unsupported" if operation not in supported_operations else "not_helm"
@@ -357,6 +364,52 @@ def _durable_action_availability(
         if _text(connection.get("state")) not in {"released", "ended"} and bool(connection.get("can_resume")):
             return True, "reattach_available"
     return False, f"{operation}_unavailable"
+
+
+def _resume_action_availability(
+    *,
+    session_id: str,
+    provider: str | None,
+    cwd: str | None,
+    provider_session_id: str | None,
+    mode: SessionMode,
+    run: SessionRunFacts | None,
+    host: SessionHostFacts,
+    heads: Collection[Mapping[str, Any]],
+    supported_operations: set[str],
+    now: datetime,
+) -> SessionActionAvailability:
+    if mode != "helm":
+        return SessionActionAvailability(state="unavailable", reason="not_helm")
+    if "resume" not in supported_operations:
+        return SessionActionAvailability(state="unavailable", reason="unsupported")
+    if run is not None and run.lifecycle != "ended":
+        return SessionActionAvailability(state="unavailable", reason="run_active")
+    if host.state in {"offline", "stale"}:
+        return SessionActionAvailability(state="unavailable", reason="machine_offline")
+    if host.state == "unknown":
+        return SessionActionAvailability(state="unavailable", reason="machine_unknown")
+    winner, _rejected = _effective_head(
+        heads,
+        session_id=session_id,
+        family="continuation",
+        now=now,
+    )
+    if winner is None:
+        return SessionActionAvailability(state="unavailable", reason="contract_missing")
+    _head, value, _observed_at, _valid_until = winner
+    if provider is None or _text(value.get("provider")) != provider:
+        return SessionActionAvailability(state="unavailable", reason="provider_incompatible")
+    if _text(value.get("contract_state")) != "valid":
+        return SessionActionAvailability(
+            state="unavailable",
+            reason=_text(value.get("unavailable_reason")) or "contract_invalid",
+        )
+    if cwd is None or _text(value.get("cwd")) != cwd:
+        return SessionActionAvailability(state="unavailable", reason="workspace_mismatch")
+    if provider_session_id is None or _text(value.get("provider_session_id")) != provider_session_id:
+        return SessionActionAvailability(state="unavailable", reason="provider_identity_mismatch")
+    return SessionActionAvailability(state="available")
 
 
 def _control_plane_for_observation(
@@ -473,7 +526,7 @@ def _effective_head(
     heads: Collection[Mapping[str, Any]],
     *,
     session_id: str,
-    family: Literal["activity", "control"],
+    family: Literal["activity", "control", "continuation"],
     now: datetime,
     expected_run_id: str | None = None,
     require_run_binding: bool = False,
@@ -669,7 +722,7 @@ def _valid_until(
 def _head_value(
     head: Mapping[str, Any],
     *,
-    family: Literal["activity", "control"],
+    family: Literal["activity", "control", "continuation"],
     session_id: str,
 ) -> dict[str, Any]:
     raw = head.get("value_json")
@@ -690,13 +743,17 @@ def _head_value(
         if not run_id:
             raise ValueError("activity run_id is missing")
         expected_subject = f"run:{run_id}"
-    else:
+    elif family == "control":
         connection_id = str(value.get("connection_id") or "").strip()
         lease_generation = str(value.get("lease_generation") or "").strip()
         if not connection_id or not lease_generation:
             raise ValueError("control connection identity is missing")
         expected_subject = f"connection:{connection_id}:{lease_generation}"
         _validated_grants(value)
+    else:
+        expected_subject = f"resume:{session_id}"
+        if value.get("contract_state") not in {"valid", "invalid"}:
+            raise ValueError("continuation contract_state is invalid")
     if head.get("subject_key") != expected_subject:
         raise ValueError("fact head subject_key does not match its value")
     return value

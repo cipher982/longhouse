@@ -89,6 +89,7 @@ private extension APISessionStateFacts {
             presentationPolicyVersion: presentationPolicyVersion ?? 1,
             mode: mode,
             dispositionState: disposition.state,
+            dispositionCloseReason: disposition.closeReason,
             launchState: launch?.state,
             runLifecycle: run?.lifecycle,
             activityState: activity.state,

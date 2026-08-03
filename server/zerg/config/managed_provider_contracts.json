@@ -134,6 +134,127 @@
             }
           ]
         },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_no_token",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "416f3e6b24da425d4f9f51c585f2dcbda9cc4c15b839a55b02fedffe4042e8c4"
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            }
+          ]
+        },
         "coordination.awareness.create": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -536,6 +657,127 @@
               ],
               "max_age_seconds": 604800,
               "oracle_digest": "fe95e150d5af4cd7ec01dd0429afb4bbb00fc4af659147e19c884898072bd827"
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_no_token",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "416f3e6b24da425d4f9f51c585f2dcbda9cc4c15b839a55b02fedffe4042e8c4"
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
             }
           ]
         },
@@ -959,6 +1201,127 @@
             }
           ]
         },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_no_token",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "416f3e6b24da425d4f9f51c585f2dcbda9cc4c15b839a55b02fedffe4042e8c4"
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -1012,7 +1375,7 @@
           ]
         }
       },
-      "can_resume": false,
+      "can_resume": true,
       "turn_start": true,
       "operation_evidence": {
         "launch_local": {
@@ -1224,6 +1587,33 @@
               ],
               "max_age_seconds": 604800,
               "oracle_digest": "83e04690e1871918ea99447feb6be2cad56e1d302a73d96dc31bbd15f1b5f318"
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
+          "policy_key": "provider.antigravity.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "unsupported_resume_is_typed_and_side_effect_free",
+              "scenario_id": "resume_unsupported",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
             }
           ]
         },
@@ -1493,6 +1883,127 @@
             }
           ]
         },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_no_token",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "416f3e6b24da425d4f9f51c585f2dcbda9cc4c15b839a55b02fedffe4042e8c4"
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+            }
+          ]
+        },
         "coordination.awareness.create": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -1655,7 +2166,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "d77744d49f4a06af5b44ab8f5c6b5a672a2b2f0217e977c4a0fde180f915d7a6"
+      "adapter_digest": "81bb1127343f7d196f2942b94150a1b428ac25081a44191b6bcda7372c1c9e53"
     }
   ]
 }

@@ -34,6 +34,8 @@ from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import verify_provider_builds
 from zerg.qa.provider_evidence_measurement import measure_evidence_package
+from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
+from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import factory_provider_names
@@ -128,6 +130,7 @@ SCENARIOS = (
     "tool_call_result",
     "codex_tool_call_result_strict",
     "resume_reattach",
+    *PROVIDER_RESUME_SCENARIOS,
     "terminate_cleanup",
     "tail_output",
     "runtime_phase",
@@ -195,6 +198,7 @@ MVP_METHODS = (
     "answer_pause_request",
     "interrupt_cancel",
     "tool_call_result",
+    "cold_resume",
     "resume_reattach",
     "terminate_cleanup",
     "tail_output",
@@ -250,6 +254,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "interrupt_cancel",
     "tool_call_result_projection",
     "resume_reattach",
+    *PROVIDER_RESUME_SCENARIOS,
     "terminate_cleanup",
     "tail_output",
     "runtime_phase",
@@ -266,13 +271,18 @@ ACTION_EXECUTION_SCENARIO_BY_ID = {
     "provider_identity": ("probe_identity",),
     "launch_local": ("launch_managed_session",),
     "run_once": ("run_prompt_once",),
-    "session_identity": ("launch_managed_session", "resume_reattach", "managed_session_e2e"),
+    "session_identity": (
+        "launch_managed_session",
+        "resume_reattach",
+        "resume_identity_continuity",
+        "managed_session_e2e",
+    ),
     "send_message": ("send_receive", "interrupt_cancel", "managed_session_e2e"),
     "steer_active_turn": ("steer_active_turn",),
     "pause_request_detect": ("pause_request_detect",),
     "answer_pause_request": ("answer_pause_request",),
     "interrupt_cancel": ("interrupt_cancel",),
-    "resume_reattach": ("resume_reattach",),
+    "resume_reattach": ("resume_reattach", *PROVIDER_RESUME_SCENARIOS),
     "terminate_cleanup": ("terminate_cleanup",),
     "tail_output": ("tail_output",),
     "runtime_phase": ("runtime_phase",),
@@ -782,6 +792,8 @@ class AgentHarnessAdapter(Protocol):
     def interrupt_cancel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def tool_call_result(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def cold_resume(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def resume_reattach(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -1546,6 +1558,26 @@ class UniversalProviderAdapter:
             }
         }
         package.write_json("assertions/tool_call_result.json", payload)
+        return payload
+
+    def cold_resume(self, package: EvidencePackage) -> dict[str, Any]:
+        contract = contract_for_provider(self.config.provider)
+        capability = dict((contract.capabilities if contract else {}).get("session.resume.helm") or {})
+        if capability.get("disposition") != "implemented":
+            payload = self._unsupported_payload(
+                "helm_cold_resume_native",
+                str(capability.get("reason_code") or "resume_unsupported"),
+                "This provider does not expose native ended-Helm Resume.",
+                operation="resume",
+            )
+        else:
+            payload = self._unsupported_payload(
+                "helm_cold_resume_native",
+                "cold_resume_adapter_missing",
+                "Native cold Resume has no provider adapter.",
+                operation="resume",
+            )
+        package.write_json("assertions/helm_cold_resume_native.json", payload)
         return payload
 
     def resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
@@ -6226,6 +6258,48 @@ def run_resume_reattach(adapter: AgentHarnessAdapter, package: EvidencePackage) 
     )
 
 
+def run_provider_resume_factory(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = run_provider_resume_scenario(adapter.config.provider, package.scenario)
+    if package.scenario == "helm_cold_resume" and payload.get("status") == STATUS_PASS:
+        native = adapter.cold_resume(package)
+        native_passed = native.get("status") == STATUS_PASS
+        payload["native_resume_evidence"] = {
+            "status": native.get("status"),
+            "failure_code": native.get("failure_code"),
+            "operation_evidence": native.get("operation_evidence"),
+            "source_artifact_kind": native.get("source_artifact_kind"),
+            "proof_scope": native.get("proof_scope"),
+        }
+        payload.setdefault("assertions", {})["native_provider_resume_proven"] = native_passed
+        if not native_passed:
+            native_status = native.get("status")
+            payload["status"] = (
+                native_status if native_status in {STATUS_UNSUPPORTED_GAP, STATUS_NOT_APPLICABLE, STATUS_BLOCKED} else STATUS_FAIL
+            )
+            payload["failure_code"] = native.get("failure_code") or "native_provider_resume_not_proven"
+    elif package.scenario == "resume_unsupported" and payload.get("status") == STATUS_PASS:
+        native = adapter.cold_resume(package)
+        refused = native.get("status") in {STATUS_UNSUPPORTED_GAP, STATUS_NOT_APPLICABLE}
+        payload["native_policy_evidence"] = {
+            "status": native.get("status"),
+            "failure_code": native.get("failure_code"),
+            "operation_evidence": native.get("operation_evidence"),
+        }
+        payload.setdefault("assertions", {})["unsupported_resume_is_typed_and_side_effect_free"] = refused
+        if not refused:
+            payload["status"] = STATUS_FAIL
+            payload["failure_code"] = "unsupported_resume_policy_not_enforced"
+    package.write_json(f"assertions/{package.scenario}.json", payload)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario=package.scenario,
+        package=package,
+        payload=payload,
+    )
+
+
 def run_terminate_cleanup(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.terminate_cleanup(package)
@@ -6448,6 +6522,7 @@ SCENARIO_RUNNERS = {
     "tool_call_result": run_tool_call_result,
     "codex_tool_call_result_strict": run_codex_tool_call_result_strict,
     "resume_reattach": run_resume_reattach,
+    **{scenario: run_provider_resume_factory for scenario in PROVIDER_RESUME_SCENARIOS},
     "terminate_cleanup": run_terminate_cleanup,
     "tail_output": run_tail_output,
     "runtime_phase": run_runtime_phase,

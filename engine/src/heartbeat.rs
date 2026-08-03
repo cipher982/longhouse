@@ -198,6 +198,8 @@ pub struct MachineEvidence {
     pub process_snapshot_scopes: Vec<ProcessSnapshotScope>,
     #[serde(default)]
     pub readiness: Vec<ReadinessEvidence>,
+    #[serde(default)]
+    pub continuation: Vec<ContinuationEvidence>,
 }
 
 /// Run-scoped terminal evidence produced only when a provider adapter can
@@ -278,6 +280,24 @@ pub struct ReadinessEvidence {
     pub raw_locator: Option<String>,
     #[serde(default)]
     pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ContinuationEvidence {
+    pub authority_class: String,
+    pub provider: String,
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    pub contract_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    pub observed_at: String,
+    pub valid_until: String,
+    pub source: String,
+    pub raw_locator: String,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -1068,6 +1088,7 @@ pub(crate) fn machine_evidence_from_observations(
     run_windows: &crate::state::session_run_binding::RunWindowIndex,
     process_snapshot_complete: bool,
     now: DateTime<Utc>,
+    continuation_observations: Option<&[crate::managed_resume_scan::ResumeContractObservation]>,
 ) -> MachineEvidence {
     let envelope_observed_at = now.to_rfc3339();
     let boot_id = machine_boot_id();
@@ -1078,6 +1099,33 @@ pub(crate) fn machine_evidence_from_observations(
     let mut readiness = antigravity_observations
         .iter()
         .map(|observation| antigravity_readiness_evidence(observation, now))
+        .collect::<Vec<_>>();
+    let scanned_continuation;
+    let continuation_observations = if let Some(observations) = continuation_observations {
+        observations
+    } else {
+        scanned_continuation = crate::config::get_longhouse_home()
+            .ok()
+            .map(|home| crate::managed_resume_scan::scan_resume_contracts(&home, now))
+            .unwrap_or_default();
+        &scanned_continuation
+    };
+    let mut continuation = continuation_observations
+        .iter()
+        .cloned()
+        .map(|observation| ContinuationEvidence {
+            authority_class: "retained_launch_contract".to_string(),
+            provider: observation.provider,
+            session_id: observation.session_id,
+            provider_session_id: observation.provider_session_id,
+            cwd: observation.cwd,
+            contract_state: observation.contract_state,
+            unavailable_reason: observation.unavailable_reason,
+            observed_at: observation.observed_at,
+            valid_until: observation.valid_until,
+            source: observation.source,
+            raw_locator: observation.raw_locator,
+        })
         .collect::<Vec<_>>();
 
     let observed_at = |value: &str| {
@@ -1620,12 +1668,14 @@ pub(crate) fn machine_evidence_from_observations(
         (&a.provider, &a.provider_session_id).cmp(&(&b.provider, &b.provider_session_id))
     });
     readiness.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    continuation.sort_by(|a, b| (&a.provider, &a.session_id).cmp(&(&b.provider, &b.session_id)));
     run.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     process.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     activity.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     control.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     transcript.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     readiness.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
+    continuation.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
 
     let identities = reducer_evidence_identities(
         machine_id,
@@ -1635,6 +1685,7 @@ pub(crate) fn machine_evidence_from_observations(
         &control,
         &transcript,
         &readiness,
+        &continuation,
     );
 
     MachineEvidence {
@@ -1667,6 +1718,7 @@ pub(crate) fn machine_evidence_from_observations(
             },
         ],
         readiness,
+        continuation,
     }
 }
 
@@ -1678,8 +1730,10 @@ fn reducer_evidence_identities(
     control: &[ControlEvidence],
     transcript: &[TranscriptEvidence],
     readiness: &[ReadinessEvidence],
+    continuation: &[ContinuationEvidence],
 ) -> Vec<EvidenceIdentity> {
     let mut families = [
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -1765,6 +1819,18 @@ fn reducer_evidence_identities(
             format!("readiness:{}:{}", fact.session_id, fact.operation),
             &fact.source,
             Some(source_epoch),
+            None,
+            fact,
+        ));
+    }
+
+    for (fact_index, fact) in continuation.iter().enumerate() {
+        families[6].push(evidence_identity(
+            "continuation",
+            fact_index,
+            format!("resume:{}", fact.session_id),
+            &fact.source,
+            Some(stable_component(&fact.raw_locator)),
             None,
             fact,
         ));
@@ -3092,9 +3158,9 @@ fn disk_free_bytes(_path: &std::path::Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::state::session_run_binding::RunWindowIndex;
     use super::*;
     use crate::state::db::open_db;
+    use crate::state::session_run_binding::RunWindowIndex;
     use std::path::PathBuf;
 
     #[test]
@@ -3407,10 +3473,7 @@ mod tests {
         // live_control_available on hosted and pinned dead rows to the shelf.
         let now = Utc::now();
 
-        let mut obs = test_observation(
-            "abandoned-tui-codex",
-            "ws://127.0.0.1:45684/session",
-        );
+        let mut obs = test_observation("abandoned-tui-codex", "ws://127.0.0.1:45684/session");
         obs.launch_mode = Some("tui".to_string());
         obs.has_tui_attachment = false;
         obs.app_server_alive = true;
@@ -3428,10 +3491,7 @@ mod tests {
         // the headless exemption; without evidence of a terminal they degrade.
         let now = Utc::now();
 
-        let mut obs = test_observation(
-            "legacy-codex",
-            "ws://127.0.0.1:45685/session",
-        );
+        let mut obs = test_observation("legacy-codex", "ws://127.0.0.1:45685/session");
         obs.launch_mode = None;
         obs.has_tui_attachment = false;
         obs.app_server_alive = true;
@@ -4829,6 +4889,7 @@ mod tests {
             &RunWindowIndex::default(),
             true,
             now,
+            Some(&[]),
         );
 
         assert_eq!(evidence.schema_version, 3);
@@ -5004,6 +5065,7 @@ mod tests {
             &RunWindowIndex::default(),
             false,
             now,
+            Some(&[]),
         );
         assert!(without_activity.activity.is_empty());
         assert_eq!(without_activity.process, evidence.process);
@@ -5162,9 +5224,9 @@ mod tests {
         );
 
         let first_identity =
-            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[first]);
+            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[first], &[]);
         let second_identity =
-            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[second]);
+            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[second], &[]);
         assert_eq!(first_identity, second_identity);
         assert_eq!(first_identity.len(), 1);
         assert!(first_identity[0].source_epoch.is_some());
@@ -5204,6 +5266,7 @@ mod tests {
             &RunWindowIndex::default(),
             true,
             first_now,
+            Some(&[]),
         );
         let second = machine_evidence_from_observations(
             "cinder",
@@ -5217,6 +5280,7 @@ mod tests {
             &RunWindowIndex::default(),
             true,
             first_now + chrono::Duration::minutes(5),
+            Some(&[]),
         );
         assert_eq!(first.transcript, second.transcript);
         let first_identity = first
@@ -5249,6 +5313,7 @@ mod tests {
             &RunWindowIndex::default(),
             true,
             first_now,
+            Some(&[]),
         );
         assert!(without_stable_position.transcript.is_empty());
     }
@@ -5282,6 +5347,7 @@ mod tests {
             &RunWindowIndex::default(),
             true,
             now,
+            Some(&[]),
         );
 
         assert_eq!(evidence.schema_version, 3);
@@ -5289,6 +5355,48 @@ mod tests {
         assert!(evidence.activity.is_empty());
         assert!(!evidence.process.is_empty());
         assert!(!evidence.transcript.is_empty());
+    }
+
+    #[test]
+    fn retained_resume_contract_maps_into_heartbeat_evidence_and_identity() {
+        let now = DateTime::parse_from_rfc3339("2026-08-02T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let continuation = crate::managed_resume_scan::ResumeContractObservation {
+            provider: "claude".to_string(),
+            session_id: "11111111-1111-4111-8111-111111111111".to_string(),
+            provider_session_id: Some("22222222-2222-4222-8222-222222222222".to_string()),
+            cwd: Some("/workspace/longhouse".to_string()),
+            contract_state: "valid".to_string(),
+            unavailable_reason: None,
+            source: "managed_resume_contract_scan".to_string(),
+            raw_locator: "claude/11111111-1111-4111-8111-111111111111".to_string(),
+            observed_at: now.to_rfc3339(),
+            valid_until: (now + chrono::Duration::minutes(20)).to_rfc3339(),
+        };
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &RunWindowIndex::default(),
+            true,
+            now,
+            Some(std::slice::from_ref(&continuation)),
+        );
+        assert_eq!(evidence.continuation.len(), 1);
+        assert_eq!(
+            evidence.continuation[0].authority_class,
+            "retained_launch_contract"
+        );
+        assert!(evidence.identities.iter().any(|identity| {
+            identity.fact_family == "continuation"
+                && identity.subject_key == "resume:11111111-1111-4111-8111-111111111111"
+        }));
     }
 
     /// Build an index the way the daemon would, from (run_id, run_started_at).
@@ -5361,6 +5469,7 @@ mod tests {
             &windows,
             true,
             now,
+            Some(&[]),
         );
         assert_eq!(evidence.activity.len(), 1);
         assert_eq!(
@@ -5389,10 +5498,7 @@ mod tests {
             observed_at: "2026-08-01T13:11:51Z".to_string(),
             valid_until: "2026-08-01T13:21:51Z".to_string(),
         };
-        let remembered = run_window_index(&[(
-            "run-cursor-session",
-            "2026-08-01T13:10:35Z",
-        )]);
+        let remembered = run_window_index(&[("run-cursor-session", "2026-08-01T13:10:35Z")]);
 
         let stranded = machine_evidence_from_observations(
             "cinder",
@@ -5406,6 +5512,7 @@ mod tests {
             &RunWindowIndex::default(),
             true,
             now,
+            Some(&[]),
         );
         assert!(
             stranded.activity.is_empty(),
@@ -5424,6 +5531,7 @@ mod tests {
             &remembered,
             true,
             now,
+            Some(&[]),
         );
         assert_eq!(evidence.activity.len(), 1);
         assert_eq!(evidence.activity[0].kind, "idle");
@@ -5523,6 +5631,7 @@ mod tests {
                 &RunWindowIndex::default(),
                 true,
                 now,
+                Some(&[]),
             );
             evidence.activity = activity;
             let mut payload = digest_test_payload();

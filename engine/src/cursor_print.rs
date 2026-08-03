@@ -979,6 +979,9 @@ fn promote_binding(
             "client_request_id": client_request_id,
             "conversation_uuid": provider_thread_id,
             "launch_id": launch_id,
+            "permission_policy": existing.get("permission_policy").cloned().unwrap_or(Value::Null),
+            "cwd": existing.get("cwd").cloned().unwrap_or(Value::Null),
+            "provider_binary": existing.get("provider_binary").cloned().unwrap_or(Value::Null),
             "hook_observed_at": Utc::now().to_rfc3339(),
         }))?,
     )

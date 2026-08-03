@@ -2316,11 +2316,9 @@ fn arm_phase_projection(pending: &mut bool) -> bool {
 /// makes this cover out-of-process writers — the Codex bridge, Console
 /// adapters, and OpenCode all record phases from their own processes.
 fn latest_phase_watermark(conn: &rusqlite::Connection) -> Option<i64> {
-    conn.query_row(
-        "SELECT MAX(revision) FROM session_phase_state",
-        [],
-        |row| row.get::<_, Option<i64>>(0),
-    )
+    conn.query_row("SELECT MAX(revision) FROM session_phase_state", [], |row| {
+        row.get::<_, Option<i64>>(0)
+    })
     .ok()
     .flatten()
 }
@@ -2516,6 +2514,7 @@ fn build_local_status_projection(
         &run_windows,
         process_snapshot_complete,
         now,
+        None,
     ));
     payload.sessions = heartbeat::resolved_sessions_from_observations(
         &payload.managed_sessions,
@@ -3402,11 +3401,20 @@ fn maybe_start_managed_observation_scan(
                     .filter(|observation| codex_contract_must_be_retained(observation))
                     .map(|observation| observation.session_id.clone())
                     .collect::<std::collections::HashSet<_>>();
-                let live_claude = claude_observations
+                let mut retained_claude = claude_observations
                     .iter()
                     .filter(|observation| observation.claude_alive || observation.bridge_alive)
                     .map(|observation| observation.session_id.clone())
                     .collect::<std::collections::HashSet<_>>();
+                retained_claude.extend(
+                    crate::managed_resume_scan::scan_resume_contracts(&home, chrono::Utc::now())
+                        .into_iter()
+                        .filter(|observation| {
+                            observation.provider == "claude"
+                                && observation.contract_state == "valid"
+                        })
+                        .map(|observation| observation.session_id),
+                );
                 let now = std::time::SystemTime::now();
                 let swept = crate::managed_contract_janitor::sweep_orphan_contracts(
                     &home.join("managed-local/contracts/codex"),
@@ -3414,7 +3422,7 @@ fn maybe_start_managed_observation_scan(
                     now,
                 ) + crate::managed_contract_janitor::sweep_orphan_contracts(
                     &home.join("managed-local/contracts/claude"),
-                    &live_claude,
+                    &retained_claude,
                     now,
                 );
                 if swept > 0 {
@@ -4788,7 +4796,11 @@ mod tests {
             );",
         )
         .unwrap();
-        assert_eq!(latest_phase_watermark(&conn), None, "empty ledger has no watermark");
+        assert_eq!(
+            latest_phase_watermark(&conn),
+            None,
+            "empty ledger has no watermark"
+        );
 
         conn.execute(
             "INSERT INTO session_phase_state VALUES ('s1','codex','thinking',NULL,'codex_bridge','2026-08-01T13:10:00+00:00',1)",
@@ -4804,7 +4816,10 @@ mod tests {
         )
         .unwrap();
         let second = latest_phase_watermark(&conn).unwrap();
-        assert_ne!(first, second, "a later phase from any session must move the watermark");
+        assert_ne!(
+            first, second,
+            "a later phase from any session must move the watermark"
+        );
 
         // Re-reading without a write must not re-arm the debounce.
         assert_eq!(latest_phase_watermark(&conn).unwrap(), second);
@@ -4854,7 +4869,10 @@ mod tests {
         // A tool-heavy turn emits many phases. They must produce one projection
         // rebuild, and the window must not slide, or a busy turn never rebuilds.
         let mut pending = false;
-        assert!(arm_phase_projection(&mut pending), "first write opens the window");
+        assert!(
+            arm_phase_projection(&mut pending),
+            "first write opens the window"
+        );
         for _ in 0..50 {
             assert!(
                 !arm_phase_projection(&mut pending),

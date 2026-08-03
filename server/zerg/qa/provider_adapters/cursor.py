@@ -257,6 +257,16 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             operations=("reattach",),
         ) or super().resume_reattach(package)
 
+    def cold_resume(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._gate0_result(
+            package,
+            scenario="helm_cold_resume_native",
+            required_scenarios=("native_resume_continuity",),
+            operations=("reattach",),
+        ) or super().cold_resume(package)
+        payload["scenario"] = "helm_cold_resume_native"
+        return payload
+
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
         return self._gate0_result(
             package,

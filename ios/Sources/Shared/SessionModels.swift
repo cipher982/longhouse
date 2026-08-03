@@ -15,11 +15,27 @@ struct SessionStateAction: Hashable, Codable, Sendable {
     var isAvailable: Bool { state == "available" }
 }
 
+struct SessionResumeIntent: Codable, Identifiable, Sendable {
+    let sessionId: String
+    let provider: String
+    let machineId: String?
+    let machineLabel: String?
+    let cwd: String?
+    let available: Bool
+    let reason: String?
+    let argv: [String]
+    let command: String?
+    let handoff: String
+
+    var id: String { sessionId }
+}
+
 struct SessionStateFacts: Hashable, Codable, Sendable {
     let contractVersion: Int
     let presentationPolicyVersion: Int
     let mode: String
     let dispositionState: String
+    let dispositionCloseReason: String?
     let launchState: String?
     let runLifecycle: String?
     let activityState: String
@@ -58,6 +74,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         presentationPolicyVersion: 1,
         mode: "unknown",
         dispositionState: "unknown",
+        dispositionCloseReason: nil,
         launchState: nil,
         runLifecycle: nil,
         activityState: "unknown",

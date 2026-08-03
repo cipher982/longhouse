@@ -67,6 +67,8 @@ from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_listing import SessionListingError
+from zerg.services.session_resume import SessionResumeIntentResponse
+from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_views import DemoSeedResponse
@@ -870,6 +872,23 @@ def get_timeline_session(
         _auth=None,
         owner_id=_browser_owner_id(current_user),
     )
+
+
+@router.post("/sessions/{session_id}/resume-intent", response_model=SessionResumeIntentResponse)
+def create_timeline_session_resume_intent(
+    session_id: UUID,
+    response: Response,
+    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
+    current_user=Depends(get_current_browser_user),
+) -> SessionResumeIntentResponse:
+    session = _sessions_router.session_detail_payload(
+        session_id=session_id,
+        response=response,
+        db=db,
+        _auth=None,
+        owner_id=_browser_owner_id(current_user),
+    )
+    return build_session_resume_intent(session)
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)

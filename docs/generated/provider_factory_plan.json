@@ -280,10 +280,127 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "claude",
@@ -411,7 +528,16 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [
         "ANTHROPIC_API_KEY",
@@ -419,6 +545,113 @@
         "LONGHOUSE_ENGINE_BIN"
       ],
       "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
         {
           "assertion_id": "claude_cli_channel_contract_preserved",
           "scenario_id": "claude_real_print",
@@ -557,10 +790,127 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "codex",
@@ -700,7 +1050,16 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [
         "CODEX_API_KEY",
@@ -708,7 +1067,115 @@
         "CODEX_API_URL",
         "LONGHOUSE_ENGINE_BIN"
       ],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "codex",
@@ -799,10 +1266,127 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "cursor",
@@ -836,10 +1420,127 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "cursor",
@@ -890,7 +1591,16 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [
         "CURSOR_API_KEY",
@@ -898,7 +1608,115 @@
         "LONGHOUSE_CLI_BIN",
         "LONGHOUSE_ENGINE_BIN"
       ],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "cursor",
@@ -1041,10 +1859,127 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "opencode",
@@ -1172,12 +2107,128 @@
         "transcript_binding",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
-        "managed_session_e2e"
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
       ],
       "credential_requirement": [
         "OPENROUTER_API_KEY"
       ],
       "assertion_status": [
+        {
+          "assertion_id": "cold_resume_registers_continuous_thread",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "native_provider_resume_proven",
+          "scenario_id": "helm_cold_resume",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic",
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "live_reattach_does_not_spawn_owner",
+          "scenario_id": "helm_live_reattach",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_continuation_is_distinct",
+          "scenario_id": "console_thread_continue",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "session_thread_and_machine_identity_continue",
+          "scenario_id": "resume_identity_continuity",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "resume_attempt_is_idempotent",
+          "scenario_id": "resume_attempt_idempotency",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "one_local_provider_owner_wins",
+          "scenario_id": "resume_single_owner",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "stale_input_is_not_replayed",
+          "scenario_id": "resume_input_safety",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "failed_resume_closes_attempt_and_restores_contract",
+          "scenario_id": "resume_failure_cleanup",
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
         {
           "assertion_id": "serve_session_contract_preserved",
           "scenario_id": "opencode_server_contract",

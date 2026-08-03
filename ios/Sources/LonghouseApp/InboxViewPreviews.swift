@@ -43,6 +43,7 @@ private func previewStateFacts(
         presentationPolicyVersion: 1,
         mode: unread ? "console" : (isManaged ? "helm" : "shadow"),
         dispositionState: closed ? "closed" : "open",
+        dispositionCloseReason: closed ? "user_closed" : nil,
         launchState: nil,
         runLifecycle: closed ? "ended" : "running",
         activityState: activity,

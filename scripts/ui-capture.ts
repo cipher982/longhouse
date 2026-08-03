@@ -17,6 +17,7 @@
  *   bunx tsx scripts/ui-capture.ts --scene=empty
  *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
  *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-detail-stress
+ *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui-capture.ts machines
  *   bunx tsx scripts/ui-capture.ts --all
  */
@@ -27,6 +28,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import {
   buildSessionDetailStressFixture,
+  buildSessionResumeFixture,
   SESSION_DETAIL_STRESS_NOW,
   SESSION_DETAIL_STRESS_SESSION_ID,
 } from "./ui-fixtures/sessionDetailStress";
@@ -54,6 +56,7 @@ const SCENES = [
   "missing-api-key",
   "timeline-card-stress",
   "session-detail-stress",
+  "session-resume",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
@@ -180,17 +183,17 @@ function parseViewport(value: string | undefined): ViewportConfig {
 }
 
 function sceneUsesMockApi(scene: SceneName): boolean {
-  return scene === "timeline-card-stress" || scene === "session-detail-stress";
+  return scene === "timeline-card-stress" || scene === "session-detail-stress" || scene === "session-resume";
 }
 
 function validateOptions(opts: Options): void {
-  if (opts.page === "session-detail" && opts.scene !== "session-detail-stress") {
+  if (opts.page === "session-detail" && !["session-detail-stress", "session-resume"].includes(opts.scene)) {
     throw new Error(
-      "session-detail requires --scene=session-detail-stress (or PAGE=session-detail SCENE=session-detail-stress through make).",
+      "session-detail requires --scene=session-detail-stress or --scene=session-resume.",
     );
   }
-  if (opts.all && opts.scene === "session-detail-stress") {
-    throw new Error("SCENE=session-detail-stress captures PAGE=session-detail only; omit ALL=1.");
+  if (opts.all && ["session-detail-stress", "session-resume"].includes(opts.scene)) {
+    throw new Error("Session-detail scenes capture PAGE=session-detail only; omit ALL=1.");
   }
 }
 
@@ -291,8 +294,8 @@ async function installSceneMocks(
 
   const appOrigin = new URL(baseUrl).origin;
 
-  if (scene === "session-detail-stress") {
-    const fixture = buildSessionDetailStressFixture();
+  if (scene === "session-detail-stress" || scene === "session-resume") {
+    const fixture = scene === "session-resume" ? buildSessionResumeFixture() : buildSessionDetailStressFixture();
     const sessionBasePath = `/api/timeline/sessions/${fixture.session.id}`;
 
     await context.route(`${appOrigin}/api/**`, async (route) => {
@@ -339,6 +342,26 @@ async function installSceneMocks(
           status: 200,
           contentType: "application/json",
           body: JSON.stringify(fixture.turns),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/resume-intent`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            session_id: fixture.session.id,
+            provider: "codex",
+            machine_id: "device-cinder",
+            machine_label: "cinder",
+            cwd: "/Users/example/git/zerg",
+            available: true,
+            reason: null,
+            argv: ["longhouse", "codex", "--cwd", "/Users/example/git/zerg", "--resume-session", fixture.session.id],
+            command: `longhouse codex --cwd /Users/example/git/zerg --resume-session ${fixture.session.id}`,
+            handoff: "terminal_command",
+          }),
         });
         return;
       }
@@ -477,7 +500,9 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     return;
   }
 
-  const fixtureNowIso = scene === "session-detail-stress" ? SESSION_DETAIL_STRESS_NOW : "2026-04-15T16:12:00Z";
+  const fixtureNowIso = ["session-detail-stress", "session-resume"].includes(scene)
+    ? SESSION_DETAIL_STRESS_NOW
+    : "2026-04-15T16:12:00Z";
   await page.addInitScript((nowIso) => {
     const fixtureNow = Date.parse(nowIso);
     Date.now = () => fixtureNow;
@@ -529,6 +554,11 @@ async function captureBundle(
 
   // Let CSS apply
   await page.waitForTimeout(100);
+
+  if (scene === "session-resume" && pageName === "session-detail") {
+    await page.getByRole("button", { name: /Resume on/ }).click();
+    await page.getByRole("dialog").waitFor();
+  }
 
   // Capture screenshot
   const screenshotPath = path.join(outputDir, `${pageName}.png`);

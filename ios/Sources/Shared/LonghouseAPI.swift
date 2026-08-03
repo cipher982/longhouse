@@ -155,12 +155,17 @@ protocol SessionWorkspaceClient: Sendable {
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
     func markSessionRead(id: String, readThrough: String) async throws
+    func sessionResumeIntent(id: String) async throws -> SessionResumeIntent
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
 }
 
 extension SessionWorkspaceClient {
     // Mocks/fixtures that never exercise acknowledgement inherit a no-op.
     func markSessionRead(id: String, readThrough: String) async throws {}
+
+    func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
+        throw LonghouseAPIError.requestFailed
+    }
 
     func respondToPauseRequest(
         sessionId: String,
@@ -671,6 +676,20 @@ struct LonghouseAPI: Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
+    }
+
+    func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
+        var request = URLRequest(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/resume-intent")
+        )
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(SessionResumeIntent.self, from: data)
     }
 
     func notificationSettings() async throws -> UserNotificationSettings {

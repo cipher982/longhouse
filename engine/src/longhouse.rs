@@ -250,6 +250,9 @@ struct OpencodeLaunchArgs {
     token: Option<String>,
     #[arg(long)]
     opencode_bin: Option<String>,
+    /// Resume an ended managed OpenCode Helm session without changing its provider session.
+    #[arg(long)]
+    resume_session: Option<String>,
     #[arg(long, alias = "config-dir")]
     claude_dir: Option<PathBuf>,
 }
@@ -455,7 +458,7 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
                 .with_context(|| format!("parse {}", settings_path.display()))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
             Err(error) => {
-                return Err(error).with_context(|| format!("read {}", settings_path.display()))
+                return Err(error).with_context(|| format!("read {}", settings_path.display()));
             }
         };
     let hooks = settings
@@ -706,14 +709,18 @@ fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
 
 fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
     if !interactive_stdio() {
-        anyhow::bail!("longhouse cursor Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console.");
+        anyhow::bail!(
+            "longhouse cursor Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console."
+        );
     }
     for arg in &args.cursor_args {
         if matches!(
             arg.split('=').next(),
             Some("--resume" | "--continue" | "--new-session-id")
         ) {
-            anyhow::bail!("Cursor Helm owns native session identity; resume/continue selectors are not accepted as passthrough args.");
+            anyhow::bail!(
+                "Cursor Helm owns native session identity; resume/continue selectors are not accepted as passthrough args."
+            );
         }
     }
     let mut command = Command::new(paired_engine_path()?);
@@ -860,39 +867,6 @@ fn write_claude_mcp_config(
     Ok(PrivateTempFile { path })
 }
 
-fn issue_coordination_token(
-    runtime: &tokio::runtime::Runtime,
-    url: &str,
-    device_token: &str,
-    session_id: &str,
-) -> anyhow::Result<String> {
-    let endpoint = format!(
-        "{}/api/agents/sessions/{session_id}/coordination-token",
-        url.trim_end_matches('/')
-    );
-    runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(endpoint)
-            .header("X-Agents-Token", device_token)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            anyhow::bail!(
-                "Could not issue coordination authority for session {session_id}: HTTP {}",
-                response.status()
-            );
-        }
-        let payload: serde_json::Value = response.json().await?;
-        payload
-            .get("coordination_token")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .context("Longhouse returned empty coordination authority")
-    })
-}
-
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
@@ -908,12 +882,42 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let (launch_actor, launch_surface) =
         managed_launch_payload::interactive_human_shell_provenance();
     let runtime = tokio::runtime::Runtime::new()?;
-    let resuming = args.resume.is_some();
-    let response: ManagedLaunchResponse = if let Some(session_id) = &args.resume {
-        let (response, session_cwd) =
-            resolve_managed_claude_resume(&runtime, &url, &token, session_id)?;
-        cwd = session_cwd;
-        response
+    let resume_target = args
+        .resume
+        .as_deref()
+        .map(|session_id| validate_claude_resume_target(session_id, &binary))
+        .transpose()?;
+    let _resume_lock = resume_target
+        .as_ref()
+        .map(|target| acquire_provider_session_lock("claude", &target.session_id))
+        .transpose()?;
+    let response: ManagedLaunchResponse = if let Some(target) = &resume_target {
+        cwd = target.cwd.clone();
+        let resume_attempt_id = Uuid::new_v4().to_string();
+        let payload = ManagedLaunchRegistration {
+            provider: "claude",
+            cwd: &cwd,
+            project: args.project.as_deref(),
+            display_name: args.name.as_deref(),
+            loop_mode: &args.loop_mode,
+            machine_name: &machine_name,
+            permission_mode: target.permission_mode,
+            extra: vec![
+                ("native_claude_channels_available", json!(true)),
+                ("session_id", json!(target.session_id)),
+                ("resume_attempt_id", json!(resume_attempt_id)),
+                ("provider_thread_id", json!(target.provider_session_id)),
+            ],
+        }
+        .to_json();
+        register_managed_launch(
+            &runtime,
+            &url,
+            &token,
+            "Claude resume",
+            &payload,
+            Some(&target.session_id),
+        )?
     } else {
         let mut payload = ManagedLaunchRegistration {
             provider: "claude",
@@ -936,33 +940,33 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         }
         register_managed_launch(&runtime, &url, &token, "Claude", &payload, None)?
     };
-    let mut launch_transaction = if resuming {
-        None
-    } else {
-        Some(ManagedLaunchTransaction::new(
-            &runtime,
-            &url,
-            &token,
-            &response.session_id,
-            &response.run_id,
-        ))
-    };
+    let mut launch_transaction = ManagedLaunchTransaction::new(
+        &runtime,
+        &url,
+        &token,
+        &response.session_id,
+        &response.run_id,
+    );
     let provider_session_id = response
         .provider_session_id
         .as_deref()
         .context("Longhouse did not return a Claude provider session")?;
     response.validate_transport("Claude", "claude_channel_bridge")?;
-    let coordination_token = match response.coordination_token() {
-        Some(value) => value.to_owned(),
-        None if resuming => issue_coordination_token(&runtime, &url, &token, &response.session_id)?,
-        None => anyhow::bail!("Longhouse did not issue coordination authority for this session"),
-    };
+    if resume_target.as_ref().is_some_and(|target| {
+        response.provider_session_id.as_deref() != Some(target.provider_session_id.as_str())
+    }) {
+        anyhow::bail!("Claude resumed a different provider session; the new run was aborted");
+    }
+    let coordination_token = response
+        .coordination_token()
+        .context("Longhouse did not issue coordination authority for this session")?
+        .to_owned();
     let mcp_config = write_claude_mcp_config(&response.session_id, &coordination_token)?;
     let mut command = Command::new(&binary);
     if response.permission_mode.as_deref() != Some("remote_approve") {
         command.arg("--dangerously-skip-permissions");
     }
-    if resuming {
+    if resume_target.is_some() {
         command.args(["--resume", provider_session_id]);
     } else {
         command.args(["--session-id", provider_session_id]);
@@ -994,18 +998,28 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 "0"
             },
         );
-    if let Err(error) = record_claude_contract(&response.session_id, &cwd, &binary) {
+    let contract_path = claude_contract_path(&response.session_id)?;
+    let retained_contract_existed = contract_path.is_file();
+    if let Err(error) = record_claude_contract(
+        &response.session_id,
+        &cwd,
+        &binary,
+        provider_session_id,
+        response.permission_mode.as_deref(),
+    ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let run_result = if let Some(transaction) = launch_transaction.as_mut() {
-        run_foreground_command_after_spawn(&mut command, || transaction.confirm())
-    } else {
-        run_foreground_command(&mut command)
+    let run_result =
+        run_foreground_command_after_spawn(&mut command, || launch_transaction.confirm());
+    let exit = match run_result {
+        Ok(exit) => exit,
+        Err(error) => {
+            if !retained_contract_existed {
+                let _ = std::fs::remove_file(&contract_path);
+            }
+            return Err(error);
+        }
     };
-    if let Err(error) = remove_claude_contract(&response.session_id) {
-        eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
-    }
-    let exit = run_result?;
     if let Err(error) = record_claude_terminal_event(
         &response.session_id,
         &response.run_id,
@@ -1023,9 +1037,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
 
 fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     let cwd = std::fs::canonicalize(&args.cwd)?;
-    let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
+    let (url, token, machine_name) = resolve_codex_config(args.url.clone(), args.token.clone())?;
     let opencode_bin = resolve_provider_binary(
         args.opencode_bin
+            .clone()
             .or_else(|| std::env::var("LONGHOUSE_OPENCODE_BIN").ok()),
         "opencode",
         "OpenCode",
@@ -1033,6 +1048,26 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     )?;
     let (launch_actor, launch_surface) =
         managed_launch_payload::interactive_human_shell_provenance();
+    let resume_target = args
+        .resume_session
+        .as_deref()
+        .map(|session_id| validate_opencode_resume_target(session_id, &cwd, &opencode_bin))
+        .transpose()?;
+    if resume_target.is_some() && (args.no_attach || !args.attach || !interactive_stdio()) {
+        anyhow::bail!("managed OpenCode resume requires an interactive attached terminal");
+    }
+    let _resume_lock = resume_target
+        .as_ref()
+        .map(|target| acquire_provider_session_lock("opencode", &target.session_id))
+        .transpose()?;
+    let extra = match &resume_target {
+        Some(target) => vec![
+            ("session_id", json!(target.session_id)),
+            ("resume_attempt_id", json!(Uuid::new_v4().to_string())),
+            ("provider_thread_id", json!(target.provider_session_id)),
+        ],
+        None => vec![],
+    };
     let mut payload = ManagedLaunchRegistration {
         provider: "opencode",
         cwd: &cwd,
@@ -1043,7 +1078,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         // OpenCode has no remote-approval surface: control_channel rejects any
         // non-bypass permission mode for it outright.
         permission_mode: PermissionMode::Bypass,
-        extra: vec![],
+        extra,
     }
     .to_json();
     if let Some(actor) = launch_actor {
@@ -1053,7 +1088,20 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         payload["launch_surface"] = json!(surface);
     }
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(&runtime, &url, &token, "OpenCode", &payload, None)?;
+    let response = register_managed_launch(
+        &runtime,
+        &url,
+        &token,
+        if resume_target.is_some() {
+            "OpenCode resume"
+        } else {
+            "OpenCode"
+        },
+        &payload,
+        resume_target
+            .as_ref()
+            .map(|target| target.session_id.as_str()),
+    )?;
     let mut launch_transaction = ManagedLaunchTransaction::new(
         &runtime,
         &url,
@@ -1096,12 +1144,34 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(dir) = &args.claude_dir {
         start.arg("--claude-dir").arg(dir);
     }
+    if let Some(target) = &resume_target {
+        start
+            .arg("--resume-provider-session-id")
+            .arg(&target.provider_session_id);
+    }
     let output = start.output().context("start native OpenCode bridge")?;
     if !output.status.success() {
+        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
         anyhow::bail!(
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
+    }
+    let bridge_response: OpencodeBridgeStartResponse = match serde_json::from_slice(&output.stdout)
+        .context("parse native OpenCode bridge response")
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+            return Err(error);
+        }
+    };
+    if resume_target
+        .as_ref()
+        .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
+    {
+        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
     if let Err(error) = launch_transaction.confirm() {
         let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
@@ -1145,6 +1215,69 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     print_helm_closed(&machine_name);
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct OpencodeBridgeStartResponse {
+    provider_session_id: String,
+}
+
+struct OpencodeResumeTarget {
+    session_id: String,
+    provider_session_id: String,
+}
+
+fn validate_opencode_resume_target(
+    session_id: &str,
+    cwd: &Path,
+    opencode_bin: &str,
+) -> anyhow::Result<OpencodeResumeTarget> {
+    validate_session_id(session_id).context("--resume-session must be a Longhouse session UUID")?;
+    let path = longhouse_home()?
+        .join("managed-local/opencode/bridge/sessions")
+        .join(format!("{session_id}.json"));
+    let payload: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).context(
+        "OpenCode Resume is unavailable because its retained provider binding is missing",
+    )?)
+    .context("OpenCode retained provider binding is invalid")?;
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || payload.get("provider").and_then(serde_json::Value::as_str) != Some("opencode")
+        || payload
+            .get("longhouse_session_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(session_id)
+    {
+        anyhow::bail!("OpenCode retained provider binding does not match this session");
+    }
+    let recorded_cwd = payload
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .context("OpenCode retained provider binding has no workspace")?;
+    if std::fs::canonicalize(recorded_cwd).ok() != std::fs::canonicalize(cwd).ok() {
+        anyhow::bail!("OpenCode Resume must run from its retained workspace");
+    }
+    let recorded_binary = payload
+        .get("provider_binary")
+        .and_then(serde_json::Value::as_str)
+        .context("OpenCode retained provider binding has no provider binary")?;
+    if std::fs::canonicalize(recorded_binary).ok() != std::fs::canonicalize(opencode_bin).ok() {
+        anyhow::bail!("OpenCode provider binary changed since this session ended");
+    }
+    let provider_session_id = payload
+        .get("provider_session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .context("OpenCode retained provider binding has no provider session")?;
+    Ok(OpencodeResumeTarget {
+        session_id: session_id.to_owned(),
+        provider_session_id,
+    })
 }
 
 fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
@@ -1239,68 +1372,68 @@ fn record_claude_terminal_event(
     )
 }
 
-fn resolve_managed_claude_resume(
-    runtime: &tokio::runtime::Runtime,
-    url: &str,
-    token: &str,
+struct ClaudeResumeTarget {
+    session_id: String,
+    provider_session_id: String,
+    cwd: PathBuf,
+    permission_mode: PermissionMode,
+}
+
+fn validate_claude_resume_target(
     session_id: &str,
-) -> anyhow::Result<(ManagedLaunchResponse, PathBuf)> {
+    claude_bin: &str,
+) -> anyhow::Result<ClaudeResumeTarget> {
     validate_session_id(session_id).context("--resume must be a Longhouse session UUID")?;
-    let endpoint = format!(
-        "{}/api/agents/sessions/{session_id}",
-        url.trim_end_matches('/')
-    );
-    runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .get(endpoint)
-            .header("X-Agents-Token", token)
-            .send()
-            .await?;
-        match response.status().as_u16() {
-            200 => {}
-            401 => anyhow::bail!("Authentication failed. Run 'longhouse auth' to re-authenticate."),
-            404 => anyhow::bail!("Session not found: {session_id}"),
-            status => anyhow::bail!("Could not load Claude session {session_id}: HTTP {status}"),
-        }
-        let provider_session_id = response
-            .headers()
-            .get("X-Provider-Session-ID")
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .context("Claude session has no provider resume identity yet")?
-            .to_owned();
-        Uuid::parse_str(&provider_session_id)
-            .context("Claude session has an invalid provider resume identity")?;
-        let payload: serde_json::Value = response.json().await?;
-        if payload.get("provider").and_then(serde_json::Value::as_str) != Some("claude") {
-            anyhow::bail!("--resume requires an existing Claude session");
-        }
-        let cwd = payload
-            .get("cwd")
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(claude_contract_path(session_id)?).context(
+            "Claude Resume is unavailable because its retained launch contract is missing",
+        )?)
+        .context("Claude retained launch contract is invalid")?;
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || payload.get("provider").and_then(serde_json::Value::as_str) != Some("claude")
+        || payload
+            .get("session_id")
             .and_then(serde_json::Value::as_str)
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute() && path.is_dir())
-            .context("Claude session workspace is unavailable")?;
-        Ok((
-            ManagedLaunchResponse {
-                session_id: session_id.to_owned(),
-                run_id: payload
-                    .get("run_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                provider_session_id: Some(provider_session_id),
-                permission_mode: payload
-                    .get("permission_mode")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                hook_token: None,
-                managed_transport: Some("claude_channel_bridge".into()),
-                coordination_token: None,
-            },
-            cwd,
-        ))
+            != Some(session_id)
+    {
+        anyhow::bail!("Claude retained launch contract does not match this session");
+    }
+    let recorded_binary = payload
+        .pointer("/provider_binary/path")
+        .and_then(serde_json::Value::as_str)
+        .context("Claude retained launch contract has no provider binary")?;
+    if std::fs::canonicalize(recorded_binary).ok() != std::fs::canonicalize(claude_bin).ok() {
+        anyhow::bail!("Claude provider binary changed since this session ended");
+    }
+    let cwd = payload
+        .pointer("/workspace/canonical_cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .context("Claude session workspace is unavailable")?;
+    let provider_session_id = payload
+        .get("provider_session_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| Uuid::parse_str(value).is_ok())
+        .map(str::to_owned)
+        .context("Claude retained launch contract has no valid provider session")?;
+    let permission_mode = match payload
+        .get("permission_mode")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("remote_approve") => PermissionMode::RemoteApprove,
+        Some("bypass") => PermissionMode::Bypass,
+        Some("provider_local") => PermissionMode::ProviderLocal,
+        _ => anyhow::bail!("Claude retained launch contract has no valid permission mode"),
+    };
+    Ok(ClaudeResumeTarget {
+        session_id: session_id.to_owned(),
+        provider_session_id,
+        cwd,
+        permission_mode,
     })
 }
 
@@ -1311,12 +1444,20 @@ fn claude_contract_path(session_id: &str) -> anyhow::Result<PathBuf> {
         .join(format!("{session_id}.json")))
 }
 
-fn record_claude_contract(session_id: &str, cwd: &Path, claude_bin: &str) -> anyhow::Result<()> {
+fn record_claude_contract(
+    session_id: &str,
+    cwd: &Path,
+    claude_bin: &str,
+    provider_session_id: &str,
+    permission_mode: Option<&str>,
+) -> anyhow::Result<()> {
     let path = claude_contract_path(session_id)?;
     let payload = json!({
         "schema_version": 1,
         "session_id": session_id,
         "provider": "claude",
+        "provider_session_id": provider_session_id,
+        "permission_mode": permission_mode,
         "launch_mode": "tui",
         "created_at": chrono::Utc::now().to_rfc3339(),
         "longhouse_build": build_identity::BuildIdentity::current().qualified(),
@@ -1337,15 +1478,32 @@ fn record_claude_contract(session_id: &str, cwd: &Path, claude_bin: &str) -> any
     Ok(())
 }
 
-fn remove_claude_contract(session_id: &str) -> anyhow::Result<()> {
-    let path = claude_contract_path(session_id)?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => {
-            Err(error).with_context(|| format!("remove managed Claude contract {}", path.display()))
+fn acquire_provider_session_lock(
+    provider: &str,
+    session_id: &str,
+) -> anyhow::Result<std::fs::File> {
+    validate_session_id(session_id)?;
+    let path = longhouse_home()?
+        .join("managed-local/locks")
+        .join(format!("{provider}-{session_id}.lock"));
+    std::fs::create_dir_all(
+        path.parent()
+            .context("managed session lock has no parent")?,
+    )?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            anyhow::bail!("{provider} Helm session {session_id} is already attached or resuming");
         }
     }
+    Ok(file)
 }
 
 fn resolve_codex_config(
@@ -2045,12 +2203,8 @@ fn finish_codex_tui_session(
                         expected_run_id,
                         Some(format!("terminal detach failed: {detach_error:#}")),
                     );
-                    let exit = finish_codex_teardown(
-                        outcome,
-                        session_id,
-                        banner_machine_name,
-                        exit,
-                    )?;
+                    let exit =
+                        finish_codex_teardown(outcome, session_id, banner_machine_name, exit)?;
                     if exit != 0 {
                         std::process::exit(exit);
                     }
@@ -2063,12 +2217,7 @@ fn finish_codex_tui_session(
                     expected_run_id,
                     Some("provider exit observed while detaching the Codex terminal".to_string()),
                 );
-                let exit = finish_codex_teardown(
-                    outcome,
-                    session_id,
-                    banner_machine_name,
-                    exit,
-                )?;
+                let exit = finish_codex_teardown(outcome, session_id, banner_machine_name, exit)?;
                 if exit != 0 {
                     std::process::exit(exit);
                 }
@@ -2087,7 +2236,9 @@ fn finish_codex_tui_session(
                     let outcome = classify_codex_teardown(
                         session_id,
                         expected_run_id,
-                        Some("provider exit observed while detaching the Codex terminal".to_string()),
+                        Some(
+                            "provider exit observed while detaching the Codex terminal".to_string(),
+                        ),
                     );
                     finish_codex_teardown(outcome, session_id, banner_machine_name, 1)?;
                     Err(error)
@@ -2476,7 +2627,7 @@ fn classify_codex_teardown(
         Err(error) => {
             return TeardownOutcome::Unresponsive {
                 detail: format!("{detail}; state path unresolved: {error:#}"),
-            }
+            };
         }
     };
     if !state_path.exists() {
@@ -2490,7 +2641,7 @@ fn classify_codex_teardown(
         Err(error) => {
             return TeardownOutcome::Unresponsive {
                 detail: format!("{detail}; bridge state unreadable: {error:#}"),
-            }
+            };
         }
     };
     let status = state.status.clone().unwrap_or_default();
@@ -3085,36 +3236,32 @@ mod tests {
                      bridge_pid: Option<u32>,
                      app_server_pid: Option<u32>,
                      process_start: Option<&str>| {
-                    std::fs::write(
-                        &state_path,
-                        serde_json::to_vec(&json!({
-                            "cwd": cwd,
-                            "codex_bin": codex,
-                            "pid": bridge_pid,
-                            "bridge_process_start_time": process_start,
-                            "app_server_pid": app_server_pid,
-                            "app_server_process_start_time": process_start,
-                            "status": "stopped",
-                            "thread_id": "33333333-3333-4333-8333-333333333333",
-                            "thread_path": rollout,
-                            "run_id": "44444444-4444-4444-8444-444444444444",
-                            "stopped_at": "2026-08-02T00:00:00Z",
-                            "terminal_state": "session_ended",
-                            "terminal_reason": terminal_reason
-                        }))
-                        .unwrap(),
-                    )
-                    .unwrap();
-                };
+                        std::fs::write(
+                            &state_path,
+                            serde_json::to_vec(&json!({
+                                "cwd": cwd,
+                                "codex_bin": codex,
+                                "pid": bridge_pid,
+                                "bridge_process_start_time": process_start,
+                                "app_server_pid": app_server_pid,
+                                "app_server_process_start_time": process_start,
+                                "status": "stopped",
+                                "thread_id": "33333333-3333-4333-8333-333333333333",
+                                "thread_path": rollout,
+                                "run_id": "44444444-4444-4444-8444-444444444444",
+                                "stopped_at": "2026-08-02T00:00:00Z",
+                                "terminal_state": "session_ended",
+                                "terminal_reason": terminal_reason
+                            }))
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    };
                 write_terminal("unknown", None, None, None);
-                let error = validate_codex_resume_target(
-                    &args,
-                    session_id,
-                    &cwd,
-                    codex.to_str().unwrap(),
-                )
-                .err()
-                .unwrap();
+                let error =
+                    validate_codex_resume_target(&args, session_id, &cwd, codex.to_str().unwrap())
+                        .err()
+                        .unwrap();
                 assert!(format!("{error:#}").contains("no resumable terminal fact"));
 
                 let current_start = process_start_identity(std::process::id()).unwrap();
@@ -3124,14 +3271,10 @@ mod tests {
                     None,
                     Some(&current_start),
                 );
-                let error = validate_codex_resume_target(
-                    &args,
-                    session_id,
-                    &cwd,
-                    codex.to_str().unwrap(),
-                )
-                .err()
-                .unwrap();
+                let error =
+                    validate_codex_resume_target(&args, session_id, &cwd, codex.to_str().unwrap())
+                        .err()
+                        .unwrap();
                 assert!(format!("{error:#}").contains("still shutting down"));
 
                 write_terminal(
@@ -3140,14 +3283,10 @@ mod tests {
                     Some(std::process::id()),
                     Some(&current_start),
                 );
-                let error = validate_codex_resume_target(
-                    &args,
-                    session_id,
-                    &cwd,
-                    codex.to_str().unwrap(),
-                )
-                .err()
-                .unwrap();
+                let error =
+                    validate_codex_resume_target(&args, session_id, &cwd, codex.to_str().unwrap())
+                        .err()
+                        .unwrap();
                 assert!(format!("{error:#}").contains("still shutting down"));
             },
         );
@@ -3309,7 +3448,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_contract_is_written_and_removed_at_the_native_path() {
+    fn claude_contract_retains_native_resume_identity() {
         let temp = tempfile::tempdir().unwrap();
         let cwd = temp.path().join("workspace");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -3318,14 +3457,25 @@ mod tests {
             "LONGHOUSE_HOME",
             Some(temp.path().display().to_string()),
             || {
-                record_claude_contract(session_id, &cwd, "/usr/bin/claude").unwrap();
+                record_claude_contract(
+                    session_id,
+                    &cwd,
+                    "/usr/bin/claude",
+                    "22222222-2222-4222-8222-222222222222",
+                    Some("bypass"),
+                )
+                .unwrap();
                 let path = claude_contract_path(session_id).unwrap();
                 let payload: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 assert_eq!(payload["provider"], "claude");
+                assert_eq!(
+                    payload["provider_session_id"],
+                    "22222222-2222-4222-8222-222222222222"
+                );
+                assert_eq!(payload["permission_mode"], "bypass");
                 assert_eq!(payload["control"]["kind"], "claude_channel_bridge");
-                remove_claude_contract(session_id).unwrap();
-                assert!(!path.exists());
+                assert!(path.exists());
             },
         );
     }

@@ -3,6 +3,7 @@ import pytest
 from zerg.qa.provider_factory_model import ALL_PROVIDERS
 from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILE
 from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILES
+from zerg.qa.provider_factory_model import KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION
 from zerg.qa.provider_factory_model import ORPHANED_CAPABILITY_SCENARIO_IDS
 from zerg.qa.provider_factory_model import PUSH_CODEX_COORDINATION_SCENARIO_ID
 from zerg.qa.provider_factory_model import load_capability_assertions
@@ -25,9 +26,12 @@ def test_capability_assertions_match_schema_scenario_count(facts) -> None:
     # gained a `session.activity.turn_boundary` cell. None of the five has an
     # automated producer yet, so they all surface in the manual lane rather than
     # silently reading as covered.
+    # 16 -> 25 scenarios and 24 -> 61 assertions on 2026-08-02: ended-Helm
+    # Resume added eight supported-provider invariants plus one typed
+    # unsupported-provider invariant across the five provider columns.
     scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert len(scenario_ids) == 16
-    assert len(facts.capability_assertions) == 24
+    assert len(scenario_ids) == 25
+    assert len(facts.capability_assertions) == 61
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:
@@ -38,8 +42,8 @@ def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> Non
     assert PUSH_CODEX_COORDINATION_SCENARIO_ID not in ORPHANED_CAPABILITY_SCENARIO_IDS
 
 
-def test_default_harness_scenarios_has_23_entries(facts) -> None:
-    assert len(facts.default_harness_scenarios) == 23
+def test_default_harness_scenarios_has_32_entries(facts) -> None:
+    assert len(facts.default_harness_scenarios) == 32
     assert "probe_identity" in facts.default_harness_scenarios
     assert "managed_session_e2e" in facts.default_harness_scenarios
     assert "interaction_semantics" in facts.default_harness_scenarios
@@ -174,6 +178,23 @@ def test_weekly_cron_runs_the_full_default_scenario_set_for_scheduled_providers(
     cell = plan_run(facts, provider, "generated_fake", "weekly_cron")
     assert cell.status == "runs"
     assert cell.harness_scenarios == facts.default_harness_scenarios
+    resume_statuses = [
+        status
+        for status in cell.assertion_status
+        if status.scenario_id in {
+            "helm_cold_resume",
+            "helm_live_reattach",
+            "console_thread_continue",
+            "resume_identity_continuity",
+            "resume_attempt_idempotency",
+            "resume_single_owner",
+            "resume_input_safety",
+            "resume_failure_cleanup",
+            "resume_unsupported",
+        }
+    ]
+    assert resume_statuses
+    assert all(status.satisfiable for status in resume_statuses)
 
 
 def test_weekly_cron_does_not_run_antigravity_maintenance_lane(facts) -> None:
@@ -200,7 +221,23 @@ def test_manual_trigger_never_runs_for_codex_without_an_evidence_producer(facts)
     cell = plan_run(facts, "codex", "observed_install", "manual")
     assert cell.status == "never_run"
     assert "no registered evidence producer" in cell.reason
-    assert cell.scenario_ids == (PUSH_CODEX_COORDINATION_SCENARIO_ID, "codex_turn_boundary_quiescent")
+    assert "helm_cold_resume" not in cell.scenario_ids
+
+
+@pytest.mark.parametrize("provider", ("codex", "claude", "opencode", "cursor"))
+def test_resume_factory_assertions_have_registered_evidence_producers(facts, provider: str) -> None:
+    resume_assertions = {
+        assertion.assertion_id: assertion
+        for assertion in facts.capability_assertions
+        if assertion.provider == provider and assertion.capability == "session.resume.helm"
+    }
+
+    assert resume_assertions
+    assert all(
+        set(assertion.acceptable_evidence)
+        & set(KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION[assertion_id])
+        for assertion_id, assertion in resume_assertions.items()
+    )
 
 
 def test_manual_trigger_never_runs_for_antigravity_without_an_evidence_producer(facts) -> None:

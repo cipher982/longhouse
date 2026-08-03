@@ -38,6 +38,7 @@ func makeSessionStateFacts(
         presentationPolicyVersion: 1,
         mode: mode ?? (owned ? "helm" : "shadow"),
         dispositionState: closed ? "closed" : "open",
+        dispositionCloseReason: closed ? "user_closed" : nil,
         launchState: launchState,
         runLifecycle: closed ? "ended" : "running",
         activityState: activity,

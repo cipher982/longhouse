@@ -4,6 +4,31 @@ import Testing
 
 struct LonghouseAPITests {
     @Test
+    func resumeIntentDecodesTerminalHandoff() throws {
+        let data = try #require("""
+        {
+          "session_id": "session-1",
+          "provider": "codex",
+          "machine_id": "cinder",
+          "machine_label": "David's Mac",
+          "cwd": "/workspace/longhouse",
+          "available": true,
+          "reason": null,
+          "argv": ["longhouse", "codex", "--resume-session", "session-1"],
+          "command": "longhouse codex --resume-session session-1",
+          "handoff": "terminal_command"
+        }
+        """.data(using: .utf8))
+
+        let intent = try JSONDecoder.snakeCase.decode(SessionResumeIntent.self, from: data)
+        #expect(intent.sessionId == "session-1")
+        #expect(intent.machineId == "cinder")
+        #expect(intent.machineLabel == "David's Mac")
+        #expect(intent.available)
+        #expect(intent.command == "longhouse codex --resume-session session-1")
+    }
+
+    @Test
     func searchSessionsURLUsesBrowserAuthTimelineRoute() throws {
         let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
 

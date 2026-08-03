@@ -4144,7 +4144,7 @@ class CatalogStore:
                 _head_commit_seq, grouped_heads, truncated_sessions = read_bounded_sessions_fact_heads(
                     connection,
                     session_ids=session_ids,
-                    families=("activity", "control"),
+                    families=("activity", "control", "continuation"),
                     limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
                 )
                 heads_by_session = {session_id: (heads, session_id in truncated_sessions) for session_id, heads in grouped_heads.items()}
@@ -4252,7 +4252,7 @@ class CatalogStore:
             commit_seq, heads, heads_truncated = read_bounded_session_fact_heads(
                 connection,
                 session_id=session_id,
-                families=("activity", "control"),
+                families=("activity", "control", "continuation"),
                 limit=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
             return {

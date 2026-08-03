@@ -26,6 +26,7 @@ const secondClockMocks = vi.hoisted(() => ({
 }));
 const agentApiMocks = vi.hoisted(() => ({
   createSessionShare: vi.fn(),
+  createSessionResumeIntent: vi.fn(),
   respondToPauseRequest: vi.fn(),
 }));
 const authMocks = vi.hoisted(() => ({
@@ -81,6 +82,7 @@ vi.mock("../../services/api/agents", async (importOriginal) => {
   return {
     ...actual,
     createSessionShare: agentApiMocks.createSessionShare,
+    createSessionResumeIntent: agentApiMocks.createSessionResumeIntent,
     respondToPauseRequest: agentApiMocks.respondToPauseRequest,
   };
 });
@@ -366,6 +368,26 @@ describe("SessionDetailPage", () => {
       revoked_at: null,
       sharer: { id: 7, display_name: "Tester" },
     });
+    agentApiMocks.createSessionResumeIntent.mockResolvedValue({
+      session_id: "session-codex",
+      provider: "codex",
+      machine_id: "cinder",
+      machine_label: "cinder",
+      cwd: "/Users/example/git/zerg",
+      available: true,
+      reason: null,
+      argv: [
+        "longhouse",
+        "codex",
+        "--cwd",
+        "/Users/example/git/zerg",
+        "--resume-session",
+        "session-codex",
+      ],
+      command: "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
+      handoff: "terminal_command",
+    });
+    clipboardMocks.copyToClipboard.mockResolvedValue(true);
     secondClockMocks.useSecondClock.mockReturnValue(
       Date.parse("2026-03-22T22:04:30Z"),
     );
@@ -524,6 +546,53 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("Metadata")).toBeInTheDocument();
     expect(screen.queryByText("Branch")).not.toBeInTheDocument();
     expect(screen.queryByText("HEAD")).not.toBeInTheDocument();
+  });
+
+  it("offers ended Helm Resume as a terminal command handoff", async () => {
+    const user = userEvent.setup();
+    const base = makeSession({
+      runtime_display: makeRuntimeDisplay({
+        lifecycle: "closed",
+        state: "completed",
+        is_live: false,
+        is_executing: false,
+        activity_recency: "stale",
+        terminal_reason: "provider_exit",
+      }),
+    });
+    const session = {
+      ...base,
+      session_state: {
+        ...base.session_state,
+        mode: "helm" as const,
+        control: {
+          ...base.session_state.control,
+          ownership: "owned" as const,
+          connection: "disconnected" as const,
+          actions: {
+            ...base.session_state.control.actions,
+            resume: { state: "available" as const },
+          },
+        },
+      },
+    };
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+    await user.click(screen.getByTestId("session-resume-button"));
+
+    expect(agentApiMocks.createSessionResumeIntent).toHaveBeenCalledWith("session-codex");
+    expect(screen.getByTestId("resume-session-modal")).toHaveTextContent("Resume on cinder");
+    expect(screen.getByTestId("resume-session-recovery-copy")).toHaveTextContent(
+      "This Helm stopped unexpectedly",
+    );
+    expect(screen.getByTestId("resume-session-command")).toHaveTextContent(
+      "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
+    );
+    await user.click(screen.getByRole("button", { name: "Copy command" }));
+    expect(clipboardMocks.copyToClipboard).toHaveBeenCalledWith(
+      "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
+    );
   });
 
   it("keeps terminal attach in the terminal section when control is offline", async () => {

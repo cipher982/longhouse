@@ -23,6 +23,7 @@ _SUBJECT_PREFIX = {
     "control": "connection:",
     "transcript": "thread:",
     "readiness": "readiness:",
+    "continuation": "resume:",
 }
 _AUTHORITY_CLASS = {
     "run": "exact_process_exit",
@@ -31,6 +32,7 @@ _AUTHORITY_CLASS = {
     "control": "provider_control",
     "transcript": "source_cursor",
     "readiness": "operation_proof",
+    "continuation": "retained_launch_contract",
 }
 _GRANTED_OPERATIONS = frozenset({"send_input", "interrupt", "terminate", "tail_output", "resume"})
 _RUN_EXIT_AUTHORITY = {
@@ -178,6 +180,18 @@ def _validate_v3_authority(family: str, value: dict[str, Any]) -> None:
         if type(value.get("pid")) is not int or value["pid"] <= 0:
             raise ValueError("machine evidence run requires a positive pid")
         return
+    if family == "continuation":
+        _required_component(value, "session_id")
+        if value.get("contract_state") not in {"valid", "invalid"}:
+            raise ValueError("machine evidence continuation requires a valid contract state")
+        if value.get("contract_state") == "valid":
+            _required_component(value, "provider_session_id", allow_colon=True)
+            _required_component(value, "cwd", allow_colon=True)
+            if value.get("unavailable_reason") is not None:
+                raise ValueError("valid continuation evidence cannot carry an unavailable reason")
+        elif not isinstance(value.get("unavailable_reason"), str):
+            raise ValueError("invalid continuation evidence requires an unavailable reason")
+        return
     if family != "control":
         return
     _required_component(value, "run_id")
@@ -234,10 +248,12 @@ def _validate_subject_key(family: str, subject_key: str, value: dict[str, Any]) 
         provider = _required_component(value, "provider")
         provider_session_id = _required_component(value, "provider_session_id", allow_colon=True)
         expected = f"thread:{provider}:{_stable_component(provider_session_id)}"
-    else:
+    elif family == "readiness":
         session_id = _required_component(value, "session_id")
         operation = _required_component(value, "operation")
         expected = f"readiness:{session_id}:{operation}"
+    else:
+        expected = f"resume:{_required_component(value, 'session_id')}"
     if subject_key != expected:
         raise ValueError(f"machine evidence {family} identity does not match its fact")
 

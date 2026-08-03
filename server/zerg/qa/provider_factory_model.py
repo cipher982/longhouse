@@ -39,6 +39,8 @@ from pathlib import Path
 
 import yaml
 
+from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
+
 # The declared-contract slice (schema resolution, CapabilityAssertion, the
 # assertion loader) lives in zerg/services/ because the served capability
 # endpoint needs it and zerg/qa/ is excluded from the published wheel. Only
@@ -93,6 +95,7 @@ DEFAULT_HARNESS_SCENARIOS: tuple[str, ...] = (
     "multi_turn_continuity",
     "crash_timeout_cleanup",
     "managed_session_e2e",
+    *PROVIDER_RESUME_SCENARIOS,
 )
 LIVE_TOKEN_HARNESS_SCENARIO = "live_token_streaming"
 
@@ -187,6 +190,17 @@ PUSH_CODEX_COORDINATION_SCENARIO_ID = "codex_coordination_awareness_post_compact
 # assertion no_duplicate_visible_bootstrap accepts hermetic and CI's run does
 # satisfy it.
 KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION: dict[str, tuple[str, ...]] = {
+    # provider-complete managed Helm Resume (weekly/release full column)
+    "cold_resume_registers_continuous_thread": ("hermetic",),
+    "native_provider_resume_proven": ("hermetic", "live_no_token", "live_token"),
+    "live_reattach_does_not_spawn_owner": ("hermetic",),
+    "console_continuation_is_distinct": ("hermetic",),
+    "session_thread_and_machine_identity_continue": ("hermetic",),
+    "resume_attempt_is_idempotent": ("hermetic",),
+    "one_local_provider_owner_wins": ("hermetic",),
+    "stale_input_is_not_replayed": ("hermetic",),
+    "failed_resume_closes_attempt_and_restores_contract": ("hermetic",),
+    "unsupported_resume_is_typed_and_side_effect_free": ("hermetic",),
     # claude_real_print_v1 (release lane)
     "claude_cli_channel_contract_preserved": ("live_no_token",),
     "real_print_marker_returned": ("live_no_token", "live_token"),  # live_token only with explicit credentials
@@ -371,11 +385,16 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
                 reason=f"{provider} has no registered release lane (no *_lane() in provider_factory/registry.py)",
             )
         scenario_ids = tuple(_release_lane_scenario_id(provider, profile) for profile in profiles)
-        relevant_assertions = tuple(a for a in facts.capability_assertions if a.provider == provider and a.scenario_id in scenario_ids)
+        runs_full_column = any(profile in FULL_COLUMN_RELEASE_PROFILES for profile in profiles)
+        produced_scenarios = set(scenario_ids)
+        if runs_full_column:
+            produced_scenarios.update(facts.default_harness_scenarios)
+        relevant_assertions = tuple(
+            a for a in facts.capability_assertions if a.provider == provider and a.scenario_id in produced_scenarios
+        )
         credential_requirement = tuple(
             dict.fromkeys(requirement for profile in profiles for requirement in CREDENTIAL_REQUIREMENT_BY_PROFILE.get(profile, ()))
         )
-        runs_full_column = any(profile in FULL_COLUMN_RELEASE_PROFILES for profile in profiles)
         return PlanCell(
             provider=provider,
             build_provenance=build_provenance,
@@ -436,6 +455,13 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             status="runs",
             reason="weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
             harness_scenarios=facts.default_harness_scenarios,
+            assertion_status=_assertion_statuses(
+                tuple(
+                    assertion
+                    for assertion in facts.capability_assertions
+                    if assertion.provider == provider and assertion.scenario_id in facts.default_harness_scenarios
+                )
+            ),
         )
 
     # Cursor has no upstream release feed. Its real-binary lane is an exact,
@@ -457,6 +483,13 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             status="runs",
             reason="exact observed-install snapshot with matching live Cursor Gate 0 evidence",
             harness_scenarios=facts.default_harness_scenarios,
+            assertion_status=_assertion_statuses(
+                tuple(
+                    assertion
+                    for assertion in facts.capability_assertions
+                    if assertion.provider == provider and assertion.scenario_id in facts.default_harness_scenarios
+                )
+            ),
         )
 
     # Trigger.MANUAL: a human runs a specific capability-proof scenario by

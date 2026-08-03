@@ -286,8 +286,22 @@ class ReadinessEvidenceIn(UTCBaseModel):
     reason_codes: list[str] = Field(default_factory=list, max_length=32)
 
 
+class ContinuationEvidenceIn(UTCBaseModel):
+    authority_class: Literal["retained_launch_contract"] | None = None
+    provider: Literal["codex", "claude", "cursor", "opencode"]
+    session_id: str = Field(..., min_length=1, max_length=255)
+    provider_session_id: str | None = Field(None, min_length=1, max_length=255)
+    cwd: str | None = Field(None, min_length=1, max_length=1024)
+    contract_state: Literal["valid", "invalid"]
+    unavailable_reason: Literal["contract_invalid", "workspace_missing", "provider_incompatible", "provider_state_missing"] | None = None
+    observed_at: datetime
+    valid_until: datetime
+    source: Literal["managed_resume_contract_scan"]
+    raw_locator: str = Field(..., min_length=1, max_length=1024)
+
+
 class EvidenceIdentityIn(UTCBaseModel):
-    fact_family: Literal["run", "process", "activity", "control", "transcript", "readiness"]
+    fact_family: Literal["run", "process", "activity", "control", "transcript", "readiness", "continuation"]
     fact_index: int = Field(..., ge=0, le=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY - 1)
     subject_key: str = Field(..., min_length=1, max_length=1024)
     source: str = Field(..., min_length=1, max_length=64)
@@ -309,6 +323,7 @@ class MachineEvidenceIn(UTCBaseModel):
     transcript: list[TranscriptEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     process_snapshot_scopes: list[ProcessSnapshotScopeIn] = Field(default_factory=list, max_length=16)
     readiness: list[ReadinessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
+    continuation: list[ContinuationEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
 
     @model_validator(mode="after")
     def validate_reducer_identities(self) -> MachineEvidenceIn:

@@ -61,7 +61,7 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: false,
-    resume: false,
+    resume: true,
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse opencode",
   },

@@ -86,6 +86,8 @@ from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_pause_requests import load_hot_session_projection_map
+from zerg.services.session_resume import SessionResumeIntentResponse
+from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
 from zerg.services.session_turns import list_session_turns
@@ -1765,6 +1767,26 @@ def get_session(
             owner_id=owner_id,
         )
     )
+
+
+@router.post("/sessions/{session_id}/resume-intent", response_model=SessionResumeIntentResponse)
+def create_session_resume_intent(
+    session_id: UUID,
+    response: Response,
+    db: Session | None = Depends(session_detail_db_dependency),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+    owner_id: int | None = Depends(_no_viewer_owner_id),
+) -> SessionResumeIntentResponse:
+    """Return an exact local terminal handoff when cold Helm Resume is proven."""
+    session = session_detail_payload(
+        session_id=session_id,
+        response=response,
+        db=db,
+        _auth=_auth,
+        owner_id=owner_id,
+    )
+    return build_session_resume_intent(session)
 
 
 def session_detail_payload(

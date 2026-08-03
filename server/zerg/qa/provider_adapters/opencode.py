@@ -417,7 +417,27 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         return payload
 
     def resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, binary_error = self._require_binary(package, "resume_reattach")
+        return self._native_resume_proof(
+            package,
+            scenario="resume_reattach",
+            proof_scope="opencode_process_restart_reattach",
+        )
+
+    def cold_resume(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._native_resume_proof(
+            package,
+            scenario="helm_cold_resume_native",
+            proof_scope="opencode_process_restart_native_attach",
+        )
+
+    def _native_resume_proof(
+        self,
+        package: EvidencePackage,
+        *,
+        scenario: str,
+        proof_scope: str,
+    ) -> dict[str, Any]:
+        binary, binary_error = self._require_binary(package, scenario)
         if binary_error is not None:
             return binary_error
 
@@ -459,13 +479,14 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "status": STATUS_PASS
             if live_verdict == "green" and reattach_status == STATUS_PASS and db_status == STATUS_PASS
             else STATUS_FAIL,
-            "scenario": "resume_reattach",
+            "scenario": scenario,
             "provider_version": live_artifact.get("provider_version"),
             "provider_live_artifact_path": str(live_artifact_path),
             "provider_live_evidence_root": str(live_evidence_root),
             "provider_live_verdict": live_verdict,
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
+            "proof_scope": proof_scope,
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
@@ -475,7 +496,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         elif db_status != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "resume_reattach_db_ingest_failed"
             payload["message"] = "OpenCode reattach evidence did not pass Longhouse DB ingest assertions."
-        package.write_json("assertions/resume_reattach.json", payload)
+        package.write_json(f"assertions/{scenario}.json", payload)
         return payload
 
     def tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:

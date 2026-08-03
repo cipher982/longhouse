@@ -196,9 +196,17 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     # oracle behind it until 2026-08-01, which is how a Cursor session sat in
     # `Thinking` for 86 seconds after replying without any lane noticing.
     turn_boundary = {"session.activity.turn_boundary"}
-    assert set(claude.capabilities) == expected | turn_boundary | {"session.launch.helm", "session.turn.start"}
-    assert set(codex.capabilities) == expected | turn_boundary
-    assert set(opencode.capabilities) == turn_boundary | {"session.launch.helm", "session.reattach.helm"}
+    assert set(claude.capabilities) == expected | turn_boundary | {
+        "session.launch.helm",
+        "session.resume.helm",
+        "session.turn.start",
+    }
+    assert set(codex.capabilities) == expected | turn_boundary | {"session.resume.helm"}
+    assert set(opencode.capabilities) == turn_boundary | {
+        "session.launch.helm",
+        "session.reattach.helm",
+        "session.resume.helm",
+    }
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
     assert cursor is not None and antigravity is not None
@@ -209,9 +217,11 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.awareness.create",
         "coordination.directed_input.send",
         "coordination.directed_input.receive",
+        "session.resume.helm",
     }
     assert set(antigravity.capabilities) == turn_boundary | {
         "session.launch.helm",
+        "session.resume.helm",
         "session.input.send",
     }
     # The `session.input.steer_active` capability cells were removed on
@@ -390,7 +400,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.steer_active_turn is False
     assert opencode.answer_pause is True
     assert opencode.reattach is True
-    assert opencode.can_resume is False
+    assert opencode.can_resume is True
     assert opencode.turn_start is True
     assert opencode.operation_evidence_for("terminate")["level"] == "hermetic"
     assert opencode.machine_control_supports == (

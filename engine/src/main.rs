@@ -32,13 +32,14 @@ mod flight;
 mod heartbeat;
 mod machine_presence;
 mod managed_antigravity_scan;
-mod managed_launch_payload;
 mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_contract_janitor;
 mod managed_cursor_helm_scan;
 mod managed_launch_lifecycle;
+mod managed_launch_payload;
 mod managed_opencode_scan;
+mod managed_resume_scan;
 mod managed_terminal;
 mod media_redaction;
 mod media_upload;
@@ -630,6 +631,8 @@ enum OpencodeBridgeCommands {
         claude_dir: Option<PathBuf>,
         #[arg(long, default_value = "detached")]
         launch_mode: String,
+        #[arg(long)]
+        resume_provider_session_id: Option<String>,
     },
     /// Stop a native OpenCode bridge only when its recorded process identity matches.
     Stop {
@@ -1635,6 +1638,7 @@ fn main() -> anyhow::Result<()> {
                 opencode_bin,
                 claude_dir,
                 launch_mode,
+                resume_provider_session_id,
             } => {
                 let result = opencode_bridge::start(opencode_bridge::StartConfig {
                     session_id,
@@ -1644,6 +1648,7 @@ fn main() -> anyhow::Result<()> {
                     opencode_bin,
                     claude_dir,
                     launch_mode,
+                    resume_provider_session_id,
                     coordination_token: std::env::var("LONGHOUSE_COORDINATION_TOKEN")
                         .unwrap_or_default(),
                 })?;

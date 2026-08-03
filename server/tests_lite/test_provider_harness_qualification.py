@@ -412,8 +412,8 @@ def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> Non
 
     assert gate["status"] == "pass"
     assert gate["provider_status"] == "not_applicable"
-    assert gate["expected_scenario_count"] == 23
-    assert gate["captured_scenario_count"] == 23
+    assert gate["expected_scenario_count"] == 32
+    assert gate["captured_scenario_count"] == 32
     assert gate["unexpected_results"] == []
 
 
@@ -572,7 +572,7 @@ def test_claude_full_column_gate_accepts_explicit_no_token_limits() -> None:
 
     assert gate["status"] == "pass"
     assert gate["provider"] == "claude"
-    assert gate["expected_scenario_count"] == 23
+    assert gate["expected_scenario_count"] == 32
     assert gate["coverage_gap_kind_counts"] == {
         "passed": 32,
         "no_token_safety_gate": 1,
@@ -591,7 +591,7 @@ def test_opencode_full_column_gate_accepts_measured_contract_limits(tmp_path: Pa
 
     assert gate["status"] == "pass"
     assert gate["provider"] == "opencode"
-    assert gate["expected_scenario_count"] == 23
+    assert gate["expected_scenario_count"] == 32
     assert gate["coverage_gap_kind_counts"] == {
         "passed": 30,
         "no_token_safety_gate": 1,
@@ -608,7 +608,7 @@ def test_antigravity_full_column_gate_accepts_maintenance_tier_limits(tmp_path: 
 
     assert gate["status"] == "pass"
     assert gate["provider"] == "antigravity"
-    assert gate["expected_scenario_count"] == 23
+    assert gate["expected_scenario_count"] == 32
     assert gate["coverage_gap_kind_counts"] == {
         "passed": 26,
         "no_token_safety_gate": 1,
@@ -950,7 +950,6 @@ def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_
     build_identity = f"sha256:{_closure_digest(package_root)}"
     monkeypatch.setenv(codex_tool_call_result.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
     monkeypatch.setenv(codex_tool_call_result.MANAGED_PACKAGE_ROOT_ENV, str(package_root))
-
     legacy_request = _request(
         tmp_path,
         profile=codex_tool_call_result.PROFILE,
