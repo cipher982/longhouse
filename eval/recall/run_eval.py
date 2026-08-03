@@ -17,6 +17,7 @@ import re
 import statistics
 import subprocess
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -280,8 +281,12 @@ def search_recall(
         # "Python-urllib/3.x" is rejected with 403 before reaching the API.
         headers={"X-Agents-Token": token, "User-Agent": "longhouse-recall-eval/1.0"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        payload = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(512).decode("utf-8", errors="replace")
+        raise ValueError(f"recall HTTP {exc.code}: {body}") from exc
     if not isinstance(payload, dict):
         raise ValueError("recall returned a non-object response")
     expected_lanes = {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[mode]
