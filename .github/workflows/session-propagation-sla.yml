@@ -39,10 +39,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native-pair:
+    name: Build exact Longhouse profiler pair
+    runs-on: cube
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build native pair once
+        run: |
+          cargo build --manifest-path engine/Cargo.toml --profile ci --bin longhouse --bin longhouse-engine
+          mkdir -p .build/session-propagation-native
+          install -m 755 engine/target/ci/longhouse .build/session-propagation-native/longhouse
+          install -m 755 engine/target/ci/longhouse-engine .build/session-propagation-native/longhouse-engine
+      - uses: actions/upload-artifact@v7
+        with:
+          name: session-propagation-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/session-propagation-native
+          if-no-files-found: error
+          retention-days: 1
+
   profiler:
     name: "${{ matrix.name }}"
+    needs: native-pair
     runs-on: cube-deploy
-    timeout-minutes: 30
+    timeout-minutes: 120
     if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SESSION_PROPAGATION_SLA_ENABLED == 'true') }}
     strategy:
       fail-fast: false
@@ -113,6 +134,15 @@ jobs:
       SESSION_PROPAGATION_EXPECTED_HOSTED_COMMIT: ${{ github.sha }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       INCLUDE_EXPERIMENTAL: ${{ inputs.include_experimental || 'false' }}
+      LONGHOUSE_DEVICE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      OPENCODE_CONFIG_CONTENT: '{"model":"openrouter/openai/gpt-5.2-codex"}'
+      SESSION_PROPAGATION_BOOTSTRAP_ENGINE: 'true'
+      SESSION_PROPAGATION_MACHINE_NAME: gha-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.provider }}
+      SESSION_PROPAGATION_SSH_TARGET: unavailable-in-ci
 
     steps:
       - uses: actions/checkout@v6
@@ -159,15 +189,72 @@ jobs:
 
       - name: Select matrix case
         id: selection
+        env:
+          PROVIDER: ${{ matrix.provider }}
         run: |
           should_run=true
+          blocked_reason=""
           if [[ "${{ matrix.experimental }}" == "true" && "$INCLUDE_EXPERIMENTAL" != "true" ]]; then
             should_run=false
+            blocked_reason="experimental case not requested"
+          fi
+          case "$PROVIDER" in
+            codex) credential="$OPENAI_API_KEY" ;;
+            claude) credential="$ANTHROPIC_API_KEY" ;;
+            cursor) credential="$CURSOR_API_KEY" ;;
+            opencode) credential="$OPENROUTER_API_KEY" ;;
+            *) credential="" ;;
+          esac
+          if [[ "$should_run" == "true" && -z "$credential" ]]; then
+            should_run=false
+            blocked_reason="missing $PROVIDER CI credential"
           fi
           echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "blocked_reason=$blocked_reason" >> "$GITHUB_OUTPUT"
           if [[ "$should_run" != "true" ]]; then
-            echo "Skipping experimental case $SESSION_PROPAGATION_SLA_CASE. Re-run workflow_dispatch with include_experimental=true to execute it."
+            echo "Skipping $SESSION_PROPAGATION_SLA_CASE: $blocked_reason"
           fi
+
+      - name: Install exact Longhouse pair
+        if: steps.selection.outputs.should_run == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: session-propagation-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/session-propagation-native
+
+      - name: Verify exact Longhouse pair
+        if: steps.selection.outputs.should_run == 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 .build/session-propagation-native/longhouse "$HOME/.local/bin/longhouse"
+          install -m 755 .build/session-propagation-native/longhouse-engine "$HOME/.local/bin/longhouse-engine"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/longhouse" verify-pair
+          "$HOME/.local/bin/longhouse" build-identity --json
+
+      - name: Install provider CLI
+        if: steps.selection.outputs.should_run == 'true'
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          case "$PROVIDER" in
+            codex) npm install --global @openai/codex@latest ;;
+            claude) npm install --global @anthropic-ai/claude-code@latest ;;
+            opencode) npm install --global opencode-ai@latest ;;
+            cursor)
+              curl https://cursor.com/install -fsS | bash
+              cursor_bin="$(command -v cursor-agent || true)"
+              if [[ -z "$cursor_bin" && -x "$HOME/.cursor/bin/cursor-agent" ]]; then
+                cursor_bin="$HOME/.cursor/bin/cursor-agent"
+              fi
+              if [[ -z "$cursor_bin" && -x "$HOME/.local/bin/agent" ]]; then
+                cursor_bin="$HOME/.local/bin/agent"
+              fi
+              [[ -n "$cursor_bin" ]]
+              ln -sf "$cursor_bin" "$HOME/.local/bin/agent"
+              ;;
+          esac
+          command -v "$([[ "$PROVIDER" == "cursor" ]] && echo agent || echo "$PROVIDER")"
 
       - name: Run session propagation SLA
         id: profiler
@@ -195,6 +282,7 @@ jobs:
             echo "- Case: \`$SESSION_PROPAGATION_SLA_CASE\`"
             echo "- Experimental: \`${{ matrix.experimental }}\`"
             echo "- Ran: \`${{ steps.selection.outputs.should_run || 'false' }}\`"
+            echo "- Blocked reason: \`${{ steps.selection.outputs.blocked_reason || 'none' }}\`"
             echo "- Instance: \`$SESSION_PROPAGATION_SUBDOMAIN\`"
             echo "- Project: \`$SESSION_PROPAGATION_PROJECT\`"
             echo "- Exit code: \`${{ steps.profiler.outputs.exit_code || 'skipped' }}\`"

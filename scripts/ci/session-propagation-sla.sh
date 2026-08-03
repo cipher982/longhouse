@@ -14,6 +14,9 @@ OWNERSHIP="${SESSION_PROPAGATION_OWNERSHIP:-managed}"
 CODEX_EFFORT="${SESSION_PROPAGATION_CODEX_EFFORT:-low}"
 PROVIDER_TO_PIXEL_ONLY="${SESSION_PROPAGATION_PROVIDER_TO_PIXEL_ONLY:-false}"
 EXPECTED_HOSTED_COMMIT="${SESSION_PROPAGATION_EXPECTED_HOSTED_COMMIT:-}"
+BOOTSTRAP_ENGINE="${SESSION_PROPAGATION_BOOTSTRAP_ENGINE:-false}"
+MACHINE_NAME="${SESSION_PROPAGATION_MACHINE_NAME:-gha-session-propagation-${PROVIDER}}"
+SSH_TARGET="${SESSION_PROPAGATION_SSH_TARGET:-zerg}"
 BASE_RUN_ID="${SESSION_PROPAGATION_RUN_ID:-session-propagation-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_ROOT="${SESSION_PROPAGATION_OUTPUT_ROOT:-$ROOT_DIR/artifacts/session-propagation-sla/$BASE_RUN_ID}"
 RETRY_SLEEP_SECS="${SESSION_PROPAGATION_RETRY_SLEEP_SECS:-15}"
@@ -56,6 +59,38 @@ if [[ "$missing" == "1" ]]; then
   echo "| 0 | 3 | setup_error: missing local profiler prerequisite | \`$OUTPUT_ROOT\` |" >> "$summary"
   echo "$summary"
   exit 3
+fi
+
+engine_pid=""
+cleanup() {
+  if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
+    kill "$engine_pid" 2>/dev/null || true
+    wait "$engine_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+if [[ "$BOOTSTRAP_ENGINE" == "true" ]]; then
+  if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
+    echo "LONGHOUSE_DEVICE_TOKEN is required when SESSION_PROPAGATION_BOOTSTRAP_ENGINE=true" >&2
+    echo "| 0 | 3 | setup_error: missing Machine Agent credential | \`$OUTPUT_ROOT\` |" >> "$summary"
+    exit 3
+  fi
+  runtime_url="https://${SUBDOMAIN}.longhouse.ai"
+  LONGHOUSE_DEVICE_TOKEN="$LONGHOUSE_DEVICE_TOKEN" \
+    longhouse auth --url "$runtime_url" --device "$MACHINE_NAME" >/dev/null
+  longhouse-engine connect \
+    --url "$runtime_url" \
+    --token "$LONGHOUSE_DEVICE_TOKEN" \
+    --machine-name "$MACHINE_NAME" \
+    >"$OUTPUT_ROOT/machine-agent.log" 2>&1 &
+  engine_pid=$!
+  sleep 2
+  if ! kill -0 "$engine_pid" 2>/dev/null; then
+    echo "Ephemeral Machine Agent failed to start" >&2
+    echo "| 0 | 3 | setup_error: Machine Agent failed to start | \`$OUTPUT_ROOT/machine-agent.log\` |" >> "$summary"
+    exit 3
+  fi
 fi
 
 if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$ATTEMPTS" -lt 1 ]]; then
@@ -102,6 +137,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     --iterations "$ITERATIONS"
     --subdomain "$SUBDOMAIN"
     --project "$PROJECT"
+    --ssh-target "$SSH_TARGET"
     --run-id "$attempt_run_id"
     --output-dir "$attempt_dir"
   )
