@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 233,
+  "file_count": 235,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -431,6 +431,15 @@
       ]
     },
     {
+      "path": "scripts/ops/profile-provider-to-pixel-matrix.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "scripts/qa/check-no-python-device-path.py",
       "providers": [
         "antigravity",
@@ -566,6 +575,15 @@
         "antigravity",
         "claude",
         "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/session-propagation-sla.test.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
         "opencode"
       ]
     },

@@ -22,6 +22,16 @@ profiler = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = profiler
 spec.loader.exec_module(profiler)
 
+matrix_spec = importlib.util.spec_from_file_location(
+    "profile_provider_to_pixel_matrix",
+    OPS / "profile-provider-to-pixel-matrix.py",
+)
+if matrix_spec is None or matrix_spec.loader is None:
+    raise RuntimeError("could not load provider-to-pixel matrix")
+matrix_profiler = importlib.util.module_from_spec(matrix_spec)
+sys.modules[matrix_spec.name] = matrix_profiler
+matrix_spec.loader.exec_module(matrix_profiler)
+
 
 def catalog(*, hidden: int, user: int = 0, assistant: int = 0, tools: int = 0) -> dict:
     return {
@@ -104,7 +114,9 @@ def test_empty_projection_proof_and_failed_empty_launch() -> None:
     assert promotion["proven"] is True
 
 
-def test_hosted_assistant_proof_accepts_storage_count_when_preview_is_replaced() -> None:
+def test_hosted_assistant_proof_accepts_storage_count_when_preview_is_replaced() -> (
+    None
+):
     data = {
         "storage_session": {
             "first_user_message_preview": "Reply with exactly LH_PROBE",
@@ -144,12 +156,21 @@ def test_promotion_delta_rejects_out_of_order_observation() -> None:
             "payload": {},
         },
     ]
-    assert instance.event_delta_any_order_ms(
-        "B1", "session-1", "content_durable_published", "browser_timeline_card_painted"
-    ) == 450
-    assert instance.event_payload_int(
-        "B1", "session-1", "content_durable_published", "observation_interval_ms"
-    ) == 500
+    assert (
+        instance.event_delta_any_order_ms(
+            "B1",
+            "session-1",
+            "content_durable_published",
+            "browser_timeline_card_painted",
+        )
+        == 450
+    )
+    assert (
+        instance.event_payload_int(
+            "B1", "session-1", "content_durable_published", "observation_interval_ms"
+        )
+        == 500
+    )
 
     instance.observations[-1]["observed_at_monotonic_ms"] = 300
     raw = instance.event_delta_any_order_ms(
@@ -200,9 +221,13 @@ def test_batch_preflight_accepts_current_healthy_transport_schema() -> None:
 
 def test_manifest_moves_legacy_metric_out_of_hard_targeting() -> None:
     manifest = profiler.sla_manifest()
-    assert profiler.metric_is_diagnostic(manifest, "warm_session_created_to_card_paint_ms")
+    assert profiler.metric_is_diagnostic(
+        manifest, "warm_session_created_to_card_paint_ms"
+    )
     assert profiler.target_for_metric("warm_session_created_to_card_paint_ms") is None
-    assert profiler.target_for_metric("content_durable_to_timeline_card_paint_ms") == 500
+    assert (
+        profiler.target_for_metric("content_durable_to_timeline_card_paint_ms") == 500
+    )
     case = profiler.case_by_id(manifest, "managed_codex_created_session_card_promotion")
     assert case is not None
     assert case["metrics"] == ["content_durable_to_timeline_card_paint_ms"]
@@ -251,10 +276,69 @@ def test_http_protocol_browser_error_is_transport_contamination() -> None:
             "session_id": "session-1",
             "event": "browser_ui_console",
             "source": "browser_ui",
-            "payload": {"text": "Failed to load resource: net::ERR_HTTP2_PROTOCOL_ERROR"},
+            "payload": {
+                "text": "Failed to load resource: net::ERR_HTTP2_PROTOCOL_ERROR"
+            },
         }
     ]
-    assert instance.transport_failure_classification("D1", "session-1", None) == "hosted_transport_degraded"
+    assert (
+        instance.transport_failure_classification("D1", "session-1", None)
+        == "hosted_transport_degraded"
+    )
+
+
+def test_select_propagation_waterfall_keeps_all_nine_stages() -> None:
+    stages = [
+        {
+            "key": key,
+            "status": "observed",
+            "duration_ms": index + 1,
+        }
+        for index, key in enumerate(profiler.WATERFALL_STAGE_KEYS)
+    ]
+    report = {
+        "events": [
+            {
+                "event_id": 7,
+                "role": "assistant",
+                "client_renders": [
+                    {"surface": "web", "clock_sync_uncertainty_ms": 11},
+                    {"surface": "ios", "clock_sync_uncertainty_ms": 13},
+                ],
+                "total_provider_to_first_render_ms": 123,
+                "measured_total_ms": 120,
+                "unaccounted_ms": 3,
+                "bottleneck": {
+                    "stage_key": "server_fanout_to_client_received",
+                    "duration_ms": 44,
+                },
+                "stages": stages,
+                "gaps": [],
+            }
+        ]
+    }
+
+    web = profiler.select_propagation_waterfall(report, surface="web")
+    assert web is not None
+    assert web["total_provider_to_first_render_ms"] == 123
+    assert set(web["stages"]) == set(profiler.WATERFALL_STAGE_KEYS)
+    assert web["first_client_render"]["clock_sync_uncertainty_ms"] == 11
+
+    ios = profiler.select_propagation_waterfall(report, surface="ios")
+    assert ios is not None
+    assert ios["first_client_render"]["clock_sync_uncertainty_ms"] == 13
+
+
+def test_provider_to_pixel_matrix_covers_every_launch_provider() -> None:
+    assert set(matrix_profiler.PROVIDER_CASES) == {
+        "codex",
+        "claude",
+        "cursor",
+        "opencode",
+    }
+    assert matrix_profiler.SUMMARY_METRICS[0] == (
+        "waterfall_total_provider_to_first_render_ms"
+    )
 
 
 if __name__ == "__main__":

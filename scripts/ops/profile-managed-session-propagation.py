@@ -79,6 +79,27 @@ BATCH_METRIC_KEYS = (
     "ship_trace_prepare_open_db_ms",
     "ship_trace_prepare_binding_wait_ms",
     "ship_trace_prepare_parse_ms",
+    "waterfall_total_provider_to_first_render_ms",
+    "waterfall_provider_to_engine_observed_ms",
+    "waterfall_engine_observed_to_enqueued_ms",
+    "waterfall_engine_enqueued_to_job_started_ms",
+    "waterfall_engine_job_started_to_http_send_ms",
+    "waterfall_http_send_to_server_handler_ms",
+    "waterfall_server_handler_to_store_returned_ms",
+    "waterfall_server_store_to_fanout_ms",
+    "waterfall_server_fanout_to_client_received_ms",
+    "waterfall_client_received_to_rendered_ms",
+)
+WATERFALL_STAGE_KEYS = (
+    "provider_to_engine_observed",
+    "engine_observed_to_enqueued",
+    "engine_enqueued_to_job_started",
+    "engine_job_started_to_http_send",
+    "http_send_to_server_handler",
+    "server_handler_to_store_returned",
+    "server_store_to_fanout",
+    "server_fanout_to_client_received",
+    "client_received_to_rendered",
 )
 BATCH_VERDICT_SEVERITY = {
     "pass": 0,
@@ -558,6 +579,51 @@ print(json.dumps(payload, default=str))
                 self.subdomain,
                 session_id,
                 str(HOSTED_RUNTIME_OBSERVATION_LIMIT),
+            ],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        data = safe_json_loads(proc.stdout)
+        return data if isinstance(data, dict) else None
+
+    def hosted_latency_report(self, session_id: str) -> dict[str, Any] | None:
+        """Build the canonical nine-stage waterfall inside the hosted runtime.
+
+        Running the read-only report in the tenant container avoids browser-auth
+        concerns while still exercising the exact deployed report code and DB.
+        """
+
+        script = r"""
+import json, sys
+from uuid import UUID
+from zerg.database import get_session_factory
+from zerg.services.realtime_propagation import build_realtime_propagation_session_report
+
+db = get_session_factory()()
+try:
+    report = build_realtime_propagation_session_report(
+        db,
+        session_id=UUID(sys.argv[1]),
+        event_limit=100,
+    )
+    print(json.dumps(report.model_dump(mode="json") if report else None))
+finally:
+    db.close()
+"""
+        proc = subprocess.run(
+            [
+                "ssh",
+                self.args.ssh_target,
+                "docker",
+                "exec",
+                "-i",
+                self.container,
+                "python3",
+                "-",
+                session_id,
             ],
             input=script,
             text=True,
@@ -3989,6 +4055,9 @@ except Exception as exc:
                 hosted = {**hosted, **hosted_fallback}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
+        waterfall_report = self.hosted_latency_report(session_id) or {}
+        web_waterfall = select_propagation_waterfall(waterfall_report, surface="web")
+        ios_waterfall = select_propagation_waterfall(waterfall_report, surface="ios")
         state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
         client_state = state_render_beacon_metrics(
             hosted,
@@ -4463,6 +4532,15 @@ except Exception as exc:
             "ship_trace_prepare_open_db_ms": None,
             "ship_trace_prepare_binding_wait_ms": None,
             "ship_trace_prepare_parse_ms": None,
+            "propagation_waterfall": {
+                "web": web_waterfall,
+                "ios": ios_waterfall,
+                "report_gaps": waterfall_report.get("gaps") or [],
+                "known_unimplemented_probes": waterfall_report.get(
+                    "known_unimplemented_probes"
+                )
+                or [],
+            },
             "failure_classification": transport_failure,
             "local_health_state": latest_health_state,
             "provider_timeout": self.event_observed_at_ms(
@@ -4478,6 +4556,18 @@ except Exception as exc:
             )
             is not None,
         }
+        if web_waterfall:
+            metrics["waterfall_total_provider_to_first_render_ms"] = web_waterfall.get(
+                "total_provider_to_first_render_ms"
+            )
+            for stage_key in WATERFALL_STAGE_KEYS:
+                metrics[f"waterfall_{stage_key}_ms"] = (
+                    (web_waterfall.get("stages") or {}).get(stage_key) or {}
+                ).get("duration_ms")
+        else:
+            metrics["waterfall_total_provider_to_first_render_ms"] = None
+            for stage_key in WATERFALL_STAGE_KEYS:
+                metrics[f"waterfall_{stage_key}_ms"] = None
         if not session:
             metrics["verdict"] = "missing"
             metrics["notes"] = "hosted session row not observed"
@@ -5238,6 +5328,50 @@ except Exception as exc:
         if hosted_degraded:
             return "hosted_transport_degraded"
         return None
+
+
+def select_propagation_waterfall(
+    report: dict[str, Any], *, surface: str
+) -> dict[str, Any] | None:
+    """Select the newest rendered assistant event for one client surface."""
+
+    candidates: list[dict[str, Any]] = []
+    for event in report.get("events") or []:
+        if not isinstance(event, dict) or event.get("role") != "assistant":
+            continue
+        renders = [
+            render
+            for render in event.get("client_renders") or []
+            if isinstance(render, dict) and render.get("surface") == surface
+        ]
+        if not renders:
+            continue
+        candidates.append(
+            {**event, "client_renders": renders, "first_client_render": renders[0]}
+        )
+    if not candidates:
+        return None
+    selected = max(
+        candidates, key=lambda event: int_or_none(event.get("event_id")) or 0
+    )
+    return {
+        "event_id": selected.get("event_id"),
+        "surface": surface,
+        "total_provider_to_first_render_ms": selected.get(
+            "total_provider_to_first_render_ms"
+        ),
+        "measured_total_ms": selected.get("measured_total_ms"),
+        "unaccounted_ms": selected.get("unaccounted_ms"),
+        "client_clock_skew_ms": selected.get("client_clock_skew_ms"),
+        "bottleneck": selected.get("bottleneck"),
+        "gaps": selected.get("gaps") or [],
+        "first_client_render": selected.get("first_client_render"),
+        "stages": {
+            stage.get("key"): stage
+            for stage in selected.get("stages") or []
+            if isinstance(stage, dict) and stage.get("key") in WATERFALL_STAGE_KEYS
+        },
+    }
 
 
 def qualification_ownership(session: dict[str, Any], requested: str | None) -> str:

@@ -22,6 +22,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
 .PHONY: provider-interaction-probe
+.PHONY: profile-provider-to-pixel
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
@@ -863,6 +864,9 @@ test-session-propagation-sla: ## Deterministic tests for the managed-session pro
 
 session-propagation-sla: ## Managed Codex warm realtime SLA probe with contaminated-run retries
 	@./scripts/ci/session-propagation-sla.sh
+
+profile-provider-to-pixel: ## Profile terminal output to web pixels for all launch providers
+	@uv run --project server python scripts/ops/profile-provider-to-pixel-matrix.py $(ARGS)
 
 managed-claude-truth-probe: ## Observe local/hosted truth for one managed Claude session
 	@./scripts/ops/probe-managed-claude-truth.py $(ARGS)
