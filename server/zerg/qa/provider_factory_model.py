@@ -39,7 +39,9 @@ from pathlib import Path
 
 import yaml
 
+from zerg.qa.codex_native_resume import REGISTRATION as CODEX_NATIVE_RESUME_PRODUCER
 from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
+from zerg.qa.resume_assurance import ProducerRegistration
 
 # The declared-contract slice (schema resolution, CapabilityAssertion, the
 # assertion loader) lives in zerg/services/ because the served capability
@@ -121,35 +123,9 @@ class Trigger(StrEnum):
     MANUAL = "manual"  # human-run, for scenarios no automated trigger can produce acceptable evidence for
 
 
-@dataclass(frozen=True)
-class ProducerRegistration:
-    producer_id: str
-    provider: str
-    scenario_id: str
-    assertion_id: str
-    variants: tuple[str, ...]
-    evidence_classes: tuple[str, ...]
-    observed_activity: tuple[str, ...]
-    implementation: str
-    executable: bool
-
-
-# Transition registration only. Phase 1's accepted-epoch compiler is the
-# authority that will decide whether a deployed worker can execute it. Keeping
-# executable=False prevents this declaration from becoming proof by itself.
-DIRECT_RESUME_PRODUCERS: tuple[ProducerRegistration, ...] = (
-    ProducerRegistration(
-        producer_id="codex.native_resume.v1",
-        provider="codex",
-        scenario_id="helm_cold_resume",
-        assertion_id="native_provider_resume_proven",
-        variants=("clean_exit", "process_loss"),
-        evidence_classes=("live_token",),
-        observed_activity=("native_resume_command", "post_resume_provider_activity"),
-        implementation="server/zerg/qa/codex_native_resume.py",
-        executable=False,
-    ),
-)
+# Compatibility view for the descriptive factory model.  The registration is
+# authored beside the executable producer; this module does not restate it.
+DIRECT_RESUME_PRODUCERS: tuple[ProducerRegistration, ...] = (CODEX_NATIVE_RESUME_PRODUCER,)
 
 
 ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor")
@@ -223,10 +199,8 @@ PUSH_CODEX_COORDINATION_SCENARIO_ID = "codex_coordination_awareness_post_compact
 KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION: dict[str, tuple[str, ...]] = {
     # provider-complete managed Helm Resume (weekly/release full column)
     "cold_resume_registers_continuous_thread": ("hermetic",),
-    # The legacy universal harness only emits adjacent/hermetic evidence.
-    # A direct native producer is registered below, but does not become an
-    # eligible current proof producer until the accepted epoch compiler ships.
-    "native_provider_resume_proven": (),
+    # native_provider_resume_proven is intentionally absent: its evidence is
+    # selected by the accepted-epoch compiler, not this descriptive legacy map.
     "live_reattach_does_not_spawn_owner": ("hermetic",),
     "console_continuation_is_distinct": ("hermetic",),
     "session_thread_and_machine_identity_continue": ("hermetic",),

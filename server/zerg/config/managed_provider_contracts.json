@@ -158,31 +158,31 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -194,7 +194,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -206,7 +206,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -218,7 +218,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -229,7 +229,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -240,7 +240,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -251,7 +251,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -262,7 +262,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             }
           ]
         },
@@ -695,31 +695,31 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -731,7 +731,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -743,7 +743,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -755,7 +755,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -766,7 +766,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -777,7 +777,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -788,7 +788,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -799,7 +799,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             }
           ]
         },
@@ -1247,31 +1247,31 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -1283,7 +1283,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -1295,7 +1295,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -1307,7 +1307,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -1318,7 +1318,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -1329,7 +1329,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -1340,7 +1340,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -1351,7 +1351,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             }
           ]
         },
@@ -1646,7 +1646,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             }
           ]
         },
@@ -1940,31 +1940,31 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "clean_exit",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "native_provider_resume_proven",
               "variant": "process_loss",
               "scenario_id": "helm_cold_resume",
-              "oracle_source": "server/zerg/qa/universal_agent_harness.py",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
               "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "232aaca013689f57cb9687e2878c0640c9b933038799eabbcf05a8561b8da29c"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -1976,7 +1976,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -1988,7 +1988,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -2000,7 +2000,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -2011,7 +2011,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -2022,7 +2022,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -2033,7 +2033,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -2044,7 +2044,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "125cc3d3539df340edfd2058180ab1f67187aa2acf874966f7057606c8401f78"
+              "oracle_digest": "27df7926142386cf59c3a250e0e2a9348ff2ecd65c7e26fc5635f152eb01e749"
             }
           ]
         },
