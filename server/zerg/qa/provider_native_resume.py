@@ -841,9 +841,10 @@ def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
         return
     compact = re.sub(r"\s+", "", _terminal_text(process.recording)).lower()
     if "loadingdevelopmentchannel" in compact and "iamusingthisforlocaldevelopment" in compact and "exit" in compact:
-        # Claude renders the local-development acknowledgement before Exit.
-        # Select it by its visible ordinal rather than relying on cursor state.
-        process.send("1\r")
+        # Claude renders an unnumbered selector with the local-development
+        # acknowledgement selected by default, followed by Exit. Accept the
+        # default with Enter; numeric input is ignored by this screen.
+        process.send("\r")
         process.claude_development_channel_acceptance_sent = True
 
 

@@ -538,7 +538,7 @@ def test_claude_development_channel_prompt_selects_local_development_once(tmp_pa
     _accept_claude_development_channel_prompt(process)  # type: ignore[arg-type]
     _accept_claude_development_channel_prompt(process)  # type: ignore[arg-type]
 
-    assert process.sent == ["1\r"]
+    assert process.sent == ["\r"]
     assert process.claude_development_channel_acceptance_sent is True
 
 
