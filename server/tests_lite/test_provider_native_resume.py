@@ -391,6 +391,28 @@ def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path)
         assert secure_command[secure_command.index(selector) + 1] == session_id
 
 
+def test_cursor_resume_commands_pin_the_factory_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = _args(tmp_path)
+    session_id = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("CURSOR_MODEL", "cursor-grok-4.5-high")
+
+    command = _launch_command(SPECS["cursor"], args, session_id)
+    assert command[-3:] == ["--", "--model", "cursor-grok-4.5-high"]
+
+    intent = {
+        "session_id": session_id,
+        "provider": "cursor",
+        "machine_id": "factory-worker",
+        "cwd": str(args.repo_root),
+        "available": True,
+        "argv": ["longhouse", "cursor", "--cwd", str(args.repo_root), "--resume-session", session_id],
+        "handoff": "terminal_command",
+    }
+    resumed, receipt = _command_from_resume_intent(SPECS["cursor"], args, session_id, intent)
+    assert resumed[-3:] == ["--", "--model", "cursor-grok-4.5-high"]
+    assert "cursor_model" in receipt["factory_overrides"]
+
+
 @pytest.mark.parametrize(
     ("provider", "selector"),
     (("claude", "--resume"), ("cursor", "--resume-session"), ("opencode", "--resume-session")),

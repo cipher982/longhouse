@@ -1226,6 +1226,10 @@ def _command_from_resume_intent(
     if spec.provider == "cursor":
         overrides.extend(("--permission-mode", "auto_approve"))
     command = [str(args.longhouse_cli), *expected_argv[1:selector_index], *overrides, *expected_argv[selector_index:]]
+    if spec.provider == "cursor":
+        cursor_model = os.environ.get("CURSOR_MODEL", "").strip()
+        if cursor_model:
+            command.extend(("--", "--model", cursor_model))
     retained_command = ["<redacted>" if value == args.agents_token else value for value in command]
     receipt = {
         "requested_at": _now(),
@@ -1237,6 +1241,7 @@ def _command_from_resume_intent(
             "runtime_host",
             "provider_binary",
             *(("permission_mode",) if spec.provider == "cursor" else ()),
+            *(("cursor_model",) if spec.provider == "cursor" and os.environ.get("CURSOR_MODEL", "").strip() else ()),
         ],
         "credential_source": "disposable_machine_file" if use_credential_files else "argv_token",
     }
@@ -1376,6 +1381,10 @@ def _launch_command(
         command.extend(("--permission-mode", "auto_approve"))
     if session_id is not None:
         command.extend((spec.resume_flag, session_id))
+    if spec.provider == "cursor":
+        cursor_model = os.environ.get("CURSOR_MODEL", "").strip()
+        if cursor_model:
+            command.extend(("--", "--model", cursor_model))
     return command
 
 
