@@ -1,0 +1,8 @@
+[Unit]
+Description=Reclaim superseded Longhouse runtime images from the boot disk
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/longhouse/docker-image-gc.sh

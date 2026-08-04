@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Longhouse Docker image GC hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=docker-image-gc.service
+
+[Install]
+WantedBy=timers.target
