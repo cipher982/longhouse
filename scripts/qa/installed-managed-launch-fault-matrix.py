@@ -84,11 +84,50 @@ class ProviderLaunchError(RuntimeError):
 
 @dataclass
 class LiveCommand:
-    process: subprocess.Popen[bytes]
+    process: Any
     output_fd: int
     output: bytearray
     is_tty: bool
     provider_ready_observed: bool
+
+
+class ForkedProcess:
+    """Small Popen-compatible owner for a ``pty.fork`` child."""
+
+    def __init__(self, pid: int, args: list[str]) -> None:
+        self.pid = pid
+        self.args = args
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        if self.returncode is not None:
+            return self.returncode
+        try:
+            waited_pid, status = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            self.returncode = -signal.SIGKILL
+            return self.returncode
+        if waited_pid == self.pid:
+            self.returncode = os.waitstatus_to_exitcode(status)
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.returncode is not None:
+            return self.returncode
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            status = self.poll()
+            if status is not None:
+                return status
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            time.sleep(0.1)
+
+    def kill(self) -> None:
+        try:
+            os.kill(self.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 @dataclass
@@ -614,25 +653,23 @@ def start_live_command(
 ) -> LiveCommand:
     """Start a provider with a real process handle and wait only for startup.
 
-    ``pty.openpty`` plus ``Popen`` is safe to call from the concurrent launch
-    pool. The returned process remains alive until Runtime Host recovery has
-    been asserted, so the registration retry cannot silently settle as a
-    post-hoc provider abort.
+    ``pty.fork`` gives the child a real session and controlling terminal,
+    matching the user's terminal contract. The forked child execs immediately
+    and the parent owns its exact PID with ``waitpid``. The returned process
+    remains alive until Runtime Host recovery has been asserted, so the
+    registration retry cannot silently settle as a post-hoc provider abort.
     """
 
-    slave_fd: int | None = None
     if use_tty:
-        master_fd, slave_fd = pty.openpty()
-        process = subprocess.Popen(
-            command,
-            env=env,
-            cwd=env.get("LONGHOUSE_FAULT_CWD"),
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            start_new_session=True,
-        )
-        os.close(slave_fd)
+        pid, master_fd = pty.fork()
+        if pid == 0:
+            try:
+                os.chdir(env.get("LONGHOUSE_FAULT_CWD", "."))
+                os.execvpe(command[0], command, env)
+            except BaseException:
+                os._exit(127)
+        process = ForkedProcess(pid, command)
+        os.set_blocking(master_fd, False)
         output_fd = master_fd
     else:
         process = subprocess.Popen(
@@ -692,8 +729,62 @@ def start_live_command(
         raise
 
 
-def finish_live_command(command: LiveCommand) -> dict[str, Any]:
-    """Stop one exact provider process group and assert it is reaped."""
+def process_start_identity(pid: int) -> str | None:
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    value = result.stdout.strip()
+    return value or None
+
+
+def process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def process_is_zombie(pid: int) -> bool:
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "stat="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip().startswith("Z")
+
+
+def finish_live_command(
+    command: LiveCommand,
+    *,
+    provider_pid: int | None = None,
+    provider_process_start_time: str | None = None,
+    cleanup_root: Path | None = None,
+) -> dict[str, Any]:
+    """Stop one exact launcher/provider process group and assert it is reaped.
+
+    The Longhouse facade and the upstream provider use separate process groups
+    after terminal handoff.  Killing only the facade leaves a provider child
+    alive and can make the facade wait forever.  The provider PID comes from
+    the durable retry intent and is checked against its recorded start
+    identity before any signal is sent.
+    """
+
+    provider_kill_status = "not_observed"
+    if provider_pid is not None and (
+        provider_process_start_time is None
+        or process_start_identity(provider_pid) == provider_process_start_time
+    ):
+        kill_group(provider_pid, grace=0.2)
+        provider_kill_status = "attempted"
+    elif provider_pid is not None:
+        provider_kill_status = "identity_mismatch"
 
     if command.is_tty:
         try:
@@ -710,7 +801,20 @@ def finish_live_command(command: LiveCommand) -> dict[str, Any]:
         command.process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         kill_group(command.process, grace=0.1)
-        command.process.wait(timeout=5)
+        # The exact Popen PID is still the final bounded cleanup target; do
+        # not let a provider-owned signal path hang the qualification.  The
+        # process may be a short-lived terminal trampoline whose waitpid
+        # bookkeeping races with the provider's own reaper, so verify its OS
+        # identity directly after the kill instead of waiting indefinitely.
+        command.process.kill()
+        if cleanup_root is not None:
+            stop_processes_for_root(cleanup_root)
+        deadline = time.monotonic() + 2
+        while process_exists(command.process.pid) and not process_is_zombie(
+            command.process.pid
+        ) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        command.process.returncode = -signal.SIGKILL
     if command.is_tty:
         try:
             os.close(command.output_fd)
@@ -721,6 +825,9 @@ def finish_live_command(command: LiveCommand) -> dict[str, Any]:
     return {
         "returncode": command.process.returncode,
         "process_group_reaped": command.process.poll() is not None,
+        "provider_pid": provider_pid,
+        "provider_process_group_cleanup": provider_kill_status,
+        "forced_launcher_cleanup": command.process.returncode == -signal.SIGKILL,
     }
 
 
@@ -730,6 +837,7 @@ def provider_command(
     longhouse_bin: Path,
     provider_bin: Path,
     root: Path,
+    profile_name: str | None = None,
     cwd: Path,
     base_url: str,
     token: str,
@@ -748,12 +856,13 @@ def provider_command(
         provider_flag,
         str(provider_bin),
     ]
+    provider_config_root = root / "provider-config" / (profile_name or provider)
     if provider == "claude":
-        command.extend(["--claude-dir", str(root / "provider-config" / "claude")])
+        command.extend(["--claude-dir", str(provider_config_root)])
     elif provider == "opencode":
         if not keep_attached:
             command.append("--no-attach")
-        command.extend(["--claude-dir", str(root / "provider-config" / "opencode")])
+        command.extend(["--claude-dir", str(provider_config_root)])
     elif provider == "codex":
         if not keep_attached:
             command.append("--no-attach")
@@ -761,7 +870,7 @@ def provider_command(
         command.extend(
             [
                 "--config-dir",
-                str(root / "provider-config" / "cursor"),
+                str(provider_config_root),
                 "--permission-mode",
                 "auto_approve",
                 "--verbose",
@@ -787,16 +896,167 @@ def retry_owner_ready(root: Path, provider: str, launcher_pid: int) -> bool:
 
 
 def provider_failure_qualification(provider: str, output: str) -> str:
-    # Claude's native channel probe depends on provider authentication. An
-    # isolated qualification profile intentionally has no credentials, so do
-    # not mislabel that harness precondition failure as a provider-owned
-    # startup defect.
+    # These provider-native probes can fail before Longhouse gets a readiness
+    # signal when an isolated qualification profile lacks the provider's own
+    # account/session state. Do not mislabel that harness precondition failure
+    # as a Longhouse startup defect.
     if provider == "claude" and (
         "auth status" in output.lower()
         or "native channels unavailable" in output.lower()
     ):
         return "harness_precondition_unmet"
     return "provider_owned_start_failure"
+
+
+def bootstrap_provider_auth(
+    provider: str,
+    *,
+    provider_bin: Path,
+    root: Path,
+) -> dict[str, Any]:
+    """Prepare provider-native auth in the disposable qualification root.
+
+    Claude, Cursor, and OpenCode consume request-scoped environment
+    credentials. Stock Codex does not: its supported isolated path is
+    ``codex login --with-api-key`` with the key supplied on stdin. The matrix
+    never copies a daily provider profile and records only the auth method,
+    never credential material.
+    """
+
+    if provider == "claude":
+        configured = bool(
+            os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+        )
+        return {
+            "status": "ready" if configured else "missing",
+            "method": "provider_environment_or_explicit_config_dir",
+        }
+    if provider == "cursor":
+        api_key_configured = bool(os.environ.get("CURSOR_API_KEY"))
+        profile_root = root / "provider-home" / provider
+        (root / "cwd" / provider).mkdir(mode=0o700, parents=True, exist_ok=True)
+        profile_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        profile_env = os.environ.copy()
+        profile_env.update(
+            {
+                "HOME": str(profile_root),
+                "XDG_CONFIG_HOME": str(profile_root / "config"),
+                "XDG_DATA_HOME": str(profile_root / "data"),
+                "XDG_STATE_HOME": str(profile_root / "state"),
+                "XDG_CACHE_HOME": str(profile_root / "cache"),
+            }
+        )
+        status_probe_timed_out = False
+        status_probe_returncode: int | None = None
+        provider_status: str | None = None
+        account_authenticated = False
+        try:
+            status_probe = subprocess.run(
+                [str(provider_bin), "status", "--format", "json"],
+                cwd=str(root / "cwd" / provider),
+                env=profile_env,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            status_probe_returncode = status_probe.returncode
+            try:
+                status_payload = json.loads(status_probe.stdout or "{}")
+            except json.JSONDecodeError:
+                status_payload = {}
+            if isinstance(status_payload, dict):
+                provider_status = (
+                    str(status_payload["status"])
+                    if status_payload.get("status") is not None
+                    else None
+                )
+                account_authenticated = (
+                    status_payload.get("isAuthenticated") is True
+                )
+        except subprocess.TimeoutExpired:
+            status_probe_timed_out = True
+        return {
+            # Cursor's API key is not sufficient for ``create-chat`` in a
+            # fresh profile. The installed lane must report that account
+            # prerequisite explicitly instead of calling the Longhouse launch
+            # path broken after its bounded provider wait expires.
+            "status": "ready" if account_authenticated else "missing",
+            "method": "cursor_account_session_and_api_key",
+            "api_key_configured": api_key_configured,
+            "account_session_authenticated": account_authenticated,
+            "provider_status": provider_status,
+            "status_probe_returncode": status_probe_returncode,
+            "status_probe_timed_out": status_probe_timed_out,
+            "precondition_failure": (
+                "cursor_status_probe_timeout"
+                if status_probe_timed_out
+                else "cursor_account_session_not_authenticated"
+                if not account_authenticated
+                else None
+            ),
+        }
+    if provider == "opencode":
+        configured = bool(
+            os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+        )
+        return {
+            "status": "ready" if configured else "provider_local_or_missing",
+            "method": "provider_environment",
+        }
+
+    api_key = (
+        os.environ.get("CODEX_API_KEY")
+        or os.environ.get("LONGHOUSE_CI_CODEX_API_KEY")
+        or ""
+    ).strip()
+    codex_home = root / "provider-config" / "codex"
+    codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (root / "cwd" / provider).mkdir(mode=0o700, parents=True, exist_ok=True)
+    (root / "provider-home" / provider).mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not api_key:
+        return {
+            "status": "missing",
+            "method": "codex_login_with_api_key_stdin",
+            "auth_path": str(codex_home / "auth.json"),
+        }
+    env = os.environ.copy()
+    env.update(
+        {
+            "CODEX_HOME": str(codex_home),
+            "HOME": str(root / "provider-home" / provider),
+        }
+    )
+    env.pop("CODEX_API_KEY", None)
+    result = subprocess.run(
+        [str(provider_bin), "login", "--with-api-key"],
+        cwd=str(root / "cwd" / provider),
+        env=env,
+        input=f"{api_key}\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    detail = (result.stderr or result.stdout or "").replace(api_key, "[REDACTED]").strip()
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Codex isolated login failed ({result.returncode}): {detail[:240]}"
+        )
+    auth_path = codex_home / "auth.json"
+    if not auth_path.is_file():
+        raise RuntimeError("Codex isolated login completed without auth.json")
+    auth_path.chmod(0o600)
+    return {
+        "status": "ready",
+        "method": "codex_login_with_api_key_stdin",
+        "auth_path": str(auth_path),
+        "provider_output": detail[:240],
+    }
 
 
 def run_provider_live(
@@ -809,25 +1069,36 @@ def run_provider_live(
     base_url: str,
     token: str,
     engine_bin: Path,
+    profile_name: str | None = None,
 ) -> tuple[dict[str, Any], LiveCommand | None]:
+    profile_name = profile_name or provider
     provider_root = evidence_root / "providers" / provider
     provider_root.mkdir(parents=True, exist_ok=True)
     cwd = root / "cwd" / provider
     cwd.mkdir(parents=True, exist_ok=True)
     env = runtime_env(root, engine_bin)
     env["LONGHOUSE_FAULT_CWD"] = str(cwd)
-    env["CODEX_HOME"] = str(root / "provider-config" / "codex")
-    provider_home = root / "provider-home" / provider
+    env["CODEX_HOME"] = str(root / "provider-config" / profile_name)
+    provider_home = root / "provider-home" / profile_name
     env["HOME"] = str(provider_home)
     env["XDG_CONFIG_HOME"] = str(provider_home / "config")
     env["XDG_DATA_HOME"] = str(provider_home / "data")
     env["XDG_STATE_HOME"] = str(provider_home / "state")
     env["XDG_CACHE_HOME"] = str(provider_home / "cache")
+    if provider == "codex":
+        codex_home = Path(env["CODEX_HOME"])
+        codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        source_auth = root / "provider-config" / "codex" / "auth.json"
+        target_auth = codex_home / "auth.json"
+        if profile_name != provider and source_auth.is_file() and not target_auth.exists():
+            shutil.copyfile(source_auth, target_auth)
+            target_auth.chmod(0o600)
     command = provider_command(
         provider,
         longhouse_bin=longhouse_bin,
         provider_bin=provider_bin,
         root=root,
+        profile_name=profile_name,
         cwd=cwd,
         base_url=base_url,
         token=token,
@@ -907,6 +1178,20 @@ def run_provider_live(
         "launch_log": str(provider_root / "launch.log"),
         "retry_intents_after_launch": read_retry_count(root),
     }
+    owner = next(
+        (
+            intent
+            for intent in read_retry_intents(root)
+            if str(intent.get("provider_name", "")).lower() == provider.lower()
+            and intent.get("launcher_pid") == live.process.pid
+        ),
+        None,
+    )
+    if owner is not None:
+        result["provider_pid"] = owner.get("provider_pid")
+        result["provider_process_start_time"] = owner.get(
+            "provider_process_start_time"
+        )
     return result, live
 
 
@@ -1013,6 +1298,7 @@ def run_concurrent_providers(
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
+                profile_name=f"concurrent-{provider}",
             )
             for provider in providers
         }
@@ -1076,6 +1362,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     args._matrix_results = results
     selected_providers = tuple(args.provider or PROVIDERS)
     args._selected_providers = selected_providers
+    provider_auth: dict[str, Any] = {}
     try:
         longhouse_bin = resolve_file(
             args.longhouse_bin or os.environ.get("LONGHOUSE_FAULT_LONGHOUSE_BIN"),
@@ -1093,6 +1380,14 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 os.environ.get(env_name), binary_name
             )
             provider_evidence[provider] = version_probe(provider_bins[provider])
+        if args.credentialed:
+            for provider in selected_providers:
+                provider_auth[provider] = bootstrap_provider_auth(
+                    provider,
+                    provider_bin=provider_bins[provider],
+                    root=temp_root,
+                )
+        args._provider_auth = provider_auth
 
         port = choose_port()
         host = start_host(temp_root, evidence_root, port=port, ordinal=1)
@@ -1132,6 +1427,16 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 results.append(result)
                 if live is not None:
                     live_commands.append((result, live))
+        cursor_auth = provider_auth.get("cursor")
+        if cursor_auth and cursor_auth.get("status") == "missing":
+            for result in results:
+                if result.get("provider") == "cursor" and result.get(
+                    "startup_failure"
+                ):
+                    result["qualification"] = "harness_precondition_unmet"
+                    result["qualification_detail"] = cursor_auth.get(
+                        "precondition_failure"
+                    )
         provider_failures = [
             result
             for result in results
@@ -1262,7 +1567,14 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 if durable_ready is True:
                     remaining_live_commands.append((result, live))
                     continue
-                cleanup = finish_live_command(live)
+                cleanup = finish_live_command(
+                    live,
+                    provider_pid=result.get("provider_pid"),
+                    provider_process_start_time=result.get(
+                        "provider_process_start_time"
+                    ),
+                    cleanup_root=temp_root,
+                )
                 if not cleanup["process_group_reaped"]:
                     raise RuntimeError(
                         f"{result['provider']} pre-ready provider process was not reaped"
@@ -1305,6 +1617,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             cold_log = evidence_root / "machine-agent-cold-restart.log"
             cold_handle = cold_log.open("wb")
             cold_env = runtime_env(temp_root, engine_bin)
+            cold_env["CODEX_HOME"] = str(temp_root / "provider-config" / "codex")
             cold_engine = subprocess.Popen(
                 [
                     str(engine_bin),
@@ -1381,6 +1694,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             engine_log = evidence_root / "machine-agent.log"
             engine_handle = engine_log.open("wb")
             engine_env = runtime_env(temp_root, engine_bin)
+            engine_env["CODEX_HOME"] = str(temp_root / "provider-config" / "codex")
             engine = subprocess.Popen(
                 [
                     str(engine_bin),
@@ -1483,7 +1797,14 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             args._last_launch_states = last_launch_states
             assert_unready_absent()
         for result, live in live_commands:
-            cleanup = finish_live_command(live)
+            cleanup = finish_live_command(
+                live,
+                provider_pid=result.get("provider_pid"),
+                provider_process_start_time=result.get(
+                    "provider_process_start_time"
+                ),
+                cleanup_root=temp_root,
+            )
             if not cleanup["process_group_reaped"]:
                 raise RuntimeError(
                     f"{result['provider']} provider process was not reaped after adoption"
@@ -1546,6 +1867,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             ],
             "providers": results,
+            "provider_auth": provider_auth,
             "provider_startup_failures": provider_failures,
             "retry_intents_before_recovery": expected_retry_count,
             "retry_intents_after_recovery": 0,
@@ -1584,6 +1906,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine-bin", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--provider", action="append", choices=PROVIDERS)
+    parser.add_argument(
+        "--credentialed",
+        action="store_true",
+        help=(
+            "Prepare provider-native auth in the disposable root using the "
+            "credential environment; Codex uses login --with-api-key on stdin."
+        ),
+    )
     parser.add_argument(
         "--concurrent",
         action="store_true",
@@ -1625,6 +1955,7 @@ def main(argv: list[str] | None = None) -> int:
             "retry_intents": getattr(args, "_retry_intents", []),
             "evidence_root": str(getattr(args, "_resolved_evidence_root", "")),
             "temporary_root": str(getattr(args, "_temporary_root", "")),
+            "provider_auth": getattr(args, "_provider_auth", {}),
         }
     evidence_root = Path(
         artifact.get("evidence_root")
