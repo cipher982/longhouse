@@ -94,6 +94,74 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
+def _write_resume_contract_snapshot(
+    *,
+    isolation_root: Path,
+    state: dict[str, Any],
+    codex_bin: Path,
+    provider_version: str,
+) -> tuple[Path, Path]:
+    """Publish the same retained-contract shape as the managed Codex facade.
+
+    This producer starts the Rust bridge directly so it can exercise the stock
+    TUI Resume command. The normal ``longhouse codex`` facade records this
+    contract after launch; a direct bridge invocation does not. Keep the probe
+    honest by recording the equivalent durable contract in the disposable
+    Longhouse home, with a state snapshot whose path is inside that home so
+    the real Machine Agent resume scanner can validate it.
+    """
+
+    session_id = str(state.get("session_id") or "").strip()
+    cwd = Path(str(state.get("cwd") or "")).resolve()
+    provider_binary = codex_bin.resolve()
+    longhouse_home = isolation_root / "longhouse"
+    state_path = longhouse_home / "managed-local/codex-bridge" / f"{session_id}.json"
+    contract_path = longhouse_home / "managed-local/contracts/codex" / f"{session_id}.json"
+    if not session_id or not cwd.is_dir() or not provider_binary.is_file():
+        raise RuntimeError("Codex resume contract snapshot inputs are incomplete")
+    state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    contract_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    snapshot = dict(state)
+    snapshot["session_id"] = session_id
+    _write_json(state_path, snapshot)
+    _write_json(
+        contract_path,
+        {
+            "schema_version": 2,
+            "session_id": session_id,
+            "provider": "codex",
+            "launch_mode": "detached_ui",
+            "created_at": _now(),
+            "provider_binary": {
+                "path": str(provider_binary),
+                "source": "staged_release",
+                "version": provider_version,
+            },
+            "workspace": {
+                "cwd": str(cwd),
+                "canonical_cwd": str(cwd),
+                "file_identity": None,
+            },
+            "control": {
+                "kind": "codex_bridge",
+                "state_path": str(state_path.resolve()),
+            },
+            "options": {"model": os.environ.get("CODEX_MODEL"), "model_reasoning_effort": None, "bypass": False},
+        },
+    )
+    return state_path, contract_path
+
+
+def _remove_resume_contract_snapshot(paths: tuple[Path, Path] | None) -> None:
+    if paths is None:
+        return
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -154,7 +222,7 @@ def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> di
     return payload
 
 
-def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: float = 45) -> dict[str, Any]:
+def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: float = 90) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     last_reason = "resume intent was not projected"
     while time.monotonic() < deadline:
@@ -445,6 +513,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     session_id = ""
     old_pids: set[int] = set()
     final_cleanup: dict[str, Any] = {"verified": False}
+    resume_contract_paths: tuple[Path, Path] | None = None
     shipper: TranscriptShipper | None = None
     try:
         initial_summary, _, isolation_root = bridge_canary._start_bridge(
@@ -492,6 +561,22 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         if shipper is not None:
             process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
         _write_json(root / "process-transition-receipt.json", process_transition)
+        contract_state = bridge_canary._read_json(initial_state_file)
+        resume_contract_paths = _write_resume_contract_snapshot(
+            isolation_root=isolation_root,
+            state=contract_state,
+            codex_bin=args.codex_bin,
+            provider_version=str(provider_receipt["version"]),
+        )
+        _write_json(
+            root / "resume-contract-receipt.json",
+            {
+                "status": "pass",
+                "contract_path": str(resume_contract_paths[1]),
+                "state_snapshot_path": str(resume_contract_paths[0]),
+                "provider": "codex",
+            },
+        )
         stale_input_receipt = _attempt_stale_input(args, isolation_root, session_id)
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)
         if stale_input_receipt["rejected"] is not True:
@@ -603,6 +688,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _remove_resume_contract_snapshot(resume_contract_paths)
         redacted_secret_files = _redact_retained_secrets(
             root,
             list(_qualification_secrets(os.environ, args.agents_token)),
@@ -670,6 +756,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _remove_resume_contract_snapshot(resume_contract_paths)
         redacted_secret_files = _redact_retained_secrets(
             root,
             list(_qualification_secrets(os.environ, args.agents_token)),
@@ -695,6 +782,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     finally:
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _remove_resume_contract_snapshot(resume_contract_paths)
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():

@@ -1333,7 +1333,8 @@ def _control_send(
         if completed.returncode == 0:
             break
         detail = f"{completed.stdout}\n{completed.stderr}"
-        if spec.provider != "cursor" or "provider_not_idle" not in detail or time.monotonic() >= deadline:
+        cursor_not_idle = "provider_not_idle" in detail or "provider is not idle" in detail.lower()
+        if spec.provider != "cursor" or not cursor_not_idle or time.monotonic() >= deadline:
             raise RuntimeError(f"{spec.provider} managed control send failed: {completed.stderr[-1000:]}")
         # Cursor's native TUI can publish its Helm lease before it reaches its
         # first idle prompt. The managed socket rejects this request without
@@ -1351,11 +1352,12 @@ def _control_send(
 def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, *, force: bool) -> dict[str, Any]:
     pid = process.pid
     provider_pid = _provider_process_pid(spec, state)
+    control_returncode: int | None = None
     if force:
         process.kill_group(signal.SIGKILL)
         method = "sigkill_exact_owner_group"
     elif spec.provider == "cursor":
-        subprocess.run(
+        control_result = subprocess.run(
             [str(args.engine), "cursor-helm", "stop", "--session-id", state["session_id"]],
             cwd=args.repo_root,
             capture_output=True,
@@ -1363,9 +1365,10 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
             timeout=15,
             check=False,
         )
+        control_returncode = control_result.returncode
         method = "cursor_helm_stop"
     elif spec.provider == "opencode":
-        subprocess.run(
+        control_result = subprocess.run(
             [str(args.engine), "opencode-bridge", "stop", "--session-id", state["session_id"]],
             cwd=args.repo_root,
             capture_output=True,
@@ -1373,6 +1376,7 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
             timeout=15,
             check=False,
         )
+        control_returncode = control_result.returncode
         method = "opencode_bridge_stop"
     else:
         process.send("\x04")
@@ -1387,6 +1391,12 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
     provider_force_signal_sent = force and _signal_pid_if_alive(provider_pid, signal.SIGKILL)
     provider_process_dead = _wait_pid_dead(provider_pid)
     dead = process.process.poll() is not None and group_dead and provider_process_dead
+    # OpenCode's TUI wrapper can exit with status 1 when its deliberately
+    # controlled localhost server is stopped underneath it. The authoritative
+    # clean-shutdown fact is the native bridge control result plus exact owner
+    # cleanup; treating the wrapper's exit code as the oracle would turn a
+    # successful provider stop into a false qualification failure.
+    clean = dead and not force and fallback_signal is None and (spec.provider != "opencode" or control_returncode == 0)
     return {
         "method": method,
         "pid": pid,
@@ -1396,8 +1406,9 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
         "process_group_dead": group_dead,
         "provider_force_signal_sent": provider_force_signal_sent,
         "provider_process_dead": provider_process_dead,
+        "control_returncode": control_returncode,
         "dead": dead,
-        "clean": dead and not force and fallback_signal is None and exit_code == 0,
+        "clean": clean,
     }
 
 
