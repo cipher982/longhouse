@@ -129,11 +129,7 @@ def _binary_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         return None, "longhouse build identity is missing facade or engine identity"
     for label, value in (("facade", facade), ("engine", engine)):
         commit = value.get("commit")
-        if (
-            not isinstance(commit, str)
-            or len(commit) != 40
-            or any(character not in "0123456789abcdefABCDEF" for character in commit)
-        ):
+        if not isinstance(commit, str) or len(commit) != 40 or any(character not in "0123456789abcdefABCDEF" for character in commit):
             return None, f"longhouse {label} build identity has an invalid commit"
         if not isinstance(value.get("commit_short"), str) or not value["commit_short"]:
             return None, f"longhouse {label} build identity has no commit_short"
@@ -160,10 +156,7 @@ def _binary_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
 
 def _load_challenge(path: Path, *, root: Path) -> tuple[dict[str, Any], bytes]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if (
-        not isinstance(payload, dict)
-        or payload.get("artifact_kind") != CHALLENGE_ARTIFACT_KIND
-    ):
+    if not isinstance(payload, dict) or payload.get("artifact_kind") != CHALLENGE_ARTIFACT_KIND:
         raise ValueError("dogfood challenge has the wrong artifact kind")
     if payload.get("issuer") != CHALLENGE_ISSUER:
         raise ValueError("dogfood challenge was not issued by the measurement reporter")
@@ -190,10 +183,7 @@ def _load_challenge(path: Path, *, root: Path) -> tuple[dict[str, Any], bytes]:
     for field in ("git_sha", "generator_sha256"):
         if challenge_provenance.get(field) != current.get(field):
             raise ValueError(f"dogfood challenge {field} does not match the collector")
-    if (
-        challenge_provenance.get("repository_dirty") is not False
-        or challenge_provenance.get("generator_dirty") is not False
-    ):
+    if challenge_provenance.get("repository_dirty") is not False or challenge_provenance.get("generator_dirty") is not False:
         raise ValueError("dogfood challenge provenance is dirty")
     return payload, key
 
@@ -218,11 +208,7 @@ def _freshness(snapshot: dict[str, Any]) -> str:
 
 def _health_state(snapshot: dict[str, Any]) -> str:
     value = snapshot.get("health_state")
-    return (
-        value
-        if isinstance(value, str) and value in HEALTH_STATES - {"unknown"}
-        else "unknown"
-    )
+    return value if isinstance(value, str) and value in HEALTH_STATES - {"unknown"} else "unknown"
 
 
 def _action_ids(snapshot: dict[str, Any]) -> list[str]:
@@ -260,30 +246,21 @@ def collect_snapshot(
         return payload, f"local-health exited {result.returncode}: {detail}"
     if payload.get("schema_version") != LOCAL_HEALTH_SCHEMA_VERSION:
         return payload, "local-health payload has an unsupported schema_version"
-    missing = [
-        field for field in ("health_state", "engine_status") if field not in payload
-    ]
+    missing = [field for field in ("health_state", "engine_status") if field not in payload]
     if missing:
         return (
             payload,
             f"local-health payload is missing required fields: {', '.join(missing)}",
         )
-    if not isinstance(payload.get("health_state"), str) or payload[
-        "health_state"
-    ] not in HEALTH_STATES - {"unknown"}:
+    if not isinstance(payload.get("health_state"), str) or payload["health_state"] not in HEALTH_STATES - {"unknown"}:
         return payload, "local-health payload has an invalid health_state"
     engine_status = payload.get("engine_status")
     if not isinstance(engine_status, dict):
         return payload, "local-health payload has an invalid engine_status"
-    if not isinstance(engine_status.get("exists"), bool) or not isinstance(
-        engine_status.get("fresh"), bool
-    ):
+    if not isinstance(engine_status.get("exists"), bool) or not isinstance(engine_status.get("fresh"), bool):
         return payload, "local-health payload has invalid engine_status booleans"
     action_ids = payload.get("suggested_action_ids")
-    if action_ids is not None and (
-        not isinstance(action_ids, list)
-        or not all(isinstance(item, str) and item for item in action_ids)
-    ):
+    if action_ids is not None and (not isinstance(action_ids, list) or not all(isinstance(item, str) and item for item in action_ids)):
         return payload, "local-health payload has invalid suggested_action_ids"
     return payload, None
 
@@ -298,18 +275,11 @@ def _conservation(path: Path | None) -> dict[str, int] | None:
     for field in CONSERVATION_FIELDS:
         count = value.get(field)
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise ValueError(
-                f"evidence conservation {field} must be a non-negative integer"
-            )
+            raise ValueError(f"evidence conservation {field} must be a non-negative integer")
         result[field] = count
-    accounted = sum(
-        result[field]
-        for field in ("archived_events", "discarded_events", "unresolved_events")
-    )
+    accounted = sum(result[field] for field in ("archived_events", "discarded_events", "unresolved_events"))
     if accounted > result["source_events"]:
-        raise ValueError(
-            "evidence conservation accounts for more events than source_events"
-        )
+        raise ValueError("evidence conservation accounts for more events than source_events")
     for field in ("replayed_events", "duplicate_events"):
         if result[field] > result["source_events"]:
             raise ValueError(f"evidence conservation {field} exceeds source_events")
@@ -356,8 +326,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     if args.expected_red_eligible is None:
         raise ValueError("one expected red-eligibility flag is required")
     if args.recovery_duration_seconds is not None and (
-        args.recovery_duration_seconds < 0
-        or not math.isfinite(args.recovery_duration_seconds)
+        args.recovery_duration_seconds < 0 or not math.isfinite(args.recovery_duration_seconds)
     ):
         raise ValueError("--recovery-duration-seconds must be finite and non-negative")
     expected = {
@@ -395,9 +364,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     if isinstance(snapshot.get("severity"), str):
         observed["severity"] = snapshot["severity"]
     if isinstance(snapshot.get("reasons"), list):
-        observed["reasons"] = [
-            item for item in snapshot["reasons"] if isinstance(item, str)
-        ]
+        observed["reasons"] = [item for item in snapshot["reasons"] if isinstance(item, str)]
     if isinstance(snapshot.get("collected_at"), str):
         observed["producer_collected_at"] = snapshot["collected_at"]
     episode: dict[str, Any] = {
@@ -422,9 +389,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             challenge_time_error = "observation predates dogfood challenge creation"
         elif observed_time > expires_time:
             challenge_time_error = "observation is after dogfood challenge expiry"
-    observation_errors = [
-        detail for detail in (binary_error, error, challenge_time_error) if detail
-    ]
+    observation_errors = [detail for detail in (binary_error, error, challenge_time_error) if detail]
     if observation_errors:
         # The measurement consumer rejects any episode carrying this field.
         # Keeping the diagnostic artifact makes the failed observation
@@ -457,9 +422,7 @@ def parser() -> argparse.ArgumentParser:
         "--expected-health-state",
         choices=sorted(HEALTH_STATES - {"unknown"}),
     )
-    command.add_argument(
-        "--expected-producer-freshness", choices=sorted(FRESHNESS_STATES)
-    )
+    command.add_argument("--expected-producer-freshness", choices=sorted(FRESHNESS_STATES))
     red = command.add_mutually_exclusive_group()
     red.add_argument(
         "--expected-red-eligible",
@@ -489,9 +452,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--output is required when collecting an episode")
         artifact = collect(args)
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"dogfood collector: {exc}", file=sys.stderr)
         return 2
