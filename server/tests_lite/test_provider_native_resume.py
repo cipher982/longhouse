@@ -129,6 +129,21 @@ def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
 
 def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
+    contract_path = tmp_path / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+    contract_path.parent.mkdir(parents=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "provider": "antigravity",
+                        "reattach": False,
+                        "capabilities": {"session.resume.helm": {"disposition": "policy_disabled"}},
+                    }
+                ]
+            }
+        )
+    )
     exit_code = antigravity_resume_policy.main(
         [
             "--variant",

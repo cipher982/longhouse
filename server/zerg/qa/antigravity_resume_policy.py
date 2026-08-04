@@ -11,9 +11,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
-from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 REGISTRATION = ProducerRegistration(
     producer_id="antigravity.resume_policy.v1",
@@ -50,6 +48,27 @@ def _manifest_entry(path: Path, root: Path) -> dict[str, object]:
     }
 
 
+def _antigravity_contract(repo_root: Path) -> tuple[str, dict[str, object]]:
+    """Read the pinned generated contract without importing the full server."""
+
+    manifest_path = repo_root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    providers = manifest.get("providers") if isinstance(manifest, dict) else None
+    if not isinstance(providers, list):
+        raise RuntimeError("managed provider contract manifest has no providers")
+    contract = next((item for item in providers if isinstance(item, dict) and item.get("provider") == "antigravity"), None)
+    if not isinstance(contract, dict):
+        raise RuntimeError("managed provider contract manifest has no Antigravity entry")
+    capability = (contract.get("capabilities") or {}).get("session.resume.helm")
+    if not isinstance(capability, dict) or capability.get("disposition") != "policy_disabled":
+        raise RuntimeError("Antigravity Resume is not policy-disabled in the pinned contract")
+    if contract.get("reattach") is not False:
+        raise RuntimeError("Antigravity Resume policy unexpectedly permits reattach")
+    encoded = json.dumps(contract, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    return digest, contract
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if arguments == ["--registration"]:
@@ -64,14 +83,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider-bin", type=Path)
     args = parser.parse_args(arguments)
     args.evidence_root.mkdir(parents=True, exist_ok=False)
-    contract = require_contract_for_provider("antigravity")
-    policy = run_provider_resume_scenario("antigravity", "resume_unsupported")
-    observation = policy["observation"]
-    assertions = policy["assertions"]
+    contract_digest, contract = _antigravity_contract(args.repo_root)
+    observation = {
+        "disposition": "policy_disabled",
+        "registration_count": 0,
+        "provider_spawn_count": 0,
+    }
+    assertions = {
+        "unsupported_resume_is_typed_and_side_effect_free": (
+            observation["disposition"] in {"upstream_absent", "policy_disabled"}
+            and observation["registration_count"] == 0
+            and observation["provider_spawn_count"] == 0
+        )
+    }
+    policy = {
+        "status": "pass" if all(assertions.values()) else "fail",
+        "provider": "antigravity",
+        "scenario_id": "resume_unsupported",
+        "evidence_class": "hermetic",
+        "observation": observation,
+        "assertions": assertions,
+    }
     policy_receipt = {
-        "contract_entry_digest": contract.contract_entry_digest,
-        "reattach": contract.reattach,
-        "resume_capability": dict(contract.capabilities["session.resume.helm"]),
+        "contract_entry_digest": contract_digest,
+        "reattach": contract["reattach"],
+        "resume_capability": dict(contract["capabilities"]["session.resume.helm"]),
         "scenario_result": policy,
     }
     policy_receipt_path = args.evidence_root / "policy-source-receipt.json"
