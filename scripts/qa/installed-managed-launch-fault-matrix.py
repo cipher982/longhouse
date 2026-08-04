@@ -236,6 +236,21 @@ def harness_provenance() -> dict[str, Any]:
     }
 
 
+def verified_harness_provenance() -> dict[str, Any]:
+    """Return usable repository provenance or fail closed before qualification."""
+    provenance = harness_provenance()
+    missing = [
+        key
+        for key in ("repository_git_sha", "repository_dirty", "harness_file_dirty")
+        if provenance.get(key) is None
+    ]
+    if missing:
+        raise ProcessScanFailure(
+            "harness provenance could not be verified: " + ", ".join(missing)
+        )
+    return provenance
+
+
 def resolve_file(raw: str | None, name: str) -> Path:
     candidate = Path(raw).expanduser() if raw else None
     if candidate is None:
@@ -2614,7 +2629,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "longhouse": source_provenance(longhouse_bin),
                 "longhouse_engine": source_provenance(engine_bin),
             },
-            "harness": harness_provenance(),
+            "harness": verified_harness_provenance(),
             "provider_binaries": provider_evidence,
             "scenarios": [
                 "installed_provider_launch_while_runtime_host_unavailable",

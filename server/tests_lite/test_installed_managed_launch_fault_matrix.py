@@ -115,6 +115,30 @@ def test_temporary_root_deletion_fails_closed(
         _MODULE.remove_temporary_root(temporary_root)
 
 
+def test_temporary_root_residual_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    temporary_root = tmp_path / "temporary-root"
+    temporary_root.mkdir()
+    monkeypatch.setattr(_MODULE.shutil, "rmtree", lambda *args, **kwargs: None)
+
+    with pytest.raises(_MODULE.ProcessScanFailure, match="left the path present"):
+        _MODULE.remove_temporary_root(temporary_root)
+
+
+def test_harness_provenance_verification_fails_closed_on_git_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _MODULE.subprocess,
+        "run",
+        lambda *args, **kwargs: _result(1, stderr="git unavailable"),
+    )
+
+    with pytest.raises(_MODULE.ProcessScanFailure, match="repository_git_sha"):
+        _MODULE.verified_harness_provenance()
+
+
 def test_run_matrix_records_completion_after_teardown(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -202,7 +226,15 @@ def test_run_matrix_records_completion_after_teardown(
     monkeypatch.setattr(_MODULE, "kill_group", lambda *args, **kwargs: None)
     monkeypatch.setattr(_MODULE.subprocess, "Popen", lambda *args, **kwargs: FakeEngine())
     monkeypatch.setattr(_MODULE, "source_provenance", lambda path: {})
-    monkeypatch.setattr(_MODULE, "harness_provenance", lambda: {})
+    monkeypatch.setattr(
+        _MODULE,
+        "harness_provenance",
+        lambda: {
+            "repository_git_sha": "test-sha",
+            "repository_dirty": False,
+            "harness_file_dirty": False,
+        },
+    )
     monkeypatch.setattr(_MODULE.shutil, "rmtree", tracked_rmtree)
     monkeypatch.setattr(
         _MODULE, "record_success_measurements", fake_record_success_measurements
