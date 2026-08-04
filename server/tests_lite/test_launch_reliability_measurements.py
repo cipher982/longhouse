@@ -234,7 +234,7 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
     assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "expected_broken_or_degraded_cases"
     assert report["measures"]["action_coverage"]["numerator"] == 1
     assert report["measures"]["action_coverage"]["denominator"] == 2
-    assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_expected_action"
+    assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_a_non_none_expected_action"
 
 
 def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path: Path):

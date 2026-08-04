@@ -266,7 +266,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
             "scope": scope,
             "numerator": action_pass,
             "denominator": action_total,
-            "denominator_definition": "cases_with_expected_action",
+            "denominator_definition": "cases_with_a_non_none_expected_action",
             "rate": (action_pass / action_total) if action_total else None,
             "source": references,
         },
