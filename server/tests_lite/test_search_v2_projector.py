@@ -242,6 +242,8 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
                 "schema_generation": "searchd-test-v1",
                 "store_id": search_store_id,
             },
+            # Nothing indexed yet, so every object needs the real decode path.
+            "search.index.objects.reuse.v2": {"reused": {}, "missing": []},
             "search.index.object.v2": {"created": True},
             "search.index.publish.v2": {"published": True},
         }
@@ -267,6 +269,94 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     assert publish_call["event_count"] == 1
     complete_call = next(params for method, params in catalog.calls if method == "projector.state.complete.v2")
     assert complete_call["claim_token"] == claim_token
+    assert complete_call["completed_revision"] == 7
+
+
+@pytest.mark.asyncio
+async def test_search_projector_reuses_already_indexed_objects_without_reading_them(monkeypatch):
+    """A re-projection must not re-decode objects searchd already holds.
+
+    Render objects are content-addressed, so an object already indexed under this
+    generation is byte-identical. Re-deriving it costs a storage read plus raw
+    interaction replay per object and produces exactly the same rows. Paying that
+    for the whole session on every revision is why sessions with thousands of
+    objects never finished inside their lease and were re-claimed forever.
+    """
+
+    now = datetime(2026, 8, 2, tzinfo=UTC)
+    claim_token = "00000000-0000-4000-8000-0000000000aa"
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = "b" * 64
+
+    catalog = FakeClient(
+        {
+            "projector.state.claim.v2": {
+                "claimed": [
+                    {
+                        "projector": "search-v2",
+                        "session_id": session_id,
+                        "claimed_revision": "7",
+                        "failure_count": 0,
+                    }
+                ]
+            },
+            "storage.session.render_objects.list.v2": {
+                "found": True,
+                "snapshot_revision": "7",
+                "generation_id": generation_id,
+                "snapshot_object_count": 1,
+                "snapshot_event_count": 3,
+                "session": {
+                    "owner_id": "42",
+                    "provider": "claude",
+                    "environment": "local",
+                    "started_at": "2026-08-01T00:00:00+00:00",
+                    "project": "zerg",
+                },
+                "objects": [
+                    {
+                        "object_id": object_id,
+                        "object_hash": object_id,
+                        "object_path": f"render/v2/{object_id}.zst",
+                    }
+                ],
+                "has_more": False,
+            },
+            "projector.state.complete.v2": {"changed": True},
+            "projector.state.fail.v2": {"changed": True},
+            "projector.store.bind.v2": {"bound": True},
+        }
+    )
+    search = FakeClient(
+        {
+            "search.ping.v2": {
+                "ready": True,
+                "schema_generation": "searchd-test-v1",
+                "store_id": str(uuid4()),
+            },
+            # searchd already holds this object under the same generation.
+            "search.index.objects.reuse.v2": {"reused": {object_id: 3}, "missing": []},
+            "search.index.publish.v2": {"published": True},
+        }
+    )
+    workers = FakeRenderWorkers({})
+    projector = SearchV2Projector(catalog=catalog, search=search, render_workers=workers, worker_id="test-worker")
+
+    import zerg.services.search_v2_projector as projector_module
+
+    monkeypatch.setattr(projector_module, "uuid4", lambda: UUID(claim_token))
+    assert await projector.run_once(now=now) == 1
+
+    # The expensive half never ran: no storage read, no re-index.
+    assert workers.calls == []
+    assert not any(method == "search.index.object.v2" for method, _ in search.calls)
+    # ...and the publish still describes the complete object set, because reuse
+    # records membership at the new revision.
+    publish_call = next(params for method, params in search.calls if method == "search.index.publish.v2")
+    assert publish_call["object_count"] == 1
+    assert publish_call["event_count"] == 3
+    complete_call = next(params for method, params in catalog.calls if method == "projector.state.complete.v2")
     assert complete_call["completed_revision"] == 7
 
 
@@ -358,6 +448,8 @@ async def test_search_projector_recovers_semantics_for_legacy_render_object():
     search = FakeClient(
         {
             "search.ping.v2": {"ready": True, "schema_generation": "searchd-test-v1", "store_id": str(uuid4())},
+            # Nothing indexed yet, so every object needs the real decode path.
+            "search.index.objects.reuse.v2": {"reused": {}, "missing": []},
             "search.index.object.v2": {"created": True},
             "search.index.publish.v2": {"published": True},
         }

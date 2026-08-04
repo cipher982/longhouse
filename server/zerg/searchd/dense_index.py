@@ -35,6 +35,11 @@ from dataclasses import replace
 
 import numpy as np
 
+# How much deeper than `limit` to scan before collapsing duplicate episode text.
+# Bounded because the scan is over already-filtered candidates and the whole
+# point is to avoid paying for a full sort.
+_DEDUPE_OVERFETCH = 4
+
 
 @dataclass(frozen=True)
 class _Snapshot:
@@ -53,6 +58,7 @@ class _Snapshot:
     providers: np.ndarray  # (N,) object
     environments: np.ndarray  # (N,) object
     started_ats: np.ndarray  # (N,) object
+    content_hashes: np.ndarray  # (N,) object
 
     @property
     def size(self) -> int:
@@ -123,6 +129,7 @@ _EMPTY = _Snapshot(
             ("providers", object),
             ("environments", object),
             ("started_ats", object),
+            ("content_hashes", object),
         )
     },
 )
@@ -242,7 +249,7 @@ class ResidentEpisodeIndex:
             """
             SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
                    e.start_order_time_us, e.event_index_start, e.event_index_end,
-                   e.owner_id, s.project, s.provider, s.environment, s.started_at
+                   e.owner_id, e.content_hash, s.project, s.provider, s.environment, s.started_at
             FROM episode_embeddings e
             JOIN session_index s
               ON s.session_id = e.session_id
@@ -358,6 +365,7 @@ class ResidentEpisodeIndex:
             providers=column("provider", object, ""),
             environments=column("environment", object, ""),
             started_ats=column("started_at", object, ""),
+            content_hashes=column("content_hash", object),
         )
 
     def search(
@@ -406,14 +414,29 @@ class ResidentEpisodeIndex:
         vector = vector / norm
         scores = snapshot.vectors[candidates] @ vector
 
-        take = min(limit, candidates.size)
+        # Over-fetch, then collapse identical episode text. Agents share a lot of
+        # boilerplate -- injected instruction files, repeated preambles, the same
+        # generated scaffolding -- so one phrase can be byte-identical across
+        # dozens of unrelated sessions. Those episodes embed to the same vector
+        # and score identically, and a query that grazes them fills top-k with
+        # copies of one passage while the results that would actually answer it
+        # sit just below the cut.
+        take = min(limit * _DEDUPE_OVERFETCH, candidates.size)
         # argpartition is O(n); a full sort of 83k scores to take 30 is waste.
         top = np.argpartition(-scores, take - 1)[:take] if take < scores.size else np.arange(scores.size)
         top = top[np.argsort(-scores[top])]
 
         results = []
+        seen_content: set[str] = set()
         for position in top:
             index = candidates[position]
+            content_hash = snapshot.content_hashes[index]
+            # Keep the best-scoring occurrence. Ties break on the sort above, so
+            # a repeated query cannot reorder its own results.
+            if content_hash is not None:
+                if content_hash in seen_content:
+                    continue
+                seen_content.add(str(content_hash))
             start = int(snapshot.start_order_times[index])
             results.append(
                 {
@@ -426,4 +449,6 @@ class ResidentEpisodeIndex:
                     "start_order_time_us": None if start < 0 else start,
                 }
             )
+            if len(results) >= limit:
+                break
         return results

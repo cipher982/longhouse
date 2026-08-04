@@ -38,8 +38,12 @@ TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
 # than 0.329, while 36 / 76 is slightly more than 0.474).
 DEFAULT_MAX_FALSE_NEGATIVE_RATE = 36 / 76
 DEFAULT_MIN_RECALL_AT_5 = 25 / 76
-MAX_LIVE_HEAD_SESSIONS = 100
-MAX_LIVE_HEAD_AGE_SECONDS = 300.0
+# Grading retrieval against a half-projected corpus measures the backlog, not
+# the retriever, so the evaluator still demands a nearly-current index. This is
+# a quality threshold for scoring, deliberately not the serving contract:
+# recall itself serves under lag and reports the watermark.
+MAX_EVAL_LAG_SESSIONS = 100
+MAX_EVAL_LAG_AGE_SECONDS = 300.0
 # Full-corpus Qwen3-8B @256d baseline measured at k=25. The replacement must
 # improve aggregate recall without buying that gain by regressing any one of
 # the four answer-present query classes.
@@ -219,7 +223,7 @@ class Report:
         projectors = sorted({str(snapshot["projector"]) for snapshot in snapshots})
         unique_snapshots = {
             (
-                str(snapshot["cutover_certified_commit_seq"]),
+                str(snapshot["complete_through_commit_seq"]),
                 str(snapshot["catalog_commit_seq"]),
                 int(snapshot["expected_sessions"]),
                 int(snapshot["expected_episodes"]),
@@ -234,12 +238,11 @@ class Report:
             "episode_count_mismatches",
         )
         coverage_valid = all(
-            snapshot["ready"] is True
-            and int(snapshot["cutover_certified_commit_seq"]) <= int(snapshot["catalog_commit_seq"])
-            and int(snapshot["catalog_lag_count"]) <= MAX_LIVE_HEAD_SESSIONS
+            int(snapshot["complete_through_commit_seq"]) <= int(snapshot["catalog_commit_seq"])
+            and int(snapshot["catalog_lag_count"]) <= MAX_EVAL_LAG_SESSIONS
             and (
                 snapshot["catalog_oldest_lag_seconds"] is None
-                or float(snapshot["catalog_oldest_lag_seconds"]) <= MAX_LIVE_HEAD_AGE_SECONDS
+                or float(snapshot["catalog_oldest_lag_seconds"]) <= MAX_EVAL_LAG_AGE_SECONDS
             )
             and int(snapshot["expected_sessions"]) == int(snapshot["published_sessions"])
             and int(snapshot["expected_episodes"]) == int(snapshot["current_episodes"])
@@ -349,10 +352,10 @@ def search_recall(
         if not isinstance(coverage, dict):
             raise ValueError("dense recall omitted corpus coverage")
         required = {
-            "ready",
             "projector",
-            "cutover_certified_commit_seq",
-            "cutover_certified_at",
+            "complete",
+            "complete_through_commit_seq",
+            "unpublished_sessions",
             "catalog_lag_count",
             "catalog_indexed_through",
             "catalog_oldest_lag_at",
@@ -373,21 +376,21 @@ def search_recall(
         if set(coverage) != required:
             raise ValueError("dense recall returned malformed corpus coverage")
         if (
-            coverage["ready"] is not True
-            or not isinstance(coverage["cutover_certified_commit_seq"], str)
-            or not coverage["cutover_certified_commit_seq"].isdecimal()
-            or int(coverage["cutover_certified_commit_seq"]) > int(coverage["catalog_commit_seq"])
-            or not isinstance(coverage["cutover_certified_at"], str)
-            or not coverage["cutover_certified_at"]
+            not isinstance(coverage["complete_through_commit_seq"], str)
+            or not coverage["complete_through_commit_seq"].isdecimal()
+            or int(coverage["complete_through_commit_seq"]) > int(coverage["catalog_commit_seq"])
+            or not isinstance(coverage["complete"], bool)
+            or coverage["complete"] != (coverage["catalog_lag_count"] == 0)
+            or not isinstance(coverage["unpublished_sessions"], int)
             or not isinstance(coverage["catalog_lag_count"], int)
             or coverage["catalog_lag_count"] < 0
-            or coverage["catalog_lag_count"] > MAX_LIVE_HEAD_SESSIONS
+            or coverage["catalog_lag_count"] > MAX_EVAL_LAG_SESSIONS
             or (
                 coverage["catalog_oldest_lag_seconds"] is not None
                 and (
                     not isinstance(coverage["catalog_oldest_lag_seconds"], (int, float))
                     or coverage["catalog_oldest_lag_seconds"] < 0
-                    or coverage["catalog_oldest_lag_seconds"] > MAX_LIVE_HEAD_AGE_SECONDS
+                    or coverage["catalog_oldest_lag_seconds"] > MAX_EVAL_LAG_AGE_SECONDS
                 )
             )
             or (

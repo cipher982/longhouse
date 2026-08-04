@@ -7793,10 +7793,6 @@ export interface components {
         RecallCoverage: {
             /** Projector */
             projector: string;
-            /** Cutover Certified Commit Seq */
-            cutover_certified_commit_seq: string;
-            /** Cutover Certified At */
-            cutover_certified_at: string;
             /** Search Store Id */
             search_store_id: string;
             /** Search Schema Generation */

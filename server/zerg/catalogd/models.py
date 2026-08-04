@@ -491,16 +491,6 @@ class ProjectorState(CatalogBase):
     __table_args__ = (Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),)
 
 
-class ProjectorCutoverCertificate(CatalogBase):
-    """Durable proof that one projector identity reached zero backlog."""
-
-    __tablename__ = "projector_cutover_certificates"
-
-    projector = Column(String(64), primary_key=True)
-    certified_commit_seq = Column(BigInteger, nullable=False)
-    certified_at = Column(DateTime(timezone=True), nullable=False)
-
-
 class ProjectorStoreBinding(CatalogBase):
     """Durable identity of one disposable derived store generation."""
 
@@ -571,7 +561,6 @@ __all__ = [
     "LegacyMigrationRun",
     "LegacyMigrationSession",
     "MediaObject",
-    "ProjectorCutoverCertificate",
     "ProjectorState",
     "ProjectorStoreBinding",
     "RawObject",

@@ -1196,6 +1196,63 @@ class SearchStore:
             records=records,
         )
 
+    def reuse_indexed_objects(
+        self,
+        *,
+        session_id: str,
+        generation_id: str,
+        desired_revision: int,
+        object_ids: list[str],
+    ) -> dict[str, object]:
+        """Admit already-indexed objects into a new revision without re-reading them.
+
+        Render objects are content-addressed: an object_id that this store already
+        holds under the same session and generation is byte-identical to the one
+        the projector is about to decode. Re-indexing it produces the same rows and
+        `index_object` short-circuits anyway -- but only *after* the projector has
+        paid to read the object out of storage, decode it, and replay raw
+        interaction kinds. On a session with thousands of objects that cost is the
+        whole pass, repeated from scratch on every revision, which is why large
+        sessions never finished inside their lease and were re-claimed forever.
+
+        Publishing checks `projection_membership` for the exact object set, so a
+        reused object still needs its membership row at the new revision. That
+        insert is the only work this does.
+        """
+
+        reused: dict[str, int] = {}
+        missing: list[str] = []
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for object_id in object_ids:
+                row = self.connection.execute(
+                    """
+                    SELECT event_count FROM indexed_objects
+                    WHERE object_id = ? AND session_id = ? AND generation_id = ?
+                    """,
+                    (object_id, session_id, generation_id),
+                ).fetchone()
+                if row is None:
+                    # Either never indexed, or indexed under a different
+                    # session/generation. Both mean the projector must do the
+                    # real work; identity conflicts stay `index_object`'s job.
+                    missing.append(object_id)
+                    continue
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO projection_membership(
+                        session_id, generation_id, desired_revision, object_id
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (session_id, generation_id, desired_revision, object_id),
+                )
+                reused[object_id] = int(row["event_count"])
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        return {"reused": reused, "missing": missing}
+
     def publish_generation(
         self,
         *,
