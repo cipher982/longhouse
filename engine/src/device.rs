@@ -1040,17 +1040,62 @@ fn native_desktop_health_from_parts(
     }
 }
 
+fn native_desktop_action_text(action_id: &str) -> String {
+    match action_id {
+        "inspect_local_health" => "Run: longhouse local-health --fast --json".to_string(),
+        "inspect_storage_source" => {
+            "Run: longhouse shipping inspect --json and inspect the retained source evidence."
+                .to_string()
+        }
+        "inspect_storage_outbox" => {
+            "Inspect the storage-v2 outbox with: longhouse local-health --fast --json".to_string()
+        }
+        "inspect_shipping" => {
+            "Inspect shipping evidence with: longhouse shipping inspect --json".to_string()
+        }
+        "inspect_transport" => {
+            "Inspect transport and retry state with: longhouse local-health --fast --json"
+                .to_string()
+        }
+        "inspect_managed_session" => {
+            "Inspect the affected managed session and local recovery files.".to_string()
+        }
+        "repair_machine" => "Run: longhouse machine repair --repair-service --json".to_string(),
+        "free_disk_space" => {
+            "Free local disk space, then rerun: longhouse local-health --fast --json".to_string()
+        }
+        "stop_managed_bridge" => "Inspect the exact managed bridge before stopping it.".to_string(),
+        "inspect_archive" => "Inspect archive repair state with: longhouse doctor".to_string(),
+        "inspect_provider" => {
+            "Inspect the installed provider and its supported Longhouse surface.".to_string()
+        }
+        _ => format!("Run the scoped Longhouse action: {action_id}"),
+    }
+}
+
 fn native_desktop_suggested_actions(
     engine_payload: Option<&Value>,
     reasons: &[String],
 ) -> Vec<String> {
     let mut actions = Vec::new();
-    if reasons.iter().any(|reason| {
+    let has_storage_action = reasons.iter().any(|reason| {
         matches!(
             reason.as_str(),
             "storage_v2_sources_blocked" | "storage_v2_sources_unresolved"
         )
-    }) {
+    });
+    let has_storage_outbox_action = reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_outbox_unreadable");
+    let has_managed_session_action = reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "managed_launch_recovery_exhausted"
+                | "managed_launch_recovery_active"
+                | "managed_launch_recovery_unreadable"
+        )
+    });
+    if has_storage_action {
         let outbox = engine_payload
             .and_then(|value| value.get("storage_v2_outbox"))
             .and_then(Value::as_object);
@@ -1083,10 +1128,7 @@ fn native_desktop_suggested_actions(
             ],
         });
     }
-    if reasons
-        .iter()
-        .any(|reason| reason == "storage_v2_outbox_unreadable")
-    {
+    if has_storage_outbox_action {
         actions.extend([
             "Run: longhouse local-health --fast --json".to_string(),
             "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
@@ -1112,44 +1154,22 @@ fn native_desktop_suggested_actions(
         );
     }
     if !actions.is_empty() {
+        for action_id in native_desktop_suggested_action_ids(reasons) {
+            let already_explained = match action_id.as_str() {
+                "inspect_storage_source" => has_storage_action,
+                "inspect_storage_outbox" => has_storage_outbox_action,
+                "inspect_managed_session" => has_managed_session_action,
+                _ => false,
+            };
+            if !already_explained {
+                actions.push(native_desktop_action_text(&action_id));
+            }
+        }
         return actions;
     }
     native_desktop_suggested_action_ids(reasons)
         .into_iter()
-        .map(|action_id| match action_id.as_str() {
-            "inspect_local_health" => "Run: longhouse local-health --fast --json".to_string(),
-            "inspect_storage_source" => {
-                "Run: longhouse shipping inspect --json and inspect the retained source evidence."
-                    .to_string()
-            }
-            "inspect_storage_outbox" => {
-                "Inspect the storage-v2 outbox with: longhouse local-health --fast --json"
-                    .to_string()
-            }
-            "inspect_shipping" => {
-                "Inspect shipping evidence with: longhouse shipping inspect --json".to_string()
-            }
-            "inspect_transport" => {
-                "Inspect transport and retry state with: longhouse local-health --fast --json"
-                    .to_string()
-            }
-            "inspect_managed_session" => {
-                "Inspect the affected managed session and local recovery files.".to_string()
-            }
-            "repair_machine" => "Run: longhouse machine repair --repair-service --json".to_string(),
-            "free_disk_space" => {
-                "Free local disk space, then rerun: longhouse local-health --fast --json"
-                    .to_string()
-            }
-            "stop_managed_bridge" => {
-                "Inspect the exact managed bridge before stopping it.".to_string()
-            }
-            "inspect_archive" => "Inspect archive repair state with: longhouse doctor".to_string(),
-            "inspect_provider" => {
-                "Inspect the installed provider and its supported Longhouse surface.".to_string()
-            }
-            _ => format!("Run the scoped Longhouse action: {action_id}"),
-        })
+        .map(|action_id| native_desktop_action_text(&action_id))
         .collect()
 }
 
@@ -3522,11 +3542,13 @@ mod tests {
                 &[
                     "storage_v2_sources_unresolved".to_string(),
                     "managed_launch_recovery_exhausted".to_string(),
+                    "engine_reconciliation_failed".to_string(),
                 ]
             ),
             vec![
                 "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it.",
                 "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.",
+                "Run: longhouse local-health --fast --json",
             ]
         );
     }
