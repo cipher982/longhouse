@@ -556,6 +556,24 @@ def test_codex_initial_bridge_reuses_the_shipper_isolation_root(
     assert seen["isolation_root"] == isolation_root
 
 
+def test_codex_post_stop_ship_receipt_is_retained_separately_from_transition(tmp_path: Path) -> None:
+    class FakeShipper:
+        def flush(self, label: str) -> dict[str, object]:
+            assert label == "post-stop"
+            return {"status": "pass", "files_shipped": 1}
+
+    transition: dict[str, object] = {}
+    receipt = codex_native_resume._record_post_stop_ship_receipt(
+        tmp_path,
+        transition,
+        FakeShipper(),  # type: ignore[arg-type]
+    )
+
+    assert receipt == {"status": "pass", "files_shipped": 1}
+    assert transition["post_stop_transcript_ship"] == receipt
+    assert json.loads((tmp_path / "post-stop-transcript-ship-receipt.json").read_text()) == receipt
+
+
 def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:
     isolation_root = tmp_path / "isolation"
     workspace = isolation_root / "workspace"
