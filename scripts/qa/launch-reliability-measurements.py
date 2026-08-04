@@ -519,8 +519,8 @@ def _dogfood_summary(
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
-            "numerator": false_red_cases,
-            "denominator": broken_cases,
+            "numerator": false_red_cases if series_eligible else None,
+            "denominator": broken_cases if series_eligible else None,
             "rate": false_red_cases / broken_cases if series_eligible and broken_cases else None,
             "numerator_definition": "dogfood_observed_broken_cases_expected_red_ineligible",
             "denominator_definition": "dogfood_observed_broken_cases",
@@ -530,8 +530,8 @@ def _dogfood_summary(
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
-            "numerator": hidden_failure_cases,
-            "denominator": eligible_failure_cases,
+            "numerator": hidden_failure_cases if series_eligible else None,
+            "denominator": eligible_failure_cases if series_eligible else None,
             "rate": hidden_failure_cases / eligible_failure_cases if series_eligible and eligible_failure_cases else None,
             "numerator_definition": "dogfood_expected_risk_observed_healthy_and_fresh",
             "denominator_definition": "dogfood_expected_red_risk_or_nonfresh_producer_cases",
@@ -541,8 +541,8 @@ def _dogfood_summary(
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
-            "numerator": action_pass,
-            "denominator": len(actionable),
+            "numerator": action_pass if series_eligible else None,
+            "denominator": len(actionable) if series_eligible else None,
             "rate": action_pass / len(actionable) if series_eligible and actionable else None,
             "numerator_definition": "dogfood_expected_action_present_in_observed_actions",
             "denominator_definition": "dogfood_cases_with_a_non_none_expected_action",
@@ -611,6 +611,7 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
         metric = summary[metric_name]
         metric["status"] = "not_observed"
         metric["reason"] = "one or more dogfood artifacts failed validation"
+        metric["source"] = []
         for field in (
             "sample_count",
             "numerator",

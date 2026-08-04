@@ -358,6 +358,19 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
     assert report["measures"]["false_red_rate"]["denominator"] == 1
 
 
+def test_repeated_matrix_content_is_counted_once(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    matrix_copy = tmp_path / "matrix-copy.json"
+    matrix_copy.write_bytes(matrix.read_bytes())
+
+    report = MODULE.build_report([matrix, matrix_copy])
+
+    assert report["matrix"]["full_run_count"] == 1
+    assert report["matrix"]["measured_clean_run_count"] == 1
+    assert report["measures"]["automatic_recovery_time"]["sample_count"] == 1
+
+
 def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     series = tmp_path / "dogfood.json"
     series.write_text(
@@ -642,6 +655,7 @@ def test_mixed_valid_and_invalid_dogfood_inputs_clear_numeric_claims(tmp_path: P
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
     assert report["dogfood_series"]["false_red_rate"]["rate"] is None
     assert report["dogfood_series"]["false_red_rate"]["denominator"] is None
+    assert report["dogfood_series"]["false_red_rate"]["source"] == []
 
 
 def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):
@@ -658,6 +672,8 @@ def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):
     assert report["dogfood_series"]["observation_window"]["distinct_observation_count"] == 1
     assert report["dogfood_series"]["observation_window"]["status"] == "insufficient"
     assert report["dogfood_series"]["false_red_rate"]["status"] == "not_observed"
+    assert report["dogfood_series"]["false_red_rate"]["numerator"] is None
+    assert report["dogfood_series"]["false_red_rate"]["denominator"] is None
     assert report["dogfood_series"]["false_red_rate"]["rate"] is None
     assert report["dogfood_series"]["automatic_recovery_time"]["sample_count"] is None
     assert report["dogfood_series"]["automatic_recovery_time"]["seconds"]["median"] is None
