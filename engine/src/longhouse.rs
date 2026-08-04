@@ -3048,8 +3048,48 @@ fn run_foreground_command_after_spawn(
             None
         }
     };
-    let parent_pgrp = unsafe { libc::getpgrp() };
     let old_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
+    let parent_pgrp = unsafe { libc::tcgetpgrp(stdin_fd) };
+    if parent_pgrp < 0 {
+        let error = std::io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::ENOTTY || code == libc::EINVAL
+        ) {
+            // A nested automation PTY can be a TTY for stdio without being a
+            // controlling terminal for this process. There is no foreground
+            // process group to switch in that case, but the child still owns
+            // the inherited PTY streams. Keep the mode explicit and continue
+            // with the same bounded process-group wait used after handoff.
+            eprintln!(
+                "Longhouse notice: terminal has no controlling process group; using inherited PTY mode"
+            );
+            unsafe {
+                libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
+                libc::close(release_fds[1]);
+                libc::signal(libc::SIGTTOU, old_sigttou);
+            }
+            let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp), &notices);
+            if let Some(termios) = saved_termios {
+                if unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) } != 0 {
+                    eprintln!(
+                        "Longhouse warning: could not restore terminal attributes: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+            }
+            for message in notices.drain() {
+                eprintln!("{message}");
+            }
+            return status;
+        }
+        unsafe {
+            libc::close(release_fds[1]);
+            libc::signal(libc::SIGTTOU, old_sigttou);
+        }
+        terminate_and_reap_child(&mut child, Some(child_pgrp));
+        return Err(error).context("inspect terminal foreground process group");
+    }
     let handed_off = unsafe { libc::tcsetpgrp(stdin_fd, child_pgrp) == 0 };
     if !handed_off {
         unsafe {
