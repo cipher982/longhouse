@@ -228,19 +228,41 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
         stalled = await client.call("session.runtime.apply.v2", {"events": [stalled_event]})
         assert stalled["attention_actions"][0]["kind"] == "attention"
         assert stalled["attention_actions"][0]["state"] == "stalled"
+        notification_event_id = stalled["attention_actions"][0]["notification_event_id"]
+        retry_event = {
+            **stalled_event,
+            "occurred_at": (now + timedelta(seconds=30)).isoformat(),
+            "dedupe_key": "catalog-stalled-retry-1",
+        }
+        retry = await client.call("session.runtime.apply.v2", {"events": [retry_event]})
+        assert retry["attention_actions"][0]["notification_event_id"] == notification_event_id
+        committed = await client.call(
+            "notification.apns.attention.commit.v2",
+            {
+                "session_id": session_id,
+                "action": "attention",
+                "state": "stalled",
+                "notification_event_id": notification_event_id,
+                "occurred_at": now.isoformat(),
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert committed["committed"] is True
 
         resolved_event = {
             **_event(
                 session_id=session_id,
                 runtime_key=f"codex:{session_id}",
                 dedupe_key="catalog-stalled-resolved-1",
-                occurred_at=now,
+                occurred_at=now + timedelta(seconds=60),
             ),
             "phase": "idle",
             "tool_name": None,
         }
         resolved = await client.call("session.runtime.apply.v2", {"events": [resolved_event]})
+        assert resolved.get("attention_actions"), resolved
         assert resolved["attention_actions"][0]["kind"] == "resolution"
+        resolution_event_id = resolved["attention_actions"][0]["notification_event_id"]
 
         rolled_back = await client.call(
             "notification.apns.attention.rollback.v2",
@@ -248,6 +270,7 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
                 "session_id": session_id,
                 "action": "resolution",
                 "state": "stalled",
+                "notification_event_id": resolution_event_id,
                 "occurred_at": (now + timedelta(minutes=1)).isoformat(),
                 "attention_push_at": now.isoformat(),
             },
@@ -263,4 +286,5 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
             LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
         ).mappings().one()
         assert catalog["last_attention_push_state"] == "stalled"
+        assert catalog["last_attention_notification_id"] == notification_event_id
     engine.dispose()

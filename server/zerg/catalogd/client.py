@@ -44,6 +44,7 @@ _SAFE_RETRY_METHODS = {
     "notification.apns.live_activity.upsert.v2",
     "notification.apns.live_activity.end.v2",
     "notification.apns.attention.rollback.v2",
+    "notification.apns.attention.commit.v2",
     # Both control mutations are caller-keyed and exact/idempotent. A replay
     # returns the reserved grant or observes the already-terminal operation.
     "control.command.prepare.v2",

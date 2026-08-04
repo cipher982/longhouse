@@ -85,6 +85,7 @@ def test_catalog_attention_dispatch_rolls_back_rejected_send():
         "project": "zerg",
         "provider": "codex",
         "tool_name": "Shell",
+        "notification_event_id": str(uuid4()),
         "targets": [{"device_token": "c" * 64, "push_environment": "sandbox"}],
     }
     catalogd = SimpleNamespace(call=AsyncMock())
@@ -102,6 +103,7 @@ def test_catalog_attention_dispatch_rolls_back_rejected_send():
             "session_id": session_id,
             "action": "attention",
             "state": "stalled",
+            "notification_event_id": action["notification_event_id"],
             "occurred_at": occurred_at.isoformat(),
             "attention_push_at": occurred_at.isoformat(),
         },
@@ -1079,7 +1081,8 @@ def test_runtime_stall_notification_creates_one_attention_event_and_resolves(tmp
     ):
         with TestClient(api_app) as client:
             for phase, seconds, notify in [
-                ("stalled", 0, True),
+                ("stalled", 0, False),
+                ("stalled", 30, True),
                 ("stalled", 5 * 60, True),
                 ("idle", 6 * 60, False),
                 ("stalled", 10 * 60, True),

@@ -5,6 +5,8 @@ archive ``Base`` here would make ``initialize_live_database`` create the full
 archive schema inside the hot DB, which would turn the split into ceremony.
 """
 
+from uuid import uuid4
+
 from sqlalchemy import JSON
 from sqlalchemy import BigInteger
 from sqlalchemy import Boolean
@@ -193,6 +195,33 @@ class LiveNotificationClientPresence(LiveBase):
     )
 
 
+class LiveNotificationEvent(LiveBase):
+    """Durable attention decision and delivery audit for the hot lane."""
+
+    __tablename__ = "notification_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_id = Column(Integer, nullable=False, index=True)
+    session_id = Column(String(64), nullable=True, index=True)
+    event_type = Column(String(64), nullable=False, index=True)
+    state_key = Column(String(255), nullable=True)
+    collapse_key = Column(String(255), nullable=True, index=True)
+    event_started_at = Column(DateTime(timezone=True), nullable=False)
+    eligible_at = Column(DateTime(timezone=True), nullable=False)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    dismissed_at = Column(DateTime(timezone=True), nullable=True)
+    channel_results = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_live_notification_events_owner_session_type", "owner_id", "session_id", "event_type"),
+        Index("ix_live_notification_events_owner_unresolved", "owner_id", "resolved_at"),
+    )
+
+
 class LiveMachinePresence(LiveBase):
     """Physical compatibility table for coarse Machine Agent presence."""
 
@@ -320,6 +349,7 @@ class LiveSessionCatalog(LiveBase):
     permission_mode = Column(String(32), nullable=False, server_default=text("'bypass'"))
     last_attention_push_state = Column(String(64), nullable=True)
     last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
+    last_attention_notification_id = Column(String(36), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
