@@ -1385,7 +1385,7 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
     else:
         process.send("\x04")
         method = "claude_terminal_eof"
-    exit_code = process.wait(10)
+    exit_code = process.wait(30 if spec.provider == "opencode" else 10)
     fallback_signal: str | None = None
     if exit_code is None:
         fallback_signal = "SIGKILL" if force else "SIGTERM"
@@ -1400,7 +1400,11 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
     # clean-shutdown fact is the native bridge control result plus exact owner
     # cleanup; treating the wrapper's exit code as the oracle would turn a
     # successful provider stop into a false qualification failure.
-    clean = dead and not force and fallback_signal is None and (spec.provider != "opencode" or control_returncode == 0)
+    clean = (
+        dead
+        and not force
+        and ((spec.provider == "opencode" and control_returncode == 0) or (spec.provider != "opencode" and fallback_signal is None))
+    )
     return {
         "method": method,
         "pid": pid,
@@ -1443,6 +1447,37 @@ def _launch_command(
         if cursor_model:
             command.extend(("--", "--model", cursor_model))
     return command
+
+
+def _reconcile_opencode_process_loss(
+    args: argparse.Namespace,
+    state: dict[str, Any],
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    """Publish the native OpenCode terminal event after an injected loss."""
+
+    command = [str(args.engine), "opencode-bridge", "stop", "--session-id", state["session_id"]]
+    claude_dir = str(environment.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if claude_dir:
+        command.extend(("--claude-dir", claude_dir))
+    completed = subprocess.run(
+        command,
+        cwd=args.repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    receipt = {
+        "method": "opencode_bridge_stop_after_process_loss",
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-2000:],
+        "stderr": completed.stderr[-2000:],
+    }
+    if completed.returncode != 0:
+        raise RuntimeError(f"OpenCode process-loss terminal reconciliation failed: {completed.stderr[-1000:]}")
+    return receipt
 
 
 def _secret_scan(root: Path, secrets: list[str]) -> list[str]:
@@ -1511,6 +1546,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     final_cleanup: dict[str, Any] = {"verified": False}
     try:
         home = _isolated_provider_home()
+        # Make every provider path explicit before any provider or engine
+        # process starts. The factory must never inherit the operator's home.
+        environment["HOME"] = str(home)
+        environment["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
+        environment["CURSOR_HOME"] = str(home / ".cursor")
         if spec.provider == "claude":
             onboarding = _prepare_claude_profile(
                 binary=args.provider_bin,
@@ -1528,6 +1568,27 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             evidence_root=root,
         )
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        if spec.provider == "cursor":
+            cursor_hooks = subprocess.run(
+                [str(args.engine), "cursor-helm", "configure-hooks", "--cursor-dir", environment["CURSOR_HOME"]],
+                cwd=args.repo_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            _write_json(
+                root / "cursor-hook-configure-receipt.json",
+                {
+                    "returncode": cursor_hooks.returncode,
+                    "stdout": cursor_hooks.stdout[-2000:],
+                    "stderr": cursor_hooks.stderr[-2000:],
+                    "cursor_dir": environment["CURSOR_HOME"],
+                },
+            )
+            if cursor_hooks.returncode != 0:
+                raise RuntimeError(f"Cursor native hook configuration failed: {cursor_hooks.stderr[-1000:]}")
         initial = PtyProcess(
             _launch_command(spec, args, None, use_credential_files=True),
             cwd=args.repo_root,
@@ -1553,6 +1614,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "initial-transcript.jsonl", initial_tail)
 
         transition = _stop(spec, args, initial_state, initial, force=args.variant == "process_loss")
+        if args.variant == "process_loss" and spec.provider == "opencode":
+            transition["terminal_reconciliation"] = _reconcile_opencode_process_loss(args, initial_state, environment)
         _write_json(root / "process-transition-receipt.json", transition)
         stale_marker = f"LONGHOUSE_{provider.upper()}_STALE_{uuid.uuid4().hex}"
         try:
