@@ -9,6 +9,9 @@ snapshot.
 
 - Run from a clean qualification checkout at the exact Longhouse commit being
   measured. Keep artifacts outside the checkout.
+- Create one private reporter challenge from that checkout before collecting.
+  The challenge binds artifacts to the collector revision and signs each
+  episode; keep the challenge file private and pass it to the final report.
 - Supply an independent expected health state, producer-freshness state, red
   eligibility, and action. A value copied from the observed snapshot is not
   independent ground truth.
@@ -22,12 +25,24 @@ snapshot.
   report keeps the longitudinal measures `not_observed` until that condition
   is met.
 
+Create the private challenge before leaving the clean checkout:
+
+```bash
+uv run --project server python scripts/qa/launch-reliability-measurements.py \
+  --create-dogfood-challenge /tmp/longhouse-dogfood-challenge.json
+```
+
+The command refuses a dirty checkout. Do not commit or copy the challenge into
+the repository. If the source commit or collector changes, create a new
+challenge.
+
 ## Collect one episode
 
 The expected fields must come from the fault injection or operator record:
 
 ```bash
 python3 scripts/qa/launch_reliability_dogfood.py \
+  --challenge /tmp/longhouse-dogfood-challenge.json \
   --output /tmp/longhouse-dogfood-episode-a.json \
   --episode-id provider-recovery-a \
   --longhouse-bin /Users/davidrose/.local/bin/longhouse \
@@ -70,9 +85,13 @@ uv run --project server python scripts/qa/launch-reliability-measurements.py \
   --dogfood-series /tmp/longhouse-dogfood-episode-a.json \
   --dogfood-series /tmp/longhouse-dogfood-episode-b.json \
   --dogfood-series /tmp/longhouse-dogfood-episode-c.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge.json \
   --output /tmp/launch-reliability-measurements.json
 ```
 
 The report must have `report_status=ok`, `dogfood_series.input_status=valid`,
-and an eligible observation window. Any invalid episode clears the numerical
-dogfood claims rather than partially counting the remaining files.
+and an eligible observation window. The sampled binary must still exist at the
+recorded path, have the recorded hash, and report a build identity containing
+the measured source commit. A stale installed binary therefore fails closed
+instead of qualifying an older implementation. Any invalid episode clears the
+numerical dogfood claims rather than partially counting the remaining files.

@@ -18,9 +18,8 @@ def _args(tmp_path: Path, binary: Path, **overrides: object) -> SimpleNamespace:
     values = {
         "repo_root": tmp_path,
         "longhouse_bin": binary,
+        "challenge": None,
         "episode_id": "episode-1",
-        "sample_count": 1,
-        "interval_seconds": 0.0,
         "timeout_seconds": 2.0,
         "expected_health_state": "degraded",
         "expected_producer_freshness": "fresh",
@@ -86,6 +85,35 @@ def test_command_failure_is_recorded_as_unknown_not_green(tmp_path: Path):
     assert episode["observed"]["health_state"] == "unknown"
     assert episode["observed"]["producer_freshness"] == "unknown"
     assert "observation_error" in episode
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "health_state": "unknown",
+            "suggested_action_ids": [],
+            "engine_status": {"exists": True, "fresh": True},
+        },
+        {
+            "health_state": "healthy",
+            "suggested_action_ids": [""],
+            "engine_status": {"exists": True, "fresh": True},
+        },
+        {
+            "health_state": "healthy",
+            "suggested_action_ids": [],
+            "engine_status": {"exists": "yes", "fresh": True},
+        },
+    ],
+)
+def test_malformed_native_payload_is_recorded_as_observation_error(tmp_path: Path, payload: dict[str, object]):
+    _git_repo(tmp_path)
+    binary = _fake_binary(tmp_path, payload)
+
+    artifact = collector.collect(_args(tmp_path, binary))
+
+    assert "observation_error" in artifact["episodes"][0]
 
 
 def test_conservation_and_issue_require_valid_explicit_inputs(tmp_path: Path):

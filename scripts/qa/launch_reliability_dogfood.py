@@ -12,7 +12,9 @@ evidence.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import math
 import shutil
@@ -33,6 +35,9 @@ CONSERVATION_FIELDS = (
     "discarded_events",
     "unresolved_events",
 )
+CHALLENGE_ARTIFACT_KIND = "launch_reliability_dogfood_challenge"
+CHALLENGE_SCHEMA_VERSION = 1
+CHALLENGE_ISSUER = "scripts/qa/launch-reliability-measurements.py"
 
 
 def _utc_now() -> str:
@@ -66,6 +71,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -90,6 +99,70 @@ def provenance(root: Path) -> dict[str, Any]:
         "repository_dirty": bool(status),
         "generator_dirty": bool(script_status),
     }
+
+
+def _binary_identity(path: Path) -> tuple[dict[str, str] | None, str | None]:
+    try:
+        result = subprocess.run(
+            [str(path), "build-identity"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"longhouse build identity failed: {type(exc).__name__}: {exc}"
+    identity = (result.stdout or "").strip()
+    if result.returncode != 0 or not identity:
+        detail = (result.stderr or result.stdout or "no output").strip()[-500:]
+        return None, f"longhouse build identity exited {result.returncode}: {detail}"
+    return {
+        "build_identity": identity,
+        "path": str(path),
+        "sha256": _sha256(path),
+    }, None
+
+
+def _load_challenge(path: Path, *, root: Path) -> tuple[dict[str, Any], bytes]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("artifact_kind") != CHALLENGE_ARTIFACT_KIND
+    ):
+        raise ValueError("dogfood challenge has the wrong artifact kind")
+    if payload.get("issuer") != CHALLENGE_ISSUER:
+        raise ValueError("dogfood challenge was not issued by the measurement reporter")
+    if payload.get("schema_version") != CHALLENGE_SCHEMA_VERSION:
+        raise ValueError("dogfood challenge has the wrong schema version")
+    if not isinstance(payload.get("challenge_id"), str) or not payload["challenge_id"]:
+        raise ValueError("dogfood challenge has no challenge_id")
+    if not isinstance(payload.get("nonce"), str) or not payload["nonce"]:
+        raise ValueError("dogfood challenge has no nonce")
+    try:
+        key = base64.urlsafe_b64decode(str(payload.get("key") or "").encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise ValueError("dogfood challenge key is not base64") from exc
+    if len(key) < 32:
+        raise ValueError("dogfood challenge key is too short")
+    challenge_provenance = payload.get("provenance")
+    if not isinstance(challenge_provenance, dict):
+        raise ValueError("dogfood challenge has no provenance")
+    current = provenance(root)
+    for field in ("git_sha", "generator_sha256"):
+        if challenge_provenance.get(field) != current.get(field):
+            raise ValueError(f"dogfood challenge {field} does not match the collector")
+    if (
+        challenge_provenance.get("repository_dirty") is not False
+        or challenge_provenance.get("generator_dirty") is not False
+    ):
+        raise ValueError("dogfood challenge provenance is dirty")
+    return payload, key
+
+
+def _sign_artifact(artifact: dict[str, Any], key: bytes) -> str:
+    body = dict(artifact)
+    body.pop("signature", None)
+    return hmac.new(key, _canonical_json(body), hashlib.sha256).hexdigest()
 
 
 def _freshness(snapshot: dict[str, Any]) -> str:
@@ -154,6 +227,23 @@ def collect_snapshot(
             payload,
             f"local-health payload is missing required fields: {', '.join(missing)}",
         )
+    if not isinstance(payload.get("health_state"), str) or payload[
+        "health_state"
+    ] not in HEALTH_STATES - {"unknown"}:
+        return payload, "local-health payload has an invalid health_state"
+    engine_status = payload.get("engine_status")
+    if not isinstance(engine_status, dict):
+        return payload, "local-health payload has an invalid engine_status"
+    if not isinstance(engine_status.get("exists"), bool) or not isinstance(
+        engine_status.get("fresh"), bool
+    ):
+        return payload, "local-health payload has invalid engine_status booleans"
+    action_ids = payload.get("suggested_action_ids")
+    if action_ids is not None and (
+        not isinstance(action_ids, list)
+        or not all(isinstance(item, str) and item for item in action_ids)
+    ):
+        return payload, "local-health payload has invalid suggested_action_ids"
     return payload, None
 
 
@@ -216,6 +306,14 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     longhouse_bin = _resolve_binary(args.longhouse_bin)
     if not longhouse_bin.is_file():
         raise ValueError(f"longhouse binary does not exist: {longhouse_bin}")
+    if not args.episode_id:
+        raise ValueError("--episode-id is required")
+    if args.expected_health_state not in HEALTH_STATES - {"unknown"}:
+        raise ValueError("--expected-health-state is required and must be known")
+    if args.expected_producer_freshness not in FRESHNESS_STATES:
+        raise ValueError("--expected-producer-freshness is required")
+    if args.expected_red_eligible is None:
+        raise ValueError("one expected red-eligibility flag is required")
     if args.recovery_duration_seconds is not None and (
         args.recovery_duration_seconds < 0
         or not math.isfinite(args.recovery_duration_seconds)
@@ -227,6 +325,16 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         "producer_freshness": args.expected_producer_freshness,
         "red_eligible": args.expected_red_eligible,
     }
+    challenge_payload = None
+    challenge_key = None
+    if args.challenge is not None:
+        challenge_payload, challenge_key = _load_challenge(args.challenge, root=root)
+    binary_info, binary_error = _binary_identity(longhouse_bin)
+    artifact_provenance = provenance(root)
+    if binary_info is not None:
+        artifact_provenance["sampled_binary"] = binary_info
+    else:
+        artifact_provenance["sampled_binary_error"] = binary_error
     issue = _issue(args)
     conservation = _conservation(args.evidence_conservation_json)
     snapshot_started_at = _utc_now()
@@ -264,42 +372,54 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         episode["event_bearing_issue"] = issue
     if conservation is not None:
         episode["evidence_conservation"] = conservation
-    if error is not None:
+    observation_errors = [detail for detail in (binary_error, error) if detail]
+    if observation_errors:
         # The measurement consumer rejects any episode carrying this field.
         # Keeping the diagnostic artifact makes the failed observation
         # inspectable without allowing it into a denominator.
-        episode["observation_error"] = error
-    return {
+        episode["observation_error"] = "; ".join(observation_errors)
+    artifact: dict[str, Any] = {
         "artifact_kind": "launch_reliability_dogfood_series",
         "generated_at": _utc_now(),
-        "provenance": provenance(root),
+        "provenance": artifact_provenance,
         "schema_version": 1,
         "episodes": [episode],
     }
+    if challenge_payload is not None and challenge_key is not None:
+        artifact["challenge"] = {
+            "challenge_id": challenge_payload["challenge_id"],
+            "nonce": challenge_payload["nonce"],
+        }
+        artifact["signature"] = _sign_artifact(artifact, challenge_key)
+    return artifact
 
 
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description=__doc__)
-    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--output", type=Path)
+    command.add_argument("--challenge", type=Path)
     command.add_argument("--longhouse-bin", type=Path, default=Path("longhouse"))
-    command.add_argument("--episode-id", required=True)
+    command.add_argument("--episode-id")
     command.add_argument("--timeout-seconds", type=float, default=20.0)
     command.add_argument(
         "--expected-health-state",
         choices=sorted(HEALTH_STATES - {"unknown"}),
-        required=True,
     )
     command.add_argument(
-        "--expected-producer-freshness", choices=sorted(FRESHNESS_STATES), required=True
+        "--expected-producer-freshness", choices=sorted(FRESHNESS_STATES)
     )
-    red = command.add_mutually_exclusive_group(required=True)
+    red = command.add_mutually_exclusive_group()
     red.add_argument(
-        "--expected-red-eligible", dest="expected_red_eligible", action="store_true"
+        "--expected-red-eligible",
+        dest="expected_red_eligible",
+        action="store_true",
+        default=None,
     )
     red.add_argument(
         "--expected-not-red-eligible",
         dest="expected_red_eligible",
         action="store_false",
+        default=None,
     )
     command.add_argument("--expected-action")
     command.add_argument("--recovery-duration-seconds", type=float)
@@ -313,6 +433,8 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.output is None:
+            raise ValueError("--output is required when collecting an episode")
         artifact = collect(args)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(

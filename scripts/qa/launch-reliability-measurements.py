@@ -11,9 +11,13 @@ registry.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import math
+import os
+import secrets
 import statistics
 import subprocess
 import sys
@@ -30,6 +34,9 @@ DOGFOOD_ARTIFACT_KIND = "launch_reliability_dogfood_series"
 DOGFOOD_SCHEMA_VERSION = 1
 DOGFOOD_GENERATOR_RELATIVE = Path("scripts/qa/launch_reliability_dogfood.py")
 REPORT_REPOSITORY = Path(__file__).resolve().parents[2]
+DOGFOOD_CHALLENGE_ARTIFACT_KIND = "launch_reliability_dogfood_challenge"
+DOGFOOD_CHALLENGE_SCHEMA_VERSION = 1
+DOGFOOD_CHALLENGE_ISSUER = "scripts/qa/launch-reliability-measurements.py"
 MIN_DOGFOOD_EPISODES = 3
 MIN_DOGFOOD_SPAN_SECONDS = 3600.0
 CONSERVATION_FIELDS = (
@@ -134,6 +141,9 @@ HEALTH_EXPECTATIONS = {
     },
 }
 EXPECTED_HEALTH_SCENARIOS = frozenset(HEALTH_EXPECTATIONS)
+KNOWN_ACTION_IDS = frozenset(
+    contract["action"] for contract in HEALTH_EXPECTATIONS.values()
+)
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -149,6 +159,10 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _git(root: Path, *args: str) -> str:
@@ -188,6 +202,107 @@ def report_provenance() -> dict[str, Any]:
         "repository_dirty": bool(status_lines),
         "sha256": _sha256(path),
     }
+
+
+def _collector_provenance() -> dict[str, Any]:
+    collector = REPORT_REPOSITORY / DOGFOOD_GENERATOR_RELATIVE
+    status = _git(REPORT_REPOSITORY, "status", "--porcelain", "--untracked-files=all")
+    collector_status = _git(
+        REPORT_REPOSITORY,
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        str(DOGFOOD_GENERATOR_RELATIVE),
+    )
+    return {
+        "generator": str(DOGFOOD_GENERATOR_RELATIVE),
+        "generator_path": str(collector),
+        "generator_sha256": _sha256(collector),
+        "git_sha": _git(REPORT_REPOSITORY, "rev-parse", "HEAD"),
+        "repository": str(REPORT_REPOSITORY),
+        "repository_dirty": bool(status),
+        "generator_dirty": bool(collector_status),
+    }
+
+
+def create_dogfood_challenge(path: Path) -> dict[str, Any]:
+    provenance = _collector_provenance()
+    if provenance["repository_dirty"] or provenance["generator_dirty"]:
+        raise ValueError("dogfood challenge requires a clean repository and collector")
+    payload = {
+        "artifact_kind": DOGFOOD_CHALLENGE_ARTIFACT_KIND,
+        "challenge_id": secrets.token_hex(16),
+        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "issuer": DOGFOOD_CHALLENGE_ISSUER,
+        "key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii"),
+        "nonce": secrets.token_urlsafe(32),
+        "provenance": provenance,
+        "schema_version": DOGFOOD_CHALLENGE_SCHEMA_VERSION,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.chmod(path, 0o600)
+    return payload
+
+
+def _load_dogfood_challenges(
+    paths: Iterable[Path], invalid: list[dict[str, str]]
+) -> dict[str, tuple[str, bytes]]:
+    challenges: dict[str, tuple[str, bytes]] = {}
+    for raw_path in paths:
+        path = raw_path.expanduser().resolve()
+        try:
+            payload = _json(path)
+            if payload.get("artifact_kind") != DOGFOOD_CHALLENGE_ARTIFACT_KIND:
+                raise ValueError("dogfood challenge has the wrong artifact kind")
+            if payload.get("schema_version") != DOGFOOD_CHALLENGE_SCHEMA_VERSION:
+                raise ValueError("dogfood challenge has the wrong schema version")
+            if payload.get("issuer") != DOGFOOD_CHALLENGE_ISSUER:
+                raise ValueError("dogfood challenge has the wrong issuer")
+            challenge_id = payload.get("challenge_id")
+            nonce = payload.get("nonce")
+            if not isinstance(challenge_id, str) or not challenge_id:
+                raise ValueError("dogfood challenge has no challenge_id")
+            if not isinstance(nonce, str) or not nonce:
+                raise ValueError("dogfood challenge has no nonce")
+            encoded_key = payload.get("key")
+            if not isinstance(encoded_key, str):
+                raise ValueError("dogfood challenge has no key")
+            try:
+                key = base64.urlsafe_b64decode(encoded_key.encode("ascii"))
+            except (ValueError, UnicodeEncodeError) as exc:
+                raise ValueError("dogfood challenge key is not base64") from exc
+            if len(key) < 32:
+                raise ValueError("dogfood challenge key is too short")
+            provenance = payload.get("provenance")
+            if not isinstance(provenance, dict):
+                raise ValueError("dogfood challenge has no provenance")
+            current = _collector_provenance()
+            if provenance.get("git_sha") != current.get("git_sha"):
+                raise ValueError(
+                    "dogfood challenge source revision does not match the report"
+                )
+            if provenance.get("generator_sha256") != current.get("generator_sha256"):
+                raise ValueError(
+                    "dogfood challenge collector hash does not match the report"
+                )
+            if (
+                provenance.get("repository_dirty") is not False
+                or provenance.get("generator_dirty") is not False
+            ):
+                raise ValueError("dogfood challenge provenance is dirty")
+            if challenge_id in challenges:
+                raise ValueError(f"duplicate dogfood challenge_id: {challenge_id}")
+            challenges[challenge_id] = (nonce, key)
+        except (
+            OSError,
+            ValueError,
+            json.JSONDecodeError,
+            subprocess.CalledProcessError,
+        ) as exc:
+            invalid.append({"path": str(path), "error": str(exc)})
+    return challenges
 
 
 def discover_matrix_artifacts(inputs: Iterable[Path]) -> list[Path]:
@@ -394,6 +509,31 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
         raise ValueError(
             "dogfood provenance git_sha does not match the report source revision"
         )
+    sampled_binary = provenance.get("sampled_binary")
+    if not isinstance(sampled_binary, dict):
+        raise ValueError("dogfood.provenance.sampled_binary is required")
+    binary_path_value = sampled_binary.get("path")
+    binary_sha = sampled_binary.get("sha256")
+    build_identity = sampled_binary.get("build_identity")
+    if not isinstance(binary_path_value, str) or not binary_path_value:
+        raise ValueError("dogfood sampled binary path is required")
+    if (
+        not isinstance(binary_sha, str)
+        or len(binary_sha) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in binary_sha)
+    ):
+        raise ValueError("dogfood sampled binary sha256 is invalid")
+    if not isinstance(build_identity, str) or not build_identity:
+        raise ValueError("dogfood sampled binary build identity is required")
+    binary_path = Path(binary_path_value).expanduser().resolve()
+    if not binary_path.is_file():
+        raise ValueError("dogfood sampled binary no longer exists")
+    if _sha256(binary_path) != binary_sha:
+        raise ValueError("dogfood sampled binary changed after collection")
+    if git_sha[:8].lower() not in build_identity.lower():
+        raise ValueError(
+            "dogfood sampled binary build identity does not match the source revision"
+        )
 
 
 def _nonnegative_count(value: Any, *, label: str) -> int:
@@ -410,27 +550,34 @@ def _health_truth(episode: dict[str, Any], *, label: str) -> None:
             f"{label} must include expected and observed health truth objects"
         )
     for side, value in (("expected", expected), ("observed", observed)):
-        if value.get("health_state") not in HEALTH_STATES:
+        if value.get("health_state") not in HEALTH_STATES - {"unknown"}:
             raise ValueError(f"{label}.{side}.health_state is invalid")
         if value.get("producer_freshness") not in PRODUCER_FRESHNESS_STATES:
             raise ValueError(f"{label}.{side}.producer_freshness is invalid")
     if not isinstance(expected.get("red_eligible"), bool):
         raise ValueError(f"{label}.expected.red_eligible must be boolean")
     action = expected.get("action")
-    if action is not None and not isinstance(action, str):
-        raise ValueError(f"{label}.expected.action must be a string or null")
+    if action is not None and (
+        not isinstance(action, str) or action not in KNOWN_ACTION_IDS
+    ):
+        raise ValueError(f"{label}.expected.action must be a known action id or null")
     suggested = observed.get("suggested_action_ids")
     if suggested is not None and (
         not isinstance(suggested, list)
-        or not all(isinstance(item, str) for item in suggested)
+        or not all(
+            isinstance(item, str) and item in KNOWN_ACTION_IDS for item in suggested
+        )
     ):
-        raise ValueError(f"{label}.observed.suggested_action_ids must be a string list")
+        raise ValueError(
+            f"{label}.observed.suggested_action_ids must contain known action ids"
+        )
 
 
 def _load_dogfood_series(
     paths: Iterable[Path],
     invalid: list[dict[str, str]],
     *,
+    challenge_paths: Iterable[Path] = (),
     as_of: datetime | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """Load validated longitudinal observations without filling missing facts."""
@@ -440,6 +587,7 @@ def _load_dogfood_series(
     seen_paths: set[Path] = set()
     seen_hashes: set[str] = set()
     seen_episode_ids: set[str] = set()
+    challenges = _load_dogfood_challenges(challenge_paths, invalid)
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
         if path in seen_paths:
@@ -455,6 +603,28 @@ def _load_dogfood_series(
                 raise ValueError(f"artifact_kind must be {DOGFOOD_ARTIFACT_KIND!r}")
             if artifact.get("schema_version") != DOGFOOD_SCHEMA_VERSION:
                 raise ValueError(f"schema_version must be {DOGFOOD_SCHEMA_VERSION}")
+            challenge = artifact.get("challenge")
+            if not isinstance(challenge, dict):
+                raise ValueError("dogfood artifact has no signed challenge")
+            challenge_id = challenge.get("challenge_id")
+            challenge_nonce = challenge.get("nonce")
+            if challenge_id not in challenges:
+                raise ValueError(
+                    "dogfood artifact challenge is not provided to the report"
+                )
+            expected_nonce, challenge_key = challenges[challenge_id]
+            if challenge_nonce != expected_nonce:
+                raise ValueError("dogfood artifact challenge nonce does not match")
+            signature = artifact.get("signature")
+            if not isinstance(signature, str) or len(signature) != 64:
+                raise ValueError("dogfood artifact has no valid signature")
+            unsigned = dict(artifact)
+            unsigned.pop("signature", None)
+            expected_signature = hmac.new(
+                challenge_key, _canonical_json(unsigned), hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(signature, expected_signature):
+                raise ValueError("dogfood artifact signature does not verify")
             generated_at = _timestamp(
                 artifact.get("generated_at"), label="dogfood.generated_at"
             )
@@ -469,6 +639,8 @@ def _load_dogfood_series(
             raw_episodes = artifact.get("episodes")
             if not isinstance(raw_episodes, list) or not raw_episodes:
                 raise ValueError("dogfood artifact has no non-empty episodes list")
+            if len(raw_episodes) != 1:
+                raise ValueError("dogfood artifact must contain exactly one episode")
             loaded_episodes: list[dict[str, Any]] = []
             loaded_ids: set[str] = set()
             for index, episode in enumerate(raw_episodes):
@@ -487,6 +659,14 @@ def _load_dogfood_series(
                     episode.get("observed_at"),
                     label=f"episode {index}.observed_at",
                 )
+                collector_started_at = _timestamp(
+                    episode.get("collector_started_at"),
+                    label=f"episode {index}.collector_started_at",
+                )
+                if collector_started_at > observed_at:
+                    raise ValueError(
+                        f"episode {index}.collector_started_at is after observed_at"
+                    )
                 if observed_at > generated_at:
                     raise ValueError(
                         f"episode {index}.observed_at is after dogfood.generated_at"
@@ -1176,6 +1356,7 @@ def build_report(
     harness_paths: Iterable[Path] = (),
     health_paths: Iterable[Path] = (),
     dogfood_paths: Iterable[Path] = (),
+    dogfood_challenge_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
@@ -1343,6 +1524,7 @@ def build_report(
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(
         dogfood_paths,
         invalid,
+        challenge_paths=dogfood_challenge_paths,
         as_of=report_generated_at,
     )
     dogfood_summary = _dogfood_summary(dogfood_episodes, dogfood_inputs)
@@ -1500,7 +1682,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--matrix-root",
         action="append",
         type=Path,
-        required=True,
+        required=False,
         help="Matrix artifact file or directory; repeatable.",
     )
     parser.add_argument(
@@ -1525,6 +1707,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Retained longitudinal dogfood episode JSON; repeatable.",
     )
     parser.add_argument(
+        "--dogfood-challenge",
+        action="append",
+        type=Path,
+        default=[],
+        help="Reporter-issued dogfood challenge JSON; repeatable.",
+    )
+    parser.add_argument(
+        "--create-dogfood-challenge",
+        type=Path,
+        help="Create a private reporter-issued challenge and exit.",
+    )
+    parser.add_argument(
         "--output", type=Path, help="Write the report JSON to this path."
     )
     return parser
@@ -1532,11 +1726,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.create_dogfood_challenge is not None:
+        if args.matrix_root or args.dogfood_series or args.dogfood_challenge:
+            raise SystemExit(
+                "--create-dogfood-challenge cannot be combined with report inputs"
+            )
+        try:
+            create_dogfood_challenge(args.create_dogfood_challenge)
+        except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+            raise SystemExit(f"dogfood challenge: {exc}") from exc
+        print(args.create_dogfood_challenge)
+        return 0
+    if not args.matrix_root:
+        raise SystemExit("--matrix-root is required when generating a report")
     report = build_report(
         discover_matrix_artifacts(args.matrix_root),
         args.provider_harness_artifact,
         args.health_artifact,
         args.dogfood_series,
+        args.dogfood_challenge,
     )
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

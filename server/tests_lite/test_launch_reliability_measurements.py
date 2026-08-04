@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import importlib.util
 import json
 import subprocess
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/qa/launch-reliability-measurements.py"
 SPEC = importlib.util.spec_from_file_location("launch_reliability_measurements", SCRIPT)
@@ -23,20 +28,53 @@ DOGFOOD_GENERATOR = REPO_ROOT / "scripts" / "qa" / "launch_reliability_dogfood.p
 
 
 def _dogfood_provenance() -> dict[str, object]:
+    git_sha = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     return {
         "generator": "scripts/qa/launch_reliability_dogfood.py",
         "generator_path": str(DOGFOOD_GENERATOR),
         "generator_sha256": MODULE._sha256(DOGFOOD_GENERATOR),
         "generator_dirty": False,
-        "git_sha": subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip(),
+        "git_sha": git_sha,
         "repository": str(REPO_ROOT),
         "repository_dirty": False,
+        "sampled_binary": {
+            "build_identity": f"fixture+{git_sha[:8]}",
+            "path": str(DOGFOOD_GENERATOR),
+            "sha256": MODULE._sha256(DOGFOOD_GENERATOR),
+        },
     }
+
+
+def _write_signed_dogfood(path: Path, payload: dict[str, object]) -> Path:
+    challenge_path = path.with_suffix(".challenge.json")
+    key = bytes(range(32))
+    challenge = {
+        "artifact_kind": "launch_reliability_dogfood_challenge",
+        "challenge_id": f"test-{path.stem}",
+        "created_at": "2026-08-04T11:00:00Z",
+        "issuer": "scripts/qa/launch-reliability-measurements.py",
+        "key": base64.urlsafe_b64encode(key).decode("ascii"),
+        "nonce": f"nonce-{path.stem}",
+        "provenance": _dogfood_provenance(),
+        "schema_version": 1,
+    }
+    challenge_path.write_text(json.dumps(challenge))
+    payload["challenge"] = {
+        "challenge_id": challenge["challenge_id"],
+        "nonce": challenge["nonce"],
+    }
+    payload["signature"] = hmac.new(
+        key,
+        MODULE._canonical_json(payload),
+        hashlib.sha256,
+    ).hexdigest()
+    path.write_text(json.dumps(payload))
+    return challenge_path
 
 
 def _matrix(
@@ -93,6 +131,7 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
             {
                 "episode_id": "same" if duplicate_ids else f"episode-{index}",
                 "observed_at": observed_at,
+                "collector_started_at": observed_at,
                 "recovery_duration_seconds": index + 1 if recovery is None else recovery,
                 "expected": {
                     "health_state": "broken",
@@ -107,17 +146,60 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
                 },
             }
         )
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "artifact_kind": "launch_reliability_dogfood_series",
-                "generated_at": "2026-08-04T13:00:30Z",
-                "provenance": _dogfood_provenance(),
-                "episodes": episodes,
-            }
-        )
+    _write_signed_dogfood(
+        path,
+        {
+            "schema_version": 1,
+            "artifact_kind": "launch_reliability_dogfood_series",
+            "generated_at": "2026-08-04T13:00:30Z",
+            "provenance": _dogfood_provenance(),
+            "episodes": episodes,
+        },
     )
+
+
+def _split_dogfood_series(path: Path, *, count: int | None = None) -> tuple[list[Path], list[Path]]:
+    source = json.loads(path.read_text())
+    episodes = source["episodes"][:count]
+    paths: list[Path] = []
+    challenges: list[Path] = []
+    for index, episode in enumerate(episodes, start=1):
+        episode_path = path.with_name(f"{path.stem}-{index}.json")
+        challenges.append(
+            _write_signed_dogfood(
+                episode_path,
+                {
+                    "schema_version": 1,
+                    "artifact_kind": "launch_reliability_dogfood_series",
+                    "generated_at": source["generated_at"],
+                    "provenance": source["provenance"],
+                    "episodes": [episode],
+                },
+            )
+        )
+        paths.append(episode_path)
+    return paths, challenges
+
+
+def _single_dogfood(
+    source_path: Path,
+    output_path: Path,
+    *,
+    index: int = 0,
+    mutate: object = None,
+) -> Path:
+    source = json.loads(source_path.read_text())
+    episode = json.loads(json.dumps(source["episodes"][index]))
+    payload = {
+        "schema_version": 1,
+        "artifact_kind": "launch_reliability_dogfood_series",
+        "generated_at": source["generated_at"],
+        "provenance": source["provenance"],
+        "episodes": [episode],
+    }
+    if mutate is not None:
+        mutate(payload)
+    return _write_signed_dogfood(output_path, payload)
 
 
 def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
@@ -702,105 +784,125 @@ def test_repeated_matrix_content_is_counted_once(tmp_path: Path):
 
 def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     series = tmp_path / "dogfood.json"
-    series.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "artifact_kind": "launch_reliability_dogfood_series",
-                "generated_at": "2026-08-04T13:00:30Z",
-                "provenance": _dogfood_provenance(),
-                "episodes": [
-                    {
-                        "episode_id": "episode-1",
-                        "observed_at": "2026-08-04T12:00:10Z",
-                        "recovery_duration_seconds": 10.0,
-                        "expected": {
-                            "health_state": "degraded",
-                            "red_eligible": False,
-                            "producer_freshness": "fresh",
-                            "action": "inspect_storage_source",
-                        },
-                        "observed": {
-                            "health_state": "degraded",
-                            "producer_freshness": "fresh",
-                            "suggested_action_ids": ["inspect_storage_source"],
-                        },
-                        "event_bearing_issue": {
-                            "status": "resolved",
-                            "opened_at": "2026-08-04T12:00:00Z",
-                            "resolved_at": "2026-08-04T12:00:08Z",
-                        },
-                        "evidence_conservation": {
-                            "source_events": 4,
-                            "archived_events": 3,
-                            "replayed_events": 1,
-                            "duplicate_events": 1,
-                            "discarded_events": 0,
-                            "unresolved_events": 1,
-                        },
+    _write_signed_dogfood(
+        series,
+        {
+            "schema_version": 1,
+            "artifact_kind": "launch_reliability_dogfood_series",
+            "generated_at": "2026-08-04T13:00:30Z",
+            "provenance": _dogfood_provenance(),
+            "episodes": [
+                {
+                    "episode_id": "episode-1",
+                    "collector_started_at": "2026-08-04T12:00:00Z",
+                    "observed_at": "2026-08-04T12:00:10Z",
+                    "recovery_duration_seconds": 10.0,
+                    "expected": {
+                        "health_state": "degraded",
+                        "red_eligible": False,
+                        "producer_freshness": "fresh",
+                        "action": "inspect_storage_source",
                     },
-                    {
-                        "episode_id": "episode-2",
-                        "observed_at": "2026-08-04T12:30:10Z",
-                        "recovery_duration_seconds": 12.0,
-                        "expected": {
-                            "health_state": "broken",
-                            "red_eligible": True,
-                            "producer_freshness": "stale",
-                            "action": "inspect_local_health",
-                        },
-                        "observed": {
-                            "health_state": "broken",
-                            "producer_freshness": "stale",
-                            "suggested_action_ids": ["inspect_local_health"],
-                        },
-                        "event_bearing_issue": {
-                            "status": "unresolved",
-                            "opened_at": "2026-08-04T12:30:00Z",
-                        },
-                        "evidence_conservation": {
-                            "source_events": 2,
-                            "archived_events": 2,
-                            "replayed_events": 0,
-                            "duplicate_events": 0,
-                            "discarded_events": 0,
-                            "unresolved_events": 0,
-                        },
+                    "observed": {
+                        "health_state": "degraded",
+                        "producer_freshness": "fresh",
+                        "suggested_action_ids": ["inspect_storage_source"],
                     },
-                    {
-                        "episode_id": "episode-3",
-                        "observed_at": "2026-08-04T13:00:30Z",
-                        "recovery_duration_seconds": 14.0,
-                        "expected": {
-                            "health_state": "broken",
-                            "red_eligible": True,
-                            "producer_freshness": "stale",
-                            "action": "inspect_local_health",
-                        },
-                        "observed": {
-                            "health_state": "broken",
-                            "producer_freshness": "stale",
-                            "suggested_action_ids": ["inspect_local_health"],
-                        },
-                        "event_bearing_issue": {
-                            "status": "unresolved",
-                            "opened_at": "2026-08-04T12:00:00Z",
-                        },
-                        "evidence_conservation": {
-                            "source_events": 3,
-                            "archived_events": 2,
-                            "replayed_events": 1,
-                            "duplicate_events": 1,
-                            "discarded_events": 0,
-                            "unresolved_events": 1,
-                        },
+                    "event_bearing_issue": {
+                        "status": "resolved",
+                        "opened_at": "2026-08-04T12:00:00Z",
+                        "resolved_at": "2026-08-04T12:00:08Z",
                     },
-                ],
-            }
-        )
+                    "evidence_conservation": {
+                        "source_events": 4,
+                        "archived_events": 3,
+                        "replayed_events": 1,
+                        "duplicate_events": 1,
+                        "discarded_events": 0,
+                        "unresolved_events": 1,
+                    },
+                },
+                {
+                    "episode_id": "episode-2",
+                    "collector_started_at": "2026-08-04T12:30:00Z",
+                    "observed_at": "2026-08-04T12:30:10Z",
+                    "recovery_duration_seconds": 12.0,
+                    "expected": {
+                        "health_state": "broken",
+                        "red_eligible": True,
+                        "producer_freshness": "stale",
+                        "action": "inspect_local_health",
+                    },
+                    "observed": {
+                        "health_state": "broken",
+                        "producer_freshness": "stale",
+                        "suggested_action_ids": ["inspect_local_health"],
+                    },
+                    "event_bearing_issue": {
+                        "status": "unresolved",
+                        "opened_at": "2026-08-04T12:30:00Z",
+                    },
+                    "evidence_conservation": {
+                        "source_events": 2,
+                        "archived_events": 2,
+                        "replayed_events": 0,
+                        "duplicate_events": 0,
+                        "discarded_events": 0,
+                        "unresolved_events": 0,
+                    },
+                },
+                {
+                    "episode_id": "episode-3",
+                    "collector_started_at": "2026-08-04T13:00:00Z",
+                    "observed_at": "2026-08-04T13:00:30Z",
+                    "recovery_duration_seconds": 14.0,
+                    "expected": {
+                        "health_state": "broken",
+                        "red_eligible": True,
+                        "producer_freshness": "stale",
+                        "action": "inspect_local_health",
+                    },
+                    "observed": {
+                        "health_state": "broken",
+                        "producer_freshness": "stale",
+                        "suggested_action_ids": ["inspect_local_health"],
+                    },
+                    "event_bearing_issue": {
+                        "status": "unresolved",
+                        "opened_at": "2026-08-04T12:00:00Z",
+                    },
+                    "evidence_conservation": {
+                        "source_events": 3,
+                        "archived_events": 2,
+                        "replayed_events": 1,
+                        "duplicate_events": 1,
+                        "discarded_events": 0,
+                        "unresolved_events": 1,
+                    },
+                },
+            ],
+        },
     )
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    source = json.loads(series.read_text())
+    episode_files: list[Path] = []
+    challenge_files: list[Path] = []
+    for index, episode in enumerate(source["episodes"], start=1):
+        episode_path = tmp_path / f"dogfood-{index}.json"
+        challenge_files.append(
+            _write_signed_dogfood(
+                episode_path,
+                {
+                    "schema_version": 1,
+                    "artifact_kind": "launch_reliability_dogfood_series",
+                    "generated_at": source["generated_at"],
+                    "provenance": source["provenance"],
+                    "episodes": [episode],
+                },
+            )
+        )
+        episode_files.append(episode_path)
+    report = MODULE.build_report([], dogfood_paths=episode_files, dogfood_challenge_paths=challenge_files)
 
     assert report["report_status"] == "ok"
     assert report["dogfood_series"]["episode_count"] == 3
@@ -825,43 +927,43 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
 
 def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
     series = tmp_path / "dogfood.json"
-    series.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "artifact_kind": "launch_reliability_dogfood_series",
-                "generated_at": "2026-08-04T13:00:30Z",
-                "provenance": _dogfood_provenance(),
-                "episodes": [
-                    {
-                        "episode_id": "episode-1",
-                        "observed_at": "2026-08-04T12:00:00Z",
-                        "expected": {
-                            "health_state": "broken",
-                            "red_eligible": True,
-                            "producer_freshness": "stale",
-                            "action": "inspect_local_health",
-                        },
-                        "observed": {
-                            "health_state": "broken",
-                            "producer_freshness": "stale",
-                            "suggested_action_ids": ["inspect_local_health"],
-                        },
-                        "evidence_conservation": {
-                            "source_events": 1,
-                            "archived_events": 2,
-                            "replayed_events": 0,
-                            "duplicate_events": 0,
-                            "discarded_events": 0,
-                            "unresolved_events": 0,
-                        },
-                    }
-                ],
-            }
-        )
+    challenge = _write_signed_dogfood(
+        series,
+        {
+            "schema_version": 1,
+            "artifact_kind": "launch_reliability_dogfood_series",
+            "generated_at": "2026-08-04T13:00:30Z",
+            "provenance": _dogfood_provenance(),
+            "episodes": [
+                {
+                    "episode_id": "episode-1",
+                    "collector_started_at": "2026-08-04T12:00:00Z",
+                    "observed_at": "2026-08-04T12:00:00Z",
+                    "expected": {
+                        "health_state": "broken",
+                        "red_eligible": True,
+                        "producer_freshness": "stale",
+                        "action": "inspect_local_health",
+                    },
+                    "observed": {
+                        "health_state": "broken",
+                        "producer_freshness": "stale",
+                        "suggested_action_ids": ["inspect_local_health"],
+                    },
+                    "evidence_conservation": {
+                        "source_events": 1,
+                        "archived_events": 2,
+                        "replayed_events": 0,
+                        "duplicate_events": 0,
+                        "discarded_events": 0,
+                        "unresolved_events": 0,
+                    },
+                }
+            ],
+        },
     )
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=[series], dogfood_challenge_paths=[challenge])
 
     assert report["report_status"] == "invalid"
     assert "accounts for more events" in report["inputs"]["invalid_artifacts"][0]["error"]
@@ -871,8 +973,13 @@ def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
 def test_duplicate_dogfood_path_is_counted_once(tmp_path: Path):
     series = tmp_path / "dogfood.json"
     _dogfood_series(series)
+    paths, challenges = _split_dogfood_series(series)
 
-    report = MODULE.build_report([], dogfood_paths=[series, series])
+    report = MODULE.build_report(
+        [],
+        dogfood_paths=[paths[0], paths[0], paths[1], paths[2]],
+        dogfood_challenge_paths=challenges,
+    )
 
     assert report["report_status"] == "ok"
     assert report["dogfood_series"]["episode_count"] == 3
@@ -883,14 +990,24 @@ def test_duplicate_dogfood_path_is_counted_once(tmp_path: Path):
 def test_duplicate_dogfood_episode_id_and_nonfinite_duration_fail_closed(tmp_path: Path):
     duplicate = tmp_path / "duplicate.json"
     _dogfood_series(duplicate, duplicate_ids=True)
-    duplicate_report = MODULE.build_report([], dogfood_paths=[duplicate])
+    duplicate_paths, duplicate_challenges = _split_dogfood_series(duplicate, count=2)
+    duplicate_report = MODULE.build_report(
+        [],
+        dogfood_paths=duplicate_paths,
+        dogfood_challenge_paths=duplicate_challenges,
+    )
     assert duplicate_report["report_status"] == "invalid"
     assert "duplicate episode_id" in duplicate_report["inputs"]["invalid_artifacts"][0]["error"]
     assert duplicate_report["measures"]["automatic_recovery_time"]["status"] == "not_observed"
 
     nonfinite = tmp_path / "nonfinite.json"
     _dogfood_series(nonfinite, recovery=float("nan"))
-    nonfinite_report = MODULE.build_report([], dogfood_paths=[nonfinite])
+    nonfinite_paths, nonfinite_challenges = _split_dogfood_series(nonfinite, count=1)
+    nonfinite_report = MODULE.build_report(
+        [],
+        dogfood_paths=nonfinite_paths,
+        dogfood_challenge_paths=nonfinite_challenges,
+    )
     assert nonfinite_report["report_status"] == "invalid"
     assert "must be non-negative" in nonfinite_report["inputs"]["invalid_artifacts"][0]["error"]
 
@@ -898,7 +1015,8 @@ def test_duplicate_dogfood_episode_id_and_nonfinite_duration_fail_closed(tmp_pat
 def test_discarded_evidence_is_visible_as_a_separate_conservation_state(tmp_path: Path):
     series = tmp_path / "discard.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
+    paths, challenges = _split_dogfood_series(series)
+    payload = json.loads(paths[0].read_text())
     payload["episodes"][0]["evidence_conservation"] = {
         "source_events": 2,
         "archived_events": 1,
@@ -907,9 +1025,11 @@ def test_discarded_evidence_is_visible_as_a_separate_conservation_state(tmp_path
         "discarded_events": 1,
         "unresolved_events": 0,
     }
-    series.write_text(json.dumps(payload))
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
 
     conservation = report["measures"]["duplicate_replayed_discarded_evidence"]
     assert conservation["conservation_status"] == "complete_with_discard"
@@ -919,15 +1039,18 @@ def test_discarded_evidence_is_visible_as_a_separate_conservation_state(tmp_path
 def test_future_issue_resolution_fails_closed(tmp_path: Path):
     series = tmp_path / "future-resolution.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
+    episode, challenge = _split_dogfood_series(series, count=1)
+    payload = json.loads(episode[0].read_text())
     payload["episodes"][0]["event_bearing_issue"] = {
         "status": "resolved",
         "opened_at": "2026-08-04T11:59:00Z",
         "resolved_at": "2026-08-04T14:00:00Z",
     }
-    series.write_text(json.dumps(payload))
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenge[0] = _write_signed_dogfood(episode[0], payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=episode, dogfood_challenge_paths=challenge)
 
     assert report["report_status"] == "invalid"
     assert "after observed_at" in report["inputs"]["invalid_artifacts"][0]["error"]
@@ -936,11 +1059,14 @@ def test_future_issue_resolution_fails_closed(tmp_path: Path):
 def test_episode_after_artifact_generation_fails_closed(tmp_path: Path):
     series = tmp_path / "future-episode.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
+    episode, challenge = _split_dogfood_series(series, count=1)
+    payload = json.loads(episode[0].read_text())
     payload["generated_at"] = "2026-08-04T11:00:00Z"
-    series.write_text(json.dumps(payload))
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenge[0] = _write_signed_dogfood(episode[0], payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=episode, dogfood_challenge_paths=challenge)
 
     assert report["report_status"] == "invalid"
     assert "after dogfood.generated_at" in report["inputs"]["invalid_artifacts"][0]["error"]
@@ -949,13 +1075,15 @@ def test_episode_after_artifact_generation_fails_closed(tmp_path: Path):
 def test_truthless_dogfood_episode_fails_closed(tmp_path: Path):
     series = tmp_path / "truthless.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
-    for episode in payload["episodes"]:
-        episode.pop("expected")
-        episode.pop("observed")
-    series.write_text(json.dumps(payload))
+    paths, challenges = _split_dogfood_series(series, count=1)
+    payload = json.loads(paths[0].read_text())
+    payload["episodes"][0].pop("expected")
+    payload["episodes"][0].pop("observed")
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
 
     assert report["report_status"] == "invalid"
     assert "must include expected and observed" in report["inputs"]["invalid_artifacts"][0]["error"]
@@ -965,25 +1093,57 @@ def test_truthless_dogfood_episode_fails_closed(tmp_path: Path):
 def test_observation_error_is_not_admissible_evidence(tmp_path: Path):
     series = tmp_path / "observation-error.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
+    paths, challenges = _split_dogfood_series(series, count=1)
+    payload = json.loads(paths[0].read_text())
     payload["episodes"][0]["observation_error"] = "local-health timed out"
-    series.write_text(json.dumps(payload))
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
 
     assert report["report_status"] == "invalid"
     assert "observation_error" in report["inputs"]["invalid_artifacts"][0]["error"]
     assert report["dogfood_series"]["episode_count"] == 0
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("health_state", "unknown", "health_state is invalid"),
+        ("suggested_action_ids", ["invented_action"], "known action ids"),
+    ],
+)
+def test_unknown_dogfood_truth_is_not_admissible_evidence(tmp_path: Path, field: str, value: object, message: str):
+    series = tmp_path / f"invalid-{field}.json"
+    _dogfood_series(series)
+    paths, challenges = _split_dogfood_series(series, count=1)
+    payload = json.loads(paths[0].read_text())
+    if field == "health_state":
+        payload["episodes"][0]["observed"][field] = value
+    else:
+        payload["episodes"][0]["observed"][field] = value
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
+
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
+
+    assert report["report_status"] == "invalid"
+    assert message in report["inputs"]["invalid_artifacts"][0]["error"]
+
+
 def test_dogfood_provenance_must_match_current_revision(tmp_path: Path):
     series = tmp_path / "wrong-provenance.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
+    paths, challenges = _split_dogfood_series(series, count=1)
+    payload = json.loads(paths[0].read_text())
     payload["provenance"]["git_sha"] = "0" * 40
-    series.write_text(json.dumps(payload))
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
 
     assert report["report_status"] == "invalid"
     assert "does not match" in report["inputs"]["invalid_artifacts"][0]["error"]
@@ -993,10 +1153,15 @@ def test_dogfood_provenance_must_match_current_revision(tmp_path: Path):
 def test_mixed_valid_and_invalid_dogfood_inputs_clear_numeric_claims(tmp_path: Path):
     valid = tmp_path / "valid.json"
     _dogfood_series(valid)
+    valid_paths, valid_challenges = _split_dogfood_series(valid, count=1)
     invalid = tmp_path / "invalid.json"
     invalid.write_text(json.dumps({"schema_version": 1, "artifact_kind": "wrong"}))
 
-    report = MODULE.build_report([], dogfood_paths=[valid, invalid])
+    report = MODULE.build_report(
+        [],
+        dogfood_paths=[valid_paths[0], invalid],
+        dogfood_challenge_paths=valid_challenges,
+    )
 
     assert report["report_status"] == "invalid"
     assert report["dogfood_series"]["episode_count"] == 0
@@ -1010,12 +1175,17 @@ def test_mixed_valid_and_invalid_dogfood_inputs_clear_numeric_claims(tmp_path: P
 def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):
     series = tmp_path / "same-time.json"
     _dogfood_series(series)
-    payload = json.loads(series.read_text())
-    payload["episodes"][1]["observed_at"] = payload["episodes"][0]["observed_at"]
-    payload["episodes"][2]["observed_at"] = payload["episodes"][0]["observed_at"]
-    series.write_text(json.dumps(payload))
+    paths, challenges = _split_dogfood_series(series)
+    first_observed_at = json.loads(paths[0].read_text())["episodes"][0]["observed_at"]
+    for index, path in enumerate(paths):
+        payload = json.loads(path.read_text())
+        payload["episodes"][0]["observed_at"] = first_observed_at
+        payload["episodes"][0]["collector_started_at"] = first_observed_at
+        payload.pop("challenge", None)
+        payload.pop("signature", None)
+        challenges[index] = _write_signed_dogfood(path, payload)
 
-    report = MODULE.build_report([], dogfood_paths=[series])
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
 
     assert report["report_status"] == "ok"
     assert report["dogfood_series"]["observation_window"]["distinct_observation_count"] == 1
