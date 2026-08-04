@@ -477,7 +477,10 @@ def _accept_claude_permission_prompt(process: PtyProcess) -> None:
         return
     compact = re.sub(r"\s+", "", _terminal_text(process.recording))
     if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
-        process.send("\x1b[B\r")
+        # Claude switches the TTY into application-cursor mode before this
+        # screen.  CSI ``ESC [ B`` is ignored/misread there; SS3 ``ESC O B``
+        # selects the second row, followed by Enter.
+        process.send("\x1bOB\r")
         process.claude_permission_acceptance_sent = True
 
 

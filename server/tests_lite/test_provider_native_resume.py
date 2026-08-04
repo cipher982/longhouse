@@ -280,7 +280,7 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
     _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
     _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
 
-    assert process.sent == ["\x1b[B\r"]
+    assert process.sent == ["\x1bOB\r"]
     assert process.claude_permission_acceptance_sent is True
 
 
