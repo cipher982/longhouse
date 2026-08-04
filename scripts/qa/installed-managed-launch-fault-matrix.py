@@ -223,8 +223,23 @@ def http_json(
         return error.code, value if isinstance(value, dict) else {}
 
 
+def isolated_profile_env(env: dict[str, str], root: Path) -> dict[str, str]:
+    profile_root = root / "runtime-profile"
+    env.update(
+        {
+            "HOME": str(profile_root / "home"),
+            "XDG_CONFIG_HOME": str(profile_root / "config"),
+            "XDG_DATA_HOME": str(profile_root / "data"),
+            "XDG_STATE_HOME": str(profile_root / "state"),
+            "XDG_CACHE_HOME": str(profile_root / "cache"),
+            "CODEX_HOME": str(profile_root / "codex"),
+        }
+    )
+    return env
+
+
 def runtime_env(root: Path, engine_bin: Path) -> dict[str, str]:
-    env = os.environ.copy()
+    env = isolated_profile_env(os.environ.copy(), root)
     env.update(
         {
             "LONGHOUSE_HOME": str(root / "longhouse"),
@@ -291,7 +306,7 @@ def start_host(root: Path, evidence_root: Path, *, port: int, ordinal: int) -> H
     database = runtime_host_archive_database(root)
     log_path = evidence_root / f"runtime-host-{ordinal}.log"
     log = log_path.open("wb")
-    env = os.environ.copy()
+    env = isolated_profile_env(os.environ.copy(), root)
     env.update(
         {
             "AUTH_DISABLED": "1",
@@ -863,6 +878,7 @@ def run_provider_live(
                 "session_id_observed": session_match.group(0) if session_match else None,
                 "launch_intent_created": launch_intent_created,
                 "startup_failure": str(error),
+                "qualification": "provider_owned_start_failure",
                 "launch_log": str(launch_log),
                 "retry_intents_after_launch": read_retry_count(root),
             },
@@ -1138,10 +1154,21 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             )
         retry_count = read_retry_count(temp_root)
         if provider_failures and args.allow_unqualified_recovery:
-            has_degraded_start = any(
-                result.get("degraded_marker_seen") for result in results
+            if any(
+                result.get("provider_version", {}).get("returncode") != 0
+                for result in provider_failures
+            ):
+                raise RuntimeError(
+                    "provider-owned startup failure lacks a verified installed "
+                    "provider binary identity; refusing a yellow qualification"
+                )
+            has_degraded_recovery_evidence = any(
+                result.get("startup_failure") is None
+                and result.get("degraded_marker_seen")
+                and result.get("launch_intent_created")
+                for result in results
             )
-            if not has_degraded_start or retry_count == 0:
+            if not has_degraded_recovery_evidence or retry_count == 0:
                 raise RuntimeError(
                     "installed provider startup produced no degraded provider start "
                     "and no attributable durable retry evidence; refusing a yellow "
@@ -1363,17 +1390,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             )
             return bool(ready_session_ids) and ready_adopted and unready_absent
 
-        if ready_session_ids:
-            wait_for(
-                launches_adopted,
-                float(os.environ.get("LONGHOUSE_LAUNCH_STATE_TIMEOUT", "60")),
-                "Runtime Host adoption of every recovered managed launch",
-            )
-        else:
-            last_launch_states = launch_attempt_states(
-                runtime_host_live_database(temp_root), expected_session_ids
-            )
-            args._last_launch_states = last_launch_states
+        def assert_unready_absent() -> None:
             unexpected_states = {
                 session_id: state
                 for session_id, state in last_launch_states.items()
@@ -1384,6 +1401,27 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     "pre-ready installed launches created host attempts after owner cleanup: "
                     f"{unexpected_states}"
                 )
+
+        if ready_session_ids:
+            wait_for(
+                launches_adopted,
+                float(os.environ.get("LONGHOUSE_LAUNCH_STATE_TIMEOUT", "60")),
+                "Runtime Host adoption of every recovered managed launch",
+            )
+            # Re-read after the ready adoption wait. This catches a delayed
+            # pre-ready registration that appears after the main predicate
+            # already observed all ready launches.
+            last_launch_states = launch_attempt_states(
+                runtime_host_live_database(temp_root), expected_session_ids
+            )
+            args._last_launch_states = last_launch_states
+            assert_unready_absent()
+        else:
+            last_launch_states = launch_attempt_states(
+                runtime_host_live_database(temp_root), expected_session_ids
+            )
+            args._last_launch_states = last_launch_states
+            assert_unready_absent()
         for result, live in live_commands:
             cleanup = finish_live_command(live)
             if not cleanup["process_group_reaped"]:
@@ -1406,7 +1444,9 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             if unready_intents or provider_failures
             else "green",
             "recovery_qualification": (
-                "degraded_start_only_provider_not_ready"
+                "mixed_provider_degraded_start_with_provider_owned_failure"
+                if unready_intents and provider_failures
+                else "degraded_start_only_provider_not_ready"
                 if unready_intents
                 else "provider_owned_start_failure"
                 if provider_failures
@@ -1490,7 +1530,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Allow a yellow degraded-start-only result when an installed provider "
-            "does not reach local readiness; never reports that case as green."
+            "does not reach local readiness. This explicit qualification flag "
+            "accepts yellow and returns exit code 0; without it yellow is nonzero."
         ),
     )
     parser.add_argument("--json", action="store_true")

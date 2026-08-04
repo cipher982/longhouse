@@ -974,6 +974,16 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             continue;
         }
         if !intent.provider_ready {
+            if let Err(error) = merge_current_retry_owner_state(&path, &mut intent) {
+                tracing::warn!(path = %path.display(), error = %error, "Could not refresh managed launch owner state before pre-ready reconciliation");
+                continue;
+            }
+            // A readiness callback may have landed after the initial read.
+            // Re-enter the ready path on the next scan instead of expiring or
+            // deleting the now-ready intent from the stale snapshot.
+            if intent.provider_ready {
+                continue;
+            }
             match launcher_owner_alive(&intent) {
                 Some(true) if pre_ready_expired(&intent, now) => {
                     exhaust_retry_intent(
@@ -1023,6 +1033,13 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                     // once and report an explicit post-hoc abort so the host
                     // does not turn this ordinary owner loss into a red,
                     // exhausted recovery incident.
+                    if let Err(error) = merge_current_retry_owner_state(&path, &mut intent) {
+                        tracing::warn!(path = %path.display(), error = %error, "Could not refresh managed launch owner state before post-hoc abort");
+                        continue;
+                    }
+                    if intent.provider_exited {
+                        continue;
+                    }
                     intent.provider_exited = true;
                     intent.last_error = Some(
                         "managed provider owner is no longer live; recording post-hoc launch abort"

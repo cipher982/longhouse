@@ -1183,11 +1183,27 @@ start_runtime_host || fail "Runtime Host did not recover on its original port"
 echo "runtime host recovered on $BASE_URL"
 wait_for_value "recovered Runtime Host" "200" 20 curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/health"
 wait_for_value "registration retry convergence" "0" 60 retry_file_count "$registration_retry_dir"
+recovered_adopted=0
+recovered_failed=0
 while IFS= read -r retry_session_id; do
   [[ -n "$retry_session_id" ]] || continue
   retry_outcome="$(wait_for_launch_terminal_state "$retry_session_id" 30)"
+  case "$retry_outcome" in
+    adopted)
+      recovered_adopted=$((recovered_adopted + 1))
+      ;;
+    failed)
+      recovered_failed=$((recovered_failed + 1))
+      ;;
+    abandoned)
+      fail "Runtime Host abandoned recovered launch $retry_session_id"
+      ;;
+  esac
   echo "ok: Runtime Host recorded $retry_outcome for recovered launch $retry_session_id"
 done <"$retry_session_ids_file"
+((recovered_adopted > 0)) \
+  || fail "Runtime Host recorded no adopted outcome for the recovered launch set"
+echo "ok: recovered launch set included $recovered_adopted adopted and $recovered_failed failed provider outcomes"
 echo "ok: durable managed launch recovery converged after Runtime Host restart"
 
 echo "managed launch lifecycle smoke passed"
