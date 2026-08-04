@@ -286,6 +286,20 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
     with pytest.raises(RuntimeError, match="did not project session"):
         _wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
 
+    missing = provider_native_resume._RuntimeHostHTTPError(404, "session not found")
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_api_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(missing),
+    )
+    assert _wait_session_tail(
+        "https://runtime.example",
+        "device-token",
+        "session-1",
+        timeout=0.01,
+        allow_unprojected=True,
+    ) == {}
+
 
 def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
     recording = tmp_path / "cursor.tty"
@@ -868,7 +882,7 @@ def test_provider_state_evidence_redacts_nested_secrets() -> None:
     }
 
 
-def test_cursor_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path) -> None:
     args = _args(tmp_path)
 
     class FakeProviderProcess:
@@ -884,13 +898,6 @@ def test_cursor_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path,
             self.sent.append(value)
 
     process = FakeProviderProcess()
-    commands: list[list[str]] = []
-
-    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
-        commands.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
     result = _control_send(
         SPECS["cursor"],
         args,
@@ -900,10 +907,9 @@ def test_cursor_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path,
         initial=True,
     )
 
-    assert result["method"] == "longhouse_control"
+    assert result["method"] == "provider_tty_bootstrap"
     assert result["returncode"] == 0
-    assert commands == [[str(args.engine), "cursor-helm", "send", "--session-id", "session-1", "--text", "seed"]]
-    assert process.sent == []
+    assert process.sent == ["seed\r"]
 
 
 def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, monkeypatch) -> None:
