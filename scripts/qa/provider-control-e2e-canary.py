@@ -1473,9 +1473,12 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
         if not candidates:
             continue
         selected = candidates[-1]
-        relative_path = database.resolve().relative_to(runtime_root.resolve()).as_posix()
         return {
-            "path": str((Path("opencode-runtime") / relative_path).as_posix()),
+            # The release verifier resolves source artifacts relative to the
+            # qualification bundle root, not this canary's runtime root.
+            # Emit the absolute path here, matching the other provider
+            # adapters; the verifier later relativizes it into the bundle.
+            "path": str(database.resolve()),
             "sha256": _sha256_file(database),
             **selected,
         }

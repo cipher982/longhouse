@@ -58,7 +58,7 @@ def test_opencode_native_model_evidence_reads_the_selected_native_message(tmp_pa
     assert evidence is not None
     assert evidence["model"] == "openrouter/deepseek/deepseek-v4-flash"
     assert evidence["session_id"] == "session-1"
-    assert evidence["path"] == "opencode-runtime/data/opencode/opencode.db"
+    assert evidence["path"] == str(database.resolve())
     assert len(evidence["sha256"]) == 64
     assert len(evidence["record_sha256"]) == 64
 
