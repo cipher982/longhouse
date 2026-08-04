@@ -254,6 +254,22 @@ wait_for_value() {
   fail "$description stayed '${value:-empty}', expected '$expected'"
 }
 
+wait_for_launch_terminal_state() {
+  local session_id="$1" timeout_secs="$2"
+  local deadline=$((SECONDS + timeout_secs)) value=""
+  while ((SECONDS < deadline)); do
+    value="$(launch_attempt_state "$session_id" 2>/dev/null || true)"
+    case "$value" in
+      adopted|failed|abandoned)
+        printf '%s' "$value"
+        return 0
+        ;;
+    esac
+    sleep 0.2
+  done
+  fail "Runtime Host launch outcome for $session_id stayed '${value:-empty}' without a terminal state"
+}
+
 retry_file_count() {
   local directory="$1"
   find "$directory" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' '
@@ -1138,6 +1154,25 @@ echo "ok: OpenCode starts locally with durable registration recovery while Runti
 
 registration_retry_dir="$HOME_DIR/.longhouse/agent/managed-local/registration-retries"
 wait_for_retry_files_at_least "durable registration retry intents" 4 10 "$registration_retry_dir"
+retry_session_ids_file="$TEST_ROOT/registration-retry-session-ids.txt"
+python3 - "$registration_retry_dir" >"$retry_session_ids_file" <<'PY'
+import json
+import pathlib
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+for path in sorted(directory.glob("*.json")):
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        continue
+    session_id = payload.get("expected_session_id")
+    if session_id:
+        print(session_id)
+PY
+retry_session_count="$(wc -l <"$retry_session_ids_file" | tr -d ' ')"
+[[ "$retry_session_count" == "4" ]] \
+  || fail "expected four recoverable launch identities, found $retry_session_count"
 echo "ok: outage launches persisted durable registration retry intents"
 
 # Bring the same Runtime Host identity back. The Machine Agent is still alive,
@@ -1148,6 +1183,11 @@ start_runtime_host || fail "Runtime Host did not recover on its original port"
 echo "runtime host recovered on $BASE_URL"
 wait_for_value "recovered Runtime Host" "200" 20 curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/health"
 wait_for_value "registration retry convergence" "0" 60 retry_file_count "$registration_retry_dir"
+while IFS= read -r retry_session_id; do
+  [[ -n "$retry_session_id" ]] || continue
+  retry_outcome="$(wait_for_launch_terminal_state "$retry_session_id" 30)"
+  echo "ok: Runtime Host recorded $retry_outcome for recovered launch $retry_session_id"
+done <"$retry_session_ids_file"
 echo "ok: durable managed launch recovery converged after Runtime Host restart"
 
 echo "managed launch lifecycle smoke passed"

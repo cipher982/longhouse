@@ -27,6 +27,7 @@ import re
 import secrets
 import select
 import shutil
+import sqlite3
 import signal
 import socket
 import subprocess
@@ -40,7 +41,7 @@ from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 PROVIDERS = ("claude", "codex", "opencode", "cursor")
@@ -63,6 +64,30 @@ class CommandEvidence:
     output: str
     marker_seen: bool
     timed_out: bool
+
+
+class ProviderLaunchError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        returncode: int | None,
+        output: str,
+        timed_out: bool,
+    ) -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.output = output
+        self.timed_out = timed_out
+
+
+@dataclass
+class LiveCommand:
+    process: subprocess.Popen[bytes]
+    output_fd: int
+    output: bytearray
+    is_tty: bool
+    provider_ready_observed: bool
 
 
 @dataclass
@@ -407,7 +432,7 @@ def wait_status(pid: int, timeout: float) -> int | None:
         try:
             waited_pid, status = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
-            return 0
+            return None
         if waited_pid == pid:
             return os.waitstatus_to_exitcode(status)
         if time.monotonic() >= deadline:
@@ -420,7 +445,7 @@ def run_tty_command(
     env: dict[str, str],
     *,
     marker: str,
-    timeout: float = 25,
+    timeout: float = 45,
 ) -> CommandEvidence:
     pid, master = pty.fork()
     if pid == 0:
@@ -515,6 +540,149 @@ def run_pipe_command(
             kill_group(process, grace=0.2)
 
 
+def _read_live_output(command: LiveCommand) -> None:
+    try:
+        command.output.extend(os.read(command.output_fd, 8192))
+    except OSError:
+        pass
+
+
+def start_live_command(
+    command: list[str],
+    env: dict[str, str],
+    *,
+    use_tty: bool,
+    marker: str,
+    ready_check: Callable[[int], bool] | None = None,
+    allow_unready: bool = False,
+    timeout: float = 45,
+) -> LiveCommand:
+    """Start a provider with a real process handle and wait only for startup.
+
+    ``pty.openpty`` plus ``Popen`` is safe to call from the concurrent launch
+    pool. The returned process remains alive until Runtime Host recovery has
+    been asserted, so the registration retry cannot silently settle as a
+    post-hoc provider abort.
+    """
+
+    slave_fd: int | None = None
+    if use_tty:
+        master_fd, slave_fd = pty.openpty()
+        process = subprocess.Popen(
+            command,
+            env=env,
+            cwd=env.get("LONGHOUSE_FAULT_CWD"),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        output_fd = master_fd
+    else:
+        process = subprocess.Popen(
+            command,
+            env=env,
+            cwd=env.get("LONGHOUSE_FAULT_CWD"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        if process.stdout is None:
+            raise RuntimeError("provider stdout pipe was not created")
+        output_fd = process.stdout.fileno()
+        os.set_blocking(output_fd, False)
+
+    live = LiveCommand(
+        process=process,
+        output_fd=output_fd,
+        output=bytearray(),
+        is_tty=use_tty,
+        provider_ready_observed=False,
+    )
+    started = time.monotonic()
+    marker_seen_at: float | None = None
+    try:
+        while time.monotonic() - started < timeout:
+            readable, _, _ = select.select([output_fd], [], [], 0.2)
+            if readable:
+                _read_live_output(live)
+            marker_seen = marker in live.output.decode("utf-8", errors="replace")
+            if marker_seen and marker_seen_at is None:
+                marker_seen_at = time.monotonic()
+            if marker_seen and (ready_check is None or ready_check(process.pid)):
+                live.provider_ready_observed = True
+                return live
+            # Provider readiness is persisted by a short-lived native callback
+            # after the degraded marker is printed. Give that callback a small
+            # bounded window before recording an unqualified start; otherwise a
+            # generic marker can race the durable readiness write.
+            if (
+                marker_seen
+                and allow_unready
+                and marker_seen_at is not None
+                and time.monotonic() - marker_seen_at >= 2
+            ):
+                return live
+            if process.poll() is not None:
+                _read_live_output(live)
+                raise ProviderLaunchError(
+                    f"provider exited before startup marker: {process.returncode}",
+                    returncode=process.returncode,
+                    output=live.output.decode("utf-8", errors="replace"),
+                    timed_out=False,
+                )
+        kill_group(process, grace=0.2)
+        process.wait(timeout=5)
+        raise ProviderLaunchError(
+            f"provider did not emit startup marker within {timeout}s",
+            returncode=process.returncode,
+            output=live.output.decode("utf-8", errors="replace"),
+            timed_out=True,
+        )
+    except BaseException:
+        if use_tty:
+            try:
+                os.close(output_fd)
+            except OSError:
+                pass
+        elif process.stdout is not None:
+            process.stdout.close()
+        raise
+
+
+def finish_live_command(command: LiveCommand) -> dict[str, Any]:
+    """Stop one exact provider process group and assert it is reaped."""
+
+    if command.is_tty:
+        try:
+            os.write(command.output_fd, b"\x03")
+        except OSError:
+            pass
+        try:
+            os.killpg(os.getpgid(command.process.pid), signal.SIGINT)
+        except (OSError, PermissionError):
+            pass
+    if command.process.poll() is None:
+        kill_group(command.process, grace=0.2)
+    try:
+        command.process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        kill_group(command.process, grace=0.1)
+        command.process.wait(timeout=5)
+    if command.is_tty:
+        try:
+            os.close(command.output_fd)
+        except OSError:
+            pass
+    elif command.process.stdout is not None:
+        command.process.stdout.close()
+    return {
+        "returncode": command.process.returncode,
+        "process_group_reaped": command.process.poll() is not None,
+    }
+
+
 def provider_command(
     provider: str,
     *,
@@ -524,6 +692,7 @@ def provider_command(
     cwd: Path,
     base_url: str,
     token: str,
+    keep_attached: bool = False,
 ) -> list[str]:
     _, _, provider_flag = PROVIDER_BINARIES[provider]
     command = [
@@ -541,11 +710,12 @@ def provider_command(
     if provider == "claude":
         command.extend(["--claude-dir", str(root / "provider-config" / "claude")])
     elif provider == "opencode":
-        command.extend(
-            ["--no-attach", "--claude-dir", str(root / "provider-config" / "opencode")]
-        )
+        if not keep_attached:
+            command.append("--no-attach")
+        command.extend(["--claude-dir", str(root / "provider-config" / "opencode")])
     elif provider == "codex":
-        command.append("--no-attach")
+        if not keep_attached:
+            command.append("--no-attach")
     else:
         command.extend(
             [
@@ -557,6 +727,124 @@ def provider_command(
             ]
         )
     return command
+
+
+def retry_owner_ready(root: Path, provider: str, launcher_pid: int) -> bool:
+    directory = root / "longhouse" / "agent" / "managed-local" / "registration-retries"
+    for path in directory.glob("*.json"):
+        try:
+            intent = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            str(intent.get("provider_name", "")).lower() == provider.lower()
+            and intent.get("launcher_pid") == launcher_pid
+            and intent.get("provider_ready") is True
+        ):
+            return True
+    return False
+
+
+def run_provider_live(
+    provider: str,
+    *,
+    longhouse_bin: Path,
+    provider_bin: Path,
+    root: Path,
+    evidence_root: Path,
+    base_url: str,
+    token: str,
+    engine_bin: Path,
+    allow_unready: bool = False,
+) -> tuple[dict[str, Any], LiveCommand | None]:
+    provider_root = evidence_root / "providers" / provider
+    provider_root.mkdir(parents=True, exist_ok=True)
+    cwd = root / "cwd" / provider
+    cwd.mkdir(parents=True, exist_ok=True)
+    env = runtime_env(root, engine_bin)
+    env["LONGHOUSE_FAULT_CWD"] = str(cwd)
+    env["CODEX_HOME"] = str(root / "provider-config" / "codex")
+    provider_home = root / "provider-home" / provider
+    env["HOME"] = str(provider_home)
+    env["XDG_CONFIG_HOME"] = str(provider_home / "config")
+    env["XDG_DATA_HOME"] = str(provider_home / "data")
+    env["XDG_STATE_HOME"] = str(provider_home / "state")
+    env["XDG_CACHE_HOME"] = str(provider_home / "cache")
+    command = provider_command(
+        provider,
+        longhouse_bin=longhouse_bin,
+        provider_bin=provider_bin,
+        root=root,
+        cwd=cwd,
+        base_url=base_url,
+        token=token,
+    )
+    try:
+        live = start_live_command(
+            command,
+            env,
+            use_tty=True,
+            marker="degraded Helm mode",
+            ready_check=lambda launcher_pid: retry_owner_ready(
+                root, provider, launcher_pid
+            ),
+            allow_unready=allow_unready,
+        )
+    except ProviderLaunchError as error:
+        output = redact(error.output, token)
+        launch_log = provider_root / "launch.log"
+        launch_log.write_text(output, encoding="utf-8")
+        return (
+            {
+                "provider": provider,
+                "provider_binary": str(provider_bin),
+                "provider_version": version_probe(provider_bin),
+                "facade": str(longhouse_bin),
+                "command": [
+                    "<device-token-redacted>" if value == token else value
+                    for value in command
+                ],
+                "returncode": error.returncode,
+                "timed_out": error.timed_out,
+                "degraded_marker_seen": False,
+                "provider_ready_observed": False,
+                "launcher_pid": None,
+                "session_id_observed": None,
+                "launch_intent_created": False,
+                "startup_failure": str(error),
+                "launch_log": str(launch_log),
+                "retry_intents_after_launch": read_retry_count(root),
+            },
+            None,
+        )
+    output = live.output.decode("utf-8", errors="replace")
+    output = redact(output, token)
+    (provider_root / "launch.log").write_text(output, encoding="utf-8")
+    session_match = UUID_RE.search(output)
+    result = {
+        "provider": provider,
+        "provider_binary": str(provider_bin),
+        "provider_version": version_probe(provider_bin),
+        "facade": str(longhouse_bin),
+        "command": [
+            "<device-token-redacted>" if value == token else value for value in command
+        ],
+        "returncode": None,
+        "timed_out": False,
+        "degraded_marker_seen": True,
+        "provider_ready_observed": live.provider_ready_observed,
+        "launcher_pid": live.process.pid,
+        "session_id_observed": session_match.group(0) if session_match else None,
+        # The durable-count assertion below verifies that each successful
+        # degraded marker produced a retry intent. Do not couple this evidence
+        # field to launcher PID identity: provider adapters may fork/exec and
+        # the persisted owner PID is intentionally the native launcher owner,
+        # not necessarily the PTY harness PID.
+        "launch_intent_created": True,
+        "launch_log": str(provider_root / "launch.log"),
+        "retry_intents_after_launch": read_retry_count(root),
+    }
+    return result, live
 
 
 def run_provider(
@@ -633,7 +921,8 @@ def run_concurrent_providers(
     base_url: str,
     token: str,
     engine_bin: Path,
-) -> list[dict[str, Any]]:
+    allow_unready: bool = False,
+) -> list[tuple[dict[str, Any], LiveCommand | None]]:
     """Launch the selected installed providers at the same time.
 
     The provider launchers own their process groups and their provider-specific
@@ -646,7 +935,7 @@ def run_concurrent_providers(
     ) as pool:
         futures = {
             provider: pool.submit(
-                run_provider,
+                run_provider_live,
                 provider,
                 longhouse_bin=longhouse_bin,
                 provider_bin=provider_bins[provider],
@@ -655,10 +944,41 @@ def run_concurrent_providers(
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
+                allow_unready=allow_unready,
             )
             for provider in providers
         }
         return [futures[provider].result() for provider in providers]
+
+
+def read_retry_intents(root: Path) -> list[dict[str, Any]]:
+    directory = root / "longhouse" / "agent" / "managed-local" / "registration-retries"
+    intents: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        intents.append(json.loads(path.read_text(encoding="utf-8")))
+    return intents
+
+
+def launch_attempt_states(
+    database: Path, session_ids: list[str]
+) -> dict[str, str | None]:
+    if not database.is_file():
+        return {session_id: None for session_id in session_ids}
+    try:
+        with sqlite3.connect(database, timeout=0.5) as connection:
+            rows = connection.execute(
+                "SELECT session_id, state FROM live_session_launch_attempts "
+                "WHERE session_id IN ({}) ORDER BY id".format(
+                    ",".join("?" for _ in session_ids)
+                ),
+                session_ids,
+            ).fetchall()
+    except sqlite3.Error:
+        return {session_id: None for session_id in session_ids}
+    states: dict[str, str | None] = {session_id: None for session_id in session_ids}
+    for session_id, state in rows:
+        states[str(session_id)] = str(state)
+    return states
 
 
 def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
@@ -678,6 +998,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     host: Host | None = None
     engine: subprocess.Popen[bytes] | None = None
     results: list[dict[str, Any]] = []
+    live_commands: list[tuple[dict[str, Any], LiveCommand]] = []
     args._matrix_results = results
     selected_providers = tuple(args.provider or PROVIDERS)
     args._selected_providers = selected_providers
@@ -707,7 +1028,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         host = None
 
         for provider in selected_providers:
-            result = run_provider(
+            result, live = run_provider_live(
                 provider,
                 longhouse_bin=longhouse_bin,
                 provider_bin=provider_bins[provider],
@@ -716,8 +1037,11 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
+                allow_unready=args.allow_unqualified_recovery,
             )
             results.append(result)
+            if live is not None:
+                live_commands.append((result, live))
         concurrent_results: list[dict[str, Any]] = []
         if args.concurrent:
             concurrent_results = run_concurrent_providers(
@@ -729,14 +1053,138 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
+                allow_unready=args.allow_unqualified_recovery,
             )
-            results.extend(concurrent_results)
+            for result, live in concurrent_results:
+                results.append(result)
+                if live is not None:
+                    live_commands.append((result, live))
+        provider_failures = [
+            result
+            for result in results
+            if result.get("startup_failure") is not None
+        ]
+        if provider_failures and not args.allow_unqualified_recovery:
+            failed_providers = ", ".join(
+                str(result.get("provider")) for result in provider_failures
+            )
+            raise RuntimeError(
+                "installed provider startup did not reach the degraded marker for "
+                f"{failed_providers}; use --allow-unqualified-recovery to retain "
+                "a yellow provider-owned failure artifact"
+            )
         retry_count = read_retry_count(temp_root)
-        expected_retry_count = len(selected_providers) * (2 if args.concurrent else 1)
+        expected_retry_count = sum(
+            1 for result in results if result.get("launch_intent_created")
+        )
         if retry_count != expected_retry_count:
             raise RuntimeError(
                 f"installed outage launches left {retry_count} retry intents, expected {expected_retry_count}"
             )
+        retry_intents = read_retry_intents(temp_root)
+        args._retry_intents = [
+            {
+                key: intent.get(key)
+                for key in (
+                    "provider_name",
+                    "expected_session_id",
+                    "provider_ready",
+                    "provider_pid",
+                    "provider_process_start_time",
+                    "provider_exited",
+                    "launcher_pid",
+                    "last_error",
+                )
+            }
+            for intent in retry_intents
+        ]
+        expected_session_ids = [
+            str(intent.get("expected_session_id"))
+            for intent in retry_intents
+            if intent.get("expected_session_id")
+        ]
+        if len(expected_session_ids) != expected_retry_count:
+            raise RuntimeError(
+                "installed recovery did not retain one expected session identity per launch: "
+                f"{len(expected_session_ids)} != {expected_retry_count}"
+            )
+
+        if any(not intent.get("launcher_pid") for intent in retry_intents):
+            raise RuntimeError("installed retry intents contained no launcher ownership identity")
+        intent_readiness_by_launcher = {
+            intent.get("launcher_pid"): intent.get("provider_ready") is True
+            for intent in retry_intents
+        }
+        for result in results:
+            launcher_pid = result.get("launcher_pid")
+            if launcher_pid in intent_readiness_by_launcher:
+                result["provider_ready_durable"] = intent_readiness_by_launcher[launcher_pid]
+        unready_intents = [
+            intent
+            for intent in retry_intents
+            if intent.get("provider_ready") is not True
+        ]
+        if unready_intents and not args.allow_unqualified_recovery:
+            providers = ", ".join(
+                str(intent.get("provider_name") or "unknown") for intent in unready_intents
+            )
+            raise RuntimeError(
+                "installed provider launch did not reach provider readiness for "
+                f"{providers}; this run cannot qualify host recovery. "
+                "Use --allow-unqualified-recovery only to record a yellow degraded-start result."
+            )
+
+        # A pre-ready intent is intentionally not eligible for Runtime Host
+        # registration. End those exact launchers and assert their process
+        # groups are reaped. The Machine Agent removes the stale pre-ready
+        # intents during its normal owner-local scan after restart.
+        pre_ready_cleanup_evidence: dict[str, Any] | None = None
+        if unready_intents:
+            remaining_live_commands: list[tuple[dict[str, Any], LiveCommand]] = []
+            cleanup_results: list[dict[str, Any]] = []
+            for result, live in live_commands:
+                durable_ready = result.get(
+                    "provider_ready_durable", result["provider_ready_observed"]
+                )
+                if durable_ready is True:
+                    remaining_live_commands.append((result, live))
+                    continue
+                cleanup = finish_live_command(live)
+                if not cleanup["process_group_reaped"]:
+                    raise RuntimeError(
+                        f"{result['provider']} pre-ready provider process was not reaped"
+                    )
+                result["returncode"] = cleanup["returncode"]
+                result["detached_cleanup"] = {
+                    "status": "pass",
+                    "remaining_process_groups": [],
+                    **cleanup,
+                }
+                cleanup_results.append(
+                    {
+                        "provider": result["provider"],
+                        "launcher_pid": result["launcher_pid"],
+                        **cleanup,
+                    }
+                )
+            live_commands = remaining_live_commands
+            pre_ready_cleanup_evidence = {
+                "provider_processes_reaped": cleanup_results,
+                "retry_intents_before_machine_agent_gc": read_retry_count(temp_root),
+                "retry_intents_expected_after_gc": len(retry_intents)
+                - len(unready_intents),
+            }
+
+        ready_session_ids = [
+            str(intent["expected_session_id"])
+            for intent in retry_intents
+            if intent.get("provider_ready") is True
+        ]
+        unready_session_ids = [
+            str(intent["expected_session_id"])
+            for intent in retry_intents
+            if intent.get("provider_ready") is not True
+        ]
 
         cold_restart_evidence: dict[str, Any] | None = None
         if args.cold_restart:
@@ -787,6 +1235,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "first_start_returncode": first_start_returncode,
                 "expected_outage_exit": first_start_returncode == 1,
                 "retry_intents_preserved": preserved_retry_count,
+                "pre_ready_intents_garbage_collected": 0,
                 "log": str(cold_log),
             }
 
@@ -822,12 +1271,74 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             60,
             "installed registration retry convergence after Runtime Host recovery",
         )
+        last_launch_states: dict[str, str | None] = {}
+        args._last_launch_states = last_launch_states
+
+        def launches_adopted() -> bool:
+            nonlocal last_launch_states
+            last_launch_states = launch_attempt_states(
+                temp_root / "runtime-host-live.db", expected_session_ids
+            )
+            args._last_launch_states = last_launch_states
+            ready_adopted = all(
+                last_launch_states.get(session_id) == "adopted"
+                for session_id in ready_session_ids
+            )
+            unready_absent = all(
+                last_launch_states.get(session_id) is None
+                for session_id in unready_session_ids
+            )
+            return bool(ready_session_ids) and ready_adopted and unready_absent
+
+        if ready_session_ids:
+            wait_for(
+                launches_adopted,
+                float(os.environ.get("LONGHOUSE_LAUNCH_STATE_TIMEOUT", "60")),
+                "Runtime Host adoption of every recovered managed launch",
+            )
+        else:
+            last_launch_states = launch_attempt_states(
+                temp_root / "runtime-host-live.db", expected_session_ids
+            )
+            args._last_launch_states = last_launch_states
+            unexpected_states = {
+                session_id: state
+                for session_id, state in last_launch_states.items()
+                if session_id in unready_session_ids and state is not None
+            }
+            if unexpected_states:
+                raise RuntimeError(
+                    "pre-ready installed launches created host attempts after owner cleanup: "
+                    f"{unexpected_states}"
+                )
+        for result, live in live_commands:
+            cleanup = finish_live_command(live)
+            if not cleanup["process_group_reaped"]:
+                raise RuntimeError(
+                    f"{result['provider']} provider process was not reaped after adoption"
+                )
+            result["returncode"] = cleanup["returncode"]
+            result["detached_cleanup"] = {
+                "status": "pass",
+                "remaining_process_groups": [],
+                **cleanup,
+            }
+        live_commands.clear()
         engine_handle.close()
         return {
             "schema_version": 1,
             "artifact_kind": "installed_managed_launch_fault_matrix",
             "generated_at": utc_now(),
-            "verdict": "green",
+            "verdict": "yellow"
+            if unready_intents or provider_failures
+            else "green",
+            "recovery_qualification": (
+                "degraded_start_only_provider_not_ready"
+                if unready_intents
+                else "provider_owned_start_failure"
+                if provider_failures
+                else "installed_provider_owner_and_host_adoption"
+            ),
             "implementation": {
                 "longhouse": str(longhouse_bin),
                 "longhouse_engine": str(engine_bin),
@@ -838,7 +1349,11 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "scenarios": [
                 "installed_provider_launch_while_runtime_host_unavailable",
                 "durable_registration_retry_intent_per_provider",
-                "machine_agent_registration_recovery_after_runtime_host_restart",
+                *(
+                    ["machine_agent_registration_recovery_after_runtime_host_restart"]
+                    if ready_session_ids
+                    else ["machine_agent_restart_after_unqualified_degraded_start"]
+                ),
                 "installed_provider_exit_and_detach_cleanup",
                 *(
                     ["concurrent_installed_provider_degraded_launch"]
@@ -852,14 +1367,23 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             ],
             "providers": results,
+            "provider_startup_failures": provider_failures,
             "retry_intents_before_recovery": expected_retry_count,
             "retry_intents_after_recovery": 0,
             "machine_agent_cold_restart": cold_restart_evidence,
+            "pre_ready_cleanup": pre_ready_cleanup_evidence,
+            "launch_attempt_states": last_launch_states,
             "runtime_host_port": port,
             "machine_agent_log": str(engine_log),
             "evidence_root": str(evidence_root),
         }
     finally:
+        for _, live in live_commands:
+            try:
+                finish_live_command(live)
+            except Exception:
+                pass
+        live_commands.clear()
         if engine is not None:
             kill_group(engine)
             try:
@@ -887,6 +1411,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Restart a Machine Agent before Runtime Host recovery.",
     )
+    parser.add_argument(
+        "--allow-unqualified-recovery",
+        action="store_true",
+        help=(
+            "Allow a yellow degraded-start-only result when an installed provider "
+            "does not reach local readiness; never reports that case as green."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -905,6 +1437,8 @@ def main(argv: list[str] | None = None) -> int:
             "error": f"{type(error).__name__}: {error}",
             "traceback": traceback.format_exc(),
             "providers": getattr(args, "_matrix_results", []),
+            "launch_attempt_states": getattr(args, "_last_launch_states", {}),
+            "retry_intents": getattr(args, "_retry_intents", []),
             "evidence_root": str(getattr(args, "_resolved_evidence_root", "")),
             "temporary_root": str(getattr(args, "_temporary_root", "")),
         }
@@ -929,7 +1463,9 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 artifact.get("error", "installed fault matrix failed"), file=sys.stderr
             )
-    return 0 if artifact["verdict"] == "green" else 1
+    return 0 if artifact["verdict"] == "green" or (
+        artifact["verdict"] == "yellow" and args.allow_unqualified_recovery
+    ) else 1
 
 
 if __name__ == "__main__":

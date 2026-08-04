@@ -858,7 +858,6 @@ fn native_fast_health_from_parts(
             reason.as_str(),
             "engine_status_unreadable"
                 | "engine_status_missing"
-                | "engine_status_stale"
                 | "payload_rejected"
                 | "payload_too_large"
         ) || storage_block_requires_repair
@@ -3780,7 +3779,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "broken");
+        assert_eq!(health.health_state, "degraded");
         assert!(!health.engine_status.fresh);
         assert!(health.reasons.contains(&"engine_status_stale".to_string()));
     }
@@ -3866,7 +3865,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "broken");
+        assert_eq!(health.health_state, "degraded");
         assert!(!health.engine_status.fresh);
         assert!(health.reasons.contains(&"engine_status_stale".to_string()));
     }

@@ -119,8 +119,27 @@ def retry_fixture(root: Path, *, exhausted: bool) -> Path:
         json.dumps(
             {
                 "schema_version": 1,
+                "provider_name": "FixtureProvider",
+                "url": "http://127.0.0.1:43123",
+                "token": "fixture-token-redacted",
+                "payload": {
+                    "session_id": "11111111-1111-4111-8111-111111111111",
+                    "provider": "fixture",
+                },
+                "expected_session_id": "11111111-1111-4111-8111-111111111111",
+                "expected_transport": "fixture_transport",
+                "provider_ready": True,
+                "attempts": 0,
+                "next_attempt_at": None,
+                "last_error": None,
                 "created_at": rfc3339(utc_now()),
                 "recovery_exhausted": exhausted,
+                "exhausted_at": rfc3339(utc_now()) if exhausted else None,
+                "provider_pid": 12345,
+                "provider_process_start_time": "fixture-provider-start",
+                "launcher_pid": 12346,
+                "launcher_process_start_time": "fixture-launcher-start",
+                "provider_exited": False,
             }
         )
         + "\n",
@@ -226,7 +245,7 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                 ),
             )
             expected = {
-                "state": "broken",
+                "state": "degraded",
                 "reason": "engine_status_stale",
                 "action": "inspect_local_health",
             }
