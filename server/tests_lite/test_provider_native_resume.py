@@ -21,6 +21,7 @@ from zerg.qa.provider_native_resume import _accept_claude_development_channel_pr
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
 from zerg.qa.provider_native_resume import _cleanup_processes
+from zerg.qa.provider_native_resume import _claude_input_prompt_visible
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
@@ -368,7 +369,9 @@ def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path
         def drain(self) -> bytes:
             self.drains += 1
             if self.drains == 2:
-                recording.write_text('screen redraw❯\u00a0Try "refactor <filepath>"', encoding="utf-8")
+                recording.write_text("development selector\n❯ 1. I am using this for local development\n", encoding="utf-8")
+            elif self.drains == 4:
+                recording.write_text("main TUI\n❯ \n", encoding="utf-8")
             return b""
 
         def settle(self) -> bytes:
@@ -379,6 +382,8 @@ def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path
     _wait_claude_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
 
     assert process.settled is True
+    assert _claude_input_prompt_visible('screen redraw❯\u00a0Try "refactor <filepath>"') is True
+    assert _claude_input_prompt_visible("❯ 1. I am using this for local development") is False
 
 
 def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> None:
@@ -386,6 +391,7 @@ def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> N
     assert _opencode_tui_is_connected("OpenCode connection lost; retrying") is False
     assert _opencode_tui_is_connected("  OpenCode   CONNECTED to server  ") is True
     assert _opencode_tui_is_connected("OpenCode connected to server") is True
+    assert _opencode_tui_is_connected("OpenCode status: longhouse Connected") is True
 
 
 def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> None:

@@ -932,11 +932,26 @@ def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
         _accept_claude_permission_prompt(process)
         _accept_claude_development_channel_prompt(process)
         terminal = _terminal_text(process.recording)
-        if re.search(r"[❯>]\s*Try\b", terminal):
+        if _claude_input_prompt_visible(terminal):
             process.settle()
             return
         time.sleep(0.1)
     raise RuntimeError("Claude TUI did not publish its input prompt")
+
+
+def _claude_input_prompt_visible(terminal: str) -> bool:
+    """Recognize Claude's provider-owned input line across TUI revisions.
+
+    Claude used to render a hint such as ``❯ Try \"refactor ...\"``. Current
+    builds render the same empty input surface as a bare ``❯``. The startup
+    development-channel selector also begins with ``❯``, so accepting any
+    arrow character would race that control record. Match a complete prompt
+    line, while retaining the older inline redraw form used by some PTYs.
+    """
+
+    normalized = terminal.replace("\r", "\n")
+    prompt_line = re.compile(r"(?:^|\n)[^\S\r\n]*[❯>][^\S\r\n]*(?:Try\b[^\r\n]*)?(?:\n|$)")
+    return bool(prompt_line.search(normalized) or re.search(r"[❯>][^\S\r\n]*Try\b", normalized))
 
 
 def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[str, Any]]:
@@ -986,6 +1001,8 @@ def _opencode_tui_is_connected(terminal: str) -> bool:
     # The native bridge logs "event monitor disconnected" into the same PTY.
     # A substring check therefore declared the TUI ready while it was actually
     # reporting a failed SSE connection.
+    if re.search(r"\blonghouse\s+connected\b", normalized) is not None:
+        return True
     return re.search(r"\bopencode\b", normalized) is not None and re.search(r"(?<!dis)\bconnected\b", normalized) is not None
 
 
@@ -1428,10 +1445,10 @@ def _wait_assistant_response_after_marker(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prove a native control record caused a new provider response.
 
-    Claude's development-channel records are stored as user events, and its
-    safety behavior may refuse to repeat a token received from that peer
+    Provider transcripts may store the submitted marker as a user event, and
+    model safety behavior may refuse to repeat a token received from that
     channel. Correlate the native marker with a *new* assistant event instead
-    of requiring the provider to echo the marker in assistant content.
+    of requiring every provider to echo the marker in assistant content.
     """
 
     deadline = time.monotonic() + timeout
@@ -1902,31 +1919,17 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         _write_json(root / "initial-seed-send.json", initial_send)
         _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
-        if spec.provider == "claude":
-            initial_tail, initial_response_correlation = _wait_assistant_response_after_marker(
-                args.api_url,
-                args.agents_token,
-                initial_state["session_id"],
-                seed_marker,
-                prior_assistant_event_digests=initial_prior_assistant_event_digests,
-                timeout=args.live_send_timeout_secs,
-            )
-            if not (
-                initial_response_correlation["marker_observed_in_transcript"] and initial_response_correlation["new_assistant_events"] > 0
-            ):
-                raise RuntimeError(f"provider transcript did not correlate initial Claude marker {seed_marker}")
-        else:
-            initial_tail = _wait_assistant_marker(
-                args.api_url, args.agents_token, initial_state["session_id"], seed_marker, timeout=args.live_send_timeout_secs
-            )
-            observed_assistant_event_digests = _assistant_event_digests(initial_tail)
-            initial_response_correlation = {
-                "method": "assistant_marker_echo",
-                "marker_observed_in_assistant": _assistant_contains(initial_tail, seed_marker),
-                "prior_assistant_events": len(initial_prior_assistant_event_digests),
-                "observed_assistant_events": len(observed_assistant_event_digests),
-                "new_assistant_events": len(observed_assistant_event_digests - initial_prior_assistant_event_digests),
-            }
+        initial_tail, initial_response_correlation = _wait_assistant_response_after_marker(
+            args.api_url,
+            args.agents_token,
+            initial_state["session_id"],
+            seed_marker,
+            prior_assistant_event_digests=initial_prior_assistant_event_digests,
+            timeout=args.live_send_timeout_secs,
+        )
+        initial_response_correlation["marker_observed_in_assistant"] = _assistant_contains(initial_tail, seed_marker)
+        if not (initial_response_correlation["marker_observed_in_transcript"] and initial_response_correlation["new_assistant_events"] > 0):
+            raise RuntimeError(f"provider transcript did not correlate initial {provider} marker {seed_marker}")
         _write_json(root / "initial-response-correlation.json", initial_response_correlation)
         if spec.provider == "cursor":
             _wait_cursor_idle(initial_state, environment)
@@ -2018,37 +2021,21 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")
         _write_json(root / "post-resume-send.json", post_send)
         _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
-        if spec.provider == "claude":
-            resumed_tail, response_correlation = _wait_assistant_response_after_marker(
-                args.api_url,
-                args.agents_token,
-                resumed_state["session_id"],
-                post_marker,
-                prior_assistant_event_digests=prior_assistant_event_digests,
-                timeout=args.live_send_timeout_secs,
-            )
-            post_resume_response_correlated = bool(
-                response_correlation["marker_observed_in_transcript"] and response_correlation["new_assistant_events"] > 0
-            )
-            post_resume_provider_activity = response_correlation["new_assistant_events"] > 0
-        else:
-            resumed_tail = _wait_assistant_marker(
-                args.api_url, args.agents_token, resumed_state["session_id"], post_marker, timeout=args.live_send_timeout_secs
-            )
-            assistant_marker_observed = _assistant_contains(resumed_tail, post_marker)
-            observed_assistant_event_digests = _assistant_event_digests(resumed_tail)
-            new_assistant_events = observed_assistant_event_digests - prior_assistant_event_digests
-            response_correlation = {
-                "method": "assistant_marker_echo",
-                "marker_observed_in_assistant": assistant_marker_observed,
-                "prior_assistant_events": len(prior_assistant_event_digests),
-                "observed_assistant_events": len(observed_assistant_event_digests),
-                "new_assistant_events": len(new_assistant_events),
-            }
-            post_resume_response_correlated = bool(
-                response_correlation["marker_observed_in_assistant"] and response_correlation["new_assistant_events"] > 0
-            )
-            post_resume_provider_activity = response_correlation["new_assistant_events"] > 0
+        resumed_tail, response_correlation = _wait_assistant_response_after_marker(
+            args.api_url,
+            args.agents_token,
+            resumed_state["session_id"],
+            post_marker,
+            prior_assistant_event_digests=prior_assistant_event_digests,
+            timeout=args.live_send_timeout_secs,
+        )
+        response_correlation["marker_observed_in_assistant"] = _assistant_contains(resumed_tail, post_marker)
+        post_resume_response_correlated = bool(
+            response_correlation["marker_observed_in_transcript"] and response_correlation["new_assistant_events"] > 0
+        )
+        post_resume_provider_activity = response_correlation["new_assistant_events"] > 0
+        if not post_resume_response_correlated:
+            raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
         _write_json(root / "post-resume-response-correlation.json", response_correlation)
         _write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = _assistant_contains(resumed_tail, post_marker)
