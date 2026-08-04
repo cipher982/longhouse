@@ -69,6 +69,7 @@ REGISTRATION = ProducerRegistration(
         "resumed_bridge_state",
         "resumed_transcript",
         "post_resume_transcript_ship_receipt",
+        "post_stop_transcript_ship_receipt",
         "process_transition_receipt",
         "stale_input_receipt",
         "concurrent_resume_receipt",
@@ -621,6 +622,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             # Publish the equivalent snapshot before flushing so the real
             # Machine Agent scanner can observe it in this cold-resume window.
             process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
+            _write_json(root / "post-stop-transcript-ship-receipt.json", process_transition["post_stop_transcript_ship"])
         _write_json(root / "process-transition-receipt.json", process_transition)
         _write_json(
             root / "resume-contract-receipt.json",

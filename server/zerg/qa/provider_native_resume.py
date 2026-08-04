@@ -352,6 +352,7 @@ def registration_for(provider: str) -> ProducerRegistration:
             "resumed_transcript",
             "post_resume_response_correlation",
             "post_resume_transcript_ship_receipt",
+            "post_stop_transcript_ship_receipt",
             "process_transition_receipt",
             "stale_input_receipt",
             "concurrent_resume_receipt",

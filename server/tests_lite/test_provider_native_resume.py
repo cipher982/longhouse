@@ -68,6 +68,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
             "initial_transcript_ship_receipt",
             "post_resume_response_correlation",
             "post_resume_transcript_ship_receipt",
+            "post_stop_transcript_ship_receipt",
         } <= set(registration.required_artifacts)
 
 
