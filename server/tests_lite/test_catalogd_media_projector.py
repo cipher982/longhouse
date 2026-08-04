@@ -370,6 +370,7 @@ async def test_projector_cutover_certificate_requires_zero_lag_and_repair_revoke
         assert complete["store_binding"] == {
             "store_id": store_id,
             "schema_generation": "searchd-test-v1",
+            "commit_seq": "1",
         }
         assert complete["lag_count"] == 0
         assert complete["oldest_lag_at"] is None

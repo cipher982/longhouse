@@ -166,6 +166,7 @@ class _ProjectorStoreBindingPayload(BaseModel):
 
     store_id: str
     schema_generation: str = Field(min_length=1)
+    commit_seq: str = Field(pattern=r"^[0-9]+$")
 
     @model_validator(mode="after")
     def validate_store_id(self) -> "_ProjectorStoreBindingPayload":
@@ -201,6 +202,12 @@ class _ProjectorCoveragePayload(BaseModel):
             raise ValueError("nonzero projector lag requires its oldest age")
         if self.certificate is not None and int(self.certificate.certified_commit_seq) > int(self.commit_seq):
             raise ValueError("cutover certificate cannot exceed the catalog watermark")
+        if (
+            self.certificate is not None
+            and self.store_binding is not None
+            and int(self.certificate.certified_commit_seq) < int(self.store_binding.commit_seq)
+        ):
+            raise ValueError("cutover certificate cannot predate the active store binding")
         return self
 
 

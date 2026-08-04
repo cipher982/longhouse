@@ -8147,6 +8147,7 @@ class CatalogStore:
                     {
                         "store_id": str(binding["store_id"]),
                         "schema_generation": str(binding["schema_generation"]),
+                        "commit_seq": str(binding["commit_seq"]),
                     }
                     if binding is not None
                     else None

@@ -31,6 +31,7 @@ def _catalog_coverage(*, lag_count: int = 0, oldest_lag_seconds: float | None = 
         store_binding=agents_search._ProjectorStoreBindingPayload(
             store_id=_STORE_ID,
             schema_generation=_SCHEMA_GENERATION,
+            commit_seq="1",
         ),
         lag_count=lag_count,
         indexed_through="9" if lag_count else "10",
@@ -68,6 +69,13 @@ def _resident_coverage(*, stale: bool = False) -> agents_search._EmbeddingCovera
         missing_session_ids=[],
         stale=stale,
     )
+
+
+def test_cutover_certificate_cannot_predate_active_store_binding():
+    payload = _catalog_coverage().model_dump()
+    payload["certificate"]["certified_commit_seq"] = "0"
+    with pytest.raises(ValueError, match="cannot predate"):
+        agents_search._ProjectorCoveragePayload.model_validate(payload)
 
 
 def test_rrf_merge_credits_both_lanes_for_agreeing_session():
@@ -158,6 +166,7 @@ async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(m
                 "store_binding": {
                     "store_id": _STORE_ID,
                     "schema_generation": _SCHEMA_GENERATION,
+                    "commit_seq": "1",
                 },
                 "lag_count": 1,
                 "indexed_through": "9",
@@ -200,6 +209,7 @@ async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkey
                 "store_binding": {
                     "store_id": _STORE_ID,
                     "schema_generation": _SCHEMA_GENERATION,
+                    "commit_seq": "1",
                 },
                 "lag_count": 0,
                 "indexed_through": "10",
