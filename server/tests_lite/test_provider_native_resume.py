@@ -528,6 +528,33 @@ def test_codex_native_resume_tui_uses_the_bridge_provider_home(
     assert environment["LONGHOUSE_MANAGED_SESSION_ID"] == "session-1"
 
 
+def test_codex_initial_bridge_reuses_the_shipper_isolation_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    evidence_root = tmp_path / "evidence"
+    isolation_root = tmp_path / "isolation"
+    seen: dict[str, object] = {}
+
+    def fake_start(*_args: object, **kwargs: object) -> tuple[dict[str, object], subprocess.CompletedProcess[str], Path]:
+        seen.update(kwargs)
+        root = kwargs["isolation_root"]
+        assert isinstance(root, Path)
+        return {}, subprocess.CompletedProcess([], 0), root
+
+    monkeypatch.setattr(codex_native_resume.bridge_canary, "_start_bridge", fake_start)
+
+    codex_native_resume._start_initial_bridge(
+        args,
+        evidence_root=evidence_root,
+        codex_bin=str(args.provider_bin),
+        isolation_root=isolation_root,
+    )
+
+    assert seen["isolation_root"] == isolation_root
+
+
 def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:
     isolation_root = tmp_path / "isolation"
     workspace = isolation_root / "workspace"

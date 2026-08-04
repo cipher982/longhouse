@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -528,6 +529,25 @@ def _native_resume_tui_environment(isolation_root: Path, session_id: str) -> dic
     return environment
 
 
+def _start_initial_bridge(
+    args: argparse.Namespace,
+    *,
+    evidence_root: Path,
+    codex_bin: str,
+    isolation_root: Path,
+) -> tuple[dict[str, Any], subprocess.CompletedProcess[str], Path]:
+    """Start the initial bridge in the shipper's already-enrolled root."""
+
+    return bridge_canary._start_bridge(
+        args,
+        evidence_root=evidence_root,
+        codex_bin=codex_bin,
+        launch_mode="detached_ui",
+        isolation_root=isolation_root,
+        register_managed=True,
+    )
+
+
 def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -563,13 +583,11 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             longhouse_home=isolation_root / "longhouse",
         )
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
-        initial_summary, _, isolation_root = bridge_canary._start_bridge(
+        initial_summary, _, isolation_root = _start_initial_bridge(
             args,
             evidence_root=root,
             codex_bin=str(args.codex_bin),
-            launch_mode="detached_ui",
             isolation_root=isolation_root,
-            register_managed=True,
         )
         session_id = str(initial_summary.get("session_id") or "")
         initial_state_file = Path(str(initial_summary.get("state_file") or ""))
