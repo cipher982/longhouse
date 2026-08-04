@@ -8280,10 +8280,10 @@ class CatalogStore:
                     updated_at=observed_at,
                 )
             )
-            connection.execute(delete(certificates).where(certificates.c.projector == projector))
+            certificate_revoked = bool(connection.execute(delete(certificates).where(certificates.c.projector == projector)).rowcount)
             return {
                 "changed": True,
-                "certificate_revoked": True,
+                "certificate_revoked": certificate_revoked,
                 "requeued_session_ids": changed,
                 "missing_session_ids": [],
                 "commit_seq": str(commit_seq),
