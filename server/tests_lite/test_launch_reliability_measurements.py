@@ -72,9 +72,11 @@ def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Pa
     assert matrix["successful_recovery_count"] == 2
     assert matrix["retry_drain_rate"] == 1.0
     assert matrix["cleanup_pass_rate"] == 1.0
-    assert len(matrix["auth_precondition_runs"]) == 1
-    assert len(matrix["provider_owned_failure_runs"]) == 1
-    assert matrix["startup_failure_totals"] == {"harness_precondition": 1, "provider_owned": 1, "unknown": 0}
+    attribution = matrix["startup_failure_attribution"]
+    assert attribution["scope"] == "measured_clean_runs"
+    assert len(attribution["auth_precondition_runs"]) == 1
+    assert len(attribution["provider_owned_failure_runs"]) == 1
+    assert attribution["totals"] == {"harness_precondition": 1, "provider_owned": 1, "unknown": 0}
     assert matrix["history"][0]["startup_failures"]["harness_precondition"] == 1
     assert matrix["history"][1]["startup_failures"]["provider_owned"] == 1
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
@@ -147,3 +149,16 @@ def test_malformed_provider_harness_marks_report_invalid(tmp_path: Path):
     assert report["inputs"]["invalid_artifacts"] == [
         {"path": str(harness), "error": "provider harness artifact has no results list"}
     ]
+
+
+def test_dirty_harness_is_not_a_measured_clean_run(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["harness"]["repository_dirty"] = True
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["measures"]["automatic_recovery_time"]["status"] == "not_observed"

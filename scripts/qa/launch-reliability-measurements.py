@@ -20,6 +20,7 @@ from typing import Any, Iterable
 
 
 MATRIX_FILENAME = "installed-managed-launch-fault-matrix.json"
+EXPECTED_PROVIDERS = frozenset({"claude", "codex", "cursor", "opencode"})
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -58,7 +59,12 @@ def discover_matrix_artifacts(inputs: Iterable[Path]) -> list[Path]:
 
 
 def _is_full_run(artifact: dict[str, Any]) -> bool:
-    return len(artifact.get("providers") or []) >= 8 and artifact.get("artifact_kind") == "installed_managed_launch_fault_matrix"
+    providers = {str(entry.get("provider") or "") for entry in artifact.get("providers") or [] if isinstance(entry, dict)}
+    return (
+        len(artifact.get("providers") or []) >= 8
+        and EXPECTED_PROVIDERS.issubset(providers)
+        and artifact.get("artifact_kind") == "installed_managed_launch_fault_matrix"
+    )
 
 
 def _cleanup_statuses(artifact: dict[str, Any]) -> list[str]:
@@ -237,9 +243,12 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
                 if measured and sum(len(_cleanup_statuses(artifact)) for _, artifact in measured)
                 else None
             ),
-            "auth_precondition_runs": auth_gap_runs,
-            "provider_owned_failure_runs": provider_failures,
-            "startup_failure_totals": dict(sorted(startup_failure_totals.items())),
+            "startup_failure_attribution": {
+                "scope": "measured_clean_runs",
+                "auth_precondition_runs": auth_gap_runs,
+                "provider_owned_failure_runs": provider_failures,
+                "totals": dict(sorted(startup_failure_totals.items())),
+            },
             "recovery_duration_seconds": {
                 "count": len(recovery_seconds),
                 "min": min(recovery_seconds) if recovery_seconds else None,
