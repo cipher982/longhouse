@@ -1310,6 +1310,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             for intent in retry_intents
             if intent.get("provider_ready") is True
         ]
+        ready_ids = set(ready_session_ids)
         unready_session_ids = [
             str(intent["expected_session_id"])
             for intent in retry_intents
@@ -1365,12 +1366,6 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     "during the outage"
                 )
             preserved_retry_count = len(current_retry_intents)
-
-            ready_ids = {
-                str(intent.get("expected_session_id"))
-                for intent in retry_intents
-                if intent.get("provider_ready") is True
-            }
 
             def cold_retry_progress() -> bool:
                 return any(
