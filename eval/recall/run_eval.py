@@ -221,8 +221,24 @@ class Report:
             for snapshot in snapshots
         }
         observed_at = sorted(str(snapshot["catalog_observed_at"]) for snapshot in snapshots)
+        defect_fields = (
+            "invalid_vectors",
+            "unnormalized_vectors",
+            "unlocatable_episodes",
+            "episode_count_mismatches",
+        )
+        coverage_complete = all(
+            snapshot["ready"] is True
+            and int(snapshot["catalog_lag_count"]) == 0
+            and snapshot["catalog_indexed_through"] == snapshot["catalog_commit_seq"]
+            and int(snapshot["expected_sessions"]) == int(snapshot["published_sessions"])
+            and int(snapshot["expected_episodes"]) == int(snapshot["current_episodes"])
+            and all(int(snapshot[field_name]) == 0 for field_name in defect_fields)
+            and not snapshot["missing_session_ids"]
+            for snapshot in snapshots
+        )
         return {
-            "status": "complete",
+            "status": "complete" if coverage_complete else "incomplete",
             "consistent_projector": len(projectors) == 1,
             "projectors": projectors,
             "response_count": len(snapshots),
@@ -232,11 +248,11 @@ class Report:
             "expected_episodes": numeric_range("expected_episodes"),
             "observed_at": {"first": observed_at[0], "last": observed_at[-1]},
             "resident_defects": {
-                "invalid_vectors": 0,
-                "unnormalized_vectors": 0,
-                "unlocatable_episodes": 0,
-                "episode_count_mismatches": 0,
-                "missing_sessions": 0,
+                **{field_name: numeric_range(field_name) for field_name in defect_fields},
+                "missing_sessions": {
+                    "min": min(len(snapshot["missing_session_ids"]) for snapshot in snapshots),
+                    "max": max(len(snapshot["missing_session_ids"]) for snapshot in snapshots),
+                },
             },
         }
 
@@ -262,6 +278,16 @@ def load_queries() -> tuple[list[Query], set[str]]:
             )
         )
     return queries, excluded
+
+
+def _without_excluded_sessions(session_ids: list[str], excluded_prefixes: set[str]) -> list[str]:
+    """Remove benchmark-producing sessions using the prefix labels stored by the eval."""
+
+    return [
+        session_id
+        for session_id in session_ids
+        if not any(session_id.startswith(prefix) for prefix in excluded_prefixes)
+    ]
 
 
 def search_recall(
@@ -430,7 +456,7 @@ def main() -> int:
             returned = [str(match.get("session_id") or "") for match in payload["matches"]]
             # Sessions that produced this work discuss retrieval itself and would
             # match every query about retrieval.
-            returned = [s for s in returned if s not in excluded]
+            returned = _without_excluded_sessions(returned, excluded)
             report.results.append(
                 Result(
                     query,
