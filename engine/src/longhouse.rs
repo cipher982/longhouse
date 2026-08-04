@@ -299,8 +299,8 @@ struct OpencodeLaunchArgs {
     /// Resume an ended managed OpenCode Helm session without changing its provider session.
     #[arg(long)]
     resume_session: Option<String>,
-    #[arg(long, alias = "config-dir")]
-    claude_dir: Option<PathBuf>,
+    #[arg(long = "config-dir", alias = "claude-dir")]
+    config_dir: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -341,8 +341,8 @@ struct OpencodeAttachArgs {
     session_id: String,
     #[arg(long)]
     opencode_bin: Option<String>,
-    #[arg(long, alias = "config-dir")]
-    claude_dir: Option<PathBuf>,
+    #[arg(long = "config-dir", alias = "claude-dir")]
+    config_dir: Option<PathBuf>,
 }
 #[derive(Args)]
 struct OpencodeStopArgs {
@@ -1552,7 +1552,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
     }
-    if let Some(dir) = &args.claude_dir {
+    if let Some(dir) = &args.config_dir {
         start.arg("--claude-dir").arg(dir);
     }
     if let Some(target) = &resume_target {
@@ -1565,7 +1565,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         if let Some(registration) = &degraded_registration {
             registration.mark_provider_failed();
         }
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
         anyhow::bail!(
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -1576,7 +1576,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     {
         Ok(response) => response,
         Err(error) => {
-            let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+            let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
             return Err(error);
         }
     };
@@ -1584,7 +1584,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
     {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
     if let Some(registration) = &degraded_registration {
@@ -1632,7 +1632,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         &opencode_bin,
     ]);
     let run_result = run_foreground_command(&mut attach);
-    let stop_result = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+    let stop_result = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
     let exit = finish_managed_opencode_attach(run_result, stop_result, || {
         if let Some(registration) = &degraded_registration {
             registration.mark_provider_exited();
@@ -1738,7 +1738,7 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     if let Some(bin) = args.opencode_bin {
         command.args(["--opencode-bin", &bin]);
     }
-    if let Some(dir) = args.claude_dir {
+    if let Some(dir) = args.config_dir {
         command.arg("--claude-dir").arg(dir);
     }
     let run_result = run_foreground_command(&mut command);
@@ -1756,11 +1756,11 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
 /// terminal indefinitely on exit.
 const OPENCODE_STOP_DEADLINE: Duration = Duration::from_secs(10);
 
-fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
+fn stop_opencode_bridge(session_id: &str, config_dir: Option<PathBuf>) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
     let mut command = Command::new(paired_engine_path()?);
     command.args(["opencode-bridge", "stop", "--session-id", session_id]);
-    if let Some(dir) = claude_dir {
+    if let Some(dir) = config_dir {
         command.arg("--claude-dir").arg(dir);
     }
     let mut child = command
@@ -4543,6 +4543,19 @@ mod tests {
         };
         assert!(command.is_none());
         assert_eq!(launch.claude_dir.unwrap(), PathBuf::from("/tmp/claude"));
+    }
+
+    #[test]
+    fn opencode_parser_uses_provider_neutral_config_dir() {
+        for flag in ["--config-dir", "--claude-dir"] {
+            let cli =
+                Cli::try_parse_from(["longhouse", "opencode", flag, "/tmp/opencode"]).unwrap();
+            let Commands::Opencode { command, launch } = cli.command.unwrap() else {
+                panic!("expected opencode command");
+            };
+            assert!(command.is_none());
+            assert_eq!(launch.config_dir.unwrap(), PathBuf::from("/tmp/opencode"));
+        }
     }
 
     #[test]
