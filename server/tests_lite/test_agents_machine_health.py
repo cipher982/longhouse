@@ -612,6 +612,7 @@ def test_machine_health_route_filters_by_device_and_marks_stale_rows_offline(tmp
         assert offline_machine["status"] == "offline"
         assert offline_machine["status_reason"] == "reported_offline"
         assert offline_machine["is_offline"] is True
+        assert offline_machine["suggested_action_ids"] == ["inspect_transport"]
     finally:
         api_app_ref.dependency_overrides = {}
 

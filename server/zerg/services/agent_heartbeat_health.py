@@ -32,6 +32,32 @@ _STATE_SORT_ORDER = {
     "healthy": 3,
 }
 
+_MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
+    "heartbeat_stale": "inspect_transport",
+    "reported_offline": "inspect_transport",
+    "connect_errors": "inspect_transport",
+    "server_errors": "inspect_transport",
+    "rate_limited": "inspect_transport",
+    "retryable_client_errors": "inspect_transport",
+    "payload_rejected": "inspect_shipping",
+    "payload_too_large": "inspect_shipping",
+    "parse_errors": "inspect_shipping",
+    "consecutive_failures": "inspect_shipping",
+    "spool_dead": "inspect_shipping",
+    "archive_dead_lettered": "inspect_archive",
+}
+
+
+def suggested_action_ids_for_machine_reasons(reasons: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    action_ids: list[str] = []
+    for reason in reasons:
+        action_id = _MACHINE_ACTION_IDS_BY_REASON.get(reason)
+        if action_id is not None and action_id not in action_ids:
+            action_ids.append(action_id)
+    if reasons and not action_ids:
+        action_ids.append("inspect_transport")
+    return tuple(action_ids)
+
 
 @dataclass(frozen=True)
 class MachineTransportHealthSummary:
@@ -45,6 +71,7 @@ class MachineTransportHealthSummary:
     status_reason: str
     status_summary: str
     reasons: tuple[str, ...]
+    suggested_action_ids: tuple[str, ...]
     last_ship_at: datetime | None
     last_ship_attempt_at: datetime | None
     last_ship_result: str | None
@@ -271,6 +298,7 @@ def build_machine_transport_health_summary(
         heartbeat_status_summary,
         archive_repair=archive_repair,
     )
+    suggested_action_ids = suggested_action_ids_for_machine_reasons(reasons)
 
     return MachineTransportHealthSummary(
         device_id=row.device_id,
@@ -283,6 +311,7 @@ def build_machine_transport_health_summary(
         status_reason=status_reason,
         status_summary=status_summary,
         reasons=tuple(reasons),
+        suggested_action_ids=suggested_action_ids,
         last_ship_at=normalize_utc(row.last_ship_at),
         last_ship_attempt_at=normalize_utc(row.last_ship_attempt_at),
         last_ship_result=row.last_ship_result,

@@ -28,6 +28,7 @@ class MachineHealthItemResponse(UTCBaseModel):
     status_reason: str
     status_summary: str
     reasons: list[str]
+    suggested_action_ids: list[str] = Field(default_factory=list)
     last_ship_at: datetime | None = None
     last_ship_attempt_at: datetime | None = None
     last_ship_result: str | None = None

@@ -6122,6 +6122,8 @@ export interface components {
             status_summary: string;
             /** Reasons */
             reasons: string[];
+            /** Suggested Action Ids */
+            suggested_action_ids?: string[];
             /** Last Ship At */
             last_ship_at?: string | null;
             /** Last Ship Attempt At */
@@ -6621,6 +6623,11 @@ export interface components {
              * @description Optional client-minted session UUID for Degraded Helm. Retries and later convergence must reuse this identity instead of minting a replacement.
              */
             session_id?: string | null;
+            /**
+             * Provider Session Id
+             * @description Optional client-minted provider-native identity for degraded Helm convergence
+             */
+            provider_session_id?: string | null;
             /**
              * Resume Attempt Id
              * @description Idempotency identity for an explicit managed-session resume
