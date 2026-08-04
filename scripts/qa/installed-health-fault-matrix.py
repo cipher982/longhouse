@@ -361,6 +361,11 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                     "expected the installed unresolved-source action to preserve the "
                     f"source epoch, got {suggested_actions!r}"
                 )
+            if observed["payload"].get("headline") != "Longhouse has unresolved durable source evidence":
+                raise AssertionError(
+                    "expected the installed unresolved-source headline to be precise, "
+                    f"got {observed['payload'].get('headline')!r}"
+                )
         return {"case": case, "expected": expected, "observed": observed["payload"]}
 
 

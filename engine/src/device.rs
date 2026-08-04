@@ -897,10 +897,17 @@ fn native_fast_health_from_parts(
     }
     .to_string();
 
-    let headline = match health_state.as_str() {
-        "healthy" => "Longhouse native fast health is healthy",
-        "degraded" => "Longhouse native fast health needs attention",
-        _ => "Longhouse native fast health is broken",
+    let headline = if reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_sources_unresolved")
+    {
+        "Longhouse has unresolved durable source evidence"
+    } else {
+        match health_state.as_str() {
+            "healthy" => "Longhouse native fast health is healthy",
+            "degraded" => "Longhouse native fast health needs attention",
+            _ => "Longhouse native fast health is broken",
+        }
     }
     .to_string();
 
@@ -3879,6 +3886,7 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_unresolved".to_string()));
+        assert_eq!(health.headline, "Longhouse has unresolved durable source evidence");
     }
 
     #[test]
