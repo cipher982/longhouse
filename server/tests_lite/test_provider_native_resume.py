@@ -20,8 +20,8 @@ from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
-from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _claude_input_prompt_visible
+from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
@@ -293,13 +293,16 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
         "_api_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(missing),
     )
-    assert _wait_session_tail(
-        "https://runtime.example",
-        "device-token",
-        "session-1",
-        timeout=0.01,
-        allow_unprojected=True,
-    ) == {}
+    assert (
+        _wait_session_tail(
+            "https://runtime.example",
+            "device-token",
+            "session-1",
+            timeout=0.01,
+            allow_unprojected=True,
+        )
+        == {}
+    )
 
 
 def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
@@ -992,13 +995,11 @@ def test_claude_initial_seed_uses_managed_channel_control(tmp_path: Path, monkey
 
     assert result["method"] == "longhouse_control"
     assert result["returncode"] == 0
-    assert commands == [
-        [str(args.engine), "claude-channel", "send", "--session-id", "session-1", "--text", "seed"]
-    ]
+    assert commands == [[str(args.engine), "claude-channel", "send", "--session-id", "session-1", "--text", "seed"]]
     assert process.sent == []
 
 
-def test_claude_response_correlation_returns_measured_facts(
+def test_response_correlation_returns_measured_facts_for_strict_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     marker = "MARKER"
@@ -1006,7 +1007,7 @@ def test_claude_response_correlation_returns_measured_facts(
         "events": [
             {"role": "assistant", "content": "prior"},
             {"role": "user", "content": marker},
-            {"role": "assistant", "content": "new response"},
+            {"role": "assistant", "content": f"Reply exactly {marker} and nothing else."},
         ]
     }
     monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: tail)
@@ -1019,18 +1020,51 @@ def test_claude_response_correlation_returns_measured_facts(
         prior_assistant_event_digests=provider_native_resume._assistant_event_digests(
             {"events": [{"role": "assistant", "content": "prior"}]}
         ),
+        require_assistant_marker=True,
         timeout=1,
     )
 
     assert observed_tail == tail
     assert correlation == {
-        "method": "transcript_marker_then_new_assistant_event",
+        "method": "assistant_marker_then_new_assistant_event",
         "marker_observed_in_transcript": True,
+        "marker_observed_in_assistant": True,
         "prior_assistant_events": 1,
         "observed_assistant_events": 2,
         "new_assistant_events": 1,
         "timed_out": False,
     }
+
+
+def test_strict_response_correlation_rejects_unrelated_assistant_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tail = {
+        "events": [
+            {"role": "user", "content": "MARKER"},
+            {"role": "assistant", "content": "unrelated response"},
+        ]
+    }
+    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: tail)
+    ticks = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+
+    _observed_tail, correlation = _wait_assistant_response_after_marker(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        "MARKER",
+        prior_assistant_event_digests=set(),
+        require_assistant_marker=True,
+        timeout=1,
+    )
+
+    assert correlation["method"] == "assistant_marker_then_new_assistant_event"
+    assert correlation["marker_observed_in_transcript"] is True
+    assert correlation["marker_observed_in_assistant"] is False
+    assert correlation["new_assistant_events"] == 1
+    assert correlation["timed_out"] is True
 
 
 def test_claude_response_correlation_returns_false_facts_on_timeout(
@@ -1055,6 +1089,7 @@ def test_claude_response_correlation_returns_false_facts_on_timeout(
     )
 
     assert correlation["marker_observed_in_transcript"] is True
+    assert correlation["marker_observed_in_assistant"] is False
     assert correlation["new_assistant_events"] == 0
     assert correlation["timed_out"] is True
 
