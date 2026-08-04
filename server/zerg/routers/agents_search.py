@@ -30,6 +30,7 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_views import RECALL_COVERAGE_MAX_NAMED_SESSIONS
@@ -775,7 +776,10 @@ async def search_storage_v2_semantic_sessions(
     unreadable = 0
     for projection, match in zip(projected, matches, strict=True):
         if isinstance(projection, BaseException):
-            if not isinstance(projection, (CatalogRemoteError, CatalogUnavailable)):
+            # `read_live_catalog_session` re-raises catalogd faults as
+            # CatalogReadError, so catching only the client-level types missed
+            # the one that actually reaches here.
+            if not isinstance(projection, (CatalogReadError, CatalogRemoteError, CatalogUnavailable)):
                 raise projection
             unreadable += 1
             continue
