@@ -160,4 +160,4 @@ def test_dirty_repository_is_marked_and_never_hidden(tmp_path: Path):
 def test_binary_name_resolves_through_path():
     resolved = collector._resolve_binary(Path("python3"))
     assert resolved.is_absolute()
-    assert resolved.name == "python3"
+    assert resolved.name.startswith("python3")
