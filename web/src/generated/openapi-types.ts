@@ -7779,17 +7779,24 @@ export interface components {
             ready: true;
             /** Projector */
             projector: string;
-            /**
-             * Catalog Lag Count
-             * @constant
-             */
-            catalog_lag_count: 0;
+            /** Cutover Certified Commit Seq */
+            cutover_certified_commit_seq: string;
+            /** Cutover Certified At */
+            cutover_certified_at: string;
+            /** Catalog Lag Count */
+            catalog_lag_count: number;
             /** Catalog Indexed Through */
             catalog_indexed_through: string;
+            /** Catalog Oldest Lag At */
+            catalog_oldest_lag_at?: string | null;
+            /** Catalog Oldest Lag Seconds */
+            catalog_oldest_lag_seconds?: number | null;
             /** Catalog Commit Seq */
             catalog_commit_seq: string;
             /** Catalog Observed At */
             catalog_observed_at: string;
+            /** Resident Stale */
+            resident_stale: boolean;
             /** Expected Sessions */
             expected_sessions: number;
             /** Published Sessions */
