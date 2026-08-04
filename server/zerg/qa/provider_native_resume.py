@@ -982,6 +982,21 @@ def _prepare_claude_profile(
                 raise RuntimeError("Claude onboarding process exited before profile completion")
             _accept_claude_permission_prompt(process)
             compact = re.sub(r"\s+", "", _terminal_text(recording))
+            if "ClaudeCode" in compact and "Welcomeback!" in compact:
+                process.send("\x04")
+                process.wait(10)
+                return {
+                    "status": "pass",
+                    "profile": "isolated_disposable",
+                    "config_dir": str(config_dir),
+                    "completion_signal": "main_tui",
+                    "has_completed_onboarding": False,
+                    "theme_attempts": theme_attempts,
+                    "api_key_attempts": api_key_attempts,
+                    "security_notes_attempts": security_notes_attempts,
+                    "trust_confirmed": confirmed_trust,
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                }
             if theme_attempts == 0 and "Choosethetextstyle" in compact:
                 process.send("\r")
                 theme_attempts += 1

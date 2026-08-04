@@ -284,6 +284,55 @@ def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -
     assert state in _state_candidates(SPECS["claude"], tmp_path)
 
 
+def test_claude_profile_bootstrap_accepts_observed_main_tui_as_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePtyProcess:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.process = SimpleNamespace(poll=lambda: None)
+            self.sent: list[str] = []
+            self.recording = Path(str(_kwargs["recording"]))
+            self.claude_permission_acceptance_sent = False
+
+        def drain(self) -> None:
+            pass
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+        def wait(self, _timeout: float) -> int:
+            return 0
+
+        def kill_group(self, _signal: int) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    moments = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(provider_native_resume, "PtyProcess", FakePtyProcess)
+    monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_terminal_text",
+        lambda _recording: "Claude Code v2.1.221  Longhouse qualification bootstrap  Welcome back!",
+    )
+
+    result = provider_native_resume._prepare_claude_profile(
+        binary=tmp_path / "claude",
+        home=tmp_path / "home",
+        workspace=tmp_path,
+        environment={},
+        recording=tmp_path / "recording.tty",
+        timeout=1.0,
+    )
+
+    assert result["status"] == "pass"
+    assert result["completion_signal"] == "main_tui"
+
+
 def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
     receipt = tmp_path / "receipt.json"
     write_codex_json(receipt, {"path": tmp_path / "provider"})
