@@ -31,6 +31,8 @@ from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
+from zerg.qa.provider_native_resume import _resume_marker
+from zerg.qa.provider_native_resume import _resume_marker_prompt
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
@@ -368,6 +370,23 @@ def test_cursor_readiness_rejects_the_trust_transition_and_accepts_the_prompt() 
     assert _cursor_tui_input_ready("Workspace Trust Required [a] Trust this workspace") is False
     assert _cursor_tui_input_ready("Cursor Agent — Plan, search, build anything") is True
     assert _cursor_tui_input_ready("Cursor Agent — Trusting workspace...") is False
+
+
+def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> None:
+    marker = _resume_marker("cursor", "SEED")
+
+    assert marker.startswith("LH_CURSOR_SEED_")
+    assert len(marker.rsplit("_", 1)[-1]) == 10
+    assert len(marker) < 32
+    assert _resume_marker_prompt("cursor", marker) == f"Reply with exactly {marker} and no other text."
+
+
+def test_other_provider_resume_markers_keep_the_long_form() -> None:
+    marker = _resume_marker("opencode", "POST")
+
+    assert marker.startswith("LONGHOUSE_OPENCODE_RESUME_POST_")
+    assert len(marker.rsplit("_", 1)[-1]) == 32
+    assert _resume_marker_prompt("opencode", marker) == f"Reply exactly {marker} and nothing else."
 
 
 def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path) -> None:

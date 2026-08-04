@@ -223,7 +223,12 @@ pub fn lifecycle(event: &str) {
         );
     }
     if matches!(event, "afterAgentResponse" | "stop" | "sessionEnd") {
-        wake_transcript(&session_id, conversation, payload.get("generation_id"));
+        wake_transcript(
+            &session_id,
+            conversation,
+            payload.get("generation_id"),
+            payload.get("transcript_path").and_then(Value::as_str),
+        );
     }
     println!("{{}}");
 }
@@ -302,21 +307,34 @@ fn rotate_cursor_conversation(
     true
 }
 
-fn wake_transcript(session_id: &str, conversation: &str, generation_id: Option<&Value>) {
+fn wake_transcript(
+    session_id: &str,
+    conversation: &str,
+    generation_id: Option<&Value>,
+    transcript_path: Option<&str>,
+) {
     let cursor_home = std::env::var_os("CURSOR_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cursor")
         });
-    let Ok(workspaces) = std::fs::read_dir(cursor_home.join("chats")) else {
-        return;
-    };
-    let stores: Vec<PathBuf> = workspaces
-        .flatten()
-        .map(|entry| entry.path().join(conversation).join("store.db"))
-        .filter(|path| path.is_file())
-        .collect();
-    let [store] = stores.as_slice() else {
+    let transcript_hint = transcript_path
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LONGHOUSE_CURSOR_TRANSCRIPT_PATH").map(PathBuf::from))
+        .filter(|path| path.is_file());
+    let transcript = transcript_hint.or_else(|| {
+        let workspaces = std::fs::read_dir(cursor_home.join("chats")).ok()?;
+        let stores: Vec<PathBuf> = workspaces
+            .flatten()
+            .map(|entry| entry.path().join(conversation).join("store.db"))
+            .filter(|path| path.is_file())
+            .collect();
+        let [store] = stores.as_slice() else {
+            return None;
+        };
+        Some(store.clone())
+    });
+    let Some(transcript) = transcript else {
         return;
     };
     let socket = home().join("agent/transcript-wake.sock");
@@ -325,14 +343,14 @@ fn wake_transcript(session_id: &str, conversation: &str, generation_id: Option<&
     };
     let _ = stream.set_write_timeout(Some(Duration::from_millis(75)));
     let observed_at_ms = Utc::now().timestamp_millis();
-    let file_len_hint = store
+    let file_len_hint = transcript
         .metadata()
         .map(|value| value.len())
         .unwrap_or_default();
     let _ = stream.write_all(
         json!({
             "provider":"cursor",
-            "path":store,
+            "path":transcript,
             "phase":"idle",
             "session_id":session_id,
             "turn_id":generation_id,

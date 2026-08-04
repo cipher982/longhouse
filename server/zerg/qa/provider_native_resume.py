@@ -383,6 +383,7 @@ class PtyProcess:
         self.claude_development_channel_acceptance_sent = False
         self.claude_development_channel_prompt_seen_at: float | None = None
         self.cursor_workspace_trust_sent = False
+        self._closed = False
         self.recording.parent.mkdir(parents=True, exist_ok=True)
         self._stream = self.recording.open("ab", buffering=0)
         self.process = subprocess.Popen(
@@ -458,12 +459,25 @@ class PtyProcess:
             os.killpg(self.process.pid, sig)
 
     def close(self) -> None:
-        self.drain()
-        self._stream.close()
+        if self._closed:
+            return
+        try:
+            self.drain()
+        finally:
+            self._stream.close()
+            self._closed = True
         try:
             os.close(self.master)
         except OSError:
             pass
+
+
+def _close_recordings(processes: tuple[PtyProcess | None, ...]) -> None:
+    """Close PTY recording streams before hashing the evidence manifest."""
+
+    for process in processes:
+        if process is not None:
+            process.close()
 
 
 def _now() -> str:
@@ -1668,6 +1682,34 @@ def _cursor_bootstrap_prompt() -> str:
     return "Reply with exactly READY and nothing else. Do not use tools or inspect files."
 
 
+def _resume_marker(provider: str, phase: str) -> str:
+    """Create a provider-safe live transcript marker.
+
+    Cursor's interactive model reliably answers the short, human-readable
+    bootstrap token but may silently complete a prompt containing a long
+    UUID-bearing instruction. Keep Cursor's marker compact while retaining
+    enough entropy to distinguish turns in the hosted transcript. Other
+    providers keep the longer marker used by their existing canaries.
+    """
+
+    if provider == "cursor":
+        return f"LH_CURSOR_{phase}_{uuid.uuid4().hex[:10]}"
+    legacy_phase = {
+        "SEED": "RESUME_SEED",
+        "STALE": "STALE",
+        "POST": "RESUME_POST",
+    }[phase]
+    return f"LONGHOUSE_{provider.upper()}_{legacy_phase}_{uuid.uuid4().hex}"
+
+
+def _resume_marker_prompt(provider: str, marker: str) -> str:
+    """Return wording that makes the marker response deterministic."""
+
+    if provider == "cursor":
+        return f"Reply with exactly {marker} and no other text."
+    return f"Reply exactly {marker} and nothing else."
+
+
 def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, *, force: bool) -> dict[str, Any]:
     pid = process.pid
     provider_pid = _provider_process_pid(spec, state)
@@ -1974,7 +2016,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         states.append(initial_state)
         _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         initial_provider_pid = _provider_process_pid(spec, initial_state)
-        seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
+        seed_marker = _resume_marker(provider, "SEED")
         initial_prior_tail = _wait_session_tail(
             args.api_url,
             args.agents_token,
@@ -2007,7 +2049,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 args,
                 initial_state,
                 initial,
-                f"Reply exactly {seed_marker} and nothing else.",
+                _resume_marker_prompt(provider, seed_marker),
             )
         else:
             initial_send = _control_send(
@@ -2015,7 +2057,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 args,
                 initial_state,
                 initial,
-                f"Reply exactly {seed_marker} and nothing else.",
+                _resume_marker_prompt(provider, seed_marker),
                 initial=True,
             )
         _write_json(root / "initial-seed-send.json", initial_send)
@@ -2049,9 +2091,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         # otherwise the catalog can still report run_active/contract_missing
         # even though the provider owner is already dead.
         _write_json(root / "post-stop-transcript-ship-receipt.json", shipper.flush("post-stop"))
-        stale_marker = f"LONGHOUSE_{provider.upper()}_STALE_{uuid.uuid4().hex}"
+        stale_marker = _resume_marker(provider, "STALE")
         try:
-            _control_send(spec, args, initial_state, initial, f"Reply exactly {stale_marker} and nothing else.")
+            _control_send(spec, args, initial_state, initial, _resume_marker_prompt(provider, stale_marker))
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             stale = {"marker": stale_marker, "rejected": True, "error": f"{type(exc).__name__}: {exc}"}
         else:
@@ -2113,14 +2155,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
-        post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
+        post_marker = _resume_marker(provider, "POST")
         prior_tail = _wait_session_tail(
             args.api_url,
             args.agents_token,
             resumed_state["session_id"],
         )
         prior_assistant_event_digests = _assistant_event_digests(prior_tail)
-        post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")
+        post_send = _control_send(spec, args, resumed_state, resumed, _resume_marker_prompt(provider, post_marker))
         _write_json(root / "post-resume-send.json", post_send)
         _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
         resumed_tail, response_correlation = _wait_assistant_response_after_marker(
@@ -2168,6 +2210,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _close_recordings((concurrent, resumed, initial))
         redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         observation = {
             "variant": args.variant,
@@ -2234,6 +2277,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _close_recordings((concurrent, resumed, initial))
         redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         failure = {
             "schema_version": 1,
@@ -2259,10 +2303,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if not final_cleanup.get("verified"):
             final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
             _write_json(root / "cleanup-receipt.json", final_cleanup)
-        for process in (concurrent, resumed, initial):
-            if process is None:
-                continue
-            process.close()
+        _close_recordings((concurrent, resumed, initial))
 
 
 def parser() -> argparse.ArgumentParser:

@@ -87,6 +87,11 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             extension: "db",
         },
         ProviderConfig {
+            name: "cursor",
+            root: home.join(".cursor").join("projects"),
+            extension: "jsonl",
+        },
+        ProviderConfig {
             name: "cursor_acp",
             root: home
                 .join(".longhouse")
@@ -217,6 +222,12 @@ fn source_wal_bytes(provider: &ProviderConfig, path: &Path) -> (u64, u64) {
     if provider.name != "opencode" && provider.name != "cursor" {
         return (0, 0);
     }
+    if !matches!(
+        path.file_name().and_then(|value| value.to_str()),
+        Some("opencode.db") | Some("store.db")
+    ) {
+        return (0, 0);
+    }
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
         return (0, 1);
     };
@@ -269,6 +280,9 @@ pub fn session_path_for_watcher_event(
             if let Some(db_path) = cursor_database_path_for_event(path) {
                 return Some((db_path, provider.name));
             }
+            if is_provider_session_file(provider, path) {
+                return Some((path.to_path_buf(), provider.name));
+            }
             continue;
         }
         if is_provider_session_file(provider, path) {
@@ -304,7 +318,14 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
         return path.file_name().and_then(|name| name.to_str()) == Some("opencode.db");
     }
     if provider.name == "cursor" {
-        return path.file_name().and_then(|name| name.to_str()) == Some("store.db");
+        if path.file_name().and_then(|name| name.to_str()) == Some("store.db") {
+            return true;
+        }
+        return provider.extension == "jsonl"
+            && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+            && path
+                .components()
+                .any(|component| component.as_os_str() == "agent-transcripts");
     }
     if provider.name == "cursor_acp" {
         return path.extension().and_then(|value| value.to_str()) == Some("jsonl");
@@ -447,6 +468,22 @@ mod tests {
     }
 
     #[test]
+    fn cursor_agent_transcript_jsonl_is_discovered_beside_store_db() {
+        let home = PathBuf::from("/tmp/home");
+        let providers = provider_candidates(&home, Path::new("/tmp/claude"));
+        let transcript = home
+            .join(".cursor/projects/workspace/agent-transcripts")
+            .join(
+                "019c638d-0000-0000-0000-000000000099/019c638d-0000-0000-0000-000000000099.jsonl",
+            );
+        assert_eq!(provider_for_path(&transcript, &providers), Some("cursor"));
+        assert_eq!(
+            session_path_for_watcher_event(&transcript, &providers),
+            Some((transcript, "cursor"))
+        );
+    }
+
+    #[test]
     fn workflow_agent_transcript_is_discovered_as_claude_session() {
         // INVARIANT (must stay true across all phases): agent-*.jsonl ARE real
         // subagent transcripts and must always be discovered.
@@ -522,8 +559,9 @@ mod tests {
             home.join(".local").join("share").join("opencode")
         );
         assert_eq!(providers[5].root, home.join(".cursor").join("chats"));
+        assert_eq!(providers[6].root, home.join(".cursor").join("projects"));
         assert_eq!(
-            providers[6].root,
+            providers[7].root,
             home.join(".longhouse")
                 .join("agent")
                 .join("cursor-acp-source")
