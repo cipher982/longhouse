@@ -81,7 +81,7 @@ extension HealthSnapshot {
             "storage_v2_outbox_unreadable",
             "storage_v2_sources_unresolved",
             "engine_status_unreadable", "orphaned_managed_bridge",
-            "managed_launch_recovery_exhausted", "managed_launch_recovery_unreadable",
+            "managed_launch_recovery_unreadable",
             "service_stopped", "spool_dead", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
@@ -92,6 +92,7 @@ extension HealthSnapshot {
             "archive_dead_lettered", "archive_repair_paused", "orphaned_managed_bridge",
             "managed_session_control_degraded", "provider_release_blocked",
             "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
+            "managed_launch_recovery_exhausted",
             "consecutive_failures", "connect_errors", "server_errors",
             "rate_limited", "retryable_client_errors",
         ]
@@ -146,6 +147,8 @@ extension HealthSnapshot {
             headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where storageBlockProofUnknown:
             headline = "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+        case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
+            headline = "Managed session recovery needs attention"
         case .inspect where degraded > 0:
             headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
         case .inspect where shippingFailures > 0:

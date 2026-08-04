@@ -927,11 +927,6 @@ fn native_fast_health_from_parts(
         "Longhouse has unresolved durable source evidence"
     } else if reasons
         .iter()
-        .any(|reason| reason == "managed_launch_recovery_exhausted")
-    {
-        "Managed session recovery needs attention"
-    } else if reasons
-        .iter()
         .any(|reason| reason == "managed_launch_recovery_unreadable")
     {
         "Managed session recovery state is unreadable"
@@ -940,6 +935,11 @@ fn native_fast_health_from_parts(
         .any(|reason| reason == "storage_v2_outbox_unreadable")
     {
         "Source upload state unavailable"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_exhausted")
+    {
+        "Managed session recovery needs attention"
     } else {
         match health_state.as_str() {
             "healthy" => "Longhouse native fast health is healthy",
@@ -3913,6 +3913,38 @@ mod tests {
             native_desktop_suggested_action_ids(&health.reasons),
             vec!["inspect_storage_outbox"]
         );
+    }
+
+    #[test]
+    fn native_fast_local_health_prioritizes_broken_outbox_headline_over_exhausted_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let retry_dir = path
+            .parent()
+            .unwrap()
+            .join("managed-local")
+            .join("registration-retries");
+        std::fs::create_dir_all(&retry_dir).unwrap();
+        std::fs::write(
+            retry_dir.join("exhausted.json"),
+            r#"{"recovery_exhausted":true}"#,
+        )
+        .unwrap();
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {"error": "database locked"}
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert_eq!(health.headline, "Source upload state unavailable");
+        assert!(health
+            .reasons
+            .contains(&"managed_launch_recovery_exhausted".to_string()));
     }
 
     #[test]

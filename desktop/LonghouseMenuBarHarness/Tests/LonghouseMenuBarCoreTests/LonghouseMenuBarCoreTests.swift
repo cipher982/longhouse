@@ -226,6 +226,19 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func exhaustedManagedRecoveryStaysAmberAndSpecific() {
+        let snapshot = presentationSnapshot(
+            reasons: ["managed_launch_recovery_exhausted"],
+            sessions: []
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Managed session recovery needs attention")
+    }
+
+    @Test
     func unresolvedSourceRemainsRedWhenNewerConflictIsReconcilable() {
         let snapshot = presentationSnapshot(
             sessions: [],
