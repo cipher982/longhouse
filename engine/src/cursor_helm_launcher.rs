@@ -1029,9 +1029,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                         payload.clone(),
                         &session_id,
                         crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
-                    ));
+                    )?);
                     eprintln!(
-                        "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and registration will retry while this Helm wrapper remains alive ({error:#})"
+                        "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive ({error:#})"
                     );
                     ManagedLaunchResponse::degraded_from_payload(
                         &payload,
@@ -1299,13 +1299,13 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
             if let Some(registration) = &degraded_registration {
-                registration.provider_alive.store(false, Ordering::Release);
+                registration.mark_provider_failed();
             }
             return Err(error);
         }
     };
     if let Some(registration) = &degraded_registration {
-        registration.provider_alive.store(true, Ordering::Release);
+        registration.mark_provider_ready();
     }
     if let Some(transaction) = launch_transaction.as_mut() {
         transaction.confirm_in_background();
@@ -1444,7 +1444,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         libc::close(master);
     }
     if let Some(registration) = &degraded_registration {
-        registration.provider_alive.store(false, Ordering::Release);
+        registration.mark_provider_failed();
     }
     if config.open {
         if let Some(url) = hook_url.as_deref() {

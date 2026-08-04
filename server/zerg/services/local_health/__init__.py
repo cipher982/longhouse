@@ -132,6 +132,7 @@ from .classifier import _launch_health_flags
 from .classifier import _managed_health_flags
 from .classifier import _outbox_is_actionable
 from .classifier import _repair_action_for_launch_readiness
+from .classifier import _suggested_action_ids
 from .claude import _collect_provider_hook_diagnostics
 from .claude import _hook_diagnostic_event_from_payload
 from .claude import _hook_error_commands_from_payload
@@ -714,6 +715,8 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         suggested_actions=suggested_actions,
         context=attention_context,
     )
+    suggested_action_ids = _suggested_action_ids(reasons)
+    attention["suggested_action_ids"] = suggested_action_ids
     _mark_machine_preview_sessions(managed_sessions)
 
     return {
@@ -726,6 +729,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "headline": headline,
         "reasons": reasons,
         "suggested_actions": suggested_actions,
+        "suggested_action_ids": suggested_action_ids,
         "attention": attention,
         "service": service,
         "engine_status": engine_status,

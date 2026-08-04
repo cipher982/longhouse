@@ -46,6 +46,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let headline: String
     public let reasons: [String]
     public let suggestedActions: [String]
+    public let suggestedActionIds: [String]?
     public let attention: AttentionSnapshot?
     public let service: ServiceSnapshot?
     public let engineStatus: EngineStatusSnapshot?
@@ -68,6 +69,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         headline: String,
         reasons: [String],
         suggestedActions: [String],
+        suggestedActionIds: [String]? = nil,
         attention: AttentionSnapshot? = nil,
         service: ServiceSnapshot?,
         engineStatus: EngineStatusSnapshot?,
@@ -89,6 +91,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.headline = headline
         self.reasons = reasons
         self.suggestedActions = suggestedActions
+        self.suggestedActionIds = suggestedActionIds
         self.attention = attention
         self.service = service
         self.engineStatus = engineStatus
@@ -127,6 +130,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             headline: headline,
             reasons: reasons,
             suggestedActions: suggestedActions,
+            suggestedActionIds: suggestedActionIds,
             attention: attention,
             service: service,
             engineStatus: engineStatus,
@@ -489,8 +493,15 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         engineStatus?.payload?.storageV2Outbox?.latestBlockKind
     }
 
+    public var storageUnresolvedBlockCount: Int {
+        engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount ?? 0
+    }
+
     public var storageBlockRequiresRepair: Bool {
         guard storageBlockedCount > 0 else { return false }
+        if engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount != nil {
+            return storageUnresolvedBlockCount > 0
+        }
         switch storageBlockKind {
         case "source_epoch_conflict", "render_generation_revision_conflict":
             return false
@@ -1470,11 +1481,32 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
     public let pendingCount: Int?
     public let pendingBytes: UInt64?
     public let blockedSourceCount: Int?
+    public let reconcilingBlockedSourceCount: Int?
+    public let unresolvedBlockedSourceCount: Int?
     public let blockedBytes: UInt64?
     public let latestBlockKind: String?
     public let latestBlockDetail: String?
     public let byteLimit: UInt64?
     public let error: String?
+
+    public init(
+        pendingCount: Int?, pendingBytes: UInt64?, blockedSourceCount: Int?,
+        reconcilingBlockedSourceCount: Int? = nil,
+        unresolvedBlockedSourceCount: Int? = nil,
+        blockedBytes: UInt64?, latestBlockKind: String?, latestBlockDetail: String?,
+        byteLimit: UInt64?, error: String?
+    ) {
+        self.pendingCount = pendingCount
+        self.pendingBytes = pendingBytes
+        self.blockedSourceCount = blockedSourceCount
+        self.reconcilingBlockedSourceCount = reconcilingBlockedSourceCount
+        self.unresolvedBlockedSourceCount = unresolvedBlockedSourceCount
+        self.blockedBytes = blockedBytes
+        self.latestBlockKind = latestBlockKind
+        self.latestBlockDetail = latestBlockDetail
+        self.byteLimit = byteLimit
+        self.error = error
+    }
 }
 
 public struct ArchiveBacklogStatus: Codable, Equatable, Sendable {

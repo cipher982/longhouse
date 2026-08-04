@@ -29,6 +29,7 @@ from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
 from zerg.cli.sessions import continue_session
+from zerg.cli.shipping import app as shipping_app
 from zerg.cli.storage_migrate import app as storage_migrate_app
 from zerg.cli.translation import app as translation_app
 from zerg.cli.update_manager import maybe_notify_update
@@ -534,6 +535,7 @@ app.add_typer(storage_migrate_app, name="storage-migrate", help="Convert the leg
 app.add_typer(translation_app, name="translation", help="Read-only provider tool translation evaluation")
 app.add_typer(provider_app, name="provider", help="Provider contracts and automation-factory diagnostics")
 app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")
+app.add_typer(shipping_app, name="shipping", help="Durable shipping source inspection")
 
 for command in (serve, status, peers, tail, send, inbox, reply, ship, recall):
     app.command()(command)

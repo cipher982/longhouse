@@ -6,14 +6,18 @@
 //! lifecycle, not a launch abort.
 
 use anyhow::Context;
-use serde::Deserialize;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::thread;
 
+#[allow(dead_code)] // Used by the provider facade binary.
 const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
@@ -96,18 +100,69 @@ impl ManagedLaunchResponse {
     }
 }
 
-/// A bounded owner-local recovery loop for an initially unreachable Runtime
-/// Host. It never owns the provider process and is cancelled when the launch
-/// wrapper exits. Successful registration confirms the same run identity; it
-/// does not silently create a second session.
+const RETRY_SCHEMA_VERSION: u32 = 1;
+const RETRY_DIRECTORY: &str = "managed-local/registration-retries";
+
+/// A durable owner-local recovery intent for an initially unreachable Runtime
+/// Host. It never owns the provider process and only confirms the exact
+/// client-minted session after the launcher records local provider readiness.
+/// The device token is kept in a 0600 file because a detached launch may outlive
+/// the process that originally received an explicit token override.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ManagedLaunchRetryIntent {
+    schema_version: u32,
+    provider_name: String,
+    url: String,
+    token: String,
+    payload: Value,
+    expected_session_id: String,
+    expected_transport: String,
+    provider_ready: bool,
+    attempts: u32,
+    next_attempt_at: Option<String>,
+    last_error: Option<String>,
+    created_at: String,
+}
+
+/// A durable owner-local recovery handle for a managed launch. The in-memory
+/// flag remains useful while a foreground launcher is alive, while the intent
+/// file lets the daemon continue the same retry after that launcher exits.
+#[derive(Clone)]
 pub struct ManagedLaunchRegistrationRetry {
-    pub provider_alive: Arc<AtomicBool>,
-    cancel: Arc<AtomicBool>,
+    state: Arc<ManagedLaunchRetryState>,
+}
+
+struct ManagedLaunchRetryState {
+    provider_alive: Arc<AtomicBool>,
+    intent_path: PathBuf,
 }
 
 impl Drop for ManagedLaunchRegistrationRetry {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        // Claude clones this handle into the post-fork readiness callback. Do
+        // not let that short-lived clone delete the durable intent while the
+        // foreground owner still has a chance to mark the provider ready.
+        if Arc::strong_count(&self.state) == 1 && !self.state.provider_alive.load(Ordering::Acquire)
+        {
+            let _ = fs::remove_file(&self.state.intent_path);
+        }
+    }
+}
+
+impl ManagedLaunchRegistrationRetry {
+    pub fn mark_provider_ready(&self) {
+        self.state.provider_alive.store(true, Ordering::Release);
+        if let Err(error) = update_retry_intent(&self.state.intent_path, |intent| {
+            intent.provider_ready = true;
+            intent.next_attempt_at = None;
+        }) {
+            eprintln!("Longhouse warning: could not persist managed launch readiness: {error:#}");
+        }
+    }
+
+    pub fn mark_provider_failed(&self) {
+        self.state.provider_alive.store(false, Ordering::Release);
+        let _ = fs::remove_file(&self.state.intent_path);
     }
 }
 
@@ -118,107 +173,29 @@ pub fn spawn_managed_launch_registration_retry(
     payload: Value,
     expected_session_id: &str,
     expected_transport: &str,
-) -> ManagedLaunchRegistrationRetry {
-    let url = url.to_owned();
-    let token = token.to_owned();
-    let provider_name = provider_name.to_owned();
-    let expected_session_id = expected_session_id.to_owned();
-    let expected_transport = expected_transport.to_owned();
+) -> anyhow::Result<ManagedLaunchRegistrationRetry> {
+    let intent = ManagedLaunchRetryIntent {
+        schema_version: RETRY_SCHEMA_VERSION,
+        provider_name: provider_name.to_owned(),
+        url: url.to_owned(),
+        token: token.to_owned(),
+        payload,
+        expected_session_id: expected_session_id.to_owned(),
+        expected_transport: expected_transport.to_owned(),
+        provider_ready: false,
+        attempts: 0,
+        next_attempt_at: None,
+        last_error: None,
+        created_at: Utc::now().to_rfc3339(),
+    };
+    let intent_path = persist_retry_intent(&intent)?;
     let provider_alive = Arc::new(AtomicBool::new(false));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let provider_alive_for_thread = Arc::clone(&provider_alive);
-    let cancel_for_thread = Arc::clone(&cancel);
-    thread::spawn(move || {
-        let mut delay = std::time::Duration::from_secs(1);
-        for attempt in 0..16 {
-            if cancel_for_thread.load(Ordering::Acquire) {
-                return;
-            }
-            let Ok(runtime) = tokio::runtime::Runtime::new() else {
-                return;
-            };
-            match register_managed_launch_with_timeout(
-                &runtime,
-                &url,
-                &token,
-                &provider_name,
-                &payload,
-                Some(&expected_session_id),
-                std::time::Duration::from_secs(2),
-            ) {
-                Ok(response) => {
-                    if let Err(error) =
-                        response.validate_transport(&provider_name, &expected_transport)
-                    {
-                        eprintln!(
-                            "Longhouse warning: recovered {provider_name} registration returned an invalid transport: {error:#}"
-                        );
-                        return;
-                    }
-                    if let Some(expected_provider_session_id) = payload
-                        .get("provider_session_id")
-                        .and_then(Value::as_str)
-                        .filter(|value| !value.trim().is_empty())
-                    {
-                        if response.provider_session_id.as_deref()
-                            != Some(expected_provider_session_id)
-                        {
-                            eprintln!(
-                                "Longhouse warning: recovered {provider_name} registration returned a different provider identity"
-                            );
-                            return;
-                        }
-                    }
-                    let mut transaction = ManagedLaunchTransaction::new(
-                        &runtime,
-                        &url,
-                        &token,
-                        &response.session_id,
-                        &response.run_id,
-                    );
-                    while !cancel_for_thread.load(Ordering::Acquire)
-                        && !provider_alive_for_thread.load(Ordering::Acquire)
-                    {
-                        thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                    if cancel_for_thread.load(Ordering::Acquire) {
-                        return;
-                    }
-                    if let Err(error) = transaction.confirm() {
-                        eprintln!(
-                            "Longhouse warning: recovered {provider_name} registration could not be confirmed: {error:#}"
-                        );
-                    }
-                    return;
-                }
-                Err(error) if attempt < 15 => {
-                    if attempt == 0 {
-                        eprintln!(
-                            "Longhouse warning: Runtime Host is still unavailable; {provider_name} is running locally and registration will retry"
-                        );
-                    }
-                    let deadline = std::time::Instant::now() + delay;
-                    while !cancel_for_thread.load(Ordering::Acquire)
-                        && std::time::Instant::now() < deadline
-                    {
-                        thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                    delay =
-                        std::cmp::min(delay.saturating_mul(2), std::time::Duration::from_secs(60));
-                    let _ = error;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "Longhouse warning: could not recover {provider_name} Helm registration within the retry budget: {error:#}"
-                    );
-                }
-            }
-        }
-    });
-    ManagedLaunchRegistrationRetry {
-        provider_alive,
-        cancel,
-    }
+    Ok(ManagedLaunchRegistrationRetry {
+        state: Arc::new(ManagedLaunchRetryState {
+            provider_alive,
+            intent_path,
+        }),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,19 +229,6 @@ impl<'a> ManagedLaunchTransaction<'a> {
             run_id,
             confirmed: false,
         }
-    }
-
-    pub fn confirm(&mut self) -> anyhow::Result<()> {
-        self.runtime.block_on(report_launch_outcome(
-            self.url,
-            self.device_token,
-            self.session_id,
-            self.run_id,
-            LaunchOutcome::Confirmed,
-            None,
-        ))?;
-        self.confirmed = true;
-        Ok(())
     }
 
     /// Confirm without making provider terminal ownership wait on the
@@ -318,6 +282,7 @@ impl<'a> ManagedLaunchTransaction<'a> {
 /// Every provider gets the same deadline, status/body error, response decode,
 /// and launch-identity validation. Provider drivers validate only their own
 /// transport-specific fields after this returns.
+#[allow(dead_code)] // Used by the provider facade binary.
 pub fn register_managed_launch(
     runtime: &tokio::runtime::Runtime,
     url: &str,
@@ -349,34 +314,260 @@ pub fn register_managed_launch_with_timeout(
     expected_session_id: Option<&str>,
     timeout: std::time::Duration,
 ) -> anyhow::Result<ManagedLaunchResponse> {
+    runtime.block_on(register_managed_launch_async(
+        url,
+        device_token,
+        provider_name,
+        payload,
+        expected_session_id,
+        timeout,
+    ))
+}
+
+async fn register_managed_launch_async(
+    url: &str,
+    device_token: &str,
+    provider_name: &str,
+    payload: &Value,
+    expected_session_id: Option<&str>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<ManagedLaunchResponse> {
     let endpoint = format!(
         "{}/api/sessions/managed-local/this-device",
         url.trim_end_matches('/')
     );
-    let response = runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(endpoint)
-            .header("X-Agents-Token", device_token)
-            .json(payload)
-            .timeout(timeout)
-            .send()
-            .await
-            .with_context(|| format!("register managed {provider_name} launch"))?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .with_context(|| format!("read managed {provider_name} registration response"))?;
-        if !status.is_success() {
-            anyhow::bail!(
-                "managed {provider_name} launch failed ({status}): {}",
-                truncate(body.trim(), 500)
-            );
-        }
-        serde_json::from_str::<ManagedLaunchResponse>(&body)
-            .with_context(|| format!("decode managed {provider_name} registration response"))
-    })?;
+    let response = reqwest::Client::new()
+        .post(endpoint)
+        .header("X-Agents-Token", device_token)
+        .json(payload)
+        .timeout(timeout)
+        .send()
+        .await
+        .with_context(|| format!("register managed {provider_name} launch"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .with_context(|| format!("read managed {provider_name} registration response"))?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "managed {provider_name} launch failed ({status}): {}",
+            truncate(body.trim(), 500)
+        );
+    }
+    let response = serde_json::from_str::<ManagedLaunchResponse>(&body)
+        .with_context(|| format!("decode managed {provider_name} registration response"))?;
     validate_launch_identity(response, provider_name, expected_session_id)
+}
+
+fn retry_directory() -> anyhow::Result<PathBuf> {
+    Ok(longhouse_home()?.join("agent").join(RETRY_DIRECTORY))
+}
+
+fn longhouse_home() -> anyhow::Result<PathBuf> {
+    if let Some(home) = std::env::var_os("LONGHOUSE_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".longhouse"))
+}
+
+fn retry_intent_path(session_id: &str) -> anyhow::Result<PathBuf> {
+    let safe_session_id = session_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe_session_id.is_empty() {
+        anyhow::bail!("managed launch retry has no usable session identity");
+    }
+    Ok(retry_directory()?.join(format!("{}.json", safe_session_id)))
+}
+
+fn persist_retry_intent(intent: &ManagedLaunchRetryIntent) -> anyhow::Result<PathBuf> {
+    let path = retry_intent_path(&intent.expected_session_id)?;
+    persist_retry_intent_at(&path, intent)
+}
+
+fn persist_retry_intent_at(
+    path: &std::path::Path,
+    intent: &ManagedLaunchRetryIntent,
+) -> anyhow::Result<PathBuf> {
+    let directory = path
+        .parent()
+        .context("managed launch retry path has no parent")?;
+    fs::create_dir_all(directory).with_context(|| {
+        format!(
+            "create managed launch retry directory {}",
+            directory.display()
+        )
+    })?;
+    let bytes = serde_json::to_vec_pretty(intent).context("encode managed launch retry intent")?;
+    let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    fs::write(&temporary, bytes)
+        .with_context(|| format!("write managed launch retry intent {}", temporary.display()))?;
+    set_private_file_permissions(&temporary)?;
+    fs::rename(&temporary, &path)
+        .with_context(|| format!("publish managed launch retry intent {}", path.display()))?;
+    set_private_file_permissions(&path)?;
+    Ok(path.to_path_buf())
+}
+
+fn set_private_file_permissions(path: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn update_retry_intent<F>(path: &std::path::Path, update: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&mut ManagedLaunchRetryIntent),
+{
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let mut intent: ManagedLaunchRetryIntent =
+        serde_json::from_slice(&bytes).context("decode managed launch retry intent")?;
+    update(&mut intent);
+    let published = persist_retry_intent_at(path, &intent)?;
+    if published != path {
+        anyhow::bail!("managed launch retry intent path changed unexpectedly");
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // Used by the Machine Agent daemon binary.
+fn retry_due(intent: &ManagedLaunchRetryIntent, now: DateTime<Utc>) -> bool {
+    intent
+        .next_attempt_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc) <= now)
+        .unwrap_or(true)
+}
+
+#[allow(dead_code)] // Used by the Machine Agent daemon binary.
+fn retry_delay(attempts: u32) -> ChronoDuration {
+    let seconds = 2_i64.saturating_pow(attempts.min(5)).min(60);
+    ChronoDuration::seconds(seconds)
+}
+
+/// Resume durable managed-launch registration intents owned by the local
+/// Machine Agent. A provider-ready intent is safe to retry because it carries
+/// the original client-minted session identity; a response with another
+/// provider identity or transport is rejected and retained for inspection.
+#[allow(dead_code)] // The provider facade and Machine Agent are separate binaries.
+pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
+    let directory = retry_directory()?;
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).with_context(|| format!("read {}", directory.display())),
+    };
+    let mut resolved = 0usize;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "Could not read managed launch retry intent");
+                continue;
+            }
+        };
+        let mut intent: ManagedLaunchRetryIntent = match serde_json::from_slice::<
+            ManagedLaunchRetryIntent,
+        >(&bytes)
+        {
+            Ok(intent) if intent.schema_version == RETRY_SCHEMA_VERSION => intent,
+            Ok(_) => {
+                tracing::warn!(path = %path.display(), "Ignoring unsupported managed launch retry intent schema");
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "Could not decode managed launch retry intent");
+                continue;
+            }
+        };
+        if !intent.provider_ready || !retry_due(&intent, Utc::now()) {
+            continue;
+        }
+        let response = match register_managed_launch_async(
+            &intent.url,
+            &intent.token,
+            &intent.provider_name,
+            &intent.payload,
+            Some(&intent.expected_session_id),
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                intent.attempts = intent.attempts.saturating_add(1);
+                intent.last_error = Some(truncate(&format!("{error:#}"), 1000));
+                intent.next_attempt_at =
+                    Some((Utc::now() + retry_delay(intent.attempts)).to_rfc3339());
+                if let Err(update_error) = persist_retry_intent(&intent) {
+                    tracing::warn!(path = %path.display(), error = %update_error, "Could not persist managed launch retry backoff");
+                }
+                continue;
+            }
+        };
+        if let Err(error) =
+            response.validate_transport(&intent.provider_name, &intent.expected_transport)
+        {
+            intent.last_error = Some(truncate(&format!("{error:#}"), 1000));
+            intent.next_attempt_at = Some((Utc::now() + ChronoDuration::minutes(1)).to_rfc3339());
+            let _ = persist_retry_intent(&intent);
+            tracing::warn!(path = %path.display(), error = %error, "Managed launch retry returned an invalid transport");
+            continue;
+        }
+        if let Some(expected_provider_session_id) = intent
+            .payload
+            .get("provider_session_id")
+            .and_then(Value::as_str)
+            .filter(|value: &&str| !value.trim().is_empty())
+        {
+            if response.provider_session_id.as_deref() != Some(expected_provider_session_id) {
+                intent.last_error =
+                    Some("Runtime Host returned a different provider identity".into());
+                intent.next_attempt_at =
+                    Some((Utc::now() + ChronoDuration::minutes(1)).to_rfc3339());
+                let _ = persist_retry_intent(&intent);
+                tracing::warn!(path = %path.display(), "Managed launch retry returned a different provider identity");
+                continue;
+            }
+        }
+        if let Err(error) = report_launch_outcome(
+            &intent.url,
+            &intent.token,
+            &response.session_id,
+            &response.run_id,
+            LaunchOutcome::Confirmed,
+            None,
+        )
+        .await
+        {
+            intent.attempts = intent.attempts.saturating_add(1);
+            intent.last_error = Some(truncate(&format!("{error:#}"), 1000));
+            intent.next_attempt_at = Some((Utc::now() + retry_delay(intent.attempts)).to_rfc3339());
+            let _ = persist_retry_intent(&intent);
+            continue;
+        }
+        fs::remove_file(&path)
+            .with_context(|| format!("remove resolved managed launch retry {}", path.display()))?;
+        resolved = resolved.saturating_add(1);
+        tracing::info!(provider = %intent.provider_name, session_id = %intent.expected_session_id, "Recovered managed launch registration");
+    }
+    Ok(resolved)
 }
 
 fn validate_launch_identity(
@@ -550,19 +741,54 @@ mod tests {
             "provider_session_id": "22222222-2222-4222-8222-222222222222",
             "permission_mode": "provider_local"
         });
-        let response = ManagedLaunchResponse::degraded_from_payload(
-            &payload,
-            "Codex",
-            "codex_app_server",
-        )
-        .unwrap();
+        let response =
+            ManagedLaunchResponse::degraded_from_payload(&payload, "Codex", "codex_app_server")
+                .unwrap();
         assert_eq!(response.session_id, payload["session_id"]);
         assert_eq!(
             response.provider_session_id.as_deref(),
             payload["provider_session_id"].as_str()
         );
         assert_eq!(response.permission_mode.as_deref(), Some("provider_local"));
-        assert_eq!(response.managed_transport.as_deref(), Some("codex_app_server"));
+        assert_eq!(
+            response.managed_transport.as_deref(),
+            Some("codex_app_server")
+        );
         assert!(!response.run_id.is_empty());
+    }
+
+    #[test]
+    fn durable_retry_intent_preserves_readiness_and_private_permissions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("managed-local").join("retry.json");
+        let intent = ManagedLaunchRetryIntent {
+            schema_version: RETRY_SCHEMA_VERSION,
+            provider_name: "Codex".to_string(),
+            url: "http://127.0.0.1:1".to_string(),
+            token: "device-token".to_string(),
+            payload: serde_json::json!({"session_id": "session-1"}),
+            expected_session_id: "session-1".to_string(),
+            expected_transport: "codex_app_server".to_string(),
+            provider_ready: false,
+            attempts: 0,
+            next_attempt_at: None,
+            last_error: None,
+            created_at: "2026-08-03T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(persist_retry_intent_at(&path, &intent).unwrap(), path);
+        update_retry_intent(&path, |stored| stored.provider_ready = true).unwrap();
+
+        let stored: ManagedLaunchRetryIntent =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(stored.provider_ready);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 }

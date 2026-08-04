@@ -79,6 +79,7 @@ extension HealthSnapshot {
 
         let repairReasons: Set<String> = [
             "storage_v2_outbox_unreadable",
+            "storage_v2_sources_unresolved",
             "service_stopped", "spool_dead", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
@@ -115,7 +116,8 @@ extension HealthSnapshot {
         let headline: String
         switch promotion {
         case .repair where storageBlockRequiresRepair:
-            headline = "Durable upload needs inspection for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+            let count = storageUnresolvedBlockCount > 0 ? storageUnresolvedBlockCount : storageBlockedCount
+            headline = "Durable upload needs inspection for \(count) source\(count == 1 ? "" : "s")"
         case .repair where isSetupRequired:
             headline = "Finish setup on this Mac"
         case .repair where isInstallLocationBlocked:

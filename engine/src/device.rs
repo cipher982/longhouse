@@ -160,6 +160,7 @@ struct NativeDesktopHealth {
     headline: String,
     reasons: Vec<String>,
     suggested_actions: Vec<String>,
+    suggested_action_ids: Vec<String>,
     engine_status: NativeDesktopEngineStatus,
     transport: NativeTransportStatus,
     spool: NativeSpoolStatus,
@@ -668,6 +669,26 @@ fn native_fast_health_from_parts(
         .and_then(|value| value.get("blocked_source_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let unresolved_blocked_source_count = object
+        .and_then(|value| value.get("storage_v2_outbox"))
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("unresolved_blocked_source_count"))
+        .and_then(Value::as_u64);
+    let latest_block_kind = object
+        .and_then(|value| value.get("storage_v2_outbox"))
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("latest_block_kind"))
+        .and_then(Value::as_str);
+    let storage_block_requires_repair = match unresolved_blocked_source_count {
+        Some(unresolved) => unresolved > 0,
+        None => {
+            blocked_source_count > 0
+                && !matches!(
+                    latest_block_kind,
+                    Some("source_epoch_conflict" | "render_generation_revision_conflict")
+                )
+        }
+    };
     let transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
@@ -716,6 +737,9 @@ fn native_fast_health_from_parts(
     if blocked_source_count > 0 {
         reasons.push("storage_v2_sources_blocked".to_string());
     }
+    if storage_block_requires_repair {
+        reasons.push("storage_v2_sources_unresolved".to_string());
+    }
     if !matches!(
         transport.status_reason.as_str(),
         "healthy" | "transport_unavailable"
@@ -733,6 +757,7 @@ fn native_fast_health_from_parts(
                 | "payload_rejected"
                 | "payload_too_large"
         )
+        || storage_block_requires_repair
     }) {
         "broken"
     } else if reasons.is_empty() {
@@ -843,6 +868,7 @@ fn native_desktop_health_from_parts(
         engine_payload.as_ref(),
         &fast.reasons,
     );
+    let suggested_action_ids = native_desktop_suggested_action_ids(&fast.reasons);
 
     NativeDesktopHealth {
         schema_version: 1,
@@ -853,6 +879,7 @@ fn native_desktop_health_from_parts(
         headline: fast.headline,
         reasons: fast.reasons,
         suggested_actions,
+        suggested_action_ids,
         engine_status: NativeDesktopEngineStatus {
             path: fast.engine_status.path,
             exists: fast.engine_status.exists,
@@ -881,13 +908,21 @@ fn native_desktop_suggested_actions(
     reasons: &[String],
 ) -> Vec<String> {
     if reasons.iter().any(|reason| reason == "storage_v2_sources_blocked") {
-        let block_kind = engine_payload
+        let outbox = engine_payload
             .and_then(|value| value.get("storage_v2_outbox"))
-            .and_then(Value::as_object)
+            .and_then(Value::as_object);
+        let unresolved_count = outbox
+            .and_then(|value| value.get("unresolved_blocked_source_count"))
+            .and_then(Value::as_u64);
+        let block_kind = outbox
             .and_then(|value| value.get("latest_block_kind"))
             .and_then(Value::as_str);
-        return match block_kind {
-            Some("source_epoch_conflict" | "render_generation_revision_conflict") => vec![
+        return match (unresolved_count, block_kind) {
+            (Some(unresolved), _) if unresolved > 0 => vec![
+                "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
+                    .to_string(),
+            ],
+            (_, Some("source_epoch_conflict" | "render_generation_revision_conflict")) => vec![
                 "Source reconciliation is pending; inspect engine-status.json for progress."
                     .to_string(),
             ],
@@ -907,6 +942,44 @@ fn native_desktop_suggested_actions(
         ];
     }
     Vec::new()
+}
+
+fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
+    let mut action_ids = Vec::new();
+    for reason in reasons {
+        let action_id = match reason.as_str() {
+            "service_stopped" => "repair_machine",
+            "engine_status_missing"
+            | "engine_status_unreadable"
+            | "engine_status_stale"
+            | "engine_evidence_stale"
+            | "engine_reconciliation_failed" => "inspect_local_health",
+            "storage_v2_sources_blocked" | "storage_v2_sources_unresolved" => {
+                "inspect_storage_source"
+            }
+            "storage_v2_outbox_unreadable" => "inspect_storage_outbox",
+            "reported_offline"
+            | "transport_unavailable"
+            | "server_errors"
+            | "connect_errors"
+            | "retryable_client_errors" => "inspect_transport",
+            "spool_dead_letters" | "outbox_stuck" => "inspect_shipping",
+            "archive_dead_lettered" => "inspect_archive",
+            "disk_critically_low" => "free_disk_space",
+            "managed_session_control_degraded"
+            | "managed_session_detached"
+            | "orphaned_managed_bridge" => "inspect_managed_session",
+            "provider_release_blocked" | "provider_support_needs_attention" => "inspect_provider",
+            _ => continue,
+        };
+        if !action_ids.iter().any(|existing| existing == &action_id) {
+            action_ids.push(action_id.to_string());
+        }
+    }
+    if !reasons.is_empty() && action_ids.is_empty() {
+        action_ids.push("inspect_local_health".to_string());
+    }
+    action_ids
 }
 
 fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
@@ -3153,6 +3226,7 @@ mod tests {
         });
         let unresolved = serde_json::json!({
             "storage_v2_outbox": {
+                "unresolved_blocked_source_count": 1,
                 "latest_block_kind": "source_epoch_conflict_unresolved"
             }
         });
@@ -3171,6 +3245,13 @@ mod tests {
             vec![
                 "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
             ]
+        );
+        assert_eq!(
+            native_desktop_suggested_action_ids(&[
+                "storage_v2_sources_blocked".to_string(),
+                "storage_v2_sources_unresolved".to_string(),
+            ]),
+            vec!["inspect_storage_source"]
         );
     }
 
@@ -3394,7 +3475,12 @@ mod tests {
             Some(json!({
                 "last_updated": "2026-06-29T00:00:00Z",
                 "daemon_pid": 1234,
-                "storage_v2_outbox": {"blocked_source_count": 2}
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2,
+                    "reconciling_blocked_source_count": 2,
+                    "unresolved_blocked_source_count": 0,
+                    "latest_block_kind": "source_epoch_conflict"
+                }
             })),
             None,
         );
@@ -3403,6 +3489,33 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_blocked".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_unresolved_storage_sources_as_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {
+                    "blocked_source_count": 1,
+                    "unresolved_blocked_source_count": 1,
+                    "latest_block_kind": "source_epoch_conflict_unresolved"
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_blocked".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_unresolved".to_string()));
     }
 
     #[test]

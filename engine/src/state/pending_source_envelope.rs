@@ -21,6 +21,8 @@ pub struct StorageV2OutboxSnapshot {
     pub pending_bytes: u64,
     pub oldest_pending_at: Option<String>,
     pub blocked_source_count: u64,
+    pub reconciling_blocked_source_count: u64,
+    pub unresolved_blocked_source_count: u64,
     pub blocked_bytes: u64,
     pub oldest_blocked_at: Option<String>,
     pub latest_block_kind: Option<String>,
@@ -327,15 +329,25 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
         pending_bytes,
         oldest_pending_at,
         blocked_source_count,
+        reconciling_blocked_source_count,
+        unresolved_blocked_source_count,
         blocked_bytes,
         oldest_blocked_at,
-    ): (i64, i64, Option<String>, i64, i64, Option<String>) = conn.query_row(
+    ): (i64, i64, Option<String>, i64, i64, i64, i64, Option<String>) = conn.query_row(
         "SELECT
             COALESCE(SUM(CASE WHEN blocked_at IS NULL THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN blocked_at IS NULL
                 THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
             MIN(CASE WHEN blocked_at IS NULL THEN created_at END),
             COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL AND block_kind IN (
+                'source_epoch_conflict', 'render_generation_revision_conflict'
+            ) THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL AND (
+                block_kind IS NULL OR block_kind NOT IN (
+                    'source_epoch_conflict', 'render_generation_revision_conflict'
+                )
+            ) THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL
                 THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
             MIN(blocked_at)
@@ -349,6 +361,8 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
             ))
         },
     )?;
@@ -374,6 +388,10 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
         oldest_pending_at,
         blocked_source_count: u64::try_from(blocked_source_count)
             .context("blocked source count is negative")?,
+        reconciling_blocked_source_count: u64::try_from(reconciling_blocked_source_count)
+            .context("reconciling blocked source count is negative")?,
+        unresolved_blocked_source_count: u64::try_from(unresolved_blocked_source_count)
+            .context("unresolved blocked source count is negative")?,
         blocked_bytes: u64::try_from(blocked_bytes).context("blocked source bytes are negative")?,
         oldest_blocked_at,
         latest_block_kind: latest_block.as_ref().and_then(|value| value.0.clone()),
@@ -873,9 +891,52 @@ mod tests {
 
         let state = snapshot(&conn).unwrap();
         assert_eq!(state.blocked_source_count, 1);
+        assert_eq!(state.reconciling_blocked_source_count, 1);
+        assert_eq!(state.unresolved_blocked_source_count, 0);
         assert_eq!(state.pending_count, 1);
         assert_eq!(state.pending_bytes, 2);
         assert_eq!(state.blocked_bytes, 2);
+    }
+
+    #[test]
+    fn snapshot_keeps_unresolved_source_risk_visible_behind_newer_reconciliation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let unresolved_epoch = Uuid::new_v4();
+        let safe_epoch = Uuid::new_v4();
+        for (epoch, source_id) in [(unresolved_epoch, "unresolved"), (safe_epoch, "safe")] {
+            conn.execute(
+                "INSERT INTO source_epoch_registry (
+                     source_epoch, provider, opaque_source_id, file_incarnation,
+                     start_reason, max_observed_len, created_at, updated_at
+                 ) VALUES (?1, 'codex', ?2, 'fixture', 'initial', 1, ?3, ?3)",
+                params![epoch.to_string(), source_id, "2026-07-15T00:00:00Z"],
+            )
+            .unwrap();
+        }
+        let unresolved = candidate(unresolved_epoch, "unresolved");
+        let safe = candidate(safe_epoch, "safe");
+        persist_or_load(&mut conn, &unresolved).unwrap();
+        quarantine(
+            &mut conn,
+            unresolved_epoch,
+            "source_epoch_conflict_unresolved",
+            "source epoch proof is missing",
+        )
+        .unwrap();
+        persist_or_load(&mut conn, &safe).unwrap();
+        quarantine(
+            &mut conn,
+            safe_epoch,
+            "source_epoch_conflict",
+            "reconciliation is pending",
+        )
+        .unwrap();
+
+        let state = snapshot(&conn).unwrap();
+        assert_eq!(state.blocked_source_count, 2);
+        assert_eq!(state.reconciling_blocked_source_count, 1);
+        assert_eq!(state.unresolved_blocked_source_count, 1);
     }
 
     #[test]

@@ -26,6 +26,44 @@ from .launch_readiness import _can_reconcile_launch_from_state
 from .launch_readiness import _repair_command
 from .phase import _managed_phase_is_unknown
 
+_ACTION_IDS_BY_REASON: dict[str, str] = {
+    "service_stopped": "repair_machine",
+    "engine_status_missing": "inspect_local_health",
+    "engine_status_unreadable": "inspect_local_health",
+    "engine_status_stale": "inspect_local_health",
+    "engine_evidence_stale": "inspect_local_health",
+    "engine_reconciliation_failed": "inspect_local_health",
+    "storage_v2_sources_blocked": "inspect_storage_source",
+    "storage_v2_sources_unresolved": "inspect_storage_source",
+    "storage_v2_outbox_unreadable": "inspect_storage_outbox",
+    "reported_offline": "inspect_transport",
+    "transport_unavailable": "inspect_transport",
+    "server_errors": "inspect_transport",
+    "connect_errors": "inspect_transport",
+    "retryable_client_errors": "inspect_transport",
+    "spool_dead_letters": "inspect_shipping",
+    "outbox_stuck": "inspect_shipping",
+    "archive_dead_lettered": "inspect_archive",
+    "disk_critically_low": "free_disk_space",
+    "managed_session_control_degraded": "inspect_managed_session",
+    "managed_session_detached": "inspect_managed_session",
+    "orphaned_managed_bridge": "inspect_managed_session",
+    "provider_release_blocked": "inspect_provider",
+    "provider_support_needs_attention": "inspect_provider",
+}
+
+
+def _suggested_action_ids(reasons: list[str]) -> list[str]:
+    """Return stable action identifiers shared by local-health consumers."""
+    action_ids: list[str] = []
+    for reason in reasons:
+        action_id = _ACTION_IDS_BY_REASON.get(reason)
+        if action_id is not None and action_id not in action_ids:
+            action_ids.append(action_id)
+    if reasons and not action_ids:
+        action_ids.append("inspect_local_health")
+    return action_ids
+
 
 @dataclass
 class _HealthClassificationContext:
@@ -45,6 +83,8 @@ class _HealthClassificationContext:
     archive_dead_ranges: int
     archive_dead_bytes: int
     storage_blocked_sources: int
+    storage_reconciling_blocked_sources: int
+    storage_unresolved_blocked_sources: int
     storage_outbox_error: str | None
     disk_free_bytes: Any
     outbox_count: int
@@ -336,6 +376,7 @@ def _health_flags(
     archive_dead_ranges: int,
     archive_dead_bytes: int,
     storage_blocked_sources: int,
+    storage_unresolved_blocked_sources: int,
     storage_outbox_error: str | None,
     orphan_bridge_count: int,
     managed_degraded: int,
@@ -354,6 +395,8 @@ def _health_flags(
         degraded = True
     if storage_blocked_sources > 0:
         degraded = True
+    if storage_unresolved_blocked_sources > 0:
+        broken = True
     if storage_outbox_error:
         degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
@@ -417,6 +460,8 @@ def _broken_health_headline(reasons: list[str]) -> str:
             headline = "Longhouse shipper state is missing"
     elif "service_stopped" in reasons:
         headline = "Longhouse engine service is stopped"
+    elif "storage_v2_sources_unresolved" in reasons:
+        headline = "Longhouse has unresolved durable source evidence"
     elif "spool_dead" in reasons:
         headline = "Longhouse has dead-lettered data to repair"
     elif "engine_status_stale" in reasons:
@@ -525,6 +570,13 @@ def _health_classification_context(
     storage_v2_outbox = payload.get("storage_v2_outbox") or {}
     if not isinstance(storage_v2_outbox, dict):
         storage_v2_outbox = {}
+    blocked_source_count = int(storage_v2_outbox.get("blocked_source_count") or 0)
+    unresolved_blocked_source_count = storage_v2_outbox.get("unresolved_blocked_source_count")
+    if unresolved_blocked_source_count is None:
+        latest_block_kind = str(storage_v2_outbox.get("latest_block_kind") or "").strip()
+        unresolved_blocked_source_count = int(
+            blocked_source_count > 0 and latest_block_kind not in {"source_epoch_conflict", "render_generation_revision_conflict"}
+        )
     unknown_managed_phase_count = 0
     for session in managed_sessions:
         if _managed_phase_is_unknown(session.get("raw_phase")):
@@ -546,7 +598,9 @@ def _health_classification_context(
         archive_pending_bytes=archive_pending_bytes,
         archive_dead_ranges=archive_dead_ranges,
         archive_dead_bytes=archive_dead_bytes,
-        storage_blocked_sources=int(storage_v2_outbox.get("blocked_source_count") or 0),
+        storage_blocked_sources=blocked_source_count,
+        storage_reconciling_blocked_sources=int(storage_v2_outbox.get("reconciling_blocked_source_count") or 0),
+        storage_unresolved_blocked_sources=int(unresolved_blocked_source_count or 0),
         storage_outbox_error=str(storage_v2_outbox.get("error") or "").strip() or None,
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
@@ -630,6 +684,9 @@ def _collect_health_reasons(
     if context.storage_blocked_sources > 0:
         reasons.append("storage_v2_sources_blocked")
         _with_action(actions, "Inspect the blocked source proof in engine-status.json")
+    if context.storage_unresolved_blocked_sources > 0:
+        reasons.append("storage_v2_sources_unresolved")
+        _with_action(actions, "Inspect the blocked source proof in engine-status.json before retrying or discarding it")
     if context.storage_outbox_error:
         reasons.append("storage_v2_outbox_unreadable")
         _with_action(actions, "Inspect the storage-v2 outbox database error in engine-status.json")
@@ -852,6 +909,7 @@ def _classify_health(
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
         storage_blocked_sources=context.storage_blocked_sources,
+        storage_unresolved_blocked_sources=context.storage_unresolved_blocked_sources,
         storage_outbox_error=context.storage_outbox_error,
         orphan_bridge_count=context.orphan_bridge_count,
         managed_degraded=context.managed_degraded,
@@ -887,6 +945,7 @@ def _classify_health(
 __all__ = [
     "_HealthClassificationContext",
     "_repair_action_for_launch_readiness",
+    "_suggested_action_ids",
     "_add_transport_health_reasons",
     "_add_service_status_reasons",
     "_add_engine_status_reasons",

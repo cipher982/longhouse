@@ -226,6 +226,21 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func unresolvedSourceRemainsRedWhenNewerConflictIsReconcilable() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 2,
+            storageBlockKind: "source_epoch_conflict",
+            storageUnresolved: 1
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
+    }
+
+    @Test
     func unknownSourceConflictRequiresInspection() {
         let snapshot = presentationSnapshot(
             sessions: [],
@@ -2020,6 +2035,21 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func unresolvedSourceFixtureCarriesScopedActionIdentifier() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/immutable-source-unresolved.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+
+        #expect(snapshot.severity == "red")
+        #expect(snapshot.suggestedActionIds == ["inspect_storage_source"])
+        #expect(snapshot.storageBlockRequiresRepair)
+    }
+
+    @Test
     func managedUIPresenceSeparatesBackgroundFromRuntimeAttached() throws {
         let data = Data("""
         {
@@ -2991,6 +3021,7 @@ private func presentationSnapshot(
     archive: ArchiveBacklogStatus? = nil,
     storageBlocked: Int = 0,
     storageBlockKind: String? = nil,
+    storageUnresolved: Int? = nil,
     storagePending: Int = 0,
     shipFailures: Int = 0,
     isOffline: Bool = false,
@@ -3012,6 +3043,7 @@ private func presentationSnapshot(
                 spoolPendingCount: 0, spoolDeadCount: 0, archiveBacklog: archive,
                 storageV2Outbox: StorageV2OutboxStatus(
                     pendingCount: storagePending, pendingBytes: 0, blockedSourceCount: storageBlocked,
+                    unresolvedBlockedSourceCount: storageUnresolved,
                     blockedBytes: 0, latestBlockKind: storageBlockKind, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),

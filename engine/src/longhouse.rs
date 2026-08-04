@@ -1022,7 +1022,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 payload.clone(),
                 session_id,
                 "claude_channel_bridge",
-            ));
+            )?);
             eprintln!(
                 "Longhouse warning: starting Claude in degraded Helm mode; durable upload will catch up if the Runtime Host recovers, while remote control is unavailable until registration recovers ({error:#})"
             );
@@ -1153,12 +1153,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let degraded_provider_alive_for_spawn = degraded_registration
-        .as_ref()
-        .map(|registration| Arc::clone(&registration.provider_alive));
+    let degraded_provider_registration_for_spawn = degraded_registration.as_ref().cloned();
     let run_result = run_foreground_command_after_spawn(&mut command, || {
-        if let Some(provider_alive) = degraded_provider_alive_for_spawn {
-            provider_alive.store(true, Ordering::Release);
+        if let Some(registration) = degraded_provider_registration_for_spawn {
+            registration.mark_provider_ready();
         }
         match launch_transaction.as_mut() {
             Some(transaction) => {
@@ -1172,7 +1170,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         Ok(exit) => exit,
         Err(error) => {
             if let Some(registration) = &degraded_registration {
-                registration.provider_alive.store(false, Ordering::Release);
+                registration.mark_provider_failed();
             }
             if !retained_contract_existed {
                 let _ = std::fs::remove_file(&contract_path);
@@ -1181,7 +1179,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         }
     };
     if let Some(registration) = &degraded_registration {
-        registration.provider_alive.store(false, Ordering::Release);
+        registration.mark_provider_failed();
     }
     drop(degraded_registration);
     if let Err(error) = record_claude_terminal_event(
@@ -1285,9 +1283,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
                     payload.clone(),
                     expected_session_id,
                     "opencode_server_bridge",
-                ));
+                )?);
                 eprintln!(
-                    "Longhouse warning: starting OpenCode in degraded Helm mode; local provider ownership is active and registration will retry while this Helm wrapper remains alive ({error:#})"
+                    "Longhouse warning: starting OpenCode in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration after this wrapper returns ({error:#})"
                 );
                 ManagedLaunchResponse::degraded_from_payload(
                     &payload,
@@ -1356,7 +1354,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     let output = start.output().context("start native OpenCode bridge")?;
     if !output.status.success() {
         if let Some(registration) = &degraded_registration {
-            registration.provider_alive.store(false, Ordering::Release);
+            registration.mark_provider_failed();
         }
         let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
         anyhow::bail!(
@@ -1374,7 +1372,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         }
     };
     if let Some(registration) = &degraded_registration {
-        registration.provider_alive.store(true, Ordering::Release);
+        registration.mark_provider_ready();
     }
     if resume_target
         .as_ref()
@@ -1405,7 +1403,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             response.session_id
         );
         if let Some(registration) = &degraded_registration {
-            registration.provider_alive.store(true, Ordering::Release);
+            registration.mark_provider_ready();
         }
         return Ok(());
     }
@@ -1869,9 +1867,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
                 payload.clone(),
                 expected_session_id,
                 "codex_app_server",
-            ));
+            )?);
             eprintln!(
-                "Longhouse warning: starting Codex in degraded Helm mode; local provider ownership is active and registration will retry while this Helm wrapper remains alive ({error:#})"
+                "Longhouse warning: starting Codex in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration after this wrapper returns ({error:#})"
             );
             Some(response)
         }
@@ -1943,7 +1941,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let output = bridge.output().context("start native Codex bridge")?;
     if !output.status.success() {
         if let Some(registration) = &degraded_registration {
-            registration.provider_alive.store(false, Ordering::Release);
+            registration.mark_provider_failed();
         }
         anyhow::bail!(
             "Codex bridge failed: {}",
@@ -1953,7 +1951,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let bridge: BridgeStartResponse =
         serde_json::from_slice(&output.stdout).context("parse native Codex bridge response")?;
     if let Some(registration) = &degraded_registration {
-        registration.provider_alive.store(true, Ordering::Release);
+        registration.mark_provider_ready();
     }
     if !attach
         && bridge
@@ -1988,12 +1986,11 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "Attach: longhouse codex attach --session-id {}",
             response.session_id
         );
-        // The bridge owns the provider after this process exits. A future
-        // durable registration worker will take over retries for detached
-        // launches; do not pretend this wrapper can keep the retry thread
-        // alive after returning.
+        // The bridge owns the provider after this process exits. The Machine
+        // Agent owns the durable registration intent and will retry it after
+        // this wrapper returns.
         if let Some(registration) = &degraded_registration {
-            registration.provider_alive.store(true, Ordering::Release);
+            registration.mark_provider_ready();
         }
         return Ok(());
     }

@@ -830,7 +830,9 @@ public struct MenuBarPanelView: View {
     private var watchingActions: some View {
         VStack(spacing: 8) {
             Group {
-                if snapshot.storageBlockRequiresRepair {
+                if snapshot.storageBlockRequiresRepair
+                    || snapshot.suggestedActionIds?.contains("inspect_storage_source") == true
+                {
                     Button {
                         perform(.runDoctor)
                     } label: {
