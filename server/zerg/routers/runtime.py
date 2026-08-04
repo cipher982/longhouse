@@ -145,6 +145,7 @@ async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> 
                 "session_id": notification.session_id,
                 "action": action_name,
                 "state": "stalled",
+                "previous_state": str(action.get("previous_state") or ""),
                 "notification_event_id": notification_event_id,
                 "occurred_at": notification.occurred_at.isoformat(),
                 "attention_push_at": attention_push_at.isoformat(),
@@ -159,7 +160,8 @@ async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> 
                         )
                 except Exception:
                     # Keep the pending stamp. The next provider keepalive will
-                    # retry the commit without sending a second alert task.
+                    # retry the delivery/commit with the same event and APNs
+                    # collapse key until the durable commit succeeds.
                     logging.getLogger(__name__).exception(
                         "Catalog APNs attention commit failed for session %s",
                         notification.session_id,

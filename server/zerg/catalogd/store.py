@@ -236,9 +236,13 @@ def _live_runtime_attention_actions(
             continue
         user = orm.get(LiveUser, owner_id)
         if bool(catalog.hidden_from_default_timeline) or bool(catalog.user_hidden_from_timeline):
-            continue
+            hidden_from_timeline = True
+        else:
+            hidden_from_timeline = False
 
         if phase == "stalled" and session_id in stall_sessions and raw_stamp in {"", "stalled:resolved", _CATALOG_STALL_PENDING}:
+            if hidden_from_timeline:
+                continue
             occurred_at = (
                 catalog.last_attention_push_at
                 if raw_stamp == _CATALOG_STALL_PENDING and catalog.last_attention_push_at is not None
@@ -288,6 +292,7 @@ def _live_runtime_attention_actions(
                     "owner_id": owner_id,
                     "session_id": session_id,
                     "state": "stalled",
+                    "previous_state": raw_stamp,
                     "occurred_at": occurred_at.isoformat(),
                     "title": title,
                     "summary": summary,
@@ -301,6 +306,11 @@ def _live_runtime_attention_actions(
         elif phase != "stalled" and raw_stamp in {"stalled", _CATALOG_STALL_PENDING, _CATALOG_STALL_RESOLUTION_PENDING}:
             occurred_at = runtime.last_runtime_signal_at or observed_at
             attention_push_at = catalog.last_attention_push_at or occurred_at
+            targets = _live_attention_targets(orm, owner_id)
+            if not targets:
+                # Keep the current or pending stamp retryable. A later
+                # keepalive after device registration can deliver the cleanup.
+                continue
             event = _live_attention_event(
                 orm,
                 catalog=catalog,
@@ -311,23 +321,23 @@ def _live_runtime_attention_actions(
                 occurred_at=attention_push_at,
                 collapse_key=f"lh-attn-{session_id}",
             )
+            previous_state = raw_stamp
             catalog.last_attention_push_state = _CATALOG_STALL_RESOLUTION_PENDING
             catalog.last_attention_push_at = attention_push_at
-            targets = _live_attention_targets(orm, owner_id)
-            if targets:
-                actions.append(
-                    {
-                        "kind": "resolution",
-                        "owner_id": owner_id,
-                        "session_id": session_id,
-                        "state": "stalled",
-                        "current_state": phase or "unknown",
-                        "occurred_at": occurred_at.isoformat(),
-                        "attention_push_at": attention_push_at.isoformat(),
-                        "notification_event_id": str(event.id),
-                        "targets": targets,
-                    }
-                )
+            actions.append(
+                {
+                    "kind": "resolution",
+                    "owner_id": owner_id,
+                    "session_id": session_id,
+                    "state": "stalled",
+                    "previous_state": previous_state,
+                    "current_state": phase or "unknown",
+                    "occurred_at": occurred_at.isoformat(),
+                    "attention_push_at": attention_push_at.isoformat(),
+                    "notification_event_id": str(event.id),
+                    "targets": targets,
+                }
+            )
     return actions
 
 
@@ -2175,6 +2185,7 @@ class CatalogStore:
         session_id: str,
         action: str,
         state: str,
+        previous_state: str,
         notification_event_id: str,
         occurred_at: datetime,
         attention_push_at: datetime,
@@ -2199,16 +2210,20 @@ class CatalogStore:
                         catalog.last_attention_notification_id = None
                         if event is not None:
                             event.failed_at = datetime.now(UTC)
-                            event.resolved_at = event.failed_at
-                            event.channel_results = {"apns_ios": {"accepted": False}}
+                            channel_results = dict(event.channel_results or {})
+                            channel_results["apns_ios"] = {"accepted": False}
+                            event.channel_results = channel_results
                         changed = True
                     elif action == "resolution" and current == _CATALOG_STALL_RESOLUTION_PENDING and same_at and same_event:
-                        catalog.last_attention_push_state = state
+                        catalog.last_attention_push_state = (
+                            previous_state if previous_state in {"stalled", _CATALOG_STALL_PENDING} else state
+                        )
                         catalog.last_attention_push_at = expected_at
                         if event is not None:
                             event.resolved_at = None
-                            event.failed_at = datetime.now(UTC)
-                            event.channel_results = {"apns_ios": {"accepted": False}}
+                            channel_results = dict(event.channel_results or {})
+                            channel_results["resolution_apns_ios"] = {"accepted": False}
+                            event.channel_results = channel_results
                         changed = True
                 orm.commit()
             except BaseException:

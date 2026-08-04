@@ -1082,13 +1082,14 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _rollback_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "action", "state", "notification_event_id", "occurred_at", "attention_push_at"}
+        expected = {"session_id", "action", "state", "previous_state", "notification_event_id", "occurred_at", "attention_push_at"}
         if set(request.params) != expected:
             return self._error(request, "invalid_request", "notification.apns.attention.rollback.v2 has invalid parameters")
         try:
             session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
             action = _bounded_text(request.params["action"], "action", 32)
             state = _bounded_text(request.params["state"], "state", 32)
+            previous_state = _bounded_text(request.params["previous_state"], "previous_state", 64)
             notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
             occurred_at = _parse_datetime(request.params["occurred_at"], "occurred_at")
             attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
@@ -1102,6 +1103,7 @@ class CatalogDaemon:
             session_id=session_id,
             action=action,
             state=state,
+            previous_state=previous_state,
             notification_event_id=notification_event_id,
             occurred_at=occurred_at,
             attention_push_at=attention_push_at,

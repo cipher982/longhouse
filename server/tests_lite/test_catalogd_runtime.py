@@ -236,18 +236,6 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
         }
         retry = await client.call("session.runtime.apply.v2", {"events": [retry_event]})
         assert retry["attention_actions"][0]["notification_event_id"] == notification_event_id
-        committed = await client.call(
-            "notification.apns.attention.commit.v2",
-            {
-                "session_id": session_id,
-                "action": "attention",
-                "state": "stalled",
-                "notification_event_id": notification_event_id,
-                "occurred_at": now.isoformat(),
-                "attention_push_at": now.isoformat(),
-            },
-        )
-        assert committed["committed"] is True
 
         resolved_event = {
             **_event(
@@ -262,6 +250,7 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
         resolved = await client.call("session.runtime.apply.v2", {"events": [resolved_event]})
         assert resolved.get("attention_actions"), resolved
         assert resolved["attention_actions"][0]["kind"] == "resolution"
+        assert resolved["attention_actions"][0]["previous_state"] == "stalled:pending"
         resolution_event_id = resolved["attention_actions"][0]["notification_event_id"]
 
         rolled_back = await client.call(
@@ -270,12 +259,48 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
                 "session_id": session_id,
                 "action": "resolution",
                 "state": "stalled",
+                "previous_state": "stalled:pending",
                 "notification_event_id": resolution_event_id,
                 "occurred_at": (now + timedelta(minutes=1)).isoformat(),
                 "attention_push_at": now.isoformat(),
             },
         )
         assert rolled_back["rolled_back"] is True
+
+        committed = await client.call(
+            "notification.apns.attention.commit.v2",
+            {
+                "session_id": session_id,
+                "action": "attention",
+                "state": "stalled",
+                "notification_event_id": notification_event_id,
+                "occurred_at": now.isoformat(),
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert committed["committed"] is True
+
+        resolved_again_event = {
+            **resolved_event,
+            "dedupe_key": "catalog-stalled-resolved-2",
+            "occurred_at": (now + timedelta(seconds=120)).isoformat(),
+        }
+        resolved_again = await client.call("session.runtime.apply.v2", {"events": [resolved_again_event]})
+        assert resolved_again["attention_actions"][0]["previous_state"] == "stalled"
+        resolution_event_id = resolved_again["attention_actions"][0]["notification_event_id"]
+        rolled_back_again = await client.call(
+            "notification.apns.attention.rollback.v2",
+            {
+                "session_id": session_id,
+                "action": "resolution",
+                "state": "stalled",
+                "previous_state": "stalled",
+                "notification_event_id": resolution_event_id,
+                "occurred_at": (now + timedelta(minutes=2)).isoformat(),
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert rolled_back_again["rolled_back"] is True
     finally:
         await client.close()
         await daemon.close()
