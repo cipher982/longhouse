@@ -53,7 +53,7 @@ use the qualification machine/workflow designated for the run.
 The expected fields must come from the fault injection or operator record:
 
 ```bash
-python3 scripts/qa/launch_reliability_dogfood.py \
+uv run --project server python scripts/qa/launch_reliability_dogfood.py \
   --challenge /tmp/longhouse-dogfood-challenge-a.json \
   --output /tmp/longhouse-dogfood-episode-a.json \
   --episode-id provider-recovery-a \
@@ -109,7 +109,8 @@ and an eligible observation window. The report's `qualification.status` remains
 diagnostic self-attestation, not an independent release attestation. An
 external CI/release receipt is required before quoting the dogfood metrics as
 launch evidence. The sampled binary must still exist at the
-recorded path, have the recorded hash, and report a build identity containing
-the measured source commit. A stale installed binary therefore fails closed
-instead of qualifying an older implementation. Any invalid episode clears the
-numerical dogfood claims rather than partially counting the remaining files.
+recorded path, and report facade and engine commits exactly equal to the full
+measured source SHA, with `dirty=false`. A stale installed binary therefore
+fails closed instead of qualifying an older implementation. Any invalid episode
+clears the numerical dogfood claims rather than partially counting the
+remaining files.

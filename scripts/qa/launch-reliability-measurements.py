@@ -279,6 +279,8 @@ def _load_dogfood_challenges(
             )
             if expires_at <= created_at:
                 raise ValueError("dogfood challenge expires_at must follow created_at")
+            if expires_at - created_at > timedelta(hours=24):
+                raise ValueError("dogfood challenge window cannot exceed 24 hours")
             encoded_key = payload.get("key")
             if not isinstance(encoded_key, str):
                 raise ValueError("dogfood challenge has no key")
@@ -607,6 +609,7 @@ def _load_dogfood_series(
     invalid: list[dict[str, str]],
     *,
     challenge_paths: Iterable[Path] = (),
+    deduplicated: list[dict[str, str]] | None = None,
     as_of: datetime | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """Load validated longitudinal observations without filling missing facts."""
@@ -621,10 +624,16 @@ def _load_dogfood_series(
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
         if path in seen_paths:
+            if deduplicated is not None:
+                deduplicated.append({"path": str(path), "reason": "duplicate_path"})
             continue
         try:
             content_hash = _sha256(path)
             if content_hash in seen_hashes:
+                if deduplicated is not None:
+                    deduplicated.append(
+                        {"path": str(path), "reason": "duplicate_content"}
+                    )
                 continue
             seen_paths.add(path)
             seen_hashes.add(content_hash)
@@ -716,6 +725,22 @@ def _load_dogfood_series(
                 if collector_started_at > observed_at:
                     raise ValueError(
                         f"episode {index}.collector_started_at is after observed_at"
+                    )
+                if collector_started_at < challenge_created_at:
+                    raise ValueError(
+                        f"episode {index}.collector_started_at predates dogfood challenge creation"
+                    )
+                if collector_started_at > challenge_expires_at:
+                    raise ValueError(
+                        f"episode {index}.collector_started_at is after dogfood challenge expiry"
+                    )
+                if observed_at < challenge_created_at:
+                    raise ValueError(
+                        f"episode {index}.observed_at predates dogfood challenge creation"
+                    )
+                if observed_at > challenge_expires_at:
+                    raise ValueError(
+                        f"episode {index}.observed_at is after dogfood challenge expiry"
                     )
                 if observed_at > generated_at:
                     raise ValueError(
@@ -1065,6 +1090,18 @@ def _dogfood_summary(
             "duplicate_replayed_discarded_evidence",
         ):
             summary[metric_name]["source"] = []
+    for metric_name in (
+        "automatic_recovery_time",
+        "false_red_rate",
+        "hidden_failure_rate",
+        "action_coverage",
+        "unresolved_event_bearing_issue_age",
+        "duplicate_replayed_discarded_evidence",
+    ):
+        summary[metric_name]["attestation"] = {
+            "status": "operator_self_attested" if episodes else "not_observed",
+            "qualification": "diagnostic_only",
+        }
     return summary
 
 
@@ -1594,10 +1631,12 @@ def build_report(
                 "error": "dogfood qualification report repository is dirty",
             }
         )
+    dogfood_deduplicated: list[dict[str, str]] = []
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(
         dogfood_paths,
         invalid,
         challenge_paths=dogfood_challenge_paths,
+        deduplicated=dogfood_deduplicated,
         as_of=report_generated_at,
     )
     dogfood_summary = _dogfood_summary(dogfood_episodes, dogfood_inputs)
@@ -1605,6 +1644,7 @@ def build_report(
     dogfood_summary["input_status"] = (
         "invalid" if dogfood_invalid else "valid" if dogfood_inputs else "absent"
     )
+    dogfood_summary["deduplicated_inputs"] = dogfood_deduplicated
     if dogfood_invalid:
         _invalidate_dogfood_summary(dogfood_summary)
 
@@ -1636,6 +1676,7 @@ def build_report(
             ],
             "health_artifacts": health_inputs,
             "dogfood_series_artifacts": dogfood_inputs,
+            "dogfood_deduplicated_artifacts": dogfood_deduplicated,
             "invalid_artifacts": invalid,
         },
         "matrix": {

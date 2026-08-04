@@ -62,14 +62,19 @@ def _dogfood_provenance() -> dict[str, object]:
     }
 
 
-def _write_signed_dogfood(path: Path, payload: dict[str, object]) -> Path:
+def _write_signed_dogfood(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    expires_at: str = "2026-08-05T11:00:00Z",
+) -> Path:
     challenge_path = path.with_suffix(".challenge.json")
     key = bytes(range(32))
     challenge = {
         "artifact_kind": "launch_reliability_dogfood_challenge",
         "challenge_id": f"test-{path.stem}",
         "created_at": "2026-08-04T11:00:00Z",
-        "expires_at": "2026-08-05T11:00:00Z",
+        "expires_at": expires_at,
         "issuer": "scripts/qa/launch-reliability-measurements.py",
         "key": base64.urlsafe_b64encode(key).decode("ascii"),
         "nonce": f"nonce-{path.stem}",
@@ -933,6 +938,10 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     assert report["dogfood_series"]["automatic_recovery_time"]["sample_count"] == 3
     assert report["measures"]["false_red_rate"]["scope"] == "dogfood_episode_series"
     assert report["measures"]["false_red_rate"]["rate"] == 0.0
+    assert report["measures"]["false_red_rate"]["attestation"] == {
+        "status": "operator_self_attested",
+        "qualification": "diagnostic_only",
+    }
     assert report["measures"]["hidden_failure_rate"]["rate"] == 0.0
     assert report["measures"]["action_coverage"]["rate"] == 1.0
     assert report["measures"]["unresolved_event_bearing_issue_age"]["max_age_seconds"] == 3630.0
@@ -1007,6 +1016,7 @@ def test_duplicate_dogfood_path_is_counted_once(tmp_path: Path):
     assert report["report_status"] == "ok"
     assert report["dogfood_series"]["episode_count"] == 3
     assert report["dogfood_series"]["input_status"] == "valid"
+    assert report["dogfood_series"]["deduplicated_inputs"] == [{"path": str(paths[0]), "reason": "duplicate_path"}]
     assert report["measures"]["automatic_recovery_time"]["sample_count"] == 3
 
 
@@ -1172,6 +1182,31 @@ def test_dogfood_report_rejects_a_dirty_report_checkout(tmp_path: Path, monkeypa
     assert report["report_status"] == "invalid"
     assert "report repository is dirty" in report["inputs"]["invalid_artifacts"][0]["error"]
     assert report["dogfood_series"]["input_status"] == "invalid"
+
+
+def test_dogfood_challenge_bounds_episode_times_and_duration(tmp_path: Path):
+    series = tmp_path / "challenge-time.json"
+    _dogfood_series(series)
+    paths, challenges = _split_dogfood_series(series, count=1)
+    payload = json.loads(paths[0].read_text())
+    payload["episodes"][0]["collector_started_at"] = "2026-08-04T10:59:00Z"
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
+
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
+
+    assert report["report_status"] == "invalid"
+    assert "collector_started_at predates" in report["inputs"]["invalid_artifacts"][0]["error"]
+
+    payload = json.loads(paths[0].read_text())
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload, expires_at="2026-08-08T11:00:00Z")
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
+
+    assert report["report_status"] == "invalid"
+    assert "cannot exceed 24 hours" in report["inputs"]["invalid_artifacts"][0]["error"]
 
 
 def test_dogfood_provenance_must_match_current_revision(tmp_path: Path):
