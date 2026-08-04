@@ -149,8 +149,21 @@ def retry_fixture(root: Path, *, exhausted: bool) -> Path:
 
 
 def invoke(binary: Path, root: Path) -> dict[str, Any]:
+    profile_root = root / "provider-profile"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(profile_root / "home"),
+            "XDG_CONFIG_HOME": str(profile_root / "config"),
+            "XDG_DATA_HOME": str(profile_root / "data"),
+            "XDG_STATE_HOME": str(profile_root / "state"),
+            "XDG_CACHE_HOME": str(profile_root / "cache"),
+            "CODEX_HOME": str(profile_root / "codex"),
+        }
+    )
     result = subprocess.run(
         [str(binary), "local-health", "--fast", "--json", "--state-root", str(root)],
+        env=env,
         capture_output=True,
         text=True,
         timeout=15,

@@ -613,6 +613,30 @@ where
     Ok(())
 }
 
+fn merge_current_retry_owner_state(
+    path: &std::path::Path,
+    intent: &mut ManagedLaunchRetryIntent,
+) -> anyhow::Result<()> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let current: ManagedLaunchRetryIntent =
+        serde_json::from_slice(&bytes).context("decode current managed launch retry intent")?;
+    // Foreground provider callbacks may update these fields while the daemon
+    // is awaiting Runtime Host registration. They are monotonic owner facts;
+    // merge them into the daemon's snapshot before it can report an outcome,
+    // rather than publishing a stale copy over a provider-exit update.
+    intent.provider_ready |= current.provider_ready;
+    intent.provider_exited |= current.provider_exited;
+    if current.provider_pid.is_some() {
+        intent.provider_pid = current.provider_pid;
+        intent.provider_process_start_time = current.provider_process_start_time;
+    }
+    if current.launcher_pid.is_some() {
+        intent.launcher_pid = current.launcher_pid;
+        intent.launcher_process_start_time = current.launcher_process_start_time;
+    }
+    Ok(())
+}
+
 #[allow(dead_code)] // Used by the Machine Agent daemon binary.
 fn retry_due(intent: &ManagedLaunchRetryIntent, now: DateTime<Utc>) -> bool {
     intent
@@ -657,6 +681,34 @@ pub fn process_start_identity(pid: u32) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+fn process_exists(pid: u32) -> Option<bool> {
+    let pid = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    let result = unsafe { libc::kill(pid, 0) };
+    if result == 0 {
+        return Some(true);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::ESRCH) => Some(false),
+        // Permission to inspect a process is not required to establish that
+        // the PID is occupied. Start-time comparison below still decides
+        // whether this is the recorded owner.
+        Some(libc::EPERM) => Some(true),
+        _ => None,
+    }
+}
+
+fn process_is_zombie(pid: u32) -> Option<bool> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "stat="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!state.is_empty()).then_some(state.starts_with('Z'))
+}
+
 fn provider_owner_alive(intent: &ManagedLaunchRetryIntent) -> Option<bool> {
     owner_identity_alive(
         intent.provider_pid,
@@ -684,23 +736,20 @@ fn owner_identity_alive(pid: Option<u32>, recorded_start: Option<&str>) -> Optio
     else {
         return None;
     };
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
-        .output()
-        .ok()?;
-    if output.status.code() == Some(1) {
-        // `ps` ran successfully but found no such process. This is a
-        // definitive owner loss, not an unknown observation, so pre-ready
-        // retry intents can be garbage-collected on the next agent scan.
-        return Some(false);
+    match process_exists(pid) {
+        Some(false) => return Some(false),
+        Some(true) => {
+            if process_is_zombie(pid) == Some(true) {
+                return Some(false);
+            }
+        }
+        None => return None,
     }
-    if !output.status.success() {
+    let Some(current) = process_start_identity(pid) else {
+        // The PID exists, but the platform identity probe failed. Do not
+        // delete a retry intent on an unsupported or permission-limited ps.
         return None;
-    }
-    let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if current.is_empty() {
-        return Some(false);
-    }
+    };
     Some(current == recorded_start)
 }
 
@@ -1043,13 +1092,37 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                 continue;
             }
         }
+        if let Err(error) = merge_current_retry_owner_state(&path, &mut intent) {
+            intent.attempts = intent.attempts.saturating_add(1);
+            intent.last_error = Some(truncate(&format!("{error:#}"), 1000));
+            intent.next_attempt_at = Some(
+                (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
+                    .to_rfc3339(),
+            );
+            let _ = persist_retry_intent_at(&path, &intent);
+            tracing::warn!(path = %path.display(), error = %error, "Could not refresh managed launch owner state before outcome");
+            continue;
+        }
         let provider_exited_during_registration = if intent.provider_exited {
             false
         } else {
             match provider_owner_alive(&intent) {
                 Some(true) => false,
                 Some(false) => true,
-                None => false,
+                None => {
+                    intent.attempts = intent.attempts.saturating_add(1);
+                    intent.last_error = Some(
+                        "managed provider owner identity is unavailable; launch outcome deferred"
+                            .into(),
+                    );
+                    intent.next_attempt_at = Some(
+                        (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
+                            .to_rfc3339(),
+                    );
+                    let _ = persist_retry_intent_at(&path, &intent);
+                    tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed provider owner identity unavailable; deferring launch outcome");
+                    continue;
+                }
             }
         };
         let post_hoc_exit = intent.provider_exited || provider_exited_during_registration;
@@ -1318,6 +1391,11 @@ mod tests {
         let stored: ManagedLaunchRetryIntent =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(stored.provider_ready);
+        update_retry_intent(&path, |stored| stored.provider_exited = true).unwrap();
+        let mut stale = intent;
+        merge_current_retry_owner_state(&path, &mut stale).unwrap();
+        assert!(stale.provider_ready);
+        assert!(stale.provider_exited);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1358,9 +1436,20 @@ mod tests {
 
     #[test]
     fn missing_launcher_process_is_dead_not_unknown() {
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
         assert_eq!(
-            owner_identity_alive(Some(u32::MAX), Some("missing-process")),
-            Some(false)
+            owner_identity_alive(Some(pid), Some("missing-process")),
+            Some(false),
+        );
+    }
+
+    #[test]
+    fn invalid_launcher_pid_is_unknown() {
+        assert_eq!(
+            owner_identity_alive(Some(u32::MAX), Some("invalid-pid")),
+            None
         );
     }
 

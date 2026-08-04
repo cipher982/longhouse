@@ -236,6 +236,18 @@ def runtime_env(root: Path, engine_bin: Path) -> dict[str, str]:
     return env
 
 
+def runtime_host_archive_database(root: Path) -> Path:
+    return root / "runtime-host.db"
+
+
+def runtime_host_live_database(root: Path) -> Path:
+    # The Runtime Host derives the catalogd-owned live store by inserting
+    # ``-live`` before the archive database suffix. Keep the assertion tied to
+    # that one path derivation instead of silently accepting a missing DB.
+    archive = runtime_host_archive_database(root)
+    return archive.with_name(f"{archive.stem}-live{archive.suffix}")
+
+
 def start_host(root: Path, evidence_root: Path, *, port: int, ordinal: int) -> Host:
     repo_root = Path(__file__).resolve().parents[2]
     server_root = repo_root / "server"
@@ -276,7 +288,7 @@ def start_host(root: Path, evidence_root: Path, *, port: int, ordinal: int) -> H
             str(port),
         ]
         command_cwd = repo_root
-    database = root / "runtime-host.db"
+    database = runtime_host_archive_database(root)
     log_path = evidence_root / f"runtime-host-{ordinal}.log"
     log = log_path.open("wb")
     env = os.environ.copy()
@@ -822,6 +834,17 @@ def run_provider_live(
         output = redact(error.output, token)
         launch_log = provider_root / "launch.log"
         launch_log.write_text(output, encoding="utf-8")
+        session_match = UUID_RE.search(output)
+        launch_intent_created = False
+        if session_match:
+            try:
+                launch_intent_created = any(
+                    str(intent.get("provider_name", "")).lower() == provider.lower()
+                    and str(intent.get("expected_session_id")) == session_match.group(0)
+                    for intent in read_retry_intents(root)
+                )
+            except (OSError, json.JSONDecodeError):
+                launch_intent_created = False
         return (
             {
                 "provider": provider,
@@ -834,11 +857,11 @@ def run_provider_live(
                 ],
                 "returncode": error.returncode,
                 "timed_out": error.timed_out,
-                "degraded_marker_seen": False,
+                "degraded_marker_seen": "degraded Helm mode" in output,
                 "provider_ready_observed": False,
                 "launcher_pid": None,
-                "session_id_observed": None,
-                "launch_intent_created": False,
+                "session_id_observed": session_match.group(0) if session_match else None,
+                "launch_intent_created": launch_intent_created,
                 "startup_failure": str(error),
                 "launch_log": str(launch_log),
                 "retry_intents_after_launch": read_retry_count(root),
@@ -892,6 +915,13 @@ def run_provider(
     cwd.mkdir(parents=True, exist_ok=True)
     env = runtime_env(root, engine_bin)
     env["LONGHOUSE_FAULT_CWD"] = str(cwd)
+    env["CODEX_HOME"] = str(root / "provider-config" / "codex")
+    provider_home = root / "provider-home" / provider
+    env["HOME"] = str(provider_home)
+    env["XDG_CONFIG_HOME"] = str(provider_home / "config")
+    env["XDG_DATA_HOME"] = str(provider_home / "data")
+    env["XDG_STATE_HOME"] = str(provider_home / "state")
+    env["XDG_CACHE_HOME"] = str(provider_home / "cache")
     command = provider_command(
         provider,
         longhouse_bin=longhouse_bin,
@@ -991,7 +1021,9 @@ def launch_attempt_states(
     database: Path, session_ids: list[str]
 ) -> dict[str, str | None]:
     if not database.is_file():
-        return {session_id: None for session_id in session_ids}
+        raise RuntimeError(
+            f"Runtime Host launch-state database is missing: {database}"
+        )
     try:
         with sqlite3.connect(database, timeout=0.5) as connection:
             rows = connection.execute(
@@ -1001,8 +1033,10 @@ def launch_attempt_states(
                 ),
                 session_ids,
             ).fetchall()
-    except sqlite3.Error:
-        return {session_id: None for session_id in session_ids}
+    except sqlite3.Error as error:
+        raise RuntimeError(
+            f"could not inspect Runtime Host launch states in {database}: {error}"
+        ) from error
     states: dict[str, str | None] = {session_id: None for session_id in session_ids}
     for session_id, state in rows:
         states[str(session_id)] = str(state)
@@ -1103,6 +1137,16 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "a yellow provider-owned failure artifact"
             )
         retry_count = read_retry_count(temp_root)
+        if provider_failures and args.allow_unqualified_recovery:
+            has_degraded_start = any(
+                result.get("degraded_marker_seen") for result in results
+            )
+            if not has_degraded_start or retry_count == 0:
+                raise RuntimeError(
+                    "installed provider startup produced no degraded provider start "
+                    "and no attributable durable retry evidence; refusing a yellow "
+                    "success for an unstarted provider"
+                )
         expected_retry_count = sum(
             1 for result in results if result.get("launch_intent_created")
         )
@@ -1306,7 +1350,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         def launches_adopted() -> bool:
             nonlocal last_launch_states
             last_launch_states = launch_attempt_states(
-                temp_root / "runtime-host-live.db", expected_session_ids
+                runtime_host_live_database(temp_root), expected_session_ids
             )
             args._last_launch_states = last_launch_states
             ready_adopted = all(
@@ -1327,7 +1371,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             )
         else:
             last_launch_states = launch_attempt_states(
-                temp_root / "runtime-host-live.db", expected_session_ids
+                runtime_host_live_database(temp_root), expected_session_ids
             )
             args._last_launch_states = last_launch_states
             unexpected_states = {
