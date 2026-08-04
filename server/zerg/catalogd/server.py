@@ -1415,6 +1415,9 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.create_local_launch, launch=launch)
+        conflict = str(result.get("conflict") or "").strip()
+        if conflict:
+            return self._error(request, "conflict", conflict)
         if result.get("idempotency_conflict") is True:
             return self._error(request, "conflict", "local launch identity was reused with different attributes")
         return CatalogRpcResponse(id=request.id, result=result)

@@ -3137,6 +3137,7 @@ class CatalogStore:
         plan_payload = dict(launch["plan"])
         session_id = UUID(plan_payload["session_id"])
         plan = SimpleNamespace(**{**plan_payload, "session_id": session_id})
+        expected_provider_session_id = str(plan.provider_session_id or "").strip() or None
         command_id = f"managed-local-{session_id}"
         observed_at = launch["started_at"]
         thread_id = primary_thread_id_for_session(session_id)
@@ -3159,7 +3160,7 @@ class CatalogStore:
                     # 409. Keep the established persisted launch-attribute
                     # checks, but do not require the outbox row to survive.
                     catalog = orm.get(LiveSessionCatalog, str(session_id))
-                    provider_session_id = str(plan.provider_session_id or "").strip()
+                    provider_session_id = expected_provider_session_id or ""
                     provider_alias = None
                     if provider_session_id:
                         provider_alias = (
@@ -3203,6 +3204,28 @@ class CatalogStore:
                         "launch": _json_launch_result(result) if result is not None else None,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
+                if expected_provider_session_id:
+                    existing_provider_alias = (
+                        orm.query(LiveSessionThreadAlias)
+                        .filter(
+                            LiveSessionThreadAlias.provider == plan.provider,
+                            LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                            LiveSessionThreadAlias.alias_value == expected_provider_session_id,
+                        )
+                        .first()
+                    )
+                    if existing_provider_alias is not None and str(existing_provider_alias.thread_id) != str(thread_id):
+                        orm.rollback()
+                        return {
+                            "created": False,
+                            "exact_replay": False,
+                            "idempotency_conflict": False,
+                            "conflict": "provider session identity is already bound to another live thread",
+                            "run_id": str(run_id),
+                            "provider_session_id": expected_provider_session_id,
+                            "launch": None,
+                            "commit_seq": str(_current_commit_seq(connection)),
+                        }
                 attempt = create_live_launch_catalog_shell(
                     orm,
                     session_id=session_id,
@@ -3252,9 +3275,18 @@ class CatalogStore:
                 persisted_provider_session_id = (
                     str(persisted_provider_alias.alias_value).strip() if persisted_provider_alias is not None else None
                 )
-                expected_provider_session_id = str(plan.provider_session_id or "").strip() or None
                 if persisted_provider_session_id != expected_provider_session_id:
-                    raise RuntimeError("persisted provider_session_id does not match the launch plan")
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": False,
+                        "idempotency_conflict": False,
+                        "conflict": "provider session identity could not be bound to the launch thread",
+                        "run_id": str(run_id),
+                        "provider_session_id": expected_provider_session_id,
+                        "launch": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
                 upsert_live_launch_readiness(
                     orm,
                     session_id=session_id,
