@@ -86,6 +86,12 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
             {
                 "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
+                "generated_at": "2026-08-04T13:00:30Z",
+                "provenance": {
+                    "generator": "test-fixture",
+                    "git_sha": "0" * 40,
+                    "repository_dirty": False,
+                },
                 "episodes": episodes,
             }
         )
@@ -296,6 +302,30 @@ def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path:
     assert report["measures"]["action_coverage"]["reason"] == "no cases with an expected action in supplied health fault matrix"
 
 
+def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
+    matrix = tmp_path / "health.json"
+    matrix.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "observed": {
+                            "health_state": "broken",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    report = MODULE.build_report([], health_paths=[matrix, matrix])
+
+    assert report["health_fault_matrix"]["case_count"] == 1
+    assert report["measures"]["false_red_rate"]["denominator"] == 1
+
+
 def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     series = tmp_path / "dogfood.json"
     series.write_text(
@@ -303,6 +333,12 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
             {
                 "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
+                "generated_at": "2026-08-04T13:00:30Z",
+                "provenance": {
+                    "generator": "test-fixture",
+                    "git_sha": "0" * 40,
+                    "repository_dirty": False,
+                },
                 "episodes": [
                     {
                         "episode_id": "episode-1",
@@ -424,10 +460,27 @@ def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
             {
                 "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
+                "generated_at": "2026-08-04T13:00:30Z",
+                "provenance": {
+                    "generator": "test-fixture",
+                    "git_sha": "0" * 40,
+                    "repository_dirty": False,
+                },
                 "episodes": [
                     {
                         "episode_id": "episode-1",
                         "observed_at": "2026-08-04T12:00:00Z",
+                        "expected": {
+                            "health_state": "broken",
+                            "red_eligible": True,
+                            "producer_freshness": "stale",
+                            "action": "inspect_local_health",
+                        },
+                        "observed": {
+                            "health_state": "broken",
+                            "producer_freshness": "stale",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
                         "evidence_conservation": {
                             "source_events": 1,
                             "archived_events": 2,
@@ -512,3 +565,36 @@ def test_future_issue_resolution_fails_closed(tmp_path: Path):
 
     assert report["report_status"] == "invalid"
     assert "after observed_at" in report["inputs"]["invalid_artifacts"][0]["error"]
+
+
+def test_truthless_dogfood_episode_fails_closed(tmp_path: Path):
+    series = tmp_path / "truthless.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    for episode in payload["episodes"]:
+        episode.pop("expected")
+        episode.pop("observed")
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "invalid"
+    assert "must include expected and observed" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["measures"]["false_red_rate"]["status"] == "not_observed"
+
+
+def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):
+    series = tmp_path / "same-time.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    payload["episodes"][1]["observed_at"] = payload["episodes"][0]["observed_at"]
+    payload["episodes"][2]["observed_at"] = payload["episodes"][0]["observed_at"]
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "ok"
+    assert report["dogfood_series"]["observation_window"]["distinct_observation_count"] == 1
+    assert report["dogfood_series"]["observation_window"]["status"] == "insufficient"
+    assert report["dogfood_series"]["false_red_rate"]["status"] == "not_observed"
+    assert report["dogfood_series"]["false_red_rate"]["rate"] is None

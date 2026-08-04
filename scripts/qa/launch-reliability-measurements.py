@@ -227,10 +227,8 @@ def _nonnegative_count(value: Any, *, label: str) -> int:
 def _health_truth(episode: dict[str, Any], *, label: str) -> None:
     expected = episode.get("expected")
     observed = episode.get("observed")
-    if expected is None and observed is None:
-        return
     if not isinstance(expected, dict) or not isinstance(observed, dict):
-        raise ValueError(f"{label} expected and observed health truth must both be objects")
+        raise ValueError(f"{label} must include expected and observed health truth objects")
     for side, value in (("expected", expected), ("observed", observed)):
         if value.get("health_state") not in HEALTH_STATES:
             raise ValueError(f"{label}.{side}.health_state is invalid")
@@ -269,6 +267,19 @@ def _load_dogfood_series(
                 raise ValueError(f"artifact_kind must be {DOGFOOD_ARTIFACT_KIND!r}")
             if artifact.get("schema_version") != DOGFOOD_SCHEMA_VERSION:
                 raise ValueError(f"schema_version must be {DOGFOOD_SCHEMA_VERSION}")
+            _timestamp(artifact.get("generated_at"), label="dogfood.generated_at")
+            provenance = artifact.get("provenance")
+            if not isinstance(provenance, dict):
+                raise ValueError("dogfood.provenance must be an object")
+            if not isinstance(provenance.get("generator"), str) or not provenance["generator"]:
+                raise ValueError("dogfood.provenance.generator must be non-empty")
+            git_sha = provenance.get("git_sha")
+            if not isinstance(git_sha, str) or len(git_sha) != 40 or any(
+                character not in "0123456789abcdefABCDEF" for character in git_sha
+            ):
+                raise ValueError("dogfood.provenance.git_sha must be a 40-character SHA-1")
+            if provenance.get("repository_dirty") is not False:
+                raise ValueError("dogfood.provenance.repository_dirty must be false")
             raw_episodes = artifact.get("episodes")
             if not isinstance(raw_episodes, list) or not raw_episodes:
                 raise ValueError("dogfood artifact has no non-empty episodes list")
@@ -385,8 +396,10 @@ def _dogfood_summary(
         if observed_times
         else None
     )
+    distinct_observation_count = len(set(observed_times))
     series_eligible = bool(
         len(observed_times) >= MIN_DOGFOOD_EPISODES
+        and distinct_observation_count >= MIN_DOGFOOD_EPISODES
         and span_seconds is not None
         and span_seconds >= MIN_DOGFOOD_SPAN_SECONDS
     )
@@ -474,13 +487,15 @@ def _dogfood_summary(
             "first_observed_at": first_observed_at,
             "last_observed_at": last_observed_at,
             "span_seconds": span_seconds,
-            "distinct_observation_count": len(set(observed_times)),
+            "distinct_observation_count": distinct_observation_count,
             "minimum_episode_count": MIN_DOGFOOD_EPISODES,
             "minimum_span_seconds": MIN_DOGFOOD_SPAN_SECONDS,
         },
         "automatic_recovery_time": {
             "status": "observed" if series_eligible and recovery else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
+            "scope": "dogfood_episode_series",
+            "source": references,
             "sample_count": len(recovery),
             "seconds": {
                 "min": min(recovery) if recovery else None,
@@ -492,9 +507,10 @@ def _dogfood_summary(
             "status": "observed" if series_eligible and broken_cases else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
+            "source": references,
             "numerator": false_red_cases,
             "denominator": broken_cases,
-            "rate": false_red_cases / broken_cases if broken_cases else None,
+            "rate": false_red_cases / broken_cases if series_eligible and broken_cases else None,
             "numerator_definition": "dogfood_observed_broken_cases_expected_red_ineligible",
             "denominator_definition": "dogfood_observed_broken_cases",
         },
@@ -502,9 +518,10 @@ def _dogfood_summary(
             "status": "observed" if series_eligible and eligible_failure_cases else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
+            "source": references,
             "numerator": hidden_failure_cases,
             "denominator": eligible_failure_cases,
-            "rate": hidden_failure_cases / eligible_failure_cases if eligible_failure_cases else None,
+            "rate": hidden_failure_cases / eligible_failure_cases if series_eligible and eligible_failure_cases else None,
             "numerator_definition": "dogfood_expected_risk_observed_healthy_and_fresh",
             "denominator_definition": "dogfood_expected_red_risk_or_stale_producer_cases",
         },
@@ -512,9 +529,10 @@ def _dogfood_summary(
             "status": "observed" if series_eligible and actionable else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
+            "source": references,
             "numerator": action_pass,
             "denominator": len(actionable),
-            "rate": action_pass / len(actionable) if actionable else None,
+            "rate": action_pass / len(actionable) if series_eligible and actionable else None,
             "numerator_definition": "dogfood_expected_action_present_in_observed_actions",
             "denominator_definition": "dogfood_cases_with_a_non_none_expected_action",
         },
@@ -522,6 +540,7 @@ def _dogfood_summary(
             "status": "observed" if series_eligible and issue_ages else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
+            "source": references,
             "unresolved_count": unresolved_issues,
             "sample_count": len(issue_ages),
             "max_age_seconds": max(issue_ages) if issue_ages else None,
@@ -532,6 +551,7 @@ def _dogfood_summary(
             "status": "observed" if series_eligible and conservation else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
+            "source": references,
             "sample_count": len(conservation),
             "totals": conservation_totals,
             "accounted_events": accounted_events,
@@ -552,6 +572,7 @@ def _dogfood_summary(
 
 def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, Any]]:
     references: list[dict[str, str]] = []
+    seen_paths: set[Path] = set()
     total = 0
     broken_cases = 0
     false_red_cases = 0
@@ -561,6 +582,9 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
     action_pass = 0
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
         try:
             artifact = _json(path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -641,7 +665,12 @@ def build_report(
 ) -> dict[str, Any]:
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
+    seen_matrix_paths: set[Path] = set()
     for path in matrix_paths:
+        path = path.expanduser().resolve()
+        if path in seen_matrix_paths:
+            continue
+        seen_matrix_paths.add(path)
         try:
             matrix_artifacts.append((path, _json(path)))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
