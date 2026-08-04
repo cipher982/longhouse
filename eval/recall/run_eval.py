@@ -33,8 +33,11 @@ TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
 # queries at k=25, so the replacement may miss at most 36/76. The previous
 # 0.671 ceiling came from an older partial-corpus k=5 run and no longer matched
 # the evaluator's real result depth or the baseline named by this release gate.
-DEFAULT_MAX_FALSE_NEGATIVE_RATE = 0.474
-DEFAULT_MIN_RECALL_AT_5 = 0.329
+# Keep the release boundary as the exact observed counts. Rounded decimal
+# approximations make the baseline fail its own gate (25 / 76 is slightly less
+# than 0.329, while 36 / 76 is slightly more than 0.474).
+DEFAULT_MAX_FALSE_NEGATIVE_RATE = 36 / 76
+DEFAULT_MIN_RECALL_AT_5 = 25 / 76
 MAX_LIVE_HEAD_SESSIONS = 100
 MAX_LIVE_HEAD_AGE_SECONDS = 300.0
 # Full-corpus Qwen3-8B @256d baseline measured at k=25. The replacement must
