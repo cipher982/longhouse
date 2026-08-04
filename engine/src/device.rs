@@ -1086,7 +1086,7 @@ fn native_desktop_suggested_actions(
                 ),
             ],
             (None, _) => vec![
-                "Update Longhouse and inspect retained source evidence before retrying or discarding it."
+                "Update Longhouse and inspect the retained source evidence."
                     .to_string(),
             ],
             _ => vec![
@@ -3915,6 +3915,9 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_proof_unknown".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_blocked".to_string()));
         assert!(!health
             .reasons
             .contains(&"storage_v2_sources_unresolved".to_string()));

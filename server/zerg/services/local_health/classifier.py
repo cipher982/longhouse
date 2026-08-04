@@ -815,10 +815,13 @@ def _collect_health_reasons(
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
     )
-    if context.storage_blocked_sources > 0 and context.storage_unresolved_blocked_sources == 0 and not context.storage_block_proof_unknown:
+    if context.storage_blocked_sources > 0 and context.storage_unresolved_blocked_sources == 0:
         reasons.append("storage_v2_sources_blocked")
-        source_suffix = f" --source-epoch {context.storage_latest_block_source_epoch}" if context.storage_latest_block_source_epoch else ""
-        _with_action(actions, f"Inspect retained source evidence: longhouse shipping inspect{source_suffix} --json.")
+        if not context.storage_block_proof_unknown:
+            source_suffix = (
+                f" --source-epoch {context.storage_latest_block_source_epoch}" if context.storage_latest_block_source_epoch else ""
+            )
+            _with_action(actions, f"Inspect retained source evidence: longhouse shipping inspect{source_suffix} --json.")
     if context.storage_unresolved_blocked_sources > 0:
         reasons.append("storage_v2_sources_unresolved")
         unresolved_source_epoch = context.storage_latest_unresolved_block_source_epoch
@@ -834,7 +837,7 @@ def _collect_health_reasons(
         )
     if context.storage_block_proof_unknown:
         reasons.append("storage_v2_sources_proof_unknown")
-        _with_action(actions, "Update Longhouse and inspect the retained source evidence")
+        _with_action(actions, "Update Longhouse and inspect the retained source evidence.")
     if context.storage_outbox_error:
         reasons.append("storage_v2_outbox_unreadable")
         _with_action(actions, "Inspect the storage-v2 outbox database error in engine-status.json")
