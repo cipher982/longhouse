@@ -1939,6 +1939,45 @@ def launch_attempt_states(
     return states
 
 
+def record_success_measurements(
+    artifact: dict[str, Any],
+    *,
+    run_started_at: str,
+    run_started_monotonic: float,
+    host_outage_started_at: str | None,
+    host_recovery_started_at: str | None,
+    host_recovery_started_monotonic: float | None,
+    recovery_completed_at: str | None,
+    recovery_completed_monotonic: float | None,
+    cleanup_completed_at: str,
+    run_completed_at: str,
+    run_completed_monotonic: float,
+) -> dict[str, Any]:
+    """Attach success timing only after the complete teardown has finished."""
+    artifact["generated_at"] = run_completed_at
+    artifact["measurements"] = {
+        "run_started_at": run_started_at,
+        "run_completed_at": run_completed_at,
+        "run_duration_seconds": round(
+            run_completed_monotonic - run_started_monotonic, 3
+        ),
+        "host_outage_started_at": host_outage_started_at,
+        "host_recovery_started_at": host_recovery_started_at,
+        "retry_queue_converged_at": recovery_completed_at,
+        "recovery_duration_seconds": (
+            round(
+                recovery_completed_monotonic - host_recovery_started_monotonic,
+                3,
+            )
+            if recovery_completed_monotonic is not None
+            and host_recovery_started_monotonic is not None
+            else None
+        ),
+        "cleanup_completed_at": cleanup_completed_at,
+    }
+    return artifact
+
+
 def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -1973,6 +2012,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     recovery_completed_at: str | None = None
     recovery_completed_monotonic: float | None = None
     cleanup_completed_at: str | None = None
+    cleanup_completed_monotonic: float | None = None
+    success_artifact: dict[str, Any] | None = None
     try:
         longhouse_bin = resolve_file(
             args.longhouse_bin or os.environ.get("LONGHOUSE_FAULT_LONGHOUSE_BIN"),
@@ -2513,14 +2554,13 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             result["returncode"] = cleanup["returncode"]
             result["detached_cleanup"] = cleanup
         live_commands.clear()
-        cleanup_completed_at = utc_now()
         if engine_handle is not None:
             engine_handle.close()
             engine_handle = None
-        return {
+        success_artifact = {
             "schema_version": 1,
             "artifact_kind": "installed_managed_launch_fault_matrix",
-            "generated_at": utc_now(),
+            "generated_at": None,
             "verdict": "yellow"
             if unready_intents or provider_failures
             else "green",
@@ -2574,27 +2614,6 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "runtime_host_port": port,
             "machine_agent_log": str(engine_log) if engine_log else None,
             "evidence_root": str(evidence_root),
-            "measurements": {
-                "run_started_at": run_started_at,
-                "run_completed_at": utc_now(),
-                "run_duration_seconds": round(
-                    time.monotonic() - run_started_monotonic, 3
-                ),
-                "host_outage_started_at": host_outage_started_at,
-                "host_recovery_started_at": host_recovery_started_at,
-                "retry_queue_converged_at": recovery_completed_at,
-                "recovery_duration_seconds": (
-                    round(
-                        recovery_completed_monotonic
-                        - host_recovery_started_monotonic,
-                        3,
-                    )
-                    if recovery_completed_monotonic is not None
-                    and host_recovery_started_monotonic is not None
-                    else None
-                ),
-                "cleanup_completed_at": cleanup_completed_at,
-            },
         }
     finally:
         primary_exception = sys.exc_info()[1]
@@ -2643,6 +2662,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             )
         if os.environ.get("LONGHOUSE_KEEP_INSTALLED_FAULT_ROOT") != "1":
             shutil.rmtree(temp_root, ignore_errors=True)
+        cleanup_completed_at = utc_now()
+        cleanup_completed_monotonic = time.monotonic()
         if cleanup_errors:
             details = "; ".join(cleanup_errors)
             if primary_exception is not None:
@@ -2652,6 +2673,25 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     f"cleanup failures: {details}"
                 ) from primary_exception
             raise ProcessScanFailure(f"installed matrix cleanup failed: {details}")
+
+    if success_artifact is None:
+        raise RuntimeError("installed matrix completed without a success artifact")
+    if cleanup_completed_at is None or cleanup_completed_monotonic is None:
+        raise RuntimeError("installed matrix completed without teardown timing")
+    run_completed_at = utc_now()
+    return record_success_measurements(
+        success_artifact,
+        run_started_at=run_started_at,
+        run_started_monotonic=run_started_monotonic,
+        host_outage_started_at=host_outage_started_at,
+        host_recovery_started_at=host_recovery_started_at,
+        host_recovery_started_monotonic=host_recovery_started_monotonic,
+        recovery_completed_at=recovery_completed_at,
+        recovery_completed_monotonic=recovery_completed_monotonic,
+        cleanup_completed_at=cleanup_completed_at,
+        run_completed_at=run_completed_at,
+        run_completed_monotonic=time.monotonic(),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

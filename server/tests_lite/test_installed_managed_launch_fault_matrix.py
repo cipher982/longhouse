@@ -71,3 +71,30 @@ def test_process_start_identity_fails_closed_on_unexpected_ps_exit(
 
     with pytest.raises(_MODULE.ProcessScanFailure, match="returncode=2"):
         _MODULE.process_start_identity(1234)
+
+
+def test_success_measurements_include_post_teardown_completion() -> None:
+    artifact = {"artifact_kind": "installed_managed_launch_fault_matrix"}
+
+    result = _MODULE.record_success_measurements(
+        artifact,
+        run_started_at="2026-08-04T15:00:00Z",
+        run_started_monotonic=10.0,
+        host_outage_started_at="2026-08-04T15:00:01Z",
+        host_recovery_started_at="2026-08-04T15:00:01Z",
+        host_recovery_started_monotonic=11.0,
+        recovery_completed_at="2026-08-04T15:00:02Z",
+        recovery_completed_monotonic=12.0,
+        cleanup_completed_at="2026-08-04T15:00:03Z",
+        run_completed_at="2026-08-04T15:00:04Z",
+        run_completed_monotonic=14.0,
+    )
+
+    assert result["generated_at"] == "2026-08-04T15:00:04Z"
+    assert result["measurements"]["cleanup_completed_at"] == (
+        "2026-08-04T15:00:03Z"
+    )
+    assert result["measurements"]["run_completed_at"] > result["measurements"][
+        "cleanup_completed_at"
+    ]
+    assert result["measurements"]["run_duration_seconds"] == 4.0
