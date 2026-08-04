@@ -43,6 +43,7 @@ _SAFE_RETRY_METHODS = {
     "notification.apns.device.upsert.v2",
     "notification.apns.live_activity.upsert.v2",
     "notification.apns.live_activity.end.v2",
+    "notification.apns.attention.pending.list.v2",
     "notification.apns.attention.rollback.v2",
     "notification.apns.attention.commit.v2",
     # Both control mutations are caller-keyed and exact/idempotent. A replay

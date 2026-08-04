@@ -263,6 +263,200 @@ def _live_resolve_suppressed_attention_events(orm: Session, *, session_id: str, 
         event.resolved_at = occurred_at
 
 
+def _live_clear_pending_attention(
+    *,
+    catalog: LiveSessionCatalog,
+    event: LiveNotificationEvent | None,
+    occurred_at: datetime,
+    status: str,
+    reason: str | None = None,
+) -> None:
+    """Close a durable action that can no longer be sent safely."""
+
+    catalog.last_attention_push_state = None
+    catalog.last_attention_push_at = None
+    catalog.last_attention_notification_id = None
+    if event is None:
+        return
+    channel_results = dict(event.channel_results or {})
+    replay_result: dict[str, str] = {"status": status}
+    if reason:
+        replay_result["reason"] = reason
+    channel_results["replayed"] = replay_result
+    event.channel_results = channel_results
+    event.resolved_at = occurred_at
+
+
+def _live_pending_attention_action(
+    *,
+    orm: Session,
+    catalog: LiveSessionCatalog,
+    runtime: LiveRuntimeState | None,
+    observed_at: datetime,
+) -> dict[str, Any] | None:
+    """Reconstruct one pending attention action from durable catalog facts."""
+
+    raw_stamp = str(catalog.last_attention_push_state or "").strip()
+    if raw_stamp not in {_CATALOG_STALL_PENDING, _CATALOG_STALL_RESOLUTION_PENDING}:
+        return None
+    session_id = str(catalog.session_id)
+    event = orm.get(LiveNotificationEvent, str(catalog.last_attention_notification_id)) if catalog.last_attention_notification_id else None
+    if event is None:
+        _live_clear_pending_attention(
+            catalog=catalog,
+            event=None,
+            occurred_at=observed_at,
+            status="missing_audit_event",
+        )
+        return None
+    if runtime is None:
+        return None
+    phase = str(runtime.phase or "").strip()
+    runtime_signal_at = _as_aware_utc(runtime.last_runtime_signal_at) or observed_at
+    attention_push_at = _as_aware_utc(catalog.last_attention_push_at)
+    if attention_push_at is None:
+        attention_push_at = _as_aware_utc(event.event_started_at) or observed_at
+
+    if raw_stamp == _CATALOG_STALL_PENDING:
+        if phase != "stalled":
+            _live_clear_pending_attention(
+                catalog=catalog,
+                event=event,
+                occurred_at=observed_at,
+                status="recovered_while_pending",
+            )
+            return None
+        if bool(catalog.hidden_from_default_timeline) or bool(catalog.user_hidden_from_timeline):
+            _live_clear_pending_attention(
+                catalog=catalog,
+                event=event,
+                occurred_at=observed_at,
+                status="suppressed",
+                reason="hidden_session",
+            )
+            return None
+        owner_id = _live_attention_owner_id(orm, session_id)
+        if owner_id is None:
+            _live_clear_pending_attention(
+                catalog=catalog,
+                event=event,
+                occurred_at=observed_at,
+                status="discarded",
+                reason="missing_owner",
+            )
+            return None
+        user = orm.get(LiveUser, owner_id)
+        policy = evaluate_tier1_delivery_with_facts(
+            orm,
+            user=user,
+            session_muted=bool(catalog.notification_muted),
+            visible_web_client=_live_recent_visible_web_client(
+                orm,
+                owner_id=owner_id,
+                occurred_at=attention_push_at,
+            ),
+            occurred_at=attention_push_at,
+            event_type="session_stalled",
+        )
+        if policy.action == AttentionDeliveryAction.QUEUE:
+            return None
+        if policy.action != AttentionDeliveryAction.DELIVER:
+            _live_clear_pending_attention(
+                catalog=catalog,
+                event=event,
+                occurred_at=observed_at,
+                status="suppressed",
+                reason=str(policy.reason or policy.action.value),
+            )
+            return None
+        targets = _live_attention_targets(orm, owner_id)
+        if not targets:
+            return None
+        title = str(catalog.summary_title or catalog.anchor_title or catalog.project or f"{catalog.provider} session")
+        summary = str(catalog.summary or title)
+        return {
+            "kind": "attention",
+            "owner_id": owner_id,
+            "session_id": session_id,
+            "state": "stalled",
+            "previous_state": raw_stamp,
+            "occurred_at": attention_push_at.isoformat(),
+            "title": title,
+            "summary": summary,
+            "project": catalog.project,
+            "provider": catalog.provider,
+            "tool_name": runtime.active_tool,
+            "notification_event_id": str(event.id),
+            "targets": targets,
+        }
+
+    if phase == "stalled":
+        _live_clear_pending_attention(
+            catalog=catalog,
+            event=event,
+            occurred_at=observed_at,
+            status="stalled_again_while_pending",
+        )
+        return None
+    owner_id = _live_attention_owner_id(orm, session_id)
+    if owner_id is None:
+        _live_clear_pending_attention(
+            catalog=catalog,
+            event=event,
+            occurred_at=observed_at,
+            status="discarded",
+            reason="missing_owner",
+        )
+        return None
+    targets = _live_attention_targets(orm, owner_id)
+    if not targets:
+        return None
+    return {
+        "kind": "resolution",
+        "owner_id": owner_id,
+        "session_id": session_id,
+        "state": "stalled",
+        "previous_state": raw_stamp,
+        "current_state": phase or "unknown",
+        "occurred_at": runtime_signal_at.isoformat(),
+        "attention_push_at": attention_push_at.isoformat(),
+        "notification_event_id": str(event.id),
+        "targets": targets,
+    }
+
+
+def _list_pending_apns_attention_actions(
+    orm: Session,
+    *,
+    observed_at: datetime,
+    limit: int,
+) -> list[dict[str, Any]]:
+    catalogs = (
+        orm.query(LiveSessionCatalog)
+        .filter(LiveSessionCatalog.last_attention_push_state.in_({_CATALOG_STALL_PENDING, _CATALOG_STALL_RESOLUTION_PENDING}))
+        .order_by(LiveSessionCatalog.last_attention_push_at.asc(), LiveSessionCatalog.session_id.asc())
+        .limit(limit)
+        .all()
+    )
+    actions: list[dict[str, Any]] = []
+    for catalog in catalogs:
+        runtime = (
+            orm.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id == catalog.session_id)
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .first()
+        )
+        action = _live_pending_attention_action(
+            orm=orm,
+            catalog=catalog,
+            runtime=runtime,
+            observed_at=observed_at,
+        )
+        if action is not None:
+            actions.append(action)
+    return actions
+
+
 def _live_runtime_attention_actions(
     orm: Session,
     *,
@@ -2268,6 +2462,33 @@ class CatalogStore:
             if attention_actions:
                 response["attention_actions"] = attention_actions
             return response
+
+    def list_pending_apns_attention_actions(
+        self,
+        *,
+        observed_at: datetime,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Rebuild durable APNs work after a Runtime Host restart."""
+
+        observed_at = _as_aware_utc(observed_at) or datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                actions = _list_pending_apns_attention_actions(
+                    orm,
+                    observed_at=observed_at,
+                    limit=limit,
+                )
+                changed = orm.dirty or orm.new or orm.deleted
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
+            return {"actions": actions, "commit_seq": str(commit_seq)}
 
     def rollback_apns_attention(
         self,

@@ -66,6 +66,7 @@ router = APIRouter(prefix="/agents/runtime", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
+_CATALOG_ATTENTION_REPLAY_INTERVAL_SECONDS = 15.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
 _catalog_attention_tasks: set[asyncio.Task] = set()
 
@@ -215,6 +216,31 @@ def _retain_catalog_attention_task(task: asyncio.Task) -> None:
                 logging.getLogger(__name__).exception("Catalog APNs attention task failed", exc_info=exception)
 
     task.add_done_callback(_finish)
+
+
+async def run_catalog_attention_replay_loop() -> None:
+    """Replay APNs actions whose dispatch or commit was interrupted."""
+
+    while True:
+        try:
+            catalogd = get_catalogd_client()
+            result = await catalogd.call(
+                "notification.apns.attention.pending.list.v2",
+                {
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "limit": 100,
+                },
+            )
+            actions = result.get("actions", [])
+            if not isinstance(actions, list):
+                raise ValueError("Catalog returned invalid pending attention actions")
+            if actions:
+                await _dispatch_catalog_attention_actions(actions, catalogd)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("Catalog APNs attention replay tick failed")
+        await asyncio.sleep(_CATALOG_ATTENTION_REPLAY_INTERVAL_SECONDS)
 
 
 def _no_runtime_db():

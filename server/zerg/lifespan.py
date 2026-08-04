@@ -79,6 +79,15 @@ async def _stop_local_embedding_initializer(app: FastAPI) -> None:
     app.state.embedding_initializer_task = None
 
 
+async def _stop_catalog_attention_replayer(app: FastAPI) -> None:
+    task = getattr(app.state, "catalog_attention_replayer_task", None)
+    if task is None:
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    app.state.catalog_attention_replayer_task = None
+
+
 @contextmanager
 def _timed_startup_step(name: str):
     started = time.monotonic()
@@ -218,6 +227,16 @@ async def lifespan(app: FastAPI):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
                 app.state.catalogd_ping = await start_catalogd_supervisor()
+            try:
+                from zerg.routers.runtime import run_catalog_attention_replay_loop
+
+                app.state.catalog_attention_replayer_task = asyncio.create_task(
+                    run_catalog_attention_replay_loop(),
+                    name="catalog-attention-replayer",
+                )
+                logger.info("Catalog APNs attention replayer started")
+            except Exception:
+                logger.exception("Failed to start catalog APNs attention replayer")
             logger.info("Live catalog schema is owned by catalogd")
             with _timed_startup_step("searchd_supervisor"):
                 try:
@@ -424,6 +443,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup: {e}")
         if catalog_mode and not _settings.testing:
             await _stop_local_embedding_initializer(app)
+            await _stop_catalog_attention_replayer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
@@ -500,6 +520,7 @@ async def lifespan(app: FastAPI):
 
         if catalog_mode and not _settings.testing:
             await _stop_local_embedding_initializer(app)
+            await _stop_catalog_attention_replayer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()

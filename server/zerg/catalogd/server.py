@@ -290,6 +290,8 @@ class CatalogDaemon:
             return await self._upsert_apns_live_activity(request)
         if request.method == "notification.apns.live_activity.end.v2":
             return await self._end_apns_live_activity(request)
+        if request.method == "notification.apns.attention.pending.list.v2":
+            return await self._list_pending_apns_attention(request)
         if request.method == "notification.apns.attention.rollback.v2":
             return await self._rollback_apns_attention(request)
         if request.method == "notification.apns.attention.commit.v2":
@@ -1078,6 +1080,29 @@ class CatalogDaemon:
             owner_id=owner_id,
             activity_id=activity_id,
             ended_at=ended_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_pending_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"observed_at", "limit"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "notification.apns.attention.pending.list.v2 has invalid parameters",
+            )
+        try:
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+            limit = _bounded_count(request.params["limit"], "limit")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if limit > 100:
+            return self._error(request, "invalid_request", "limit must be at most 100")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_pending_apns_attention_actions,
+            observed_at=observed_at,
+            limit=limit,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
