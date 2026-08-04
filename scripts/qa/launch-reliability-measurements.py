@@ -249,25 +249,34 @@ def _health_truth(episode: dict[str, Any], *, label: str) -> None:
 def _load_dogfood_series(
     paths: Iterable[Path],
     invalid: list[dict[str, str]],
+    *,
+    as_of: datetime | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """Load validated longitudinal observations without filling missing facts."""
 
     references: list[dict[str, str]] = []
     episodes: list[dict[str, Any]] = []
     seen_paths: set[Path] = set()
+    seen_hashes: set[str] = set()
     seen_episode_ids: set[str] = set()
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
         if path in seen_paths:
             continue
-        seen_paths.add(path)
         try:
+            content_hash = _sha256(path)
+            if content_hash in seen_hashes:
+                continue
+            seen_paths.add(path)
+            seen_hashes.add(content_hash)
             artifact = _json(path)
             if artifact.get("artifact_kind") != DOGFOOD_ARTIFACT_KIND:
                 raise ValueError(f"artifact_kind must be {DOGFOOD_ARTIFACT_KIND!r}")
             if artifact.get("schema_version") != DOGFOOD_SCHEMA_VERSION:
                 raise ValueError(f"schema_version must be {DOGFOOD_SCHEMA_VERSION}")
             generated_at = _timestamp(artifact.get("generated_at"), label="dogfood.generated_at")
+            if as_of is not None and generated_at > as_of:
+                raise ValueError("dogfood.generated_at is after report generation time")
             provenance = artifact.get("provenance")
             if not isinstance(provenance, dict):
                 raise ValueError("dogfood.provenance must be an object")
@@ -498,11 +507,11 @@ def _dogfood_summary(
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
-            "sample_count": len(recovery),
+            "sample_count": len(recovery) if series_eligible else None,
             "seconds": {
-                "min": min(recovery) if recovery else None,
-                "median": statistics.median(recovery) if recovery else None,
-                "max": max(recovery) if recovery else None,
+                "min": min(recovery) if series_eligible and recovery else None,
+                "median": statistics.median(recovery) if series_eligible and recovery else None,
+                "max": max(recovery) if series_eligible and recovery else None,
             },
         },
         "false_red_rate": {
@@ -543,10 +552,10 @@ def _dogfood_summary(
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
-            "unresolved_count": unresolved_issues,
-            "sample_count": len(issue_ages),
-            "max_age_seconds": max(issue_ages) if issue_ages else None,
-            "median_age_seconds": statistics.median(issue_ages) if issue_ages else None,
+            "unresolved_count": unresolved_issues if series_eligible else None,
+            "sample_count": len(issue_ages) if series_eligible else None,
+            "max_age_seconds": max(issue_ages) if series_eligible and issue_ages else None,
+            "median_age_seconds": statistics.median(issue_ages) if series_eligible and issue_ages else None,
             "denominator_definition": "dogfood_unresolved_event_bearing_issues",
         },
         "duplicate_replayed_discarded_evidence": {
@@ -554,18 +563,21 @@ def _dogfood_summary(
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
-            "sample_count": len(conservation),
-            "totals": conservation_totals,
-            "accounted_events": accounted_events,
-            "unaccounted_events": source_events - accounted_events if conservation else None,
+            "sample_count": len(conservation) if series_eligible else None,
+            "totals": conservation_totals if series_eligible else {field: None for field in CONSERVATION_FIELDS},
+            "accounted_events": accounted_events if series_eligible else None,
+            "unaccounted_events": source_events - accounted_events if series_eligible and conservation else None,
             "conservation_status": (
                 "complete"
-                if conservation and source_events == accounted_events and conservation_totals["discarded_events"] == 0
+                if series_eligible
+                and conservation
+                and source_events == accounted_events
+                and conservation_totals["discarded_events"] == 0
                 else "complete_with_discard"
-                if conservation and source_events == accounted_events
+                if series_eligible and conservation and source_events == accounted_events
                 else "gap"
             )
-            if conservation
+            if series_eligible and conservation
             else None,
             "denominator_definition": "dogfood_source_events",
         },
@@ -623,6 +635,7 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
 def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, Any]]:
     references: list[dict[str, str]] = []
     seen_paths: set[Path] = set()
+    seen_hashes: set[str] = set()
     total = 0
     broken_cases = 0
     false_red_cases = 0
@@ -634,8 +647,12 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
         path = raw_path.expanduser().resolve()
         if path in seen_paths:
             continue
-        seen_paths.add(path)
         try:
+            content_hash = _sha256(path)
+            if content_hash in seen_hashes:
+                continue
+            seen_paths.add(path)
+            seen_hashes.add(content_hash)
             artifact = _json(path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
@@ -716,12 +733,17 @@ def build_report(
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
     seen_matrix_paths: set[Path] = set()
+    seen_matrix_hashes: set[str] = set()
     for path in matrix_paths:
         path = path.expanduser().resolve()
         if path in seen_matrix_paths:
             continue
-        seen_matrix_paths.add(path)
         try:
+            content_hash = _sha256(path)
+            if content_hash in seen_matrix_hashes:
+                continue
+            seen_matrix_paths.add(path)
+            seen_matrix_hashes.add(content_hash)
             matrix_artifacts.append((path, _json(path)))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
@@ -784,12 +806,17 @@ def build_report(
     blocked_operations: list[dict[str, str]] = []
     harness_inputs: list[str] = []
     seen_harness_paths: set[Path] = set()
+    seen_harness_hashes: set[str] = set()
     for path in harness_paths:
         path = path.expanduser().resolve()
         if path in seen_harness_paths:
             continue
-        seen_harness_paths.add(path)
         try:
+            content_hash = _sha256(path)
+            if content_hash in seen_harness_hashes:
+                continue
+            seen_harness_paths.add(path)
+            seen_harness_hashes.add(content_hash)
             artifact = _json(path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
@@ -820,9 +847,14 @@ def build_report(
                     level = str(evidence.get("level") or "unknown")
                     harness_levels[level] += 1
 
+    report_generated_at = datetime.now(UTC)
     health_inputs, health_summary = _health_measurements(health_paths, invalid)
     invalid_before_dogfood = len(invalid)
-    dogfood_inputs, dogfood_episodes = _load_dogfood_series(dogfood_paths, invalid)
+    dogfood_inputs, dogfood_episodes = _load_dogfood_series(
+        dogfood_paths,
+        invalid,
+        as_of=report_generated_at,
+    )
     dogfood_summary = _dogfood_summary(dogfood_episodes, dogfood_inputs)
     dogfood_invalid = len(invalid) > invalid_before_dogfood
     dogfood_summary["input_status"] = (
@@ -847,7 +879,7 @@ def build_report(
         "schema_version": 2,
         "artifact_kind": "launch_reliability_measurements",
         "report_status": "invalid" if invalid else "ok",
-        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "generated_at": report_generated_at.isoformat().replace("+00:00", "Z"),
         "provenance": report_provenance(),
         "inputs": {
             "matrix_artifacts": [_input_reference(path) for path, _ in matrix_artifacts],
@@ -910,6 +942,11 @@ def build_report(
                     "scope": "measured_clean_runs",
                     "sample_count": len(successful),
                     "source": [_input_reference(path) for path, _ in successful],
+                    "seconds": {
+                        "min": min(recovery_seconds) if recovery_seconds else None,
+                        "median": statistics.median(recovery_seconds) if recovery_seconds else None,
+                        "max": max(recovery_seconds) if recovery_seconds else None,
+                    },
                 }
                 if successful
                 else _not_observed("no measured matrix run with a positive retry queue converged to zero and complete cleanup")

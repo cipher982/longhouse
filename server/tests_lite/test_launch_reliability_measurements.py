@@ -181,8 +181,10 @@ def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
             }
         )
     )
+    harness_copy = tmp_path / "harness-copy.json"
+    harness_copy.write_bytes(harness.read_bytes())
 
-    report = MODULE.build_report([matrix], [harness, harness])
+    report = MODULE.build_report([matrix], [harness, harness_copy, harness])
 
     assert report["provider_scenarios"]["result_status_counts"] == {"pass": 1}
     assert report["provider_scenarios"]["operation_status_counts"] == {"pass": 1}
@@ -347,8 +349,10 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
             }
         )
     )
+    matrix_copy = tmp_path / "health-copy.json"
+    matrix_copy.write_bytes(matrix.read_bytes())
 
-    report = MODULE.build_report([], health_paths=[matrix, matrix])
+    report = MODULE.build_report([], health_paths=[matrix, matrix_copy, matrix])
 
     assert report["health_fault_matrix"]["case_count"] == 1
     assert report["measures"]["false_red_rate"]["denominator"] == 1
@@ -655,3 +659,5 @@ def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):
     assert report["dogfood_series"]["observation_window"]["status"] == "insufficient"
     assert report["dogfood_series"]["false_red_rate"]["status"] == "not_observed"
     assert report["dogfood_series"]["false_red_rate"]["rate"] is None
+    assert report["dogfood_series"]["automatic_recovery_time"]["sample_count"] is None
+    assert report["dogfood_series"]["automatic_recovery_time"]["seconds"]["median"] is None
