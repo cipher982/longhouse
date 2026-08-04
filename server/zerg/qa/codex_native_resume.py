@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _redact_state_for_evidence
@@ -877,8 +879,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
         return 0
     args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get("CODEX_API_URL", "")
-    args.agents_token = os.environ.get("CODEX_AGENTS_TOKEN", "")
+    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
+    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
     args.script_bin = None
     args.timeout_bin = None
     if not args.api_url or not args.agents_token:

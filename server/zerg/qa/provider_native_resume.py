@@ -41,6 +41,8 @@ QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
 _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
+RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
+RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 _EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|access_key|authorization)$")
 
 
@@ -2151,8 +2153,8 @@ def main_for(provider: str, argv: list[str] | None = None) -> int:
         print(json.dumps(registration_for(provider).to_dict(), indent=2, sort_keys=True))
         return 0
     args = parser().parse_args(arguments)
-    args.api_url = os.environ.get("CODEX_API_URL", "")
-    args.agents_token = os.environ.get("CODEX_AGENTS_TOKEN", "")
+    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
+    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
     if not args.api_url or not args.agents_token:
         print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
         return 2
