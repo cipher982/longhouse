@@ -664,8 +664,8 @@ def test_codex_main_serializes_path_values_in_result_output(
         executable.chmod(0o755)
     result_path = tmp_path / "evidence"
 
-    monkeypatch.setenv("CODEX_API_URL", "https://runtime.example")
-    monkeypatch.setenv("CODEX_AGENTS_TOKEN", "device-token")
+    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "https://runtime.example")
+    monkeypatch.setenv("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "device-token")
     monkeypatch.setattr(
         codex_native_resume,
         "run_native_resume",
