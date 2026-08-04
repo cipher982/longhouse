@@ -26,7 +26,12 @@ def _add_archive_backlog_reason(
         )
     if archive_mode == "paused" or archive_state == "paused":
         reasons.append("archive_repair_paused")
-    elif archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
+        _with_action(
+            actions,
+            "Inspect archive repair state: longhouse local-health --fast --json",
+        )
+        return
+    if archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
         return
     elif archive_state in {"draining", "scanning", "uploading"}:
         reasons.append("archive_repair_draining")

@@ -61,7 +61,7 @@ def test_explicit_archive_pause_is_visible_without_backlog():
     reasons, actions = _collect_health_reasons(context, transport_assessment=None)
 
     assert reasons == ["archive_repair_paused"]
-    assert any("longhouse local-health --fast --json" in action for action in actions)
+    assert any("Inspect archive repair state" in action for action in actions)
     assert _suggested_action_ids(reasons) == ["inspect_archive"]
     assert _health_flags(
         launch_state="ready",
