@@ -3539,7 +3539,7 @@ mod tests {
     // Raw eprintln! inside thread bodies is prevented structurally by routing
     // thread notices through DeferredNotices (see spawn_claude_registration_retry).
     #[test]
-    fn deferred_notices_drain_is_lifo_consuming() {
+    fn deferred_notices_drain_is_fifo_and_consuming() {
         let notices = DeferredNotices::default();
         assert!(notices.drain().is_empty());
         notices.push("first".to_string());
