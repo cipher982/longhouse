@@ -424,31 +424,30 @@ struct BridgeState {
 }
 
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
-    if let Some(override_path) = std::env::var_os("LONGHOUSE_ENGINE_BIN") {
-        return Ok(PathBuf::from(override_path));
-    }
-    let exe = std::fs::canonicalize(
-        std::env::current_exe().context("resolve native longhouse executable")?,
-    )
-    .context("resolve native longhouse executable path")?;
-    let dir = exe
-        .parent()
-        .context("native longhouse executable has no parent")?;
-    Ok(dir.join(if cfg!(windows) {
-        "longhouse-engine.exe"
+    let path = if let Some(override_path) = std::env::var_os("LONGHOUSE_ENGINE_BIN") {
+        PathBuf::from(override_path)
     } else {
-        "longhouse-engine"
-    }))
+        let exe = std::fs::canonicalize(
+            std::env::current_exe().context("resolve native longhouse executable")?,
+        )
+        .context("resolve native longhouse executable path")?;
+        let dir = exe
+            .parent()
+            .context("native longhouse executable has no parent")?;
+        dir.join(if cfg!(windows) {
+            "longhouse-engine.exe"
+        } else {
+            "longhouse-engine"
+        })
+    };
+    if !path.is_file() {
+        anyhow::bail!("paired longhouse-engine not found at {}", path.display());
+    }
+    Ok(path)
 }
 
 fn pair_identity() -> anyhow::Result<PairIdentity> {
     let engine_path = paired_engine_path()?;
-    if !engine_path.is_file() {
-        anyhow::bail!(
-            "paired longhouse-engine not found at {}",
-            engine_path.display()
-        );
-    }
     let output = Command::new(&engine_path)
         .args(["build-identity", "--json"])
         .output()
@@ -4471,6 +4470,23 @@ mod tests {
             .to_string()
             .contains("claude-lifecycle-hook"));
         assert!(!temp.path().join(".claude.json").exists());
+    }
+
+    #[test]
+    fn every_native_delegate_reports_the_missing_paired_engine() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-longhouse-engine");
+        temp_env::with_var(
+            "LONGHOUSE_ENGINE_BIN",
+            Some(missing.display().to_string()),
+            || {
+                let error = paired_engine_path().unwrap_err();
+                assert_eq!(
+                    format!("{error:#}"),
+                    format!("paired longhouse-engine not found at {}", missing.display())
+                );
+            },
+        );
     }
 
     #[test]

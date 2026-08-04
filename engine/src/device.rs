@@ -5,7 +5,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -3432,6 +3432,18 @@ mod tests {
         let contract: Value =
             serde_json::from_str(include_str!("../../schemas/health_action_ids.json")).unwrap();
         let mapping = contract["reason_to_action"].as_object().unwrap();
+        let canonical_actions: BTreeSet<String> = mapping
+            .values()
+            .map(|action| action.as_str().unwrap().to_string())
+            .collect();
+        let native_actions: BTreeSet<String> = mapping
+            .keys()
+            .flat_map(|reason| native_desktop_suggested_action_ids(&[reason.clone()]))
+            .collect();
+        assert_eq!(
+            native_actions, canonical_actions,
+            "native action map must expose exactly the canonical action set"
+        );
         for (reason, action) in mapping {
             assert_eq!(
                 native_desktop_suggested_action_ids(&[reason.clone()]),
