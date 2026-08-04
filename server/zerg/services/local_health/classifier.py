@@ -62,6 +62,7 @@ _ACTION_IDS_BY_REASON: dict[str, str] = {
     "spool_dead_letters": "inspect_shipping",
     "outbox_stuck": "inspect_shipping",
     "archive_dead_lettered": "inspect_archive",
+    "archive_repair_paused": "inspect_archive",
     "disk_critically_low": "free_disk_space",
     "disk_low": "free_disk_space",
     "managed_session_control_degraded": "inspect_managed_session",
@@ -497,6 +498,11 @@ def _health_flags(
 ) -> tuple[bool, bool]:
     broken, degraded = _launch_health_flags(launch_state)
     if canonical_sessions_missing or canonical_sessions_invalid:
+        degraded = True
+    if archive_mode == "paused" or archive_state == "paused":
+        # An explicit pause is a current operator/configuration state even
+        # when the queue happens to be empty. Keep it amber and actionable so
+        # a paused hosted install cannot look healthy until work appears.
         degraded = True
     archive_is_actionable = archive_state not in {"draining", "scanning", "uploading"} or archive_mode == "paused"
     if (archive_pending_ranges > 0 or archive_pending_bytes > 0) and archive_is_actionable:

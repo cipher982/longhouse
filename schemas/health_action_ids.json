@@ -2,6 +2,7 @@
   "schema_version": 1,
   "reason_to_action": {
     "archive_dead_lettered": "inspect_archive",
+    "archive_repair_paused": "inspect_archive",
     "consecutive_failures": "inspect_shipping",
     "connect_errors": "inspect_transport",
     "disk_critically_low": "free_disk_space",

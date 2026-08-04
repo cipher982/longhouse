@@ -48,6 +48,7 @@ _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
     "spool_dead_letters": "inspect_shipping",
     "outbox_stuck": "inspect_shipping",
     "archive_dead_lettered": "inspect_archive",
+    "archive_repair_paused": "inspect_archive",
     "disk_critically_low": "free_disk_space",
     "disk_low": "free_disk_space",
     "engine_status_missing": "inspect_local_health",
@@ -552,6 +553,10 @@ def _overlay_archive_repair_reasons(
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, ...]:
+    if (
+        str(archive_repair.get("mode") or "").strip() == "paused" or str(archive_repair.get("state") or "").strip() == "paused"
+    ) and "archive_repair_paused" not in reasons:
+        reasons = (*reasons, "archive_repair_paused")
     if not _archive_has_dead_letters(archive_repair) or "archive_dead_lettered" in reasons:
         return reasons
     return (*reasons, "archive_dead_lettered")
@@ -564,6 +569,14 @@ def _overlay_archive_repair_status(
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, str, str]:
+    if status == "healthy" and (
+        str(archive_repair.get("mode") or "").strip() == "paused" or str(archive_repair.get("state") or "").strip() == "paused"
+    ):
+        return (
+            "degraded",
+            "archive_repair_paused",
+            "Archive repair is paused; inspect the local archive state.",
+        )
     if not _archive_has_dead_letters(archive_repair) or status != "healthy":
         return status, status_reason, status_summary
     return (

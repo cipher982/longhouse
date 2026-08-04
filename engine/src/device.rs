@@ -781,6 +781,13 @@ fn native_fast_health_from_parts(
     };
     let storage_block_proof_unknown =
         unresolved_blocked_source_count.is_none() && blocked_source_count > 0;
+    let archive_repair_paused = object
+        .and_then(|value| value.get("archive_backlog"))
+        .and_then(Value::as_object)
+        .is_some_and(|value| {
+            value.get("mode").and_then(Value::as_str) == Some("paused")
+                || value.get("state").and_then(Value::as_str) == Some("paused")
+        });
     let transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
@@ -826,6 +833,9 @@ fn native_fast_health_from_parts(
     }
     if dead_count > 0 {
         reasons.push("spool_dead_letters".to_string());
+    }
+    if archive_repair_paused {
+        reasons.push("archive_repair_paused".to_string());
     }
     if blocked_source_count > 0 && !storage_block_requires_repair {
         reasons.push("storage_v2_sources_blocked".to_string());
@@ -1155,7 +1165,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "spool_dead"
             | "spool_dead_letters"
             | "outbox_stuck" => "inspect_shipping",
-            "archive_dead_lettered" => "inspect_archive",
+            "archive_dead_lettered" | "archive_repair_paused" => "inspect_archive",
             "disk_critically_low" | "disk_low" => "free_disk_space",
             "managed_session_control_degraded"
             | "managed_session_detached"
@@ -2427,7 +2437,7 @@ fn default_archive_repair_mode_for_url(url: &str) -> &'static str {
         .unwrap_or("")
         .trim_end_matches('.');
     if host == "longhouse.ai" || host.ends_with(".longhouse.ai") {
-        "paused"
+        "trickle"
     } else {
         "drain"
     }
@@ -3741,6 +3751,35 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_blocked".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_explicit_archive_pause_without_backlog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "archive_backlog": {
+                    "state": "complete",
+                    "mode": "paused",
+                    "pending_ranges": 0,
+                    "pending_bytes": 0
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"archive_repair_paused".to_string()));
+        assert_eq!(
+            native_desktop_suggested_action_ids(&health.reasons),
+            vec!["inspect_archive"]
+        );
     }
 
     #[test]
@@ -5284,7 +5323,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(content.contains("<string>com.longhouse.shipper</string>"));
         assert!(content.contains("<string>connect</string>"));
         assert!(content.contains("<string>--archive-repair-mode</string>"));
-        assert!(content.contains("<string>paused</string>"));
+        assert!(content.contains("<string>trickle</string>"));
         assert!(content.contains("<string>work-macbook-dev</string>"));
         assert!(content.contains("<key>LONGHOUSE_MACHINE_GENERATION</key>"));
         assert!(content.contains("<key>LONGHOUSE_MACHINE_STATE_HASH</key>"));

@@ -24,10 +24,10 @@ def _add_archive_backlog_reason(
             actions,
             "Archive retry remains bounded and Machine Agent-owned; inspect local logs before intervention.",
         )
-    if archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
-        return
     if archive_mode == "paused" or archive_state == "paused":
         reasons.append("archive_repair_paused")
+    elif archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
+        return
     elif archive_state in {"draining", "scanning", "uploading"}:
         reasons.append("archive_repair_draining")
     else:
