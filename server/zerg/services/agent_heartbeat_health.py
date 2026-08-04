@@ -426,8 +426,8 @@ def _optional_nonnegative_int(value: Any) -> int | None:
     return value
 
 
-def _counter_is_malformed(value: Any) -> bool:
-    return value is not None and _optional_nonnegative_int(value) is None
+def _counter_is_malformed(value: Any, *, present: bool) -> bool:
+    return present and _optional_nonnegative_int(value) is None
 
 
 def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
@@ -448,7 +448,7 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
 
     if storage is None and storage_value is not None:
         reasons.append("storage_v2_outbox_unreadable")
-        degraded_reasons.append("storage_v2_outbox_unreadable")
+        broken_reasons.append("storage_v2_outbox_unreadable")
     elif storage is not None:
         blocked_value = storage.get("blocked_source_count")
         unresolved_value = storage.get("unresolved_blocked_source_count")
@@ -456,9 +456,18 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
         blocked = _nonnegative_int(blocked_value)
         unresolved = _optional_nonnegative_int(unresolved_value)
         proof_unknown = (
-            _counter_is_malformed(blocked_value)
-            or _counter_is_malformed(unresolved_value)
-            or _counter_is_malformed(reconciling_value)
+            _counter_is_malformed(
+                blocked_value,
+                present="blocked_source_count" in storage,
+            )
+            or _counter_is_malformed(
+                unresolved_value,
+                present="unresolved_blocked_source_count" in storage,
+            )
+            or _counter_is_malformed(
+                reconciling_value,
+                present="reconciling_blocked_source_count" in storage,
+            )
             or (unresolved is None and blocked > 0)
         )
         if blocked > 0 and (unresolved is None or unresolved == 0):
@@ -472,7 +481,7 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
             degraded_reasons.append("storage_v2_sources_proof_unknown")
         if str(storage.get("error") or "").strip():
             reasons.append("storage_v2_outbox_unreadable")
-            degraded_reasons.append("storage_v2_outbox_unreadable")
+            broken_reasons.append("storage_v2_outbox_unreadable")
 
     if recovery is not None:
         if _nonnegative_int(recovery.get("exhausted_count")) > 0:

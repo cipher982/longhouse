@@ -112,9 +112,9 @@ def _optional_nonnegative_int(value: Any) -> int | None:
     return value
 
 
-def _counter_is_malformed(value: Any) -> bool:
+def _counter_is_malformed(value: Any, *, present: bool) -> bool:
     """Return whether a present health counter cannot be trusted."""
-    return value is not None and _optional_nonnegative_int(value) is None
+    return present and _optional_nonnegative_int(value) is None
 
 
 @dataclass
@@ -513,6 +513,7 @@ def _health_flags(
     unknown_managed_phase_count: int,
     canonical_sessions_missing: bool,
     canonical_sessions_invalid: bool,
+    storage_block_proof_unknown: bool = False,
     managed_recovery_exhausted_count: int = 0,
     managed_recovery_active_count: int = 0,
     managed_recovery_scan_error: bool = False,
@@ -530,12 +531,12 @@ def _health_flags(
         degraded = True
     if archive_dead_ranges > 0 or archive_dead_bytes > 0:
         degraded = True
-    if storage_blocked_sources > 0:
+    if storage_blocked_sources > 0 or storage_block_proof_unknown:
         degraded = True
     if storage_unresolved_blocked_sources > 0:
         broken = True
     if storage_outbox_error:
-        degraded = True
+        broken = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
         managed_degraded=managed_degraded,
@@ -602,6 +603,8 @@ def _broken_health_headline(reasons: list[str]) -> str:
         headline = "Longhouse engine service is stopped"
     elif "storage_v2_sources_unresolved" in reasons:
         headline = "Longhouse has unresolved durable source evidence"
+    elif "storage_v2_outbox_unreadable" in reasons:
+        headline = "Source upload state unavailable"
     elif "managed_launch_recovery_exhausted" in reasons:
         headline = "Longhouse could not recover a managed session"
     elif "managed_launch_recovery_unreadable" in reasons:
@@ -721,9 +724,18 @@ def _health_classification_context(
     blocked_source_count = _nonnegative_int(blocked_source_value)
     unresolved_blocked_source_count = _optional_nonnegative_int(unresolved_source_value)
     storage_block_proof_unknown = not storage_outbox_payload_invalid and (
-        _counter_is_malformed(blocked_source_value)
-        or _counter_is_malformed(unresolved_source_value)
-        or _counter_is_malformed(reconciling_source_value)
+        _counter_is_malformed(
+            blocked_source_value,
+            present="blocked_source_count" in storage_v2_outbox,
+        )
+        or _counter_is_malformed(
+            unresolved_source_value,
+            present="unresolved_blocked_source_count" in storage_v2_outbox,
+        )
+        or _counter_is_malformed(
+            reconciling_source_value,
+            present="reconciling_blocked_source_count" in storage_v2_outbox,
+        )
         or (unresolved_blocked_source_count is None and blocked_source_count > 0)
     )
     latest_block_source_epoch = str(storage_v2_outbox.get("latest_block_source_epoch") or "").strip() or None
@@ -873,7 +885,8 @@ def _collect_health_reasons(
         _with_action(actions, "Update Longhouse and inspect the retained source evidence.")
     if context.storage_outbox_error:
         reasons.append("storage_v2_outbox_unreadable")
-        _with_action(actions, "Inspect the storage-v2 outbox database error in engine-status.json")
+        _with_action(actions, "Run: longhouse local-health --fast --json")
+        _with_action(actions, "Inspect the storage-v2 outbox error in engine-status.json.")
     _add_managed_session_reasons(
         reasons,
         actions,
@@ -1117,6 +1130,7 @@ def _classify_health(
         storage_blocked_sources=context.storage_blocked_sources,
         storage_unresolved_blocked_sources=context.storage_unresolved_blocked_sources,
         storage_outbox_error=context.storage_outbox_error,
+        storage_block_proof_unknown=context.storage_block_proof_unknown,
         orphan_bridge_count=context.orphan_bridge_count,
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,

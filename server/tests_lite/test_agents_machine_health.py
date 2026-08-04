@@ -144,8 +144,8 @@ def test_hosted_machine_health_surfaces_unreadable_storage_outbox():
     )
 
     assert facts["reasons"] == ("storage_v2_outbox_unreadable",)
-    assert facts["broken_reasons"] == ()
-    assert facts["degraded_reasons"] == ("storage_v2_outbox_unreadable",)
+    assert facts["broken_reasons"] == ("storage_v2_outbox_unreadable",)
+    assert facts["degraded_reasons"] == ()
 
 
 def test_machine_health_surfaces_explicit_archive_pause_without_backlog():

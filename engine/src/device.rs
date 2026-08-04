@@ -908,6 +908,7 @@ fn native_fast_health_from_parts(
                 | "engine_status_missing"
                 | "payload_rejected"
                 | "payload_too_large"
+                | "storage_v2_outbox_unreadable"
         ) || storage_block_requires_repair
             || managed_launch_recovery.exhausted_count > 0
             || managed_launch_recovery.scan_error
@@ -3905,7 +3906,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "degraded");
+        assert_eq!(health.health_state, "broken");
         assert!(health
             .reasons
             .contains(&"storage_v2_outbox_unreadable".to_string()));

@@ -1479,6 +1479,58 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case lastUpdated
         case build
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let storageV2Outbox: StorageV2OutboxStatus?
+        if !container.contains(.storageV2Outbox) {
+            storageV2Outbox = nil
+        } else if (try? container.decodeNil(forKey: .storageV2Outbox)) == true {
+            storageV2Outbox = StorageV2OutboxStatus(
+                pendingCount: nil,
+                pendingBytes: nil,
+                blockedSourceCount: nil,
+                blockedBytes: nil,
+                latestBlockKind: nil,
+                latestBlockDetail: nil,
+                byteLimit: nil,
+                error: nil,
+                malformedCounter: true
+            )
+        } else if let decoded = try? container.decode(StorageV2OutboxStatus.self, forKey: .storageV2Outbox) {
+            storageV2Outbox = decoded
+        } else {
+            storageV2Outbox = StorageV2OutboxStatus(
+                pendingCount: nil,
+                pendingBytes: nil,
+                blockedSourceCount: nil,
+                blockedBytes: nil,
+                latestBlockKind: nil,
+                latestBlockDetail: nil,
+                byteLimit: nil,
+                error: nil,
+                malformedCounter: true
+            )
+        }
+
+        self.init(
+            version: try container.decodeIfPresent(String.self, forKey: .version),
+            daemonPid: try container.decodeIfPresent(Int.self, forKey: .daemonPid),
+            lastShipAt: try container.decodeIfPresent(String.self, forKey: .lastShipAt),
+            spoolPendingCount: try container.decodeIfPresent(Int.self, forKey: .spoolPendingCount),
+            spoolDeadCount: try container.decodeIfPresent(Int.self, forKey: .spoolDeadCount),
+            archiveBacklog: try container.decodeIfPresent(ArchiveBacklogStatus.self, forKey: .archiveBacklog),
+            storageV2Outbox: storageV2Outbox,
+            parseErrorCount1H: try container.decodeIfPresent(Int.self, forKey: .parseErrorCount1H),
+            consecutiveShipFailures: try container.decodeIfPresent(Int.self, forKey: .consecutiveShipFailures),
+            diskFreeBytes: try container.decodeIfPresent(UInt64.self, forKey: .diskFreeBytes),
+            isOffline: try container.decodeIfPresent(Bool.self, forKey: .isOffline),
+            localProjection: try container.decodeIfPresent(LocalProjectionStatus.self, forKey: .localProjection),
+            recentDeadLetters: try container.decodeIfPresent([DeadLetterSnapshot].self, forKey: .recentDeadLetters),
+            lastUpdated: try container.decodeIfPresent(String.self, forKey: .lastUpdated),
+            build: try container.decodeIfPresent(BuildIdentityRecord.self, forKey: .build)
+        )
+    }
 }
 
 public struct LocalProjectionStatus: Codable, Equatable, Sendable {
@@ -1558,10 +1610,11 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
     ) -> (value: Int?, malformed: Bool) {
         guard container.contains(key) else { return (nil, false) }
         if (try? container.decodeNil(forKey: key)) == true {
-            return (nil, false)
+            return (nil, true)
         }
         do {
-            return (try container.decode(Int.self, forKey: key), false)
+            let value = try container.decode(Int.self, forKey: key)
+            return (value, value < 0)
         } catch {
             return (nil, true)
         }

@@ -3137,6 +3137,33 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func nonObjectStorageOutboxKeepsNativeEnvelopeActionable() throws {
+        let data = Data("""
+        {
+          "schema_version": 1,
+          "collected_at": "2026-08-04T20:00:00Z",
+          "health_state": "broken",
+          "severity": "red",
+          "headline": "Source upload state unavailable",
+          "reasons": ["storage_v2_outbox_unreadable"],
+          "suggested_actions": ["Inspect the storage-v2 outbox error in engine-status.json."],
+          "suggested_action_ids": ["inspect_storage_outbox"],
+          "engine_status": {
+            "exists": true,
+            "fresh": true,
+            "age_seconds": 1,
+            "payload": {"storage_v2_outbox": "unreadable"}
+          }
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+
+        #expect(snapshot.engineStatus?.payload?.storageV2Outbox?.malformedCounter == true)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .repair)
+    }
+
+    @Test
     func projectionWithoutRuntimeHostAuthorityIsLeftAlone() {
         let localOnly = ManagedSessionSnapshot(
             sessionId: "s2", provider: "claude", workspaceLabel: "longhouse",

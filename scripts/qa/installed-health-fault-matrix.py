@@ -34,6 +34,9 @@ CASES = (
     "unresolved_source_conflict",
     "legacy_source_payload",
     "malformed_source_count",
+    "negative_source_count",
+    "null_source_count",
+    "malformed_storage_payload",
     "unreadable_storage_outbox",
     "payload_rejected",
     "managed_launch_recovery_active",
@@ -330,6 +333,46 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                 "reason": "storage_v2_sources_proof_unknown",
                 "action": "inspect_storage_source",
             }
+        elif case == "negative_source_count":
+            write_status(
+                root,
+                current_status(
+                    storage_v2_outbox={
+                        "blocked_source_count": -1,
+                        "unresolved_blocked_source_count": 0,
+                    }
+                ),
+            )
+            expected = {
+                "state": "degraded",
+                "reason": "storage_v2_sources_proof_unknown",
+                "action": "inspect_storage_source",
+            }
+        elif case == "null_source_count":
+            write_status(
+                root,
+                current_status(
+                    storage_v2_outbox={
+                        "blocked_source_count": None,
+                        "unresolved_blocked_source_count": 0,
+                    }
+                ),
+            )
+            expected = {
+                "state": "degraded",
+                "reason": "storage_v2_sources_proof_unknown",
+                "action": "inspect_storage_source",
+            }
+        elif case == "malformed_storage_payload":
+            write_status(
+                root,
+                current_status(storage_v2_outbox="unreadable"),
+            )
+            expected = {
+                "state": "broken",
+                "reason": "storage_v2_outbox_unreadable",
+                "action": "inspect_storage_outbox",
+            }
         elif case == "unreadable_storage_outbox":
             write_status(
                 root,
@@ -338,7 +381,7 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                 ),
             )
             expected = {
-                "state": "degraded",
+                "state": "broken",
                 "reason": "storage_v2_outbox_unreadable",
                 "action": "inspect_storage_outbox",
             }
@@ -438,6 +481,25 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                 raise AssertionError(
                     "expected unreadable storage outbox guidance, got "
                     f"{observed['payload'].get('suggested_actions')!r}"
+                )
+        elif case == "malformed_storage_payload":
+            expected_actions = [
+                "Run: longhouse local-health --fast --json",
+                "Inspect the storage-v2 outbox error in engine-status.json.",
+            ]
+            if observed["payload"].get("suggested_actions") != expected_actions:
+                raise AssertionError(
+                    "expected malformed storage payload guidance, got "
+                    f"{observed['payload'].get('suggested_actions')!r}"
+                )
+        elif case in {"negative_source_count", "null_source_count"}:
+            expected_actions = [
+                "Update Longhouse and inspect the retained source evidence."
+            ]
+            if observed["payload"].get("suggested_actions") != expected_actions:
+                raise AssertionError(
+                    "expected invalid source counts to produce proof-unknown "
+                    f"guidance, got {observed['payload'].get('suggested_actions')!r}"
                 )
         return {"case": case, "expected": expected, "observed": observed["payload"]}
 
