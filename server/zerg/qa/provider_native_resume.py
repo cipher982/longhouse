@@ -1633,6 +1633,18 @@ def _control_send(
     }
 
 
+def _cursor_bootstrap_prompt() -> str:
+    """Return a side-effect-free first-turn prompt for Cursor's hook probe.
+
+    Cursor's native lifecycle hooks are not observed until the first foreground
+    prompt is submitted through its PTY.  The prompt only establishes that
+    provider-owned boundary; the actual qualification marker is sent through
+    the managed Helm socket after the hook reports idle.
+    """
+
+    return "Reply with exactly READY and nothing else. Do not use tools or inspect files."
+
+
 def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, *, force: bool) -> dict[str, Any]:
     pid = process.pid
     provider_pid = _provider_process_pid(spec, state)
@@ -1942,14 +1954,36 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             allow_unprojected=spec.provider in {"claude", "cursor"},
         )
         initial_prior_assistant_event_digests = _assistant_event_digests(initial_prior_tail)
-        initial_send = _control_send(
-            spec,
-            args,
-            initial_state,
-            initial,
-            f"Reply exactly {seed_marker} and nothing else.",
-            initial=True,
-        )
+        if spec.provider == "cursor":
+            bootstrap_send = _control_send(
+                spec,
+                args,
+                initial_state,
+                initial,
+                _cursor_bootstrap_prompt(),
+                initial=True,
+            )
+            _write_json(root / "initial-bootstrap-send.json", bootstrap_send)
+            _wait_cursor_idle(initial_state, environment)
+            _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
+            bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
+            initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
+            initial_send = _control_send(
+                spec,
+                args,
+                initial_state,
+                initial,
+                f"Reply exactly {seed_marker} and nothing else.",
+            )
+        else:
+            initial_send = _control_send(
+                spec,
+                args,
+                initial_state,
+                initial,
+                f"Reply exactly {seed_marker} and nothing else.",
+                initial=True,
+            )
         _write_json(root / "initial-seed-send.json", initial_send)
         _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
         initial_tail, initial_response_correlation = _wait_assistant_response_after_marker(
@@ -2023,28 +2057,20 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         if spec.provider == "cursor":
             # A cold Cursor Resume also starts before the provider emits its
-            # first hook phase. Bootstrap one foreground prompt through the
-            # disposable PTY, then require the native hook to publish idle
-            # before exercising the real Helm control socket.
-            bootstrap_marker = f"LONGHOUSE_{provider.upper()}_RESUME_BOOTSTRAP_{uuid.uuid4().hex}"
+            # first hook phase. Bootstrap one harmless foreground prompt
+            # through the disposable PTY, then require the native hook to
+            # publish idle before exercising the real Helm control socket.
             bootstrap_send = _control_send(
                 spec,
                 args,
                 resumed_state,
                 resumed,
-                f"Reply exactly {bootstrap_marker} and nothing else.",
+                _cursor_bootstrap_prompt(),
                 initial=True,
             )
             _write_json(root / "resume-bootstrap-send.json", bootstrap_send)
-            _wait_assistant_marker(
-                args.api_url,
-                args.agents_token,
-                resumed_state["session_id"],
-                bootstrap_marker,
-                timeout=args.live_send_timeout_secs,
-            )
-            _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
             _wait_cursor_idle(resumed_state, environment)
+            _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
