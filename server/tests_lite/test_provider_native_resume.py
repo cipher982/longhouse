@@ -318,6 +318,8 @@ def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path
 
 def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> None:
     assert _opencode_tui_is_connected("OpenCode event monitor disconnected; retrying") is False
+    assert _opencode_tui_is_connected("OpenCode connection lost; retrying") is False
+    assert _opencode_tui_is_connected("  OpenCode   CONNECTED to server  ") is True
     assert _opencode_tui_is_connected("OpenCode connected to server") is True
 
 
