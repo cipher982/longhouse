@@ -12,6 +12,7 @@ from zerg.qa import codex_native_resume
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
+from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
@@ -143,6 +144,98 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
     assert (home / ".longhouse/machine/device-token").read_text().strip() == "device-token"
     assert (home / ".longhouse/machine/state.json").read_text().find("sauron-clifford") >= 0
     assert shipper.stop()["process_dead"] is True
+
+
+def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    args = argparse.Namespace(
+        api_url="https://runtime.example",
+        agents_token="device-token",
+        engine=tmp_path / "longhouse-engine",
+        repo_root=tmp_path,
+    )
+    commands: list[list[str]] = []
+
+    class FakeProcess:
+        next_pid = 12000
+
+        def __init__(self, argv: list[str], **kwargs: object) -> None:
+            self.pid = FakeProcess.next_pid
+            FakeProcess.next_pid += 1
+            self.returncode: int | None = None
+            commands.append(argv)
+            db_path = Path(argv[argv.index("--db") + 1])
+            (db_path.parent / "transcript-wake.sock").touch()
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = 0
+            return 0
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.Popen", FakeProcess)
+    monkeypatch.setattr(
+        "zerg.qa.provider_native_resume._api_json",
+        lambda *_args, **_kwargs: {"machine_id": "sauron-clifford"},
+    )
+    monkeypatch.setattr("zerg.qa.provider_native_resume.os.killpg", lambda *_args: None)
+    monkeypatch.setattr("zerg.qa.provider_native_resume._wait_process_group_dead", lambda _pid: True)
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps({"protocol": "storage-v2", "files_scanned": 1, "events_shipped": 1})
+        stderr = ""
+
+    run_commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> Completed:
+        run_commands.append(command)
+        return Completed()
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
+    shipper = _start_transcript_shipper(
+        "codex",
+        args,
+        home=home,
+        environment={"HOME": str(home), "CLAUDE_CONFIG_DIR": str(tmp_path / "staged-claude")},
+        evidence_root=evidence,
+    )
+
+    receipt = shipper.flush("initial")
+    assert receipt["status"] == "pass"
+    assert receipt["daemon_paused"] is True
+    assert receipt["daemon_restarted"] is True
+    assert run_commands[0][run_commands[0].index("--db") + 1] == str(home / ".longhouse/agent/longhouse-shipper.db")
+    assert len(commands) == 2
+    assert shipper.stop()["process_dead"] is True
+
+
+def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
+    recording = tmp_path / "cursor.tty"
+    recording.write_text("Workspace Trust Required\n▶ [a] Trust this workspace\n[q] Quit\n", encoding="utf-8")
+
+    class FakeProcess:
+        cursor_workspace_trust_sent = False
+
+        def __init__(self) -> None:
+            self.recording = recording
+            self.sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProcess()
+    _accept_cursor_workspace_trust(process)  # type: ignore[arg-type]
+    _accept_cursor_workspace_trust(process)  # type: ignore[arg-type]
+
+    assert process.sent == ["a"]
+    assert process.cursor_workspace_trust_sent is True
 
 
 def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:
@@ -384,7 +477,7 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
     _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
     _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
 
-    assert process.sent == ["\x1b[B\r"]
+    assert process.sent == ["2\r"]
     assert process.claude_permission_acceptance_sent is True
 
 

@@ -96,6 +96,7 @@ class TranscriptShipper:
         engine_environment: dict[str, str],
         evidence_root: Path,
         redaction_secrets: tuple[str, ...],
+        connect_command: list[str],
     ) -> None:
         self.process = process
         self.log_stream = log_stream
@@ -108,6 +109,7 @@ class TranscriptShipper:
         self.engine_environment = engine_environment
         self.evidence_root = evidence_root
         self.redaction_secrets = tuple(secret for secret in redaction_secrets if secret)
+        self.connect_command = tuple(connect_command)
         self._stopped = False
 
     def _redact(self, value: str) -> str:
@@ -118,18 +120,25 @@ class TranscriptShipper:
     def flush(self, label: str) -> dict[str, Any]:
         """Force a bounded scan before a hosted projection assertion."""
 
-        flush_db = self.evidence_root / f"transcript-flush-{label}.db"
+        # A fresh engine DB creates a fresh storage-v2 source epoch. The
+        # Runtime Host only accepts epochs registered by the long-lived
+        # daemon, so pause that daemon and reuse its enrolled DB for the
+        # one-shot scan. Restart it before returning to the provider probe.
         command = [
             str(self.engine),
             "ship",
             "--url",
             self.api_url,
             "--db",
-            str(flush_db),
+            str(self.db_path),
             "--machine-name",
             self.machine_name,
             "--json",
         ]
+        daemon_was_live = self.process.poll() is None
+        daemon_restart_error: str | None = None
+        if daemon_was_live:
+            self._terminate_daemon()
         try:
             completed = subprocess.run(
                 command,
@@ -141,7 +150,7 @@ class TranscriptShipper:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            return {
+            result = {
                 "status": "fail",
                 "label": label,
                 "exit_code": None,
@@ -149,35 +158,50 @@ class TranscriptShipper:
                 "stdout_sha256": hashlib.sha256(str(exc.stdout or "").encode()).hexdigest(),
                 "stderr_sha256": hashlib.sha256(str(exc.stderr or "").encode()).hexdigest(),
             }
+        except OSError as exc:
+            result = {
+                "status": "fail",
+                "label": label,
+                "exit_code": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        else:
+            stdout = self._redact(completed.stdout or "")
+            stderr = self._redact(completed.stderr or "")
+            try:
+                summary = json.loads(completed.stdout)
+            except (TypeError, json.JSONDecodeError):
+                summary = {}
+            if not isinstance(summary, dict):
+                summary = {}
+            result = {
+                "status": "pass" if completed.returncode == 0 else "fail",
+                "label": label,
+                "exit_code": completed.returncode,
+                "protocol": summary.get("protocol"),
+                "files_scanned": summary.get("files_scanned"),
+                "files_shipped": summary.get("files_shipped"),
+                "events_shipped": summary.get("events_shipped"),
+                "spool_replayed": summary.get("spool_replayed"),
+                "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
+                "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
+            }
+            log_path = self.evidence_root / f"transcript-flush-{label}.log"
+            log_path.write_text(f"stdout:\n{stdout}\nstderr:\n{stderr}\n", encoding="utf-8")
+            result["log_path"] = str(log_path)
+        if daemon_was_live:
+            try:
+                self._restart_daemon()
+            except Exception as exc:  # noqa: BLE001 - retain restart evidence in the receipt
+                daemon_restart_error = f"{type(exc).__name__}: {exc}"
+                result["status"] = "fail"
+        result["daemon_paused"] = daemon_was_live
+        result["daemon_restarted"] = daemon_was_live and daemon_restart_error is None
+        if daemon_restart_error:
+            result["daemon_restart_error"] = daemon_restart_error
+        return result
 
-        stdout = self._redact(completed.stdout or "")
-        stderr = self._redact(completed.stderr or "")
-        log_path = self.evidence_root / f"transcript-flush-{label}.log"
-        log_path.write_text(f"stdout:\n{stdout}\nstderr:\n{stderr}\n", encoding="utf-8")
-        try:
-            summary = json.loads(completed.stdout)
-        except (TypeError, json.JSONDecodeError):
-            summary = {}
-        if not isinstance(summary, dict):
-            summary = {}
-        return {
-            "status": "pass" if completed.returncode == 0 else "fail",
-            "label": label,
-            "exit_code": completed.returncode,
-            "protocol": summary.get("protocol"),
-            "files_scanned": summary.get("files_scanned"),
-            "files_shipped": summary.get("files_shipped"),
-            "events_shipped": summary.get("events_shipped"),
-            "spool_replayed": summary.get("spool_replayed"),
-            "log_path": str(log_path),
-            "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
-            "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
-        }
-
-    def stop(self) -> dict[str, Any]:
-        if self._stopped:
-            return self.receipt
-        self._stopped = True
+    def _terminate_daemon(self) -> str | None:
         signal_sent: str | None = None
         if self.process.poll() is None:
             try:
@@ -194,6 +218,39 @@ class TranscriptShipper:
                 except ProcessLookupError:
                     pass
                 self.process.wait(timeout=5)
+        self.log_stream.flush()
+        return signal_sent
+
+    def _restart_daemon(self) -> None:
+        socket_path = Path(str(self.receipt["socket_path"]))
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        self.process = subprocess.Popen(
+            list(self.connect_command),
+            cwd=self.repo_root,
+            env=self.engine_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=self.log_stream,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if socket_path.exists():
+                return
+            if self.process.poll() is not None:
+                raise RuntimeError(f"Longhouse transcript shipper exited during restart (exit_code={self.process.returncode})")
+            time.sleep(0.1)
+        raise RuntimeError("Longhouse transcript shipper did not become ready after flush")
+
+    def stop(self) -> dict[str, Any]:
+        if self._stopped:
+            return self.receipt
+        self._stopped = True
+        signal_sent = self._terminate_daemon()
         self.receipt.update(
             {
                 "stopped": True,
@@ -317,6 +374,7 @@ class PtyProcess:
         self.master = master
         self.recording = recording
         self.claude_permission_acceptance_sent = False
+        self.cursor_workspace_trust_sent = False
         self.recording.parent.mkdir(parents=True, exist_ok=True)
         self._stream = self.recording.open("ab", buffering=0)
         self.process = subprocess.Popen(
@@ -566,6 +624,7 @@ def _start_transcript_shipper(
                 engine_environment=engine_environment,
                 evidence_root=evidence_root,
                 redaction_secrets=(*_qualification_secrets(environment, args.agents_token),),
+                connect_command=command,
             )
         if process.poll() is not None:
             log_stream.flush()
@@ -765,11 +824,22 @@ def _accept_claude_permission_prompt(process: PtyProcess) -> None:
         return
     compact = re.sub(r"\s+", "", _terminal_text(process.recording))
     if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
-        # Claude's selector is in normal cursor mode on the provider PTY. Use
-        # the same CSI sequence a real terminal sends for Down; Enter then
-        # confirms the second option rather than the default "No, exit".
-        process.send("\x1b[B\r")
+        # The provider renders numbered choices and accepts the visible
+        # choice key directly. This avoids depending on whether its selector
+        # currently installed normal- or application-cursor mode.
+        process.send("2\r")
         process.claude_permission_acceptance_sent = True
+
+
+def _accept_cursor_workspace_trust(process: PtyProcess) -> None:
+    """Accept Cursor's provider-owned first-run workspace trust gate once."""
+
+    if getattr(process, "cursor_workspace_trust_sent", False):
+        return
+    compact = re.sub(r"\s+", "", _terminal_text(process.recording)).lower()
+    if "workspacetrustrequired" in compact and "[a]trustthisworkspace" in compact:
+        process.send("a")
+        process.cursor_workspace_trust_sent = True
 
 
 def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[str, Any]]:
@@ -956,6 +1026,8 @@ def _wait_state(
                 )
             if spec.provider == "claude":
                 _accept_claude_permission_prompt(process)
+            elif spec.provider == "cursor":
+                _accept_cursor_workspace_trust(process)
         for path in _state_candidates(spec, home):
             try:
                 state = _normalize_state(spec, _read_json(path), path)
@@ -1333,6 +1405,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         initial_state = _wait_state(spec, home, process=initial)
         initial.settle()
+        if spec.provider == "cursor":
+            _accept_cursor_workspace_trust(initial)
+            initial.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(initial, root / "initial.tty")
         states.append(initial_state)
@@ -1380,6 +1455,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             process=resumed,
         )
         resumed.settle()
+        if spec.provider == "cursor":
+            _accept_cursor_workspace_trust(resumed)
+            resumed.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         states.append(resumed_state)
