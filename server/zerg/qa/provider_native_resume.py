@@ -244,6 +244,43 @@ def _wait_process_group_dead(pid: int, timeout: float = 5) -> bool:
     return _process_group_dead(pid)
 
 
+def _pid_dead(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def _wait_pid_dead(pid: int, timeout: float = 5) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _pid_dead(pid):
+            return True
+        time.sleep(0.1)
+    return _pid_dead(pid)
+
+
+def _signal_pid_if_alive(pid: int, sig: int) -> bool:
+    if _pid_dead(pid):
+        return False
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _provider_process_pid(spec: ProviderSpec, state: dict[str, Any]) -> int:
+    field = {"claude": "claude_pid", "cursor": "cursor_pid", "opencode": "pid"}[spec.provider]
+    pid = state.get(field)
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        raise RuntimeError(f"{spec.provider} Helm state did not expose positive {field}")
+    return pid
+
+
 def _endpoint_absence(state: dict[str, Any]) -> dict[str, Any]:
     socket_path = state.get("socket_path")
     if isinstance(socket_path, str) and socket_path:
@@ -269,6 +306,7 @@ def _endpoint_absence(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _cleanup_processes(
+    spec: ProviderSpec,
     processes: tuple[PtyProcess | None, ...],
     states: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -278,6 +316,11 @@ def _cleanup_processes(
             forced_pids.append(process.pid)
             process.kill_group(signal.SIGKILL)
             process.wait(5)
+    provider_pids = sorted({_provider_process_pid(spec, state) for state in states})
+    forced_provider_pids: list[int] = []
+    for pid in provider_pids:
+        if _signal_pid_if_alive(pid, signal.SIGKILL):
+            forced_provider_pids.append(pid)
     process_receipts = [
         {
             "pid": process.pid,
@@ -287,8 +330,10 @@ def _cleanup_processes(
         for process in processes
         if process is not None
     ]
+    provider_process_receipts = [{"pid": pid, "process_dead": _wait_pid_dead(pid)} for pid in provider_pids]
     endpoint_receipts = [_endpoint_absence(state) for state in states]
     orphan_count = sum(not receipt["process_exited"] or not receipt["process_group_dead"] for receipt in process_receipts)
+    orphan_count += sum(not receipt["process_dead"] for receipt in provider_process_receipts)
     endpoints_absent = all(receipt["absent"] for receipt in endpoint_receipts)
     verified = orphan_count == 0 and endpoints_absent
     return {
@@ -296,7 +341,9 @@ def _cleanup_processes(
         "verified": verified,
         "orphan_count": orphan_count,
         "processes": process_receipts,
+        "provider_processes": provider_process_receipts,
         "forced_cleanup_pids": forced_pids,
+        "forced_provider_cleanup_pids": forced_provider_pids,
         "control_endpoints": endpoint_receipts,
         "final_socket_absent": endpoints_absent,
     }
@@ -424,6 +471,7 @@ def _control_send(spec: ProviderSpec, args: argparse.Namespace, state: dict[str,
 
 def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, *, force: bool) -> dict[str, Any]:
     pid = process.pid
+    provider_pid = _provider_process_pid(spec, state)
     if force:
         process.kill_group(signal.SIGKILL)
         method = "sigkill_exact_owner_group"
@@ -457,13 +505,18 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
         process.kill_group(signal.SIGKILL if force else signal.SIGTERM)
         exit_code = process.wait(5)
     group_dead = _wait_process_group_dead(pid)
-    dead = process.process.poll() is not None and group_dead
+    provider_force_signal_sent = force and _signal_pid_if_alive(provider_pid, signal.SIGKILL)
+    provider_process_dead = _wait_pid_dead(provider_pid)
+    dead = process.process.poll() is not None and group_dead and provider_process_dead
     return {
         "method": method,
         "pid": pid,
+        "provider_pid": provider_pid,
         "exit_code": exit_code,
         "fallback_signal": fallback_signal,
         "process_group_dead": group_dead,
+        "provider_force_signal_sent": provider_force_signal_sent,
+        "provider_process_dead": provider_process_dead,
         "dead": dead,
         "clean": dead and not force and fallback_signal is None and exit_code == 0,
     }
@@ -534,6 +587,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             recording=root / "initial.tty",
         )
         initial_state = _wait_state(spec, home)
+        initial_provider_pid = _provider_process_pid(spec, initial_state)
         states.append(initial_state)
         _write_json(root / "initial-bridge-state.json", initial_state)
         seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
@@ -554,8 +608,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             stale = {"marker": stale_marker, "rejected": False}
         _write_json(root / "stale-input-receipt.json", stale)
 
+        resumed_command = _launch_command(spec, args, initial_state["session_id"])
         resumed = PtyProcess(
-            _launch_command(spec, args, initial_state["session_id"]),
+            resumed_command,
             cwd=args.repo_root,
             env=environment,
             recording=root / "native-resume.tty",
@@ -566,6 +621,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             session_id=initial_state["session_id"],
             prior_run_id=str(initial_state["run_id"]),
         )
+        resumed_provider_pid = _provider_process_pid(spec, resumed_state)
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", resumed_state)
         post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
@@ -575,6 +631,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             args.api_url, args.agents_token, resumed_state["session_id"], post_marker, timeout=args.live_send_timeout_secs
         )
         _write_json(root / "resumed-transcript.jsonl", resumed_tail)
+        post_resume_marker_observed = _assistant_contains(resumed_tail, post_marker)
         stale_generation_dispatched = _assistant_contains(resumed_tail, stale_marker)
 
         concurrent = PtyProcess(
@@ -596,7 +653,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "concurrent-resume-receipt.json", concurrent_receipt)
 
         _stop(spec, args, resumed_state, resumed, force=False)
-        final_cleanup = _cleanup_processes((initial, resumed, concurrent), states)
+        final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         redacted = _secret_scan(
             root,
@@ -614,18 +671,25 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "same_provider_thread": resumed_state["provider_session_id"] == initial_state["provider_session_id"],
             "new_run": resumed_state["run_id"] != initial_state["run_id"],
             "new_connection": resumed_state["connection_id"] != initial_state["connection_id"],
-            "new_app_server_process": resumed.pid != initial.pid,
-            "native_resume_command": True,
-            "bridge_subscribed": True,
-            "post_resume_provider_activity": True,
-            "post_resume_marker_in_assistant_transcript": _assistant_contains(resumed_tail, post_marker),
+            "new_app_server_process": resumed_provider_pid != initial_provider_pid,
+            "initial_provider_pid": initial_provider_pid,
+            "resumed_provider_pid": resumed_provider_pid,
+            "native_resume_command": (
+                spec.resume_flag in resumed_command
+                and resumed_command[resumed_command.index(spec.resume_flag) + 1] == initial_state["session_id"]
+            ),
+            "bridge_subscribed": all(
+                resumed_state.get(field) for field in ("session_id", "provider_session_id", "run_id", "connection_id")
+            ),
+            "post_resume_provider_activity": post_resume_marker_observed,
+            "post_resume_marker_in_assistant_transcript": post_resume_marker_observed,
             "stale_input_rejected": stale["rejected"] is True,
             "stale_generation_dispatched": stale_generation_dispatched,
             "concurrent_resume_refused": concurrent_refused,
             "artifact_secret_scan_passed": not redacted,
             "clean_stop_verified": args.variant == "clean_exit" and transition["clean"],
             "old_bridge_process_dead": args.variant == "process_loss" and transition["dead"],
-            "old_app_server_process_dead": args.variant == "process_loss" and transition["dead"],
+            "old_app_server_process_dead": args.variant == "process_loss" and transition["provider_process_dead"],
             "replacement_started_after_process_loss": args.variant == "process_loss" and resumed_state["run_id"] != initial_state["run_id"],
             "final_cleanup_verified": final_cleanup["verified"],
             "final_socket_absent": final_cleanup["final_socket_absent"],
@@ -655,7 +719,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain the exact causal failure
-        final_cleanup = _cleanup_processes((initial, resumed, concurrent), states)
+        final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         redacted = _secret_scan(root, [args.agents_token])
         failure = {
@@ -678,7 +742,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         return failure
     finally:
         if not final_cleanup.get("verified"):
-            final_cleanup = _cleanup_processes((initial, resumed, concurrent), states)
+            final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
             _write_json(root / "cleanup-receipt.json", final_cleanup)
         for process in (concurrent, resumed, initial):
             if process is None:

@@ -108,9 +108,12 @@ def _validated_records(
     if not all(isinstance(value, str) and value.strip() for value in (worker_id, worker_census_digest, auth_mechanism, published_at)):
         raise ValueError("proof bundle publication identity is incomplete")
     try:
-        datetime.fromisoformat(str(published_at).replace("Z", "+00:00")).astimezone(UTC)
+        parsed_published_at = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("proof bundle publication timestamp is invalid") from exc
+    if parsed_published_at.tzinfo is None:
+        raise ValueError("proof bundle publication timestamp must include a timezone")
+    parsed_published_at.astimezone(UTC)
     if auth_mechanism != "factory_token_v1":
         raise ValueError("proof bundle auth_mechanism is not admitted")
     raw_records = payload.get("records")
@@ -174,28 +177,6 @@ def _validated_records(
     return tuple(records), tuple(blobs), publication
 
 
-def _validated_legacy_records(payload: dict[str, Any]) -> tuple[ProviderCapabilityProofRecord, ...]:
-    if payload.get("schema_version") != 2 or payload.get("artifact_kind") != _BUNDLE_KIND:
-        raise ValueError("historical proof bundle schema is invalid")
-    raw_records = payload.get("records")
-    if not isinstance(raw_records, list) or not raw_records or len(raw_records) > _MAX_RECORDS:
-        raise ValueError("historical proof bundle records are invalid")
-    supported = managed_provider_names()
-    records = []
-    for raw_record in raw_records:
-        if not isinstance(raw_record, dict):
-            raise ValueError("historical proof bundle records must be objects")
-        record = proof_record_from_mapping(raw_record)
-        if record.schema_version != 2:
-            raise ValueError("historical proof bundle may contain only schema-v2 records")
-        if record.provider not in supported or record.producer_class != _FACTORY_PRODUCER_CLASS:
-            raise ValueError("historical proof record has an unsupported authority")
-        if not record.run_reference or not record.raw_reference_digests:
-            raise ValueError("historical proof record lacks retained execution identity")
-        records.append(record)
-    return tuple(records)
-
-
 def _bounded_records(store: ProviderCapabilityProofStore) -> tuple[tuple[ProviderCapabilityProofRecord, ...], int]:
     """Return a provider-fair newest-first window that always fits the machine contract."""
     queues = {provider: list(reversed(store.records(provider))) for provider in sorted(managed_provider_names())}
@@ -219,18 +200,10 @@ async def publish_provider_capability_proofs(
 ) -> dict[str, Any]:
     payload = await _read_capped_json(request)
     if payload.get("schema_version") == 2:
-        try:
-            historical = _validated_legacy_records(payload)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-        store = _legacy_proof_store()
-        for record in historical:
-            store.write(record)
-        return {
-            "schema_version": 2,
-            "accepted": len(historical),
-            "historical_artifact_ids": [record.artifact_id for record in historical],
-        }
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="historical schema-v2 proofs are read-only and cannot be published",
+        )
     try:
         records, blobs, publication = _validated_records(payload)
     except ValueError as exc:
@@ -277,7 +250,7 @@ def list_provider_capability_proofs(
     trusted_ids = [
         record.artifact_id
         for record in records
-        if record.artifact_id in legacy_ids or (integrity.get(record.artifact_id, None) and integrity[record.artifact_id].admissible)
+        if record.artifact_id not in legacy_ids and integrity.get(record.artifact_id, None) and integrity[record.artifact_id].admissible
     ]
     return {
         "schema_version": 2,
@@ -286,7 +259,7 @@ def list_provider_capability_proofs(
             {
                 **record.serialize(),
                 "store_integrity": (
-                    {"admissible": True, "reason_codes": ["historical_schema_v2"]}
+                    {"admissible": False, "reason_codes": ["proof_schema_legacy", "historical_schema_v2"]}
                     if record.artifact_id in legacy_ids
                     else {
                         "admissible": integrity[record.artifact_id].admissible,
@@ -324,7 +297,9 @@ def build_capability_projection_payload() -> dict[str, Any]:
         )
     legacy_store = _legacy_proof_store()
     for provider in sorted(managed_provider_names()):
-        all_records.extend(legacy_store.records(provider))
+        legacy_records = legacy_store.records(provider)
+        all_records.extend(legacy_records)
+        integrity_reasons.update({record.artifact_id: ("proof_schema_legacy", "historical_schema_v2") for record in legacy_records})
     try:
         assertions = load_capability_assertions()
     except SystemExit as exc:

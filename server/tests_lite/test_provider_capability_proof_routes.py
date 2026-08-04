@@ -168,14 +168,22 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
     assert fetched.json()["truncated"] is False
 
 
-def test_factory_accepts_v2_as_visible_history_without_promoting_it_to_v3(monkeypatch, tmp_path: Path) -> None:
+def test_factory_rejects_new_v2_publication_but_keeps_old_history_non_admissible(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
-    legacy = _record(assertion_variant=None, schema_version=LEGACY_PROOF_SCHEMA_VERSION)
+    legacy = _record(
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        generated_at=datetime.now(UTC).isoformat(),
+        schema_version=LEGACY_PROOF_SCHEMA_VERSION,
+    )
     payload = {
         "schema_version": LEGACY_PROOF_SCHEMA_VERSION,
         "artifact_kind": "provider_capability_proof_bundle",
         "records": [legacy.serialize()],
     }
+    routes._legacy_proof_store().write(legacy)
     try:
         published = client.post(
             "/api/internal/provider-capability-proofs",
@@ -183,18 +191,42 @@ def test_factory_accepts_v2_as_visible_history_without_promoting_it_to_v3(monkey
             json=payload,
         )
         fetched = client.get("/api/agents/provider-capability-proofs")
+        projection = routes.build_capability_projection_payload()
     finally:
         api_app.dependency_overrides.clear()
 
-    assert published.status_code == 201
-    assert published.json() == {
-        "schema_version": 2,
-        "accepted": 1,
-        "historical_artifact_ids": [legacy.artifact_id],
-    }
+    assert published.status_code == 422
+    assert published.json()["detail"] == "historical schema-v2 proofs are read-only and cannot be published"
     visible = next(record for record in fetched.json()["records"] if record["artifact_id"] == legacy.artifact_id)
     assert visible["schema_version"] == 2
-    assert visible["store_integrity"]["reason_codes"] == ["historical_schema_v2"]
+    assert visible["store_integrity"] == {
+        "admissible": False,
+        "reason_codes": ["proof_schema_legacy", "historical_schema_v2"],
+    }
+    assert legacy.artifact_id not in fetched.json()["trusted_artifact_ids"]
+    row = next(
+        item
+        for item in projection["capabilities"]
+        if item["provider"] == "codex" and item["assertion_id"] == legacy.assertion_id
+    )
+    assert row["proof_status"] == "unacceptable_evidence"
+    assert row["proof_artifact_id"] is None
+    assert row["latest_proof_artifact_id"] == legacy.artifact_id
+    assert "proof_schema_legacy" in row["admissibility_reasons"]
+
+
+def test_factory_publication_timestamp_requires_timezone(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    payload = _bundle(_record())
+    payload["publication"]["published_at"] = "2026-07-22T18:01:00"
+    payload["bundle_digest"] = routes._bundle_digest(payload)
+    try:
+        response = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=payload)
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "proof bundle publication timestamp must include a timezone"
 
 
 def test_factory_publish_is_absent_when_token_is_unconfigured(monkeypatch, tmp_path: Path) -> None:
