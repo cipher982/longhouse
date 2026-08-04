@@ -54,6 +54,58 @@ class ProviderSpec:
     state_patterns: tuple[str, ...]
 
 
+class TranscriptShipper:
+    """Own the disposable Machine Agent used by a live provider qualification.
+
+    A managed provider bridge can create live control state without creating a
+    transcript/archive projection.  The real machine path has a second local
+    process—the engine connect daemon—that watches provider files and ships
+    them.  Qualification must run that process too or hosted readiness checks
+    are testing an artificial half-stack.
+    """
+
+    def __init__(self, process: subprocess.Popen[Any], log_stream: Any, receipt: dict[str, Any]) -> None:
+        self.process = process
+        self.log_stream = log_stream
+        self.receipt = receipt
+        self._stopped = False
+
+    def stop(self) -> dict[str, Any]:
+        if self._stopped:
+            return self.receipt
+        self._stopped = True
+        signal_sent: str | None = None
+        if self.process.poll() is None:
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+                signal_sent = "SIGTERM"
+            except ProcessLookupError:
+                pass
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                    signal_sent = "SIGKILL"
+                except ProcessLookupError:
+                    pass
+                self.process.wait(timeout=5)
+        self.receipt.update(
+            {
+                "stopped": True,
+                "signal": signal_sent,
+                "exit_code": self.process.returncode,
+                "process_dead": self.process.poll() is not None,
+                "process_group_dead": _wait_process_group_dead(self.process.pid),
+            }
+        )
+        try:
+            self.log_stream.close()
+        except OSError:
+            pass
+        return self.receipt
+
+
 SPECS = {
     "claude": ProviderSpec(
         provider="claude",
@@ -127,6 +179,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         network_policy="shared_provider_egress",
         required_artifacts=(
             "provider_binary_receipt",
+            "transcript_shipper_receipt",
             "resume_intent_receipt",
             "initial_bridge_state",
             "initial_transcript",
@@ -295,6 +348,114 @@ def _wait_pid_dead(pid: int, timeout: float = 5) -> bool:
             return True
         time.sleep(0.1)
     return _pid_dead(pid)
+
+
+def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None:
+    """Create the provider roots the real engine discovers at startup."""
+
+    roots = [
+        home / ".codex" / "sessions",
+        home / ".local" / "share" / "opencode",
+        home / ".cursor" / "chats",
+        home / ".longhouse" / "agent" / "cursor-acp-source",
+    ]
+    configured_claude_dir = str(environment.get("CLAUDE_CONFIG_DIR") or "").strip()
+    roots.append(Path(configured_claude_dir) / "projects" if configured_claude_dir else home / ".claude" / "projects")
+    for path in roots:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def _start_transcript_shipper(
+    provider: str,
+    args: argparse.Namespace,
+    *,
+    home: Path,
+    environment: dict[str, str],
+    evidence_root: Path,
+) -> TranscriptShipper:
+    """Start the same file-watching Machine Agent used outside the factory."""
+
+    _provision_transcript_roots(home, environment)
+    longhouse_home = home / ".longhouse"
+    machine_dir = longhouse_home / "machine"
+    agent_dir = longhouse_home / "agent"
+    machine_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    agent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _write_json(
+        machine_dir / "state.json",
+        {"runtime_url": args.api_url, "machine_name": "provider-factory"},
+    )
+    token_path = machine_dir / "device-token"
+    token_path.write_text(args.agents_token.strip() + "\n", encoding="utf-8")
+    os.chmod(token_path, 0o600)
+    db_path = agent_dir / "longhouse-shipper.db"
+    socket_path = agent_dir / "transcript-wake.sock"
+    log_path = evidence_root / "transcript-shipper.log"
+    log_stream = log_path.open("w", encoding="utf-8")
+    engine_environment = dict(environment)
+    engine_environment["HOME"] = str(home)
+    engine_environment["LONGHOUSE_HOME"] = str(longhouse_home)
+    if provider != "claude":
+        # A Codex/OpenCode/Cursor qualification may inherit the factory's
+        # staged Claude profile. Do not let the shipper use that profile as a
+        # second machine source.
+        engine_environment.pop("CLAUDE_CONFIG_DIR", None)
+    command = [
+        str(args.engine),
+        "connect",
+        "--url",
+        args.api_url,
+        "--db",
+        str(db_path),
+        "--machine-name",
+        "provider-factory",
+        "--fallback-scan-secs",
+        "1",
+        "--spool-replay-secs",
+        "1",
+        "--archive-repair-mode",
+        "drain",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=args.repo_root,
+        env=engine_environment,
+        stdin=subprocess.DEVNULL,
+        stdout=log_stream,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if socket_path.exists():
+            receipt = {
+                "status": "started",
+                "provider": provider,
+                "engine_path": str(args.engine),
+                "pid": process.pid,
+                "machine_name": "provider-factory",
+                "socket_path": str(socket_path),
+                "db_path": str(db_path),
+                "ready": True,
+            }
+            return TranscriptShipper(process, log_stream, receipt)
+        if process.poll() is not None:
+            log_stream.flush()
+            try:
+                detail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+            except OSError:
+                detail = ""
+            log_stream.close()
+            raise RuntimeError(
+                "Longhouse transcript shipper exited before readiness "
+                f"(provider={provider}, exit_code={process.returncode}, log={detail!r})"
+            )
+        time.sleep(0.1)
+    process.kill()
+    process.wait(timeout=5)
+    log_stream.close()
+    raise RuntimeError(f"Longhouse transcript shipper did not become ready for {provider}")
 
 
 def _signal_pid_if_alive(pid: int, sig: int) -> bool:
@@ -1004,6 +1165,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     initial: PtyProcess | None = None
     resumed: PtyProcess | None = None
     concurrent: PtyProcess | None = None
+    shipper: TranscriptShipper | None = None
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
     try:
@@ -1017,6 +1179,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 recording=root / "claude-onboarding.tty",
             )
             _write_json(root / "claude-onboarding-receipt.json", onboarding)
+        shipper = _start_transcript_shipper(
+            provider,
+            args,
+            home=home,
+            environment=environment,
+            evidence_root=root,
+        )
+        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         initial = PtyProcess(
             _launch_command(spec, args, None),
             cwd=args.repo_root,
@@ -1106,6 +1276,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _stop(spec, args, resumed_state, resumed, force=False)
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         redacted = _secret_scan(
             root,
             [
@@ -1178,6 +1350,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             pass
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         redacted = _secret_scan(root, [args.agents_token])
         failure = {
             "schema_version": 1,
@@ -1198,6 +1372,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "result.json", failure)
         return failure
     finally:
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         if not final_cleanup.get("verified"):
             final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
             _write_json(root / "cleanup-receipt.json", final_cleanup)

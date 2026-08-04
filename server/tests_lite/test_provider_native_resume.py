@@ -17,6 +17,8 @@ from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _provider_process_pid
+from zerg.qa.provider_native_resume import _provision_transcript_roots
+from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import registration_for
@@ -43,6 +45,72 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
+        assert "transcript_shipper_receipt" in registration.required_artifacts
+
+
+def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    configured_claude = tmp_path / "claude-config"
+
+    _provision_transcript_roots(home, {"CLAUDE_CONFIG_DIR": str(configured_claude)})
+
+    for relative in (
+        ".codex/sessions",
+        ".local/share/opencode",
+        ".cursor/chats",
+        ".longhouse/agent/cursor-acp-source",
+    ):
+        assert (home / relative).is_dir()
+    assert (configured_claude / "projects").is_dir()
+
+
+def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    args = argparse.Namespace(
+        api_url="https://runtime.example",
+        agents_token="device-token",
+        engine=tmp_path / "longhouse-engine",
+        repo_root=tmp_path,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 12345
+        returncode: int | None = None
+
+        def __init__(self, argv: list[str], **kwargs: object) -> None:
+            captured["argv"] = argv
+            db_path = Path(argv[argv.index("--db") + 1])
+            socket_path = db_path.parent / "transcript-wake.sock"
+            socket_path.touch()
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = 0
+            return 0
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.Popen", FakeProcess)
+    monkeypatch.setattr("zerg.qa.provider_native_resume.os.killpg", lambda *_args: None)
+    monkeypatch.setattr("zerg.qa.provider_native_resume._wait_process_group_dead", lambda _pid: True)
+
+    shipper = _start_transcript_shipper(
+        "codex",
+        args,
+        home=home,
+        environment={"HOME": str(home), "CLAUDE_CONFIG_DIR": str(tmp_path / "staged-claude")},
+        evidence_root=evidence,
+    )
+    argv = [str(value) for value in captured["argv"]]
+    assert "--token" not in argv
+    assert (home / ".longhouse/machine/device-token").read_text().strip() == "device-token"
+    assert shipper.stop()["process_dead"] is True
 
 
 def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:
