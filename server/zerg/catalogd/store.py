@@ -163,6 +163,7 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
 # cap leaves deterministic headroom below the 8 MiB frame even when all 100
 # rows contain escape-heavy content that doubles during outer JSON encoding.
 _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
+_MACHINE_HEALTH_MAX_U64 = (1 << 64) - 1
 
 
 def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -9912,8 +9913,8 @@ def _bounded_machine_health_critical_raw(raw: dict[str, Any]) -> dict[str, Any]:
             "byte_limit",
         ):
             value = storage.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
-                bounded_storage[key] = max(0, value)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MACHINE_HEALTH_MAX_U64:
+                bounded_storage[key] = value
         for key in (
             "latest_block_source_epoch",
             "latest_unresolved_block_source_epoch",
@@ -9932,8 +9933,8 @@ def _bounded_machine_health_critical_raw(raw: dict[str, Any]) -> dict[str, Any]:
         bounded_recovery: dict[str, Any] = {}
         for key in ("active_count", "exhausted_count"):
             value = recovery.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
-                bounded_recovery[key] = max(0, value)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MACHINE_HEALTH_MAX_U64:
+                bounded_recovery[key] = value
         if isinstance(recovery.get("scan_error"), bool):
             bounded_recovery["scan_error"] = recovery["scan_error"]
         if bounded_recovery:
