@@ -96,12 +96,13 @@ def _redact_argv(argv: Any, secrets: list[str] | None = None) -> Any:
     redacted: list[Any] = []
     redact_next = False
     for item in argv:
+        item_text = str(item)
         if redact_next:
             redacted.append("<redacted>")
             redact_next = False
             continue
-        redacted.append("<redacted>" if item in secrets else item)
-        if item == "--agents-token":
+        redacted.append("<redacted>" if item_text in secrets else item_text)
+        if item_text == "--agents-token":
             redact_next = True
     return redacted
 

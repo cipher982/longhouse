@@ -25,6 +25,19 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     )
 
 
+def test_command_evidence_normalizes_pathlike_argv_values() -> None:
+    result = subprocess.CompletedProcess(
+        [Path("/tmp/longhouse-engine"), "codex-bridge", "--agents-token", "test-agents-token"],
+        1,
+        "",
+        "listener failed",
+    )
+
+    evidence = canary._command_evidence(result, secrets=["test-agents-token"])
+
+    assert evidence["argv"] == ["/tmp/longhouse-engine", "codex-bridge", "--agents-token", "<redacted>"]
+
+
 def test_fake_app_server_binary_proves_installed_engine_permission_protocol(tmp_path: Path) -> None:
     engine = tmp_path / "longhouse-engine"
     engine.write_text(
