@@ -257,7 +257,23 @@ struct PathTaskContext {
     /// Reusable shipper-DB connections. Schema bootstrap has already run
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
-    storage_v2: Option<std::sync::Arc<StorageV2Capabilities>>,
+    storage_v2: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<StorageV2Capabilities>>>>,
+}
+
+impl PathTaskContext {
+    fn storage_v2_enabled(&self) -> bool {
+        self.storage_v2
+            .read()
+            .map(|capabilities| capabilities.is_some())
+            .unwrap_or(false)
+    }
+
+    fn storage_v2_capabilities(&self) -> Option<std::sync::Arc<StorageV2Capabilities>> {
+        self.storage_v2
+            .read()
+            .ok()
+            .and_then(|capabilities| capabilities.clone())
+    }
 }
 
 struct PathTaskResult {
@@ -690,32 +706,39 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 3. Create HTTP client
     let client = ShipperClient::with_compression(&config.shipper_config, config.algo)?;
     tracing::info!("Shipping to: {}", client.ingest_url());
-    let storage_v2 = match client
+    let (storage_v2, mut storage_v2_probe_pending) = match client
         .storage_v2_capabilities(
             &config.shipper_config.machine_name,
             Some(Duration::from_secs(5)),
         )
-        .await?
+        .await
     {
-        Some(capabilities) if capabilities.cutover => {
+        Ok(Some(capabilities)) if capabilities.cutover => {
             tracing::info!(
                 tenant_id = %capabilities.tenant_id,
                 "Runtime Host requires storage-v2 transcript shipping"
             );
-            Some(std::sync::Arc::new(capabilities))
+            (Some(std::sync::Arc::new(capabilities)), false)
         }
-        Some(capabilities) => {
+        Ok(Some(capabilities)) => {
             tracing::info!(
                 tenant_id = %capabilities.tenant_id,
                 "Runtime Host accepts storage-v2 but has not enabled cutover"
             );
-            None
+            (None, false)
         }
-        None => {
+        Ok(None) => {
             tracing::info!(
                 "Runtime Host does not advertise storage-v2; using the legacy ingest protocol"
             );
-            None
+            (None, false)
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "Runtime Host storage-v2 capability unavailable; keeping local recovery alive"
+            );
+            (None, true)
         }
     };
 
@@ -777,7 +800,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         flight_recorder: flight_recorder.clone(),
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
-        storage_v2,
+        storage_v2: std::sync::Arc::new(std::sync::RwLock::new(storage_v2)),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -829,7 +852,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut deferred_retries = HashMap::new();
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
-    if task_context.storage_v2.is_some() {
+    if task_context.storage_v2_enabled() {
         match queue_storage_v2_pending_retry_paths(
             &mut scheduler,
             &conn,
@@ -898,6 +921,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     managed_observation_timer.tick().await; // startup scan already owns the first pass
     let mut managed_launch_retry_timer = tokio::time::interval(Duration::from_secs(5));
     managed_launch_retry_timer.tick().await; // startup retry owns the first pass
+    let mut storage_v2_refresh_timer = tokio::time::interval(Duration::from_secs(30));
+    storage_v2_refresh_timer.tick().await; // startup probe owns the first pass
     let mut managed_full_reconciliation_timer = tokio::time::interval(Duration::from_secs(
         MANAGED_FULL_RECONCILIATION_INTERVAL_SECS,
     ));
@@ -990,7 +1015,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 PERIODIC_SPOOL_PATH_LIMIT,
                 Some(adaptive_limiter.as_ref()),
                 config.archive_repair_mode,
-                task_context.storage_v2.is_some(),
+                task_context.storage_v2_enabled(),
             ) {
                 Ok(queued) if queued > 0 => {
                     tracing::info!(
@@ -1021,6 +1046,41 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = shutdown_signal() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
                 break;
+            }
+
+            // Capability negotiation is a recoverable Runtime Host dependency.
+            // Do not let an outage at daemon startup terminate the Machine
+            // Agent before managed-launch recovery and local health are live.
+            _ = storage_v2_refresh_timer.tick(), if storage_v2_probe_pending && !task_context.storage_v2_enabled() => {
+                match client
+                    .storage_v2_capabilities(
+                        &config.shipper_config.machine_name,
+                        Some(Duration::from_secs(5)),
+                    )
+                    .await
+                {
+                    Ok(Some(capabilities)) if capabilities.cutover => {
+                        tracing::info!(
+                            tenant_id = %capabilities.tenant_id,
+                            "Runtime Host storage-v2 capability recovered"
+                        );
+                        if let Ok(mut current) = task_context.storage_v2.write() {
+                            *current = Some(std::sync::Arc::new(capabilities));
+                        }
+                        storage_v2_probe_pending = false;
+                    }
+                    Ok(Some(_)) => {
+                        tracing::debug!("Runtime Host storage-v2 capability probe is available without cutover");
+                        storage_v2_probe_pending = false;
+                    }
+                    Ok(None) => {
+                        tracing::debug!("Runtime Host still does not advertise storage-v2");
+                        storage_v2_probe_pending = false;
+                    }
+                    Err(error) => {
+                        tracing::debug!(error = %error, "Runtime Host storage-v2 capability probe unavailable; keeping local recovery alive");
+                    }
+                }
             }
 
             // Managed transcript wakes are the lowest-latency completion lane.
@@ -2071,7 +2131,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Err(e) => tracing::warn!("Failed-shipment retry error: {}", e),
                 }
-                if task_context.storage_v2.is_some() {
+                if task_context.storage_v2_enabled() {
                     match queue_storage_v2_pending_retry_paths(
                         &mut scheduler,
                         &conn,
@@ -4241,7 +4301,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     // adapter. Never replay an old pointer spool or parse/post a lossy legacy
     // projection when this Runtime Host lacks the v2 cutover.
     if (is_cursor_database_job(&result.job) || is_cursor_acp_source_job(&result.job))
-        && task_context.storage_v2.is_none()
+        && !task_context.storage_v2_enabled()
     {
         if let Err(error) = Spool::new(&conn).dead_letter_pending_for_provider(
             "cursor",
@@ -4256,7 +4316,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         return finish_path_task(result, task_started);
     }
 
-    if result.job.priority != WorkPriority::Live && task_context.storage_v2.is_none() {
+    if result.job.priority != WorkPriority::Live && !task_context.storage_v2_enabled() {
         let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
         let replay_trace = shipper::ShipTraceContext {
             work_context: FAILED_SHIPMENT_RETRY_CONTEXT,
@@ -4330,7 +4390,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     }
 
-    if let Some(capabilities) = task_context.storage_v2.as_deref() {
+    if let Some(capabilities) = task_context.storage_v2_capabilities() {
         let lane = if result.job.priority == WorkPriority::Live {
             "live"
         } else {
@@ -4351,7 +4411,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             crate::storage_v2_shipper::ship_next_opencode_envelope(
                 &mut conn,
                 &task_context.client,
-                capabilities,
+                capabilities.as_ref(),
                 &result.job.path,
                 lane,
                 timeout,
@@ -4367,7 +4427,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             crate::storage_v2_shipper::ship_next_cursor_envelope(
                 &mut conn,
                 &task_context.client,
-                capabilities,
+                capabilities.as_ref(),
                 &result.job.path,
                 lane,
                 timeout,
@@ -4391,7 +4451,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             crate::storage_v2_shipper::ship_next_cursor_acp_envelope(
                 &mut conn,
                 &task_context.client,
-                capabilities,
+                capabilities.as_ref(),
                 &result.job.path,
                 lane,
                 timeout,
@@ -4407,7 +4467,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             crate::storage_v2_shipper::ship_next_envelope(
                 &mut conn,
                 &task_context.client,
-                capabilities,
+                capabilities.as_ref(),
                 &result.job.path,
                 result.job.provider,
                 result.job.observation.session_id.as_deref(),

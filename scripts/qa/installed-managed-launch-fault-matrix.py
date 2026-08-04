@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -800,6 +801,19 @@ def retry_owner_ready(root: Path, provider: str, launcher_pid: int) -> bool:
     return False
 
 
+def provider_failure_qualification(provider: str, output: str) -> str:
+    # Claude's native channel probe depends on provider authentication. An
+    # isolated qualification profile intentionally has no credentials, so do
+    # not mislabel that harness precondition failure as a provider-owned
+    # startup defect.
+    if provider == "claude" and (
+        "auth status" in output.lower()
+        or "native channels unavailable" in output.lower()
+    ):
+        return "harness_precondition_unmet"
+    return "provider_owned_start_failure"
+
+
 def run_provider_live(
     provider: str,
     *,
@@ -878,7 +892,7 @@ def run_provider_live(
                 "session_id_observed": session_match.group(0) if session_match else None,
                 "launch_intent_created": launch_intent_created,
                 "startup_failure": str(error),
-                "qualification": "provider_owned_start_failure",
+                "qualification": provider_failure_qualification(provider, output),
                 "launch_log": str(launch_log),
                 "retry_intents_after_launch": read_retry_count(root),
             },
@@ -888,6 +902,10 @@ def run_provider_live(
     output = redact(output, token)
     (provider_root / "launch.log").write_text(output, encoding="utf-8")
     session_match = UUID_RE.search(output)
+    launch_intent_created = any(
+        str(intent.get("provider_name", "")).lower() == provider.lower()
+        for intent in read_retry_intents(root)
+    )
     result = {
         "provider": provider,
         "provider_binary": str(provider_bin),
@@ -902,12 +920,7 @@ def run_provider_live(
         "provider_ready_observed": live.provider_ready_observed,
         "launcher_pid": live.process.pid,
         "session_id_observed": session_match.group(0) if session_match else None,
-        # The durable-count assertion below verifies that each successful
-        # degraded marker produced a retry intent. Do not couple this evidence
-        # field to launcher PID identity: provider adapters may fork/exec and
-        # the persisted owner PID is intentionally the native launcher owner,
-        # not necessarily the PTY harness PID.
-        "launch_intent_created": True,
+        "launch_intent_created": launch_intent_created,
         "launch_log": str(provider_root / "launch.log"),
         "retry_intents_after_launch": read_retry_count(root),
     }
@@ -1075,6 +1088,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     args._temporary_root = temp_root
     host: Host | None = None
     engine: subprocess.Popen[bytes] | None = None
+    engine_handle: Any | None = None
+    engine_log: Path | None = None
     results: list[dict[str, Any]] = []
     live_commands: list[tuple[dict[str, Any], LiveCommand]] = []
     args._matrix_results = results
@@ -1182,6 +1197,21 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 f"installed outage launches left {retry_count} retry intents, expected {expected_retry_count}"
             )
         retry_intents = read_retry_intents(temp_root)
+        successful_provider_counts = Counter(
+            str(result.get("provider", "")).lower()
+            for result in results
+            if result.get("startup_failure") is None
+        )
+        intent_provider_counts = Counter(
+            str(intent.get("provider_name", "")).lower()
+            for intent in retry_intents
+        )
+        if intent_provider_counts != successful_provider_counts:
+            raise RuntimeError(
+                "installed launch intents were not attributable one-for-one by provider: "
+                f"intents={dict(intent_provider_counts)} "
+                f"successful_launches={dict(successful_provider_counts)}"
+            )
         args._retry_intents = [
             {
                 key: intent.get(key)
@@ -1315,56 +1345,104 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             )
             time.sleep(2)
             first_start_returncode = cold_engine.poll()
-            if first_start_returncode is None:
-                kill_group(cold_engine)
-                cold_engine.wait(timeout=5)
-            elif first_start_returncode not in {0, 1}:
+            if first_start_returncode is not None:
                 cold_handle.close()
                 raise RuntimeError(
-                    "cold-start Machine Agent exited unexpectedly before restart: "
+                    "cold-start Machine Agent exited during Runtime Host outage; "
+                    "local recovery must stay alive: "
                     f"{first_start_returncode}"
                 )
-            cold_handle.close()
+            engine = cold_engine
+            engine_handle = cold_handle
+            engine_log = cold_log
             preserved_retry_count = read_retry_count(temp_root)
             if preserved_retry_count != expected_retry_count:
                 raise RuntimeError(
                     "cold-start Machine Agent changed durable retry intent count: "
                     f"{preserved_retry_count} != {expected_retry_count}"
                 )
+
+            ready_ids = {
+                str(intent.get("expected_session_id"))
+                for intent in retry_intents
+                if intent.get("provider_ready") is True
+            }
+
+            def cold_retry_progress() -> bool:
+                return any(
+                    int(intent.get("attempts") or 0) > 0
+                    for intent in read_retry_intents(temp_root)
+                    if str(intent.get("expected_session_id")) in ready_ids
+                )
+
+            wait_for(
+                cold_retry_progress,
+                15,
+                "cold-start Machine Agent retry progress while Runtime Host is unavailable",
+            )
+            retry_attempts_observed = max(
+                int(intent.get("attempts") or 0)
+                for intent in read_retry_intents(temp_root)
+                if str(intent.get("expected_session_id")) in ready_ids
+            )
             cold_restart_evidence = {
                 "first_start_returncode": first_start_returncode,
-                "expected_outage_exit": first_start_returncode == 1,
+                "first_start_survived_outage": True,
+                "retry_attempts_observed": retry_attempts_observed,
                 "retry_intents_preserved": preserved_retry_count,
-                "pre_ready_intents_garbage_collected": 0,
+                "pre_ready_intents_garbage_collected": None,
                 "log": str(cold_log),
             }
 
         host = start_host(temp_root, evidence_root, port=port, ordinal=2)
-        engine_log = evidence_root / "machine-agent.log"
-        engine_handle = engine_log.open("wb")
-        engine_env = runtime_env(temp_root, engine_bin)
-        engine = subprocess.Popen(
-            [
-                str(engine_bin),
-                "connect",
-                "--url",
-                base_url,
-                "--token",
-                token,
-                "--db",
-                str(temp_root / "agent.db"),
-                "--machine-name",
-                DEVICE_ID,
-                "--fallback-scan-secs",
-                "1",
-                "--spool-replay-secs",
-                "1",
-            ],
-            env=engine_env,
-            stdout=engine_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        if engine is None:
+            engine_log = evidence_root / "machine-agent.log"
+            engine_handle = engine_log.open("wb")
+            engine_env = runtime_env(temp_root, engine_bin)
+            engine = subprocess.Popen(
+                [
+                    str(engine_bin),
+                    "connect",
+                    "--url",
+                    base_url,
+                    "--token",
+                    token,
+                    "--db",
+                    str(temp_root / "agent.db"),
+                    "--machine-name",
+                    DEVICE_ID,
+                    "--fallback-scan-secs",
+                    "1",
+                    "--spool-replay-secs",
+                    "1",
+                ],
+                env=engine_env,
+                stdout=engine_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+
+        if unready_intents:
+            unready_ids = {
+                str(intent.get("expected_session_id")) for intent in unready_intents
+            }
+
+            def pre_ready_intents_garbage_collected() -> bool:
+                current_ids = {
+                    str(intent.get("expected_session_id"))
+                    for intent in read_retry_intents(temp_root)
+                }
+                return not (unready_ids & current_ids)
+
+            wait_for(
+                pre_ready_intents_garbage_collected,
+                30,
+                "pre-ready installed retry intents to be removed by the live Machine Agent",
+            )
+            if cold_restart_evidence is not None:
+                cold_restart_evidence["pre_ready_intents_garbage_collected"] = len(
+                    unready_ids
+                )
 
         wait_for(
             lambda: read_retry_count(temp_root) == 0,
@@ -1435,7 +1513,9 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 **cleanup,
             }
         live_commands.clear()
-        engine_handle.close()
+        if engine_handle is not None:
+            engine_handle.close()
+            engine_handle = None
         return {
             "schema_version": 1,
             "artifact_kind": "installed_managed_launch_fault_matrix",
@@ -1487,7 +1567,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "pre_ready_cleanup": pre_ready_cleanup_evidence,
             "launch_attempt_states": last_launch_states,
             "runtime_host_port": port,
-            "machine_agent_log": str(engine_log),
+            "machine_agent_log": str(engine_log) if engine_log else None,
             "evidence_root": str(evidence_root),
         }
     finally:
@@ -1497,6 +1577,9 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             except Exception:
                 pass
         live_commands.clear()
+        if engine_handle is not None:
+            engine_handle.close()
+            engine_handle = None
         if engine is not None:
             kill_group(engine)
             try:

@@ -1064,12 +1064,18 @@ fn native_desktop_suggested_actions(
             "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
         ];
     }
+    if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_exhausted")
+    {
+        return vec![
+            "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.".to_string(),
+        ];
+    }
     if reasons.iter().any(|reason| {
         matches!(
             reason.as_str(),
-            "managed_launch_recovery_exhausted"
-                | "managed_launch_recovery_active"
-                | "managed_launch_recovery_unreadable"
+            "managed_launch_recovery_active" | "managed_launch_recovery_unreadable"
         )
     }) {
         return vec![

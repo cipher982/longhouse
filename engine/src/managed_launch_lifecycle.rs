@@ -637,6 +637,18 @@ fn merge_current_retry_owner_state(
     Ok(())
 }
 
+fn persist_retry_intent_with_owner_merge(
+    path: &std::path::Path,
+    intent: &mut ManagedLaunchRetryIntent,
+) -> anyhow::Result<()> {
+    merge_current_retry_owner_state(path, intent)?;
+    let published = persist_retry_intent_at(path, intent)?;
+    if published != path {
+        anyhow::bail!("managed launch retry intent path changed unexpectedly");
+    }
+    Ok(())
+}
+
 #[allow(dead_code)] // Used by the Machine Agent daemon binary.
 fn retry_due(intent: &ManagedLaunchRetryIntent, now: DateTime<Utc>) -> bool {
     intent
@@ -764,6 +776,7 @@ fn exhaust_retry_intent(intent: &mut ManagedLaunchRetryIntent, reason: impl Into
     intent.exhausted_at = Some(Utc::now().to_rfc3339());
     intent.last_error = Some(reason.into());
     intent.next_attempt_at = None;
+    intent.token.clear();
 }
 
 fn outcome_retry_exhausted(intent: &ManagedLaunchOutcomeRetryIntent, now: DateTime<Utc>) -> bool {
@@ -783,6 +796,7 @@ fn exhaust_outcome_retry_intent(
     intent.exhausted_at = Some(Utc::now().to_rfc3339());
     intent.last_error = Some(reason.into());
     intent.next_attempt_at = None;
+    intent.token.clear();
 }
 
 fn exhausted_retention_expired(exhausted_at: Option<&str>, now: DateTime<Utc>) -> bool {
@@ -990,7 +1004,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                         &mut intent,
                         "managed launch did not become ready before its recovery window expired",
                     );
-                    if let Err(error) = persist_retry_intent_at(&path, &intent) {
+                    if let Err(error) = persist_retry_intent_with_owner_merge(&path, &mut intent) {
                         tracing::warn!(path = %path.display(), error = %error, "Could not persist expired pre-ready managed launch retry intent");
                     }
                     tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed launch stayed pre-ready until its recovery window expired");
@@ -998,12 +1012,12 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                 }
                 Some(true) => continue,
                 Some(false) => {
-                    tracing::warn!(path = %path.display(), "Removing managed launch intent whose launcher exited before readiness");
+                    tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Removing managed launch intent whose launcher exited before readiness");
                     let _ = remove_if_present(&path);
                     continue;
                 }
                 None if pre_ready_expired(&intent, now) => {
-                    tracing::warn!(path = %path.display(), "Removing stale managed launch intent with no readiness owner identity");
+                    tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Removing stale managed launch intent with no readiness owner identity");
                     let _ = remove_if_present(&path);
                     continue;
                 }
@@ -1015,7 +1029,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                 &mut intent,
                 "automatic managed launch registration recovery exhausted; inspect the managed session",
             );
-            if let Err(error) = persist_retry_intent_at(&path, &intent) {
+            if let Err(error) = persist_retry_intent_with_owner_merge(&path, &mut intent) {
                 tracing::warn!(path = %path.display(), error = %error, "Could not persist exhausted managed launch retry intent");
             }
             tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed launch registration recovery exhausted");
@@ -1045,7 +1059,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                         "managed provider owner is no longer live; recording post-hoc launch abort"
                             .into(),
                     );
-                    let _ = persist_retry_intent_at(&path, &intent);
+                    let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
                     tracing::warn!(
                         path = %path.display(),
                         action_id = "inspect_managed_session",
@@ -1078,7 +1092,8 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                     (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
                         .to_rfc3339(),
                 );
-                if let Err(update_error) = persist_retry_intent_at(&path, &intent) {
+                if let Err(update_error) = persist_retry_intent_with_owner_merge(&path, &mut intent)
+                {
                     tracing::warn!(path = %path.display(), error = %update_error, "Could not persist managed launch retry backoff");
                 }
                 continue;
@@ -1089,7 +1104,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
         {
             intent.last_error = Some(truncate(&format!("{error:#}"), 1000));
             intent.next_attempt_at = Some((Utc::now() + ChronoDuration::minutes(1)).to_rfc3339());
-            let _ = persist_retry_intent_at(&path, &intent);
+            let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
             tracing::warn!(path = %path.display(), error = %error, "Managed launch retry returned an invalid transport");
             continue;
         }
@@ -1104,7 +1119,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                     Some("Runtime Host returned a different provider identity".into());
                 intent.next_attempt_at =
                     Some((Utc::now() + ChronoDuration::minutes(1)).to_rfc3339());
-                let _ = persist_retry_intent_at(&path, &intent);
+                let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
                 tracing::warn!(path = %path.display(), "Managed launch retry returned a different provider identity");
                 continue;
             }
@@ -1116,7 +1131,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                 (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
                     .to_rfc3339(),
             );
-            let _ = persist_retry_intent_at(&path, &intent);
+            let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
             tracing::warn!(path = %path.display(), error = %error, "Could not refresh managed launch owner state before outcome");
             continue;
         }
@@ -1136,7 +1151,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                         (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
                             .to_rfc3339(),
                     );
-                    let _ = persist_retry_intent_at(&path, &intent);
+                    let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
                     tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed provider owner identity unavailable; deferring launch outcome");
                     continue;
                 }
@@ -1168,7 +1183,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                 (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
                     .to_rfc3339(),
             );
-            let _ = persist_retry_intent_at(&path, &intent);
+            let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
             continue;
         }
         if let Err(error) = remove_if_present(&path) {
@@ -1529,6 +1544,49 @@ mod tests {
         assert!(!exhausted_retention_expired(Some(&retained), now));
         assert!(exhausted_retention_expired(Some(&expired), now));
         assert!(!exhausted_retention_expired(None, now));
+    }
+
+    #[test]
+    fn exhausted_intents_drop_device_tokens_before_retention() {
+        let mut registration = ManagedLaunchRetryIntent {
+            schema_version: RETRY_SCHEMA_VERSION,
+            provider_name: "Codex".to_string(),
+            url: "http://127.0.0.1:1".to_string(),
+            token: "device-token".to_string(),
+            payload: serde_json::json!({"session_id": "session-1"}),
+            expected_session_id: "session-1".to_string(),
+            expected_transport: "codex_app_server".to_string(),
+            provider_ready: true,
+            attempts: 0,
+            next_attempt_at: None,
+            last_error: None,
+            created_at: Utc::now().to_rfc3339(),
+            recovery_exhausted: false,
+            exhausted_at: None,
+            provider_pid: None,
+            provider_process_start_time: None,
+            launcher_pid: None,
+            launcher_process_start_time: None,
+            provider_exited: false,
+        };
+        exhaust_retry_intent(&mut registration, "test");
+        assert!(registration.token.is_empty());
+
+        let mut outcome = ManagedLaunchOutcomeRetryIntent {
+            schema_version: RETRY_SCHEMA_VERSION,
+            url: "http://127.0.0.1:1".to_string(),
+            token: "device-token".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: "run-1".to_string(),
+            attempts: 0,
+            next_attempt_at: None,
+            last_error: None,
+            created_at: Utc::now().to_rfc3339(),
+            recovery_exhausted: false,
+            exhausted_at: None,
+        };
+        exhaust_outcome_retry_intent(&mut outcome, "test");
+        assert!(outcome.token.is_empty());
     }
 
     #[test]
