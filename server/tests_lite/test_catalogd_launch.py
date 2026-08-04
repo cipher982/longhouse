@@ -494,6 +494,49 @@ async def test_catalogd_local_launch_replays_when_retry_timestamps_differ(daemon
 
 
 @pytest.mark.asyncio
+async def test_catalogd_local_launch_replays_after_archive_drains_outbox(daemon_paths):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider="claude",
+        managed_transport="claude_channel_bridge",
+        attach_command="",
+        provider_session_id="claude-thread-retry",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert created["created"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        outbox = db.query(LiveArchiveOutbox).filter_by(kind=MANAGED_LOCAL_LAUNCH_KIND).one()
+        db.delete(outbox)
+        db.commit()
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        replay = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert replay["created"] is False
+        assert replay["exact_replay"] is True
+        assert replay["idempotency_conflict"] is False
+        assert replay["launch"]["session_id"] == str(session_id)
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider", "managed_transport"),
     [
