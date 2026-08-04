@@ -71,7 +71,12 @@ def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Pa
     assert matrix["measured_clean_run_count"] == 2
     assert matrix["successful_recovery_count"] == 2
     assert matrix["retry_drain_rate"] == 1.0
+    assert matrix["retry_drain_sample_count"] == 2
+    assert matrix["retry_drain_denominator"] == "measured_clean_runs"
     assert matrix["cleanup_pass_rate"] == 1.0
+    assert matrix["cleanup_pass_count"] == 16
+    assert matrix["cleanup_scope_count"] == 16
+    assert matrix["cleanup_rate_denominator"] == "measured_cleanup_scopes"
     attribution = matrix["startup_failure_attribution"]
     assert attribution["scope"] == "measured_clean_runs"
     assert len(attribution["auth_precondition_runs"]) == 1
@@ -215,12 +220,16 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
     assert report["measures"]["false_red_rate"] == {
         "status": "observed",
         "scope": "installed_health_fault_matrix",
+        "basis": "fault_matrix_expected_state",
         "numerator": 1,
         "denominator": 2,
+        "numerator_definition": "observed_broken_cases_expected_not_broken",
         "denominator_definition": "observed_broken_cases",
         "rate": 0.5,
         "source": [{"path": str(matrix), "sha256": MODULE._sha256(matrix)}],
     }
     assert report["measures"]["hidden_failure_rate"]["numerator"] == 1
+    assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "all_health_fault_cases"
     assert report["measures"]["action_coverage"]["numerator"] == 1
     assert report["measures"]["action_coverage"]["denominator"] == 2
+    assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_expected_action"

@@ -237,8 +237,10 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
         "false_red_rate": {
             "status": "observed" if total else "not_observed",
             "scope": scope,
+            "basis": "fault_matrix_expected_state",
             "numerator": false_red_cases,
             "denominator": broken_cases,
+            "numerator_definition": "observed_broken_cases_expected_not_broken",
             "denominator_definition": "observed_broken_cases",
             "rate": (false_red_cases / broken_cases) if broken_cases else None,
             "source": references,
@@ -248,6 +250,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
             "scope": scope,
             "numerator": hidden_failure_cases,
             "denominator": total,
+            "denominator_definition": "all_health_fault_cases",
             "rate": (hidden_failure_cases / total) if total else None,
             "source": references,
         },
@@ -256,6 +259,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
             "scope": scope,
             "numerator": action_pass,
             "denominator": action_total,
+            "denominator_definition": "cases_with_expected_action",
             "rate": (action_pass / action_total) if action_total else None,
             "source": references,
         },
@@ -284,6 +288,9 @@ def build_report(
         if (reason := _excluded_run_reason(artifact)) is not None
     ]
     successful = [(path, artifact) for path, artifact in measured if _successful_recovery(artifact)]
+    cleanup_statuses = [
+        status for _, artifact in measured for status in _cleanup_statuses(artifact)
+    ]
     recovery_seconds = [float(artifact["measurements"]["recovery_duration_seconds"]) for _, artifact in successful]
     run_seconds = [float(artifact["measurements"]["run_duration_seconds"]) for _, artifact in successful]
     verdicts = Counter(str(artifact.get("verdict") or "unknown") for _, artifact in matrix_artifacts)
@@ -383,12 +390,16 @@ def build_report(
             "successful_recovery_count": len(successful),
             "verdict_counts": dict(sorted(verdicts.items())),
             "retry_drain_rate": (len(successful) / len(measured)) if measured else None,
+            "retry_drain_sample_count": len(measured),
+            "retry_drain_denominator": "measured_clean_runs",
             "cleanup_pass_rate": (
-                sum(_cleanup_statuses(artifact).count("pass") for _, artifact in measured)
-                / sum(len(_cleanup_statuses(artifact)) for _, artifact in measured)
-                if measured and sum(len(_cleanup_statuses(artifact)) for _, artifact in measured)
+                cleanup_statuses.count("pass") / len(cleanup_statuses)
+                if cleanup_statuses
                 else None
             ),
+            "cleanup_pass_count": cleanup_statuses.count("pass"),
+            "cleanup_scope_count": len(cleanup_statuses),
+            "cleanup_rate_denominator": "measured_cleanup_scopes",
             "startup_failure_attribution": {
                 "scope": "measured_clean_runs",
                 "auth_precondition_runs": auth_gap_runs,
