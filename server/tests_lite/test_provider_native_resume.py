@@ -295,7 +295,7 @@ def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path
         def drain(self) -> bytes:
             self.drains += 1
             if self.drains == 2:
-                recording.write_text('❯ Try "refactor <filepath>"\n', encoding="utf-8")
+                recording.write_text('screen redraw❯\u00a0Try "refactor <filepath>"', encoding="utf-8")
             return b""
 
         def settle(self) -> bytes:

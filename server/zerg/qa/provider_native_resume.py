@@ -920,7 +920,7 @@ def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
         if process.process.poll() is not None:
             raise RuntimeError("Claude Helm process exited before its TUI became ready")
         terminal = _terminal_text(process.recording)
-        if re.search(r"(?im)(?:^|\n)\s*[❯>]\s*Try\b", terminal):
+        if re.search(r"[❯>]\s*Try\b", terminal):
             process.settle()
             return
         time.sleep(0.1)
