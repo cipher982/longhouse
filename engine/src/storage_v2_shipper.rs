@@ -320,11 +320,18 @@ fn prepare_next_envelope_with_limit(
         })
         .cloned()
         .collect::<Vec<_>>();
-    if render_records.is_empty()
+    if position == 0
+        && render_records.is_empty()
         && media_objects.is_empty()
         && provider.eq_ignore_ascii_case("claude")
         && raw_batch_is_claude_startup_metadata(&raw_batch)
     {
+        // Startup metadata may be skipped only while establishing the first
+        // host coordinate. Once an epoch has shipped data, advancing the
+        // local cursor over new metadata would create a host-side range gap:
+        // the next event envelope would start after bytes Runtime Host has
+        // never accepted. Preserve those bytes in a zero-event envelope so
+        // the durable raw range remains contiguous.
         source_epoch::acknowledge_position(
             conn,
             resolution.source_epoch,
@@ -4513,6 +4520,40 @@ mod tests {
 
         assert_eq!(prepared.range_start, metadata.len() as u64);
         assert_eq!(prepared.event_count, 1);
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
+    }
+
+    #[test]
+    fn ships_late_claude_startup_metadata_after_an_accepted_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let user = r#"{"type":"user","uuid":"u1","timestamp":"2026-07-12T12:00:00Z","message":{"content":"hello"}}"#;
+        let metadata_line =
+            r#"{"type":"mode","mode":"normal","sessionId":"018f0c3a-7b2d-7f10-8a11-123456789abc"}"#;
+        let user_line = format!("{user}\n");
+        fs::write(&path, &user_line).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+        fs::write(&path, format!("{user_line}{metadata_line}\n")).unwrap();
+
+        let late_metadata =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(late_metadata.source_epoch, first.source_epoch);
+        assert_eq!(late_metadata.range_start, user_line.len() as u64);
+        assert_eq!(late_metadata.event_count, 0);
+        assert_eq!(
+            late_metadata.envelope.render.as_ref().unwrap().records.len(),
+            0
+        );
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
     }
 
