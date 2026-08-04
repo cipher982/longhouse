@@ -6,12 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
+from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _provider_process_pid
+from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -36,6 +39,21 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
+
+
+def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:
+    state = tmp_path / ".claude" / "channels" / "longhouse" / "sessions" / "session.json"
+    state.parent.mkdir(parents=True)
+    state.write_text("{}")
+
+    assert state in _state_candidates(SPECS["claude"], tmp_path)
+
+
+def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
+    receipt = tmp_path / "receipt.json"
+    write_codex_json(receipt, {"path": tmp_path / "provider"})
+
+    assert json.loads(receipt.read_text()) == {"path": str(tmp_path / "provider")}
 
 
 def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path) -> None:
@@ -129,6 +147,9 @@ def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
 
 def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
+    # The producer must read the generated, digest-pinned contract that the
+    # factory mounts as --repo-root; a synthetic tmp_path would bypass that seam.
+    repo_root = Path(__file__).resolve().parents[2]
     exit_code = antigravity_resume_policy.main(
         [
             "--variant",
@@ -136,7 +157,7 @@ def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -
             "--evidence-root",
             str(evidence),
             "--repo-root",
-            str(tmp_path),
+            str(repo_root),
             "--engine",
             str(tmp_path / "engine"),
             "--longhouse-cli",
@@ -157,3 +178,60 @@ def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -
     assert source["resume_capability"]["disposition"] == "policy_disabled"
     assert source["scenario_result"]["status"] == "pass"
     assert json.loads((evidence / "cleanup-receipt.json").read_text())["orphan_count"] == 0
+
+
+def test_antigravity_policy_contract_digest_matches_canonical_authority() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+
+    _contract, digest = antigravity_resume_policy._policy_contract(repo_root)
+
+    assert digest == managed_provider_contract_entry_digest("antigravity")
+
+
+@pytest.mark.parametrize(
+    ("reattach", "disposition"),
+    ((True, "policy_disabled"), (False, "implemented")),
+)
+def test_antigravity_policy_proof_fails_closed_when_contract_enables_resume(
+    tmp_path: Path,
+    reattach: bool,
+    disposition: str,
+) -> None:
+    manifest_path = tmp_path / "server/zerg/config/managed_provider_contracts.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": [
+                    {
+                        "provider": "antigravity",
+                        "reattach": reattach,
+                        "capabilities": {"session.resume.helm": {"disposition": disposition}},
+                    }
+                ],
+            }
+        )
+    )
+    evidence = tmp_path / "evidence"
+
+    exit_code = antigravity_resume_policy.main(
+        [
+            "--variant",
+            "policy_disabled",
+            "--evidence-root",
+            str(evidence),
+            "--repo-root",
+            str(tmp_path),
+            "--engine",
+            str(tmp_path / "engine"),
+            "--longhouse-cli",
+            str(tmp_path / "longhouse"),
+        ]
+    )
+
+    result = json.loads((evidence / "result.json").read_text())
+    assert exit_code == 0
+    assert result["status"] == "fail"
+    source = json.loads((evidence / "policy-source-receipt.json").read_text())
+    assert source["scenario_result"]["failure_code"] == "resume_unsupported_oracle_failed"

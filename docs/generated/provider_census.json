@@ -1120,6 +1120,7 @@
     {
       "path": "server/tests_lite/test_provider_native_resume.py",
       "providers": [
+        "antigravity",
         "claude",
         "cursor",
         "opencode"

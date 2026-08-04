@@ -506,9 +506,7 @@ def test_full_column_gate_accepts_the_result_of_an_explicit_live_interaction_att
     assert gate["provider_status"] == ("pass" if status == "pass" else "blocked")
 
 
-def test_full_column_gate_uses_declared_nested_native_source_root(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_full_column_gate_uses_declared_nested_native_source_root(tmp_path: Path, monkeypatch) -> None:
     payload = _passing_claude_full_column_payload()
     digest = "sha256:" + "a" * 64
     interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
