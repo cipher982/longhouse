@@ -213,9 +213,11 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
     )
     socket_file.touch()
     commands: list[list[str]] = []
+    environments: list[dict[str, str] | None] = []
 
-    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+    def fake_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
+        environments.append(kwargs.get("env"))
         state_file.write_text(
             json.dumps({"status": "stopped", "active_turn_id": None}),
             encoding="utf-8",
@@ -244,6 +246,7 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
     assert result["verification"]["verified"] is True
     assert result["verification"]["terminal_state"] is True
     assert result["verification"]["socket_absent"] is True
+    assert environments[0]["LONGHOUSE_HOME"] == str(isolation_root / "longhouse")
 
 
 def test_stop_verification_rejects_zero_exit_shape_without_terminal_cleanup(tmp_path: Path) -> None:
