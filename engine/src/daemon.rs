@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
@@ -258,6 +259,7 @@ struct PathTaskContext {
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
     storage_v2: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<StorageV2Capabilities>>>>,
+    storage_v2_probe_pending: std::sync::Arc<AtomicBool>,
 }
 
 impl PathTaskContext {
@@ -273,6 +275,10 @@ impl PathTaskContext {
             .read()
             .ok()
             .and_then(|capabilities| capabilities.clone())
+    }
+
+    fn storage_v2_probe_pending(&self) -> bool {
+        self.storage_v2_probe_pending.load(Ordering::Acquire)
     }
 }
 
@@ -307,6 +313,15 @@ fn is_cursor_database_job(job: &PathJob) -> bool {
 fn is_cursor_acp_source_job(job: &PathJob) -> bool {
     job.provider == "cursor_acp"
         && job.path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+}
+
+fn should_defer_storage_v2_job(
+    is_cursor_job: bool,
+    is_nonlive_job: bool,
+    storage_v2_enabled: bool,
+    capability_probe_pending: bool,
+) -> bool {
+    !storage_v2_enabled && capability_probe_pending && (is_cursor_job || is_nonlive_job)
 }
 
 struct DeferredRetry {
@@ -706,7 +721,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 3. Create HTTP client
     let client = ShipperClient::with_compression(&config.shipper_config, config.algo)?;
     tracing::info!("Shipping to: {}", client.ingest_url());
-    let (storage_v2, mut storage_v2_probe_pending) = match client
+    let (storage_v2, storage_v2_probe_pending) = match client
         .storage_v2_capabilities(
             &config.shipper_config.machine_name,
             Some(Duration::from_secs(5)),
@@ -801,6 +816,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
         storage_v2: std::sync::Arc::new(std::sync::RwLock::new(storage_v2)),
+        storage_v2_probe_pending: std::sync::Arc::new(AtomicBool::new(storage_v2_probe_pending)),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -1051,7 +1067,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Capability negotiation is a recoverable Runtime Host dependency.
             // Do not let an outage at daemon startup terminate the Machine
             // Agent before managed-launch recovery and local health are live.
-            _ = storage_v2_refresh_timer.tick(), if storage_v2_probe_pending && !task_context.storage_v2_enabled() => {
+            _ = storage_v2_refresh_timer.tick(), if task_context.storage_v2_probe_pending() && !task_context.storage_v2_enabled() => {
                 match client
                     .storage_v2_capabilities(
                         &config.shipper_config.machine_name,
@@ -1067,15 +1083,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         if let Ok(mut current) = task_context.storage_v2.write() {
                             *current = Some(std::sync::Arc::new(capabilities));
                         }
-                        storage_v2_probe_pending = false;
+                        task_context
+                            .storage_v2_probe_pending
+                            .store(false, Ordering::Release);
                     }
                     Ok(Some(_)) => {
                         tracing::debug!("Runtime Host storage-v2 capability probe is available without cutover");
-                        storage_v2_probe_pending = false;
+                        task_context
+                            .storage_v2_probe_pending
+                            .store(false, Ordering::Release);
                     }
                     Ok(None) => {
                         tracing::debug!("Runtime Host still does not advertise storage-v2");
-                        storage_v2_probe_pending = false;
+                        task_context
+                            .storage_v2_probe_pending
+                            .store(false, Ordering::Release);
                     }
                     Err(error) => {
                         tracing::debug!(error = %error, "Runtime Host storage-v2 capability probe unavailable; keeping local recovery alive");
@@ -4300,9 +4322,19 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     // Cursor stores are source-faithful only through the native storage-v2
     // adapter. Never replay an old pointer spool or parse/post a lossy legacy
     // projection when this Runtime Host lacks the v2 cutover.
-    if (is_cursor_database_job(&result.job) || is_cursor_acp_source_job(&result.job))
-        && !task_context.storage_v2_enabled()
-    {
+    let storage_v2_enabled = task_context.storage_v2_enabled();
+    let is_cursor_job =
+        is_cursor_database_job(&result.job) || is_cursor_acp_source_job(&result.job);
+    if should_defer_storage_v2_job(
+        is_cursor_job,
+        result.job.priority != WorkPriority::Live,
+        storage_v2_enabled,
+        task_context.storage_v2_probe_pending(),
+    ) {
+        result.local_retry_after = Some(Duration::from_secs(30));
+        return finish_path_task(result, task_started);
+    }
+    if is_cursor_job && !storage_v2_enabled {
         if let Err(error) = Spool::new(&conn).dead_letter_pending_for_provider(
             "cursor",
             "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
@@ -4316,7 +4348,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         return finish_path_task(result, task_started);
     }
 
-    if result.job.priority != WorkPriority::Live && !task_context.storage_v2_enabled() {
+    if result.job.priority != WorkPriority::Live && !storage_v2_enabled {
         let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
         let replay_trace = shipper::ShipTraceContext {
             work_context: FAILED_SHIPMENT_RETRY_CONTEXT,
@@ -4893,6 +4925,15 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn storage_v2_probe_unknown_defers_cursor_and_replay_work() {
+        assert!(should_defer_storage_v2_job(true, false, false, true));
+        assert!(should_defer_storage_v2_job(false, true, false, true));
+        assert!(!should_defer_storage_v2_job(true, false, false, false));
+        assert!(!should_defer_storage_v2_job(true, false, true, true));
+        assert!(!should_defer_storage_v2_job(false, false, false, true));
+    }
 
     #[test]
     fn ledger_watermark_detects_out_of_process_phase_writes() {

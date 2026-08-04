@@ -1083,7 +1083,43 @@ fn native_desktop_suggested_actions(
                 .to_string(),
         ];
     }
-    Vec::new()
+    native_desktop_suggested_action_ids(reasons)
+        .into_iter()
+        .map(|action_id| match action_id.as_str() {
+            "inspect_local_health" => "Run: longhouse local-health --fast --json".to_string(),
+            "inspect_storage_source" => {
+                "Run: longhouse shipping inspect --json and inspect the retained source evidence."
+                    .to_string()
+            }
+            "inspect_storage_outbox" => {
+                "Inspect the storage-v2 outbox with: longhouse local-health --fast --json"
+                    .to_string()
+            }
+            "inspect_shipping" => {
+                "Inspect shipping evidence with: longhouse shipping inspect --json".to_string()
+            }
+            "inspect_transport" => {
+                "Inspect transport and retry state with: longhouse local-health --fast --json"
+                    .to_string()
+            }
+            "inspect_managed_session" => {
+                "Inspect the affected managed session and local recovery files.".to_string()
+            }
+            "repair_machine" => "Run: longhouse machine repair --repair-service --json".to_string(),
+            "free_disk_space" => {
+                "Free local disk space, then rerun: longhouse local-health --fast --json"
+                    .to_string()
+            }
+            "stop_managed_bridge" => {
+                "Inspect the exact managed bridge before stopping it.".to_string()
+            }
+            "inspect_archive" => "Inspect archive repair state with: longhouse doctor".to_string(),
+            "inspect_provider" => {
+                "Inspect the installed provider and its supported Longhouse surface.".to_string()
+            }
+            _ => format!("Run the scoped Longhouse action: {action_id}"),
+        })
+        .collect()
 }
 
 fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
