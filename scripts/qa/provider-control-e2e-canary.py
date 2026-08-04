@@ -1440,9 +1440,17 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
                 continue
             database_session_id = str(database_session_id or "").strip()
             record_session_id = str(record.get("sessionID") or "").strip()
-            if not database_session_id or not record_session_id or database_session_id != record_session_id:
+            # OpenCode 1.17 stores the binding in the normalized SQLite
+            # session_id column and omits sessionID from message.data. When a
+            # payload does carry sessionID, keep the cross-column consistency
+            # check: a mismatched provider payload must never be attributed to
+            # the requested native session.
+            if not database_session_id:
                 continue
-            if session_ids and record_session_id not in session_ids:
+            if record_session_id and database_session_id != record_session_id:
+                continue
+            bound_session_id = record_session_id or database_session_id
+            if session_ids and bound_session_id not in session_ids:
                 continue
             model_record = record.get("model") if isinstance(record.get("model"), dict) else record
             model = _opencode_model_identity(
@@ -1456,7 +1464,7 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
             candidates.append(
                 {
                     "message_id": str(message_id or record.get("id") or ""),
-                    "session_id": record_session_id,
+                    "session_id": bound_session_id,
                     "database_session_id": database_session_id,
                     "model": model,
                     "record_sha256": _native_event_digest(record),

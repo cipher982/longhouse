@@ -63,6 +63,33 @@ def test_opencode_native_model_evidence_reads_the_selected_native_message(tmp_pa
     assert len(evidence["record_sha256"]) == 64
 
 
+def test_opencode_native_model_evidence_uses_sqlite_binding_when_payload_omits_session_id(tmp_path) -> None:
+    canary = _load_canary()
+    runtime = tmp_path / "opencode-runtime"
+    database = runtime / "data" / "opencode" / "opencode.db"
+    database.parent.mkdir(parents=True)
+    record = {
+        "id": "message-1",
+        "role": "assistant",
+        "providerID": "openrouter",
+        "modelID": "~openai/gpt-mini-latest",
+    }
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            ("message-1", "session-1", 1, json.dumps(record)),
+        )
+
+    evidence = canary._opencode_native_model_evidence(runtime, session_ids=["session-1"])  # noqa: SLF001
+
+    assert evidence is not None
+    assert evidence["session_id"] == "session-1"
+    assert evidence["model"] == "openrouter/~openai/gpt-mini-latest"
+
+
 def test_opencode_native_model_evidence_rejects_conflicting_sqlite_session_bindings(tmp_path) -> None:
     canary = _load_canary()
     runtime = tmp_path / "opencode-runtime"
