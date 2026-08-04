@@ -96,6 +96,49 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
 
 
 @pytest.mark.asyncio
+async def test_catalogd_rejects_provider_session_identity_bound_to_another_thread(daemon_paths):
+    database_path, socket_path = daemon_paths
+    first_session_id = uuid4()
+    second_session_id = uuid4()
+    provider_session_id = "claude-native-session-1"
+    first = _local_launch_payload(
+        session_id=first_session_id,
+        provider="claude",
+        managed_transport="claude_channel",
+        attach_command="longhouse claude --resume claude-native-session-1",
+        provider_session_id=provider_session_id,
+    )
+    second = _local_launch_payload(
+        session_id=second_session_id,
+        provider="claude",
+        managed_transport="claude_channel",
+        attach_command="longhouse claude --resume claude-native-session-1",
+        provider_session_id=provider_session_id,
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": first})
+        assert created["created"] is True
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("session.launch.local.create.v2", {"launch": second})
+        assert exc_info.value.code == "conflict"
+        assert "provider session identity" in str(exc_info.value)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        assert db.get(LiveSessionCatalog, str(first_session_id)) is not None
+        assert db.get(LiveSessionCatalog, str(second_session_id)) is None
+        assert db.query(LiveSessionLaunchAttempt).count() == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("terminal_state", "terminal_reason"),
     [("process_gone", "provider_exit"), ("session_ended", "user_closed")],

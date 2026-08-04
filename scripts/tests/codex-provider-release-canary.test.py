@@ -103,7 +103,7 @@ if args[:2] == ["codex-bridge", "start"]:
         raise SystemExit(2)
     session_id = arg_value("--session-id")
     isolation_root = Path(arg_value("--isolation-root"))
-    state_root = isolation_root / "codex-bridge"
+    state_root = isolation_root / "longhouse" / "managed-local" / "codex-bridge"
     state_root.mkdir(parents=True, exist_ok=True)
     state_file = state_root / f"{session_id}.json"
     state_file.with_suffix(".sock").write_text("fake socket", encoding="utf-8")
@@ -431,6 +431,10 @@ def _run_canary(
     evidence = root / "evidence"
     env = os.environ.copy()
     env.pop("LONGHOUSE_CODEX_BIN", None)
+    # The fixture is hermetic. A developer's real provider binding must not
+    # switch this fake canary into the stock Codex login path.
+    env.pop("CODEX_API_KEY", None)
+    env.pop("OPENAI_API_KEY", None)
     env["FAKE_ENGINE_CALLS"] = str(fixture["calls"])
     env["FAKE_CODEX_ARGS_LOG"] = str(fixture["codex_args"])
     env["FAKE_TUI_STATE_POINTER"] = str(fixture["tui_state_pointer"])

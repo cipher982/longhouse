@@ -88,13 +88,21 @@ def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> No
     assert (configured_claude / "projects").is_dir()
 
 
-def test_cursor_qualification_workspace_has_project_identity(tmp_path: Path) -> None:
+def test_cursor_qualification_workspace_has_project_identity(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "cursor-workspace"
     workspace.mkdir()
+    template = tmp_path / "git-template"
+    (template / "hooks").mkdir(parents=True)
+    (template / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    global_config = tmp_path / "gitconfig"
+    global_config.write_text(f"[init]\n\ttemplatedir = {template}\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template))
 
     _initialize_cursor_workspace(workspace)
 
     assert (workspace / ".git").is_dir()
+    assert not (workspace / ".git" / "hooks" / "pre-commit").exists()
 
 
 def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
