@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -17,6 +18,7 @@ from zerg.routers import agents_sessions
 from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.session_views import SessionNotificationWatchRequest
+from zerg.services.session_views import SessionReadRequest
 
 
 @pytest.fixture
@@ -101,6 +103,57 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
         )
         assert replay["updated"] is False
         assert replay["commit_seq"] == "3"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_read_rejects_future_console_result_in_catalog(daemon_paths, monkeypatch):
+    from fastapi import HTTPException
+
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    session_id = str(uuid4())
+    now = datetime.now(UTC).replace(microsecond=0)
+    result_at = now - timedelta(seconds=5)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="codex",
+                environment="dev",
+                started_at=now,
+                last_console_result_at=result_at,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: client)
+    try:
+        with pytest.raises(HTTPException) as error:
+            await agents_sessions.mark_session_read(
+                session_id=UUID(session_id),
+                body=SessionReadRequest(read_through=now),
+                db=None,
+                _auth=None,
+                _single=None,
+            )
+        assert error.value.status_code == 400
+
+        accepted = await agents_sessions.mark_session_read(
+            session_id=UUID(session_id),
+            body=SessionReadRequest(read_through=result_at),
+            db=None,
+            _auth=None,
+            _single=None,
+        )
+        assert accepted.last_read_at == result_at
     finally:
         await client.close()
         await daemon.close()

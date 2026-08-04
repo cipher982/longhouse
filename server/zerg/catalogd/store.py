@@ -4805,6 +4805,7 @@ class CatalogStore:
                         table.c.notification_muted,
                         table.c.user_hidden_from_timeline,
                         table.c.user_hidden_at,
+                        table.c.last_console_result_at,
                         table.c.last_read_at,
                     ).where(table.c.session_id == session_id)
                 )
@@ -4819,12 +4820,21 @@ class CatalogStore:
                             StorageSession.__table__.c.loop_mode,
                             StorageSession.__table__.c.notification_muted,
                             StorageSession.__table__.c.user_hidden_from_timeline,
+                            StorageSession.__table__.c.last_console_result_at,
                             StorageSession.__table__.c.last_read_at,
                         ).where(StorageSession.__table__.c.session_id == session_id)
                     )
                     .mappings()
                     .first()
                 )
+                if storage_current is not None and last_read_at is not None:
+                    result_at = _as_aware_utc(storage_current["last_console_result_at"])
+                    if result_at is not None and last_read_at > result_at:
+                        return {
+                            "found": True,
+                            "read_through_rejected": True,
+                            "commit_seq": str(_current_commit_seq(connection)),
+                        }
                 if storage_current is not None and (user_hidden_from_timeline is not None or last_read_at is not None):
                     storage_values: dict[str, Any] = {"updated_at": observed_at}
                     if user_hidden_from_timeline is not None:
@@ -4859,6 +4869,14 @@ class CatalogStore:
                     "commit_seq": str(_current_commit_seq(connection)),
                 }
             values: dict[str, Any] = {}
+            if last_read_at is not None:
+                result_at = _as_aware_utc(current["last_console_result_at"])
+                if result_at is not None and last_read_at > result_at:
+                    return {
+                        "found": True,
+                        "read_through_rejected": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
             if user_state is not None and user_state != str(current["user_state"] or "active"):
                 values["user_state"] = user_state
                 values["user_state_at"] = observed_at

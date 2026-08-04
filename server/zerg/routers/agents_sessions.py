@@ -1642,6 +1642,11 @@ async def mark_session_read(
         preferences = await update_session_preferences(session_id, last_read_at=read_through)
         if preferences is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        if preferences.read_through_rejected:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="read_through must not be newer than the latest observed Console result",
+            )
         publish_session_read_update(session_id=str(session_id))
         return SessionReadResponse(session_id=str(session_id), last_read_at=preferences.last_read_at)
 
@@ -1649,6 +1654,12 @@ async def mark_session_read(
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    result_at = normalize_utc_datetime(session.last_console_result_at)
+    if result_at is not None and read_through > result_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="read_through must not be newer than the latest observed Console result",
+        )
     current = normalize_utc_datetime(session.last_read_at)
     if current is None or read_through > current:
         session.last_read_at = read_through
