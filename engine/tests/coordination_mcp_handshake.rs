@@ -53,11 +53,14 @@ fn registered_engine_command_advertises_coordination_tools() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 6);
-    // search_sessions is the history verb. This is the surface every managed
-    // provider loads, so its absence here means no agent can find prior work.
+    assert_eq!(names.len(), 7);
+    // search_sessions finds sessions and recall reads evidence out of them.
+    // This is the surface every managed provider loads, so a verb missing here
+    // is a verb no agent can reach -- recall was absent entirely, which left
+    // managed sessions with no semantic retrieval at all.
     for expected in [
         "search_sessions",
+        "recall",
         "peers",
         "tail",
         "send",

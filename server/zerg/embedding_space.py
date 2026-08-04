@@ -144,4 +144,10 @@ EMBEDDING_ARTIFACT_FILES: Final = tuple(_parsed_files)
 # The projector identity is a projection-schema version, not only a model-space
 # name. Bump it when provenance semantics change so catalogd reclaims every
 # session instead of treating rows written under the old contract as complete.
-EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p2"
+# The trailing generation marker is bumped whenever the *text* fed to the model
+# changes, even though the model and dimensions do not. Episode hashes are
+# computed over the chunker's output, so a chunker change only re-embeds
+# sessions the projector re-claims; a new projector identity is what makes it
+# re-claim all of them. p3: model-tokenizer budgeting at 2048 replaced a
+# tiktoken sandwich that the encoder then re-truncated to 1024.
+EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p3"

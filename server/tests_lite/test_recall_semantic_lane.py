@@ -51,13 +51,49 @@ def _complete_catalog_projection(monkeypatch):
     monkeypatch.setattr(agents_search, "_require_complete_projection_coverage", complete)
 
 
+async def _noop_hydrate(match, **_kwargs):
+    match.evidence_status = "not_requested"
+    return match
+
+
+async def _recall(*, mode: str):
+    """Drive the route handler directly, past auth and the request-timeout state."""
+
+    class _Request:
+        query_params = {"query": "anything", "mode": mode}
+        state = type("S", (), {})()
+
+    class _Auth:
+        owner_id = 42
+
+    # Called directly, so every FastAPI Query default has to be supplied.
+    return await agents_search.recall_sessions(
+        _Request(),
+        response=None,
+        query="anything",
+        project=None,
+        provider=None,
+        include_test=False,
+        since_days=90,
+        max_results=5,
+        context_turns=0,
+        context_mode="forensic",
+        include_automation=False,
+        mode=mode,
+        _auth=_Auth(),
+        _single=None,
+    )
+
+
 def _match(session_id: str, score: float) -> RecallMatch:
     return RecallMatch(session_id=session_id, chunk_index=0, score=score)
 
 
 def _resident_coverage(*, stale: bool = False) -> agents_search._EmbeddingCoveragePayload:
     return agents_search._EmbeddingCoveragePayload(
-        ready=True,
+        integrity_ready=True,
+        complete=True,
+        unpublished_sessions=0,
         expected_sessions=1,
         published_sessions=1,
         expected_episodes=1,
@@ -149,7 +185,7 @@ async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(monkeypatch):
+async def test_missing_cutover_certificate_closes_the_outer_coverage_gate(monkeypatch):
     from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
     from zerg.services import catalogd_supervisor
 
@@ -187,7 +223,7 @@ async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(m
         await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
 
     assert incomplete.value.status_code == 503
-    assert incomplete.value.detail["code"] == "embedding_coverage_incomplete"
+    assert incomplete.value.detail["code"] == "embedding_coverage_unproven"
     assert incomplete.value.detail["reason"] == "cutover_not_certified"
     assert seen == [EMBEDDING_PROJECTOR_ID]
 
@@ -233,15 +269,23 @@ async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkey
 @pytest.mark.parametrize(
     ("lag_count", "oldest_lag_seconds"),
     [
-        (agents_search.RECALL_LIVE_HEAD_MAX_SESSIONS + 1, 1.0),
-        (1, agents_search.RECALL_LIVE_HEAD_MAX_AGE_SECONDS + 0.1),
+        (500, 1.0),
+        (1, 86_400.0),
     ],
 )
-async def test_live_head_must_stay_inside_explicit_bounds(
+async def test_projection_lag_serves_instead_of_refusing(
     monkeypatch,
     lag_count,
     oldest_lag_seconds,
 ):
+    """Lag is freshness, not corruption, so it must not close the gate.
+
+    A single unfinished session used to make every semantic query in the tenant
+    return a typed "incomplete corpus" 503, including queries over the tens of
+    thousands of sessions that were long since immutable and embedded. Neither a
+    large head nor an old one is a reason to refuse; both are reported.
+    """
+
     from zerg.services import catalogd_supervisor
 
     class FakeCatalog:
@@ -260,9 +304,13 @@ async def test_live_head_must_stay_inside_explicit_bounds(
         "_require_complete_projection_coverage",
         _REAL_COVERAGE_CHECK,
     )
-    with pytest.raises(agents_search.HTTPException) as incomplete:
-        await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
-    assert incomplete.value.detail["reason"] == "live_head_exceeds_bounds"
+
+    coverage = await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
+
+    assert coverage.lag_count == lag_count
+    assert coverage.oldest_lag_seconds == oldest_lag_seconds
+    # The watermark is what makes serving-under-lag honest rather than silent.
+    assert coverage.indexed_through == "9"
 
 
 @pytest.mark.asyncio
@@ -401,7 +449,9 @@ async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch
         owner_id=42,
     )
     assert [match.chunk_index for match in result.matches] == [3]
-    assert result.coverage.ready is True
+    assert result.coverage.complete is True
+    assert result.coverage.complete_through_commit_seq == "10"
+    assert result.coverage.unpublished_sessions == 0
     assert result.coverage.catalog_commit_seq == "10"
     assert result.coverage.cutover_certified_commit_seq == "9"
     assert result.coverage.search_store_id == _STORE_ID
@@ -453,3 +503,56 @@ async def test_semantic_recall_rejects_resident_from_an_uncertified_store(monkey
     assert incomplete.value.status_code == 503
     assert incomplete.value.detail["code"] == "embedding_coverage_incomplete"
     assert incomplete.value.detail["reason"] == "store_binding_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_serves_lexical_when_the_dense_lane_is_down(monkeypatch):
+    """One lane failing costs its own results, never the whole request.
+
+    `auto` used to gather both lanes without `return_exceptions`, so a dense
+    fault propagated out of the route and threw away lexical results that had
+    already been computed. Agents got a 503 and a hint to fall back to plain
+    string search, which is exactly what they did.
+    """
+
+    lexical_hit = _match(str(uuid4()), 0.8)
+
+    async def lexical(**_kwargs):
+        return [lexical_hit]
+
+    async def dense(**_kwargs):
+        raise agents_search.HTTPException(
+            status_code=503,
+            detail={"code": "embedder_unavailable", "message": "The local embedding model is not loaded."},
+        )
+
+    monkeypatch.setattr(agents_search, "_lexical_recall_matches", lexical)
+    monkeypatch.setattr(agents_search, "_semantic_recall", dense)
+    monkeypatch.setattr(agents_search, "_hydrate_recall_match", _noop_hydrate)
+
+    response = await _recall(mode="auto")
+
+    assert [match.session_id for match in response.matches] == [lexical_hit.session_id]
+    assert response.lanes == ["lexical"]
+    # The caller must be able to tell a narrower answer from a complete one.
+    assert [failure.lane for failure in response.degraded] == ["dense"]
+    assert response.degraded[0].code == "embedder_unavailable"
+    assert response.coverage is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_mode_still_fails_when_its_only_lane_is_down(monkeypatch):
+    """A caller who named one lane gets that lane's fault, not an empty success."""
+
+    async def dense(**_kwargs):
+        raise agents_search.HTTPException(
+            status_code=503,
+            detail={"code": "embedder_unavailable", "message": "The local embedding model is not loaded."},
+        )
+
+    monkeypatch.setattr(agents_search, "_semantic_recall", dense)
+    monkeypatch.setattr(agents_search, "_hydrate_recall_match", _noop_hydrate)
+
+    with pytest.raises(agents_search.HTTPException) as failure:
+        await _recall(mode="semantic")
+    assert failure.value.status_code == 503

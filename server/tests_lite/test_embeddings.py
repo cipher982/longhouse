@@ -232,3 +232,47 @@ def test_turn_chunks_break_equal_timestamps_by_event_id(tmp_path):
 
     assert len(chunks) == 1
     assert chunks[0].text.index("First the question.") < chunks[0].text.index("Then the answer.")
+
+
+def test_truncate_document_preserves_head_and_tail_within_the_model_budget():
+    """The model's tokenizer is the only budget authority, and the tail survives.
+
+    The chunker used to budget with tiktoken and the encoder then re-truncated
+    with the model's tokenizer, keeping only the head. Two tokenizers disagreeing
+    about one budget silently discarded the end of roughly a third of episodes --
+    which is where an episode says how the work turned out.
+    """
+
+    from zerg.services import local_embedder
+    from zerg.services.local_embedder import LocalEmbedder
+
+    class _WordTokenizer:
+        """One token per word, so budgets are countable by hand."""
+
+        class _Encoded:
+            def __init__(self, ids):
+                self.ids = ids
+
+        def encode(self, text):
+            return self._Encoded(text.split())
+
+        def decode(self, ids):
+            return " ".join(ids)
+
+    embedder = LocalEmbedder("/nonexistent", dims=256)
+    embedder._budget_tokenizer = _WordTokenizer()
+
+    prefix_tokens = len(local_embedder.DOCUMENT_PREFIX.split())
+    budget = local_embedder.EMBED_MAX_TOKENS - prefix_tokens
+
+    short = " ".join(f"w{i}" for i in range(budget))
+    assert embedder.truncate_document(short) == (short, False)
+
+    words = [f"w{i}" for i in range(budget + 500)]
+    truncated, was_truncated = embedder.truncate_document(" ".join(words))
+    assert was_truncated is True
+    assert truncated.startswith("w0 w1 ")
+    # The last words of the episode must survive; keeping only the head is the
+    # exact defect this replaced.
+    assert truncated.endswith(words[-1])
+    assert len(truncated.split()) <= budget + 1  # +1 for the "..." separator

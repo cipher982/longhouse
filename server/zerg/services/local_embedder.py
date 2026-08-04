@@ -47,7 +47,10 @@ logger = logging.getLogger(__name__)
 # parallelism returns, and a bounded count keeps the embedder from starving
 # the rest of the process.
 EMBED_INTRA_OP_THREADS = int(os.getenv("LONGHOUSE_EMBED_THREADS", "4"))
-EMBED_MAX_TOKENS = int(os.getenv("LONGHOUSE_EMBED_MAX_TOKENS", "1024"))
+# EmbeddingGemma's real maximum sequence length. This was 1024, half the
+# model's capacity, which cut roughly a third of episodes short for no reason.
+# 4096 fails at the ONNX rotary-embedding cache, so 2048 is the ceiling.
+EMBED_MAX_TOKENS = int(os.getenv("LONGHOUSE_EMBED_MAX_TOKENS", "2048"))
 # ONNX cannot be preempted inside one run. A batch of eight realistic episodes
 # held the lane for 300-520 ms on Apple Silicon despite query priority. One
 # document per quantum bounds interactive waiting at one document forward pass;
@@ -80,6 +83,7 @@ class LocalEmbedder:
         self._waiting_queries = 0
         self._session = None
         self._tokenizer = None
+        self._budget_tokenizer = None
         self._embedding_output = 0
 
     def load(self) -> None:
@@ -98,7 +102,13 @@ class LocalEmbedder:
         session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
         tokenizer = Tokenizer.from_file(str(tokenizer_path))
         tokenizer.enable_padding()
+        # Kept as a backstop only. Production text is budgeted upstream by
+        # `LocalEmbedder.truncate_document`, which preserves head and tail;
+        # this truncation keeps the head and would silently drop the rest.
         tokenizer.enable_truncation(max_length=EMBED_MAX_TOKENS)
+        # A second, untruncated instance: measuring a budget with a tokenizer
+        # that already truncates at that budget always reports "fits".
+        budget_tokenizer = Tokenizer.from_file(str(tokenizer_path))
         names = [o.name for o in session.get_outputs()]
         if EMBEDDING_OUTPUT_NAME not in names:
             # Falling back to output 0 would silently embed with whatever tensor
@@ -108,11 +118,45 @@ class LocalEmbedder:
         self._embedding_output = names.index(EMBEDDING_OUTPUT_NAME)
         self._session = session
         self._tokenizer = tokenizer
+        self._budget_tokenizer = budget_tokenizer
         logger.info("Local embedder loaded model=%s threads=%d", model_path, EMBED_INTRA_OP_THREADS)
 
     @property
     def ready(self) -> bool:
         return self._session is not None
+
+    @property
+    def budget_tokenizer(self):
+        """The model's tokenizer with truncation off, for measuring a budget."""
+
+        if self._budget_tokenizer is None:
+            raise LocalEmbedderUnavailable("embedding model is not loaded")
+        return self._budget_tokenizer
+
+    def truncate_document(self, text: str) -> tuple[str, bool]:
+        """Cut one episode to what this model will actually read, keeping head and tail.
+
+        The chunker used to budget with tiktoken and the model then re-truncated
+        with its own tokenizer, keeping the head. Two tokenizers disagreeing about
+        one budget meant the sandwich's tail -- the part of an episode holding the
+        outcome -- was cut off before the model saw it, for roughly a third of
+        episodes. This makes the model's own tokenizer the single authority, so
+        the text the content hash is computed over is the text the model reads.
+
+        The document prefix counts against the budget: it is prepended before
+        encoding.
+        """
+
+        tokenizer = self.budget_tokenizer
+        budget = max(1, EMBED_MAX_TOKENS - len(tokenizer.encode(DOCUMENT_PREFIX).ids))
+        ids = tokenizer.encode(text).ids
+        if len(ids) <= budget:
+            return text, False
+        # Same 67/33 split the old sandwich used: an episode opens with the
+        # request and closes with the result, and the middle of a long tool-call
+        # run is the least distinctive part.
+        head = int(budget * 0.67)
+        return tokenizer.decode(ids[:head]) + "\n...\n" + tokenizer.decode(ids[-(budget - head) :]), True
 
     def _acquire_query(self) -> None:
         with self._condition:

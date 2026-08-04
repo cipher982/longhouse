@@ -1818,30 +1818,45 @@ class RecallMatch(BaseModel):
     start_order_time_us: Optional[int] = Field(default=None, exclude=True)
 
 
-RECALL_LIVE_HEAD_MAX_SESSIONS = 100
-RECALL_LIVE_HEAD_MAX_AGE_SECONDS = 300.0
+# How many lagging session ids a coverage report names before it summarizes.
+# The full list is unbounded and a caller cannot act on thousands of ids; the
+# count stays exact either way.
+RECALL_COVERAGE_MAX_NAMED_SESSIONS = 25
 
 
 class RecallCoverage(BaseModel):
-    """Complete-corpus certificate observed by a successful dense request."""
+    """What the dense lane actually searched, and how far it is proven current.
+
+    This used to assert a totally complete corpus: equality between expected and
+    published counts, an empty missing-session list, and a live head inside fixed
+    age/size bounds. On an append-only corpus those predicates are false almost
+    always -- one session mid-projection made them false for the whole tenant --
+    so the dense lane answered nothing during ordinary operation while reporting
+    a typed "incomplete corpus" fault that read like corruption.
+
+    Completeness of a moving corpus is freshness, not integrity. So coverage now
+    reports a watermark: the corpus is proven current through
+    ``complete_through_commit_seq``, with the lag beyond it named explicitly.
+    Physical integrity is still absolute -- the four corruption counters below
+    stay ``Literal[0]`` and still fail the request closed, because a corrupt or
+    unlocatable vector is wrong rather than merely stale.
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    ready: Literal[True]
     projector: str = Field(min_length=1)
     cutover_certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
     cutover_certified_at: str = Field(min_length=1)
     search_store_id: str
     search_schema_generation: str = Field(min_length=1)
-    catalog_lag_count: int = Field(ge=0, le=RECALL_LIVE_HEAD_MAX_SESSIONS)
+    # The corpus is proven current through this catalog watermark. Everything
+    # after it is enumerated by the lag fields rather than hidden.
+    complete_through_commit_seq: str = Field(pattern=r"^[0-9]+$")
+    complete: bool = Field(description="True when nothing is lagging: the watermark is the catalog head.")
+    catalog_lag_count: int = Field(ge=0)
     catalog_indexed_through: str = Field(pattern=r"^[0-9]+$")
     catalog_oldest_lag_at: Optional[str] = None
-    catalog_oldest_lag_seconds: Optional[float] = Field(
-        default=None,
-        ge=0,
-        le=RECALL_LIVE_HEAD_MAX_AGE_SECONDS,
-        allow_inf_nan=False,
-    )
+    catalog_oldest_lag_seconds: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     catalog_commit_seq: str = Field(pattern=r"^[0-9]+$")
     catalog_observed_at: str = Field(min_length=1)
     resident_stale: bool
@@ -1853,10 +1868,20 @@ class RecallCoverage(BaseModel):
     unnormalized_vectors: Literal[0]
     unlocatable_episodes: Literal[0]
     episode_count_mismatches: Literal[0]
-    missing_session_ids: List[str] = Field(default_factory=list, max_length=0)
+    # Sessions the resident index knows it is missing. Bounded for legibility;
+    # `unpublished_sessions` carries the exact count.
+    missing_session_ids: List[str] = Field(default_factory=list, max_length=RECALL_COVERAGE_MAX_NAMED_SESSIONS)
+    unpublished_sessions: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def validate_complete_coverage(self) -> "RecallCoverage":
+    def validate_coverage_shape(self) -> "RecallCoverage":
+        """Check that the report is internally consistent, not that it is total.
+
+        Every rule here is about the watermark describing itself honestly. A
+        lagging corpus is a valid report; a report that contradicts itself is
+        not, because a caller reasons about freshness from these fields alone.
+        """
+
         try:
             parsed_store_id = UUID(self.search_store_id)
         except ValueError as exc:
@@ -1865,17 +1890,38 @@ class RecallCoverage(BaseModel):
             raise ValueError("search_store_id must be a canonical UUID")
         if int(self.cutover_certified_commit_seq) > int(self.catalog_commit_seq):
             raise ValueError("cutover certificate cannot exceed the observed catalog watermark")
-        if self.catalog_lag_count == 0 and (self.catalog_oldest_lag_at is not None or self.catalog_oldest_lag_seconds is not None):
-            raise ValueError("zero catalog lag cannot have an oldest lag")
-        if self.catalog_lag_count == 0 and self.catalog_indexed_through != self.catalog_commit_seq:
-            raise ValueError("complete recall coverage requires the current catalog watermark")
-        if self.catalog_lag_count > 0 and (self.catalog_oldest_lag_at is None or self.catalog_oldest_lag_seconds is None):
+        if int(self.complete_through_commit_seq) > int(self.catalog_commit_seq):
+            raise ValueError("coverage cannot be proven past the observed catalog watermark")
+        if self.complete != (self.catalog_lag_count == 0):
+            raise ValueError("complete must mean exactly that nothing is lagging")
+        if self.catalog_lag_count == 0:
+            if self.catalog_oldest_lag_at is not None or self.catalog_oldest_lag_seconds is not None:
+                raise ValueError("zero catalog lag cannot have an oldest lag")
+            if self.complete_through_commit_seq != self.catalog_commit_seq or self.catalog_indexed_through != self.catalog_commit_seq:
+                raise ValueError("zero catalog lag must be proven through the current catalog watermark")
+        elif self.catalog_oldest_lag_at is None or self.catalog_oldest_lag_seconds is None:
             raise ValueError("nonzero catalog lag requires its oldest age")
-        if self.expected_sessions != self.published_sessions:
-            raise ValueError("complete recall coverage requires every expected session publication")
-        if self.expected_episodes != self.current_episodes:
-            raise ValueError("complete recall coverage requires every expected episode")
+        if self.published_sessions > self.expected_sessions:
+            raise ValueError("published sessions cannot exceed expected sessions")
+        if self.current_episodes > self.expected_episodes:
+            raise ValueError("current episodes cannot exceed expected episodes")
+        if self.unpublished_sessions != self.expected_sessions - self.published_sessions:
+            raise ValueError("unpublished session count must match the publication shortfall")
+        if len(self.missing_session_ids) > self.unpublished_sessions:
+            raise ValueError("coverage cannot name more missing sessions than are unpublished")
         return self
+
+
+class RecallLaneFailure(BaseModel):
+    """A lane that was requested, could not run, and cost only its own results."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    lane: Literal["lexical", "dense"]
+    status_code: int = Field(ge=400, le=599)
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    reason: Optional[str] = None
 
 
 class RecallResponse(BaseModel):
@@ -1893,6 +1939,14 @@ class RecallResponse(BaseModel):
             "produced it; this makes that visible to the caller."
         ),
     )
+    degraded: List[RecallLaneFailure] = Field(
+        default_factory=list,
+        description=(
+            "Lanes that were requested but could not run. Present so a partial "
+            "answer is never mistaken for a complete one: `lanes` says what "
+            "produced these results, `degraded` says what is missing and why."
+        ),
+    )
     embedding_model: Optional[str] = None
     embedding_dims: Optional[int] = None
     embedding_revision: Optional[str] = None
@@ -1907,6 +1961,11 @@ class RecallResponse(BaseModel):
             raise ValueError("recall lanes must be a non-empty unique list")
 
         lane_set = set(self.lanes)
+        degraded_lanes = [failure.lane for failure in self.degraded]
+        if len(degraded_lanes) != len(set(degraded_lanes)):
+            raise ValueError("recall cannot report the same lane failing twice")
+        if lane_set & set(degraded_lanes):
+            raise ValueError("a lane cannot both serve results and be reported as degraded")
         embedding_identity = (self.embedding_model, self.embedding_dims, self.embedding_revision)
         if "dense" in lane_set:
             if any(value is None for value in embedding_identity):

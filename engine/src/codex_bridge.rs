@@ -57,8 +57,15 @@ const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const TUI_OWNED_RESUME_TIMEOUT_SECS: u64 = 30;
 const TUI_OWNED_RESUME_PROBE_TIMEOUT_SECS: u64 = 2;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
-const LONGHOUSE_COORDINATION_TOOLS: &[&str] =
-    &["search_sessions", "peers", "tail", "send", "inbox", "reply"];
+const LONGHOUSE_COORDINATION_TOOLS: &[&str] = &[
+    "search_sessions",
+    "recall",
+    "peers",
+    "tail",
+    "send",
+    "inbox",
+    "reply",
+];
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
 pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 5;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";

@@ -134,11 +134,15 @@ def test_coverage_requires_a_current_complete_publication(tmp_path):
         [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
     )
     try:
-        assert index.coverage.ready is True
+        assert index.coverage.complete is True
+        assert index.coverage.integrity_ready is True
         connection.execute("DELETE FROM embedding_publications WHERE session_id = 's1'")
         connection.commit()
         index.load(connection)
-        assert index.coverage.ready is False
+        # An unembedded session makes the corpus incomplete, not unservable:
+        # integrity is untouched, so the index still answers and says so.
+        assert index.coverage.complete is False
+        assert index.coverage.integrity_ready is True
         assert index.coverage.missing_session_ids == ("s1",)
     finally:
         connection.close()
@@ -163,7 +167,7 @@ def test_coverage_rejects_invalid_episode_rows(tmp_path, mutation, field):
         connection.execute(mutation)
         connection.commit()
         index.load(connection)
-        assert index.coverage.ready is False
+        assert index.coverage.integrity_ready is False
         assert getattr(index.coverage, field) == 1
     finally:
         connection.close()

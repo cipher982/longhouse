@@ -61,7 +61,21 @@ class _Snapshot:
 
 @dataclass(frozen=True)
 class EmbeddingCoverage:
-    ready: bool
+    """Two independent facts about the resident index, deliberately not merged.
+
+    ``integrity_ready`` is about correctness: every resident vector is finite,
+    unit-normalized, locatable, and contiguous within its session. It gates
+    serving, because a corrupt vector scores against every query and ranks
+    rather than fails.
+
+    ``complete`` is about freshness: every session catalogd expects has a
+    publication here. It does NOT gate serving. Merging the two into one
+    ``ready`` flag meant a single session mid-projection was reported the same
+    way as a corrupt corpus, and refused every query for the other 23,000.
+    """
+
+    integrity_ready: bool
+    complete: bool
     expected_sessions: int
     published_sessions: int
     expected_episodes: int
@@ -75,7 +89,9 @@ class EmbeddingCoverage:
 
     def as_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
-            "ready": self.ready,
+            "integrity_ready": self.integrity_ready,
+            "complete": self.complete,
+            "unpublished_sessions": max(0, self.expected_sessions - self.published_sessions),
             "expected_sessions": self.expected_sessions,
             "published_sessions": self.published_sessions,
             "expected_episodes": self.expected_episodes,
@@ -126,7 +142,19 @@ class ResidentEpisodeIndex:
         self._dims = dims
         self._snapshot = _EMPTY
         self._loaded = False
-        self._coverage = EmbeddingCoverage(False, 0, 0, 0, 0, 0, 0, 0, 0, ())
+        self._coverage = EmbeddingCoverage(
+            integrity_ready=False,
+            complete=False,
+            expected_sessions=0,
+            published_sessions=0,
+            expected_episodes=0,
+            current_episodes=0,
+            invalid_vectors=0,
+            unnormalized_vectors=0,
+            unlocatable_episodes=0,
+            episode_count_mismatches=0,
+            missing_session_ids=(),
+        )
         self._blocking_session_ids: frozenset[str] = frozenset()
         self._nonrelational_blocking_session_ids: frozenset[str] = frozenset()
         self._write_lock = threading.Lock()
@@ -179,17 +207,17 @@ class ResidentEpisodeIndex:
     def invalidate(self, *, allow_stale_reads: bool = True) -> None:
         """Mark the last validated snapshot stale while a refresh is pending.
 
-        A never-complete or defective snapshot remains unavailable. Once a
-        snapshot has passed every resident invariant, keep it readable while
-        catalogd's separately bounded live-head contract decides whether the
-        old snapshot is still safe to serve. The next successful ``load``
-        atomically replaces both the matrix and its coverage proof.
+        A defective snapshot remains unservable. Once a snapshot has passed
+        every resident integrity invariant, keep it readable and let the caller
+        see `stale`; the next successful ``load`` atomically replaces both the
+        matrix and its coverage proof. Staleness is reported, never silently
+        served as current.
         """
 
         with self._write_lock:
             self._coverage = replace(
                 self._coverage,
-                ready=self._coverage.ready if allow_stale_reads else False,
+                integrity_ready=self._coverage.integrity_ready if allow_stale_reads else False,
                 stale=True,
             )
 
@@ -281,18 +309,13 @@ class ResidentEpisodeIndex:
                 blocking_session_ids.add(session_id)
         expected_episodes = sum(expected_by_session.values())
         current_episodes = len(rows)
-        ready = (
-            len(publications) == len(expected_by_session)
-            and current_episodes == expected_episodes
-            and invalid_vectors == 0
-            and unnormalized_vectors == 0
-            and unlocatable_episodes == 0
-            and count_mismatches == 0
-        )
+        integrity_ready = invalid_vectors == 0 and unnormalized_vectors == 0 and unlocatable_episodes == 0 and count_mismatches == 0
+        complete = len(publications) == len(expected_by_session) and current_episodes == expected_episodes
         return (
             valid_rows,
             EmbeddingCoverage(
-                ready=ready,
+                integrity_ready=integrity_ready,
+                complete=complete,
                 expected_sessions=len(publications),
                 published_sessions=len(expected_by_session),
                 expected_episodes=expected_episodes,
