@@ -68,10 +68,12 @@ against its category floors at k=25 (exact 11, paraphrase 16, causal 7,
 supersession 6). JSON output includes
 the exact endpoint, git SHA, query-set digest, thresholds, lane contract, and
 embedding model/revision observed from the live response.
-For dense strategies it also requires a complete corpus certificate on every
-response and records the projector, catalog watermark range, session/episode
-count ranges, zero-defect resident invariants, and per-query error details. A
-missing/incomplete certificate or mixed embedding space/projector fails the run.
+For dense strategies it also requires a durable cutover certificate and either
+a current corpus or a live head bounded to 100 sessions and five minutes on
+every response. It records the projector, certificate and catalog watermark,
+head lag, session/episode count ranges, resident staleness, zero-defect resident
+invariants, and per-query error details. A missing/invalid certificate,
+out-of-bounds head, or mixed embedding space/projector fails the run.
 Every response must also report the exact serving commit requested with
 `--expected-sha` (the evaluator checkout SHA by default), so a split deployment
 cohort cannot produce one blended quality score.
