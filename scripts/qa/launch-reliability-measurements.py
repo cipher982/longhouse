@@ -43,6 +43,7 @@ PRODUCER_FRESHNESS_STATES = frozenset({"fresh", "stale", "unknown"})
 HEALTH_ARTIFACT_KIND = "installed_native_health_fault_matrix"
 HEALTH_SCHEMA_VERSION = 1
 MAX_HEALTH_OBSERVATION_AGE_SECONDS = 300.0
+MAX_HEALTH_ARTIFACT_AGE_SECONDS = 86400.0
 HEALTH_EXPECTATIONS = {
     "missing_engine_status": {
         "state": "broken",
@@ -744,6 +745,10 @@ def _health_measurements(
             generated_at = _timestamp(artifact.get("generated_at"), label="health.generated_at")
             if generated_at > as_of:
                 raise ValueError("health.generated_at is after report generation time")
+            if (as_of - generated_at).total_seconds() > MAX_HEALTH_ARTIFACT_AGE_SECONDS:
+                raise ValueError(
+                    f"health.generated_at is older than {MAX_HEALTH_ARTIFACT_AGE_SECONDS:g} seconds before report generation time"
+                )
             implementation = artifact.get("implementation")
             if not isinstance(implementation, dict):
                 raise ValueError("health implementation provenance must be an object")

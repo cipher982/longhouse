@@ -541,6 +541,32 @@ def test_stale_health_observation_invalidates_the_artifact(tmp_path: Path):
     assert report["health_fault_matrix"]["case_count"] == 0
 
 
+def test_old_health_artifact_invalidates_the_artifact(tmp_path: Path):
+    matrix = tmp_path / "old-health.json"
+    payload = _health_artifact(
+        [
+            {
+                "case": "missing_engine_status",
+                "expected": {"state": "broken", "action": "inspect_local_health"},
+                "observed": {
+                    "health_state": "broken",
+                    "suggested_action_ids": ["inspect_local_health"],
+                },
+            }
+        ]
+    )
+    payload["generated_at"] = "2020-01-01T00:00:30Z"
+    for result in payload["results"]:
+        result["observed"]["collected_at"] = "2020-01-01T00:00:00Z"
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["report_status"] == "invalid"
+    assert "older than 86400 seconds" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["health_fault_matrix"]["case_count"] == 0
+
+
 def test_malformed_health_label_invalidates_the_entire_artifact(tmp_path: Path):
     matrix = tmp_path / "health.json"
     matrix.write_text(
