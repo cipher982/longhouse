@@ -1818,6 +1818,10 @@ class RecallMatch(BaseModel):
     start_order_time_us: Optional[int] = Field(default=None, exclude=True)
 
 
+RECALL_LIVE_HEAD_MAX_SESSIONS = 100
+RECALL_LIVE_HEAD_MAX_AGE_SECONDS = 300.0
+
+
 class RecallCoverage(BaseModel):
     """Complete-corpus certificate observed by a successful dense request."""
 
@@ -1827,10 +1831,15 @@ class RecallCoverage(BaseModel):
     projector: str = Field(min_length=1)
     cutover_certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
     cutover_certified_at: str = Field(min_length=1)
-    catalog_lag_count: int = Field(ge=0, le=100)
+    catalog_lag_count: int = Field(ge=0, le=RECALL_LIVE_HEAD_MAX_SESSIONS)
     catalog_indexed_through: str = Field(pattern=r"^[0-9]+$")
     catalog_oldest_lag_at: Optional[str] = None
-    catalog_oldest_lag_seconds: Optional[float] = Field(default=None, ge=0, le=300, allow_inf_nan=False)
+    catalog_oldest_lag_seconds: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=RECALL_LIVE_HEAD_MAX_AGE_SECONDS,
+        allow_inf_nan=False,
+    )
     catalog_commit_seq: str = Field(pattern=r"^[0-9]+$")
     catalog_observed_at: str = Field(min_length=1)
     resident_stale: bool

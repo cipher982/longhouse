@@ -32,6 +32,8 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.searchd_supervisor import get_searchd_client
+from zerg.services.session_views import RECALL_LIVE_HEAD_MAX_AGE_SECONDS
+from zerg.services.session_views import RECALL_LIVE_HEAD_MAX_SESSIONS
 from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import RecallCoverage
 from zerg.services.session_views import RecallMatch
@@ -48,8 +50,6 @@ logger = logging.getLogger(__name__)
 # the explicit hydration reserve and stays within searchd's hard RPC ceiling;
 # timing telemetry and release gates enforce ordinary latency separately.
 RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
-RECALL_LIVE_HEAD_MAX_SESSIONS = 100
-RECALL_LIVE_HEAD_MAX_AGE_SECONDS = 300.0
 
 _catalog_db_dependency = catalog_db_dependency()
 
