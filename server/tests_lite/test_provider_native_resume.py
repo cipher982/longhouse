@@ -14,6 +14,7 @@ from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
+from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _provider_process_pid
@@ -113,6 +114,32 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
     )
     argv = [str(value) for value in captured["argv"]]
     assert "--token" not in argv
+    flush_run: dict[str, object] = {}
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "protocol": "storage-v2",
+                "files_scanned": 3,
+                "files_shipped": 2,
+                "events_shipped": 4,
+                "spool_replayed": 1,
+            }
+        )
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> Completed:
+        flush_run["command"] = command
+        return Completed()
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
+    flush_receipt = shipper.flush("initial")
+    flush_argv = [str(value) for value in flush_run["command"]]
+    assert "device-token" not in flush_argv
+    assert flush_argv[flush_argv.index("--machine-name") + 1] == "sauron-clifford"
+    assert flush_receipt["status"] == "pass"
+    assert flush_receipt["events_shipped"] == 4
     assert (home / ".longhouse/machine/device-token").read_text().strip() == "device-token"
     assert (home / ".longhouse/machine/state.json").read_text().find("sauron-clifford") >= 0
     assert shipper.stop()["process_dead"] is True
@@ -357,8 +384,37 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
     _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
     _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
 
-    assert process.sent == ["\x1bOB\r"]
+    assert process.sent == ["\x1b[B\r"]
     assert process.claude_permission_acceptance_sent is True
+
+
+def test_cursor_initial_seed_uses_provider_terminal_before_idle_control(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+
+    class FakeProviderProcess:
+        class Process:
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        process = Process()
+        sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProviderProcess()
+    result = _control_send(
+        SPECS["cursor"],
+        args,
+        {"session_id": "session-1"},
+        process,  # type: ignore[arg-type]
+        "seed",
+        initial=True,
+    )
+
+    assert result == {"method": "provider_tty_bootstrap", "returncode": 0}
+    assert process.sent == ["seed\r"]
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:

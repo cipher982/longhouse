@@ -21,6 +21,7 @@ from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.provider_native_resume import TranscriptShipper
+from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -59,9 +60,11 @@ REGISTRATION = ProducerRegistration(
         "resume_intent_receipt",
         "initial_bridge_state",
         "initial_transcript",
+        "initial_transcript_ship_receipt",
         "native_resume_terminal_recording",
         "resumed_bridge_state",
         "resumed_transcript",
+        "post_resume_transcript_ship_receipt",
         "process_transition_receipt",
         "stale_input_receipt",
         "concurrent_resume_receipt",
@@ -450,6 +453,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
         _write_json(root / "initial-bridge-state.json", initial_state)
         shutil.copy2(initial_thread_path, root / "initial-transcript.jsonl")
+        _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
         old_pids = {int(value) for value in (initial_state.get("pid"), initial_state.get("app_server_pid")) if value}
 
         if args.variant == "clean_exit":
@@ -531,6 +535,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)
         _write_json(root / "resumed-bridge-state.json", resumed_state)
         _write_json(root / "post-resume-send.json", send_summary)
+        _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")
         concurrent_resume_receipt = _attempt_concurrent_resume(
             args,
@@ -565,7 +570,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         redacted_secret_files = _redact_retained_secrets(
             root,
-            [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
+            list(_qualification_secrets(os.environ, args.agents_token)),
         )
 
         observation = {
@@ -632,7 +637,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         redacted_secret_files = _redact_retained_secrets(
             root,
-            [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
+            list(_qualification_secrets(os.environ, args.agents_token)),
         )
         failure = {
             "schema_version": 1,

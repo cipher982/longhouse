@@ -43,6 +43,24 @@ _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
 
+def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
+    """Return every credential value that must not survive in evidence."""
+
+    names = (
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CODEX_API_KEY",
+        "CURSOR_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "PROVIDER_FACTORY_PUBLISH_TOKEN",
+        "PROVIDER_FACTORY_TRIAGE_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    )
+    return tuple(dict.fromkeys(value for value in (agents_token, *(environment.get(name, "") for name in names)) if value))
+
+
 @dataclass(frozen=True)
 class ProviderSpec:
     provider: str
@@ -64,11 +82,97 @@ class TranscriptShipper:
     are testing an artificial half-stack.
     """
 
-    def __init__(self, process: subprocess.Popen[Any], log_stream: Any, receipt: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        process: subprocess.Popen[Any],
+        log_stream: Any,
+        receipt: dict[str, Any],
+        *,
+        engine: Path,
+        repo_root: Path,
+        api_url: str,
+        machine_name: str,
+        db_path: Path,
+        engine_environment: dict[str, str],
+        evidence_root: Path,
+        redaction_secrets: tuple[str, ...],
+    ) -> None:
         self.process = process
         self.log_stream = log_stream
         self.receipt = receipt
+        self.engine = engine
+        self.repo_root = repo_root
+        self.api_url = api_url
+        self.machine_name = machine_name
+        self.db_path = db_path
+        self.engine_environment = engine_environment
+        self.evidence_root = evidence_root
+        self.redaction_secrets = tuple(secret for secret in redaction_secrets if secret)
         self._stopped = False
+
+    def _redact(self, value: str) -> str:
+        for secret in self.redaction_secrets:
+            value = value.replace(secret, "<redacted>")
+        return value
+
+    def flush(self, label: str) -> dict[str, Any]:
+        """Force a bounded scan before a hosted projection assertion."""
+
+        flush_db = self.evidence_root / f"transcript-flush-{label}.db"
+        command = [
+            str(self.engine),
+            "ship",
+            "--url",
+            self.api_url,
+            "--db",
+            str(flush_db),
+            "--machine-name",
+            self.machine_name,
+            "--json",
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.repo_root,
+                env=self.engine_environment,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "status": "fail",
+                "label": label,
+                "exit_code": None,
+                "timed_out": True,
+                "stdout_sha256": hashlib.sha256(str(exc.stdout or "").encode()).hexdigest(),
+                "stderr_sha256": hashlib.sha256(str(exc.stderr or "").encode()).hexdigest(),
+            }
+
+        stdout = self._redact(completed.stdout or "")
+        stderr = self._redact(completed.stderr or "")
+        log_path = self.evidence_root / f"transcript-flush-{label}.log"
+        log_path.write_text(f"stdout:\n{stdout}\nstderr:\n{stderr}\n", encoding="utf-8")
+        try:
+            summary = json.loads(completed.stdout)
+        except (TypeError, json.JSONDecodeError):
+            summary = {}
+        if not isinstance(summary, dict):
+            summary = {}
+        return {
+            "status": "pass" if completed.returncode == 0 else "fail",
+            "label": label,
+            "exit_code": completed.returncode,
+            "protocol": summary.get("protocol"),
+            "files_scanned": summary.get("files_scanned"),
+            "files_shipped": summary.get("files_shipped"),
+            "events_shipped": summary.get("events_shipped"),
+            "spool_replayed": summary.get("spool_replayed"),
+            "log_path": str(log_path),
+            "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
+        }
 
     def stop(self) -> dict[str, Any]:
         if self._stopped:
@@ -183,9 +287,11 @@ def registration_for(provider: str) -> ProducerRegistration:
             "resume_intent_receipt",
             "initial_bridge_state",
             "initial_transcript",
+            "initial_transcript_ship_receipt",
             "native_resume_terminal_recording",
             "resumed_bridge_state",
             "resumed_transcript",
+            "post_resume_transcript_ship_receipt",
             "process_transition_receipt",
             "stale_input_receipt",
             "concurrent_resume_receipt",
@@ -399,6 +505,7 @@ def _start_transcript_shipper(
     engine_environment = dict(environment)
     engine_environment["HOME"] = str(home)
     engine_environment["LONGHOUSE_HOME"] = str(longhouse_home)
+    engine_environment.setdefault("RUST_LOG", "longhouse_engine=info")
     environment["LONGHOUSE_HOME"] = str(longhouse_home)
     if provider != "claude":
         # A Codex/OpenCode/Cursor qualification may inherit the factory's
@@ -420,6 +527,8 @@ def _start_transcript_shipper(
         "1",
         "--archive-repair-mode",
         "drain",
+        "--log-dir",
+        str(evidence_root / "engine-logs"),
     ]
     process = subprocess.Popen(
         command,
@@ -442,9 +551,22 @@ def _start_transcript_shipper(
                 "machine_name": machine_id,
                 "socket_path": str(socket_path),
                 "db_path": str(db_path),
+                "log_dir": str(evidence_root / "engine-logs"),
                 "ready": True,
             }
-            return TranscriptShipper(process, log_stream, receipt)
+            return TranscriptShipper(
+                process,
+                log_stream,
+                receipt,
+                engine=args.engine,
+                repo_root=args.repo_root,
+                api_url=args.api_url,
+                machine_name=machine_id,
+                db_path=db_path,
+                engine_environment=engine_environment,
+                evidence_root=evidence_root,
+                redaction_secrets=(*_qualification_secrets(environment, args.agents_token),),
+            )
         if process.poll() is not None:
             log_stream.flush()
             try:
@@ -643,10 +765,10 @@ def _accept_claude_permission_prompt(process: PtyProcess) -> None:
         return
     compact = re.sub(r"\s+", "", _terminal_text(process.recording))
     if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
-        # Claude switches the TTY into application-cursor mode before this
-        # screen.  CSI ``ESC [ B`` is ignored/misread there; SS3 ``ESC O B``
-        # selects the second row, followed by Enter.
-        process.send("\x1bOB\r")
+        # Claude's selector is in normal cursor mode on the provider PTY. Use
+        # the same CSI sequence a real terminal sends for Down; Enter then
+        # confirms the second option rather than the default "No, exit".
+        process.send("\x1b[B\r")
         process.claude_permission_acceptance_sent = True
 
 
@@ -1018,16 +1140,24 @@ def _wait_assistant_marker(api_url: str, token: str, session_id: str, marker: st
     raise RuntimeError(f"provider transcript did not retain assistant marker {marker}")
 
 
-def _control_send(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, text: str) -> dict[str, Any]:
+def _control_send(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    state: dict[str, Any],
+    process: PtyProcess,
+    text: str,
+    *,
+    initial: bool = False,
+) -> dict[str, Any]:
     if spec.provider == "claude":
         command = [str(args.engine), "claude-channel", "send", "--session-id", state["session_id"], "--text", text]
-    elif spec.provider == "cursor":
+    elif spec.provider == "cursor" and not initial:
         command = [str(args.engine), "cursor-helm", "send", "--session-id", state["session_id"], "--text", text]
     else:
         if process.process.poll() is not None:
-            raise RuntimeError("OpenCode terminal control owner is no longer live")
+            raise RuntimeError(f"{spec.provider} terminal control owner is no longer live")
         process.send(text + "\r")
-        return {"method": "provider_tty", "returncode": 0}
+        return {"method": "provider_tty_bootstrap" if initial else "provider_tty", "returncode": 0}
     completed = subprocess.run(command, cwd=args.repo_root, capture_output=True, text=True, timeout=30, check=False)
     if completed.returncode:
         raise RuntimeError(f"{spec.provider} managed control send failed: {completed.stderr[-1000:]}")
@@ -1209,7 +1339,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "initial-bridge-state.json", initial_state)
         initial_provider_pid = _provider_process_pid(spec, initial_state)
         seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
-        _control_send(spec, args, initial_state, initial, f"Reply exactly {seed_marker} and nothing else.")
+        _control_send(spec, args, initial_state, initial, f"Reply exactly {seed_marker} and nothing else.", initial=True)
+        _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
         initial_tail = _wait_assistant_marker(
             args.api_url, args.agents_token, initial_state["session_id"], seed_marker, timeout=args.live_send_timeout_secs
         )
@@ -1257,6 +1388,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
         post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")
         _write_json(root / "post-resume-send.json", post_send)
+        _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
         resumed_tail = _wait_assistant_marker(
             args.api_url, args.agents_token, resumed_state["session_id"], post_marker, timeout=args.live_send_timeout_secs
         )
@@ -1287,16 +1419,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-        redacted = _secret_scan(
-            root,
-            [
-                args.agents_token,
-                os.environ.get("ANTHROPIC_API_KEY", ""),
-                os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""),
-                os.environ.get("CURSOR_API_KEY", ""),
-                os.environ.get("OPENROUTER_API_KEY", ""),
-            ],
-        )
+        redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         observation = {
             "variant": args.variant,
             "same_longhouse_session": resumed_state["session_id"] == initial_state["session_id"],
@@ -1361,7 +1484,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-        redacted = _secret_scan(root, [args.agents_token])
+        redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         failure = {
             "schema_version": 1,
             "artifact_kind": "direct_native_resume_result",
