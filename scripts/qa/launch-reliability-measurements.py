@@ -24,6 +24,7 @@ import sys
 from collections import Counter
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Iterable
@@ -230,10 +231,14 @@ def create_dogfood_challenge(path: Path) -> dict[str, Any]:
     provenance = _collector_provenance()
     if provenance["repository_dirty"] or provenance["generator_dirty"]:
         raise ValueError("dogfood challenge requires a clean repository and collector")
+    created_at = datetime.now(UTC)
     payload = {
         "artifact_kind": DOGFOOD_CHALLENGE_ARTIFACT_KIND,
         "challenge_id": secrets.token_hex(16),
-        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at": created_at.isoformat().replace("+00:00", "Z"),
+        "expires_at": (created_at + timedelta(hours=24))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "issuer": DOGFOOD_CHALLENGE_ISSUER,
         "key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii"),
         "nonce": secrets.token_urlsafe(32),
@@ -248,8 +253,8 @@ def create_dogfood_challenge(path: Path) -> dict[str, Any]:
 
 def _load_dogfood_challenges(
     paths: Iterable[Path], invalid: list[dict[str, str]]
-) -> dict[str, tuple[str, bytes]]:
-    challenges: dict[str, tuple[str, bytes]] = {}
+) -> dict[str, tuple[str, bytes, datetime, datetime]]:
+    challenges: dict[str, tuple[str, bytes, datetime, datetime]] = {}
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
         try:
@@ -266,6 +271,14 @@ def _load_dogfood_challenges(
                 raise ValueError("dogfood challenge has no challenge_id")
             if not isinstance(nonce, str) or not nonce:
                 raise ValueError("dogfood challenge has no nonce")
+            created_at = _timestamp(
+                payload.get("created_at"), label="dogfood challenge created_at"
+            )
+            expires_at = _timestamp(
+                payload.get("expires_at"), label="dogfood challenge expires_at"
+            )
+            if expires_at <= created_at:
+                raise ValueError("dogfood challenge expires_at must follow created_at")
             encoded_key = payload.get("key")
             if not isinstance(encoded_key, str):
                 raise ValueError("dogfood challenge has no key")
@@ -294,7 +307,7 @@ def _load_dogfood_challenges(
                 raise ValueError("dogfood challenge provenance is dirty")
             if challenge_id in challenges:
                 raise ValueError(f"duplicate dogfood challenge_id: {challenge_id}")
-            challenges[challenge_id] = (nonce, key)
+            challenges[challenge_id] = (nonce, key, created_at, expires_at)
         except (
             OSError,
             ValueError,
@@ -523,17 +536,33 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
         or any(character not in "0123456789abcdefABCDEF" for character in binary_sha)
     ):
         raise ValueError("dogfood sampled binary sha256 is invalid")
-    if not isinstance(build_identity, str) or not build_identity:
-        raise ValueError("dogfood sampled binary build identity is required")
+    if not isinstance(build_identity, dict):
+        raise ValueError(
+            "dogfood sampled binary build identity must be structured JSON"
+        )
     binary_path = Path(binary_path_value).expanduser().resolve()
     if not binary_path.is_file():
         raise ValueError("dogfood sampled binary no longer exists")
     if _sha256(binary_path) != binary_sha:
         raise ValueError("dogfood sampled binary changed after collection")
-    if git_sha[:8].lower() not in build_identity.lower():
+    if build_identity.get("facade_path") != str(binary_path):
         raise ValueError(
-            "dogfood sampled binary build identity does not match the source revision"
+            "dogfood sampled binary identity path does not match the sampled path"
         )
+    for label in ("facade", "engine"):
+        identity = build_identity.get(label)
+        if not isinstance(identity, dict):
+            raise ValueError(f"dogfood sampled binary identity has no {label} record")
+        if identity.get("commit") != git_sha:
+            raise ValueError(
+                f"dogfood sampled binary {label} commit does not match the source revision"
+            )
+        if identity.get("commit_short") != git_sha[:8]:
+            raise ValueError(
+                f"dogfood sampled binary {label} commit_short does not match the source revision"
+            )
+        if identity.get("dirty") is not False:
+            raise ValueError(f"dogfood sampled binary {label} is dirty")
 
 
 def _nonnegative_count(value: Any, *, label: str) -> int:
@@ -587,6 +616,7 @@ def _load_dogfood_series(
     seen_paths: set[Path] = set()
     seen_hashes: set[str] = set()
     seen_episode_ids: set[str] = set()
+    seen_challenge_ids: set[str] = set()
     challenges = _load_dogfood_challenges(challenge_paths, invalid)
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
@@ -608,11 +638,20 @@ def _load_dogfood_series(
                 raise ValueError("dogfood artifact has no signed challenge")
             challenge_id = challenge.get("challenge_id")
             challenge_nonce = challenge.get("nonce")
+            if not isinstance(challenge_id, str) or not challenge_id:
+                raise ValueError("dogfood artifact has no challenge_id")
+            if not isinstance(challenge_nonce, str) or not challenge_nonce:
+                raise ValueError("dogfood artifact has no challenge nonce")
             if challenge_id not in challenges:
                 raise ValueError(
                     "dogfood artifact challenge is not provided to the report"
                 )
-            expected_nonce, challenge_key = challenges[challenge_id]
+            (
+                expected_nonce,
+                challenge_key,
+                challenge_created_at,
+                challenge_expires_at,
+            ) = challenges[challenge_id]
             if challenge_nonce != expected_nonce:
                 raise ValueError("dogfood artifact challenge nonce does not match")
             signature = artifact.get("signature")
@@ -630,6 +669,17 @@ def _load_dogfood_series(
             )
             if as_of is not None and generated_at > as_of:
                 raise ValueError("dogfood.generated_at is after report generation time")
+            if generated_at < challenge_created_at:
+                raise ValueError(
+                    "dogfood.generated_at predates dogfood challenge creation"
+                )
+            if generated_at > challenge_expires_at:
+                raise ValueError(
+                    "dogfood.generated_at is after dogfood challenge expiry"
+                )
+            if challenge_id in seen_challenge_ids:
+                raise ValueError(f"dogfood challenge_id is reused: {challenge_id}")
+            seen_challenge_ids.add(challenge_id)
             provenance = artifact.get("provenance")
             if not isinstance(provenance, dict):
                 raise ValueError("dogfood.provenance must be an object")
@@ -880,6 +930,14 @@ def _dogfood_summary(
     source_events = conservation_totals["source_events"]
     summary = {
         "scope": "dogfood_episode_series",
+        "attestation": {
+            "status": "operator_self_attested" if episodes else "not_observed",
+            "qualification": "diagnostic_only",
+            "reason": (
+                "HMAC integrity is not an independent release attestation; an external "
+                "CI or release receipt is required for launch qualification."
+            ),
+        },
         "episode_count": len(episodes),
         "source": references,
         "observation_window": {
@@ -1014,6 +1072,11 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
     """Remove usable numeric claims when any dogfood input is invalid."""
 
     summary["input_status"] = "invalid"
+    summary["attestation"] = {
+        "status": "invalid",
+        "qualification": "diagnostic_only",
+        "reason": "one or more dogfood artifacts failed validation",
+    }
     summary["episode_count"] = 0
     summary["source"] = []
     summary["observation_window"] = {
@@ -1358,6 +1421,8 @@ def build_report(
     dogfood_paths: Iterable[Path] = (),
     dogfood_challenge_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
+    dogfood_paths = list(dogfood_paths)
+    dogfood_challenge_paths = list(dogfood_challenge_paths)
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
     seen_matrix_paths: set[Path] = set()
@@ -1510,6 +1575,7 @@ def build_report(
                     harness_levels[level] += 1
 
     report_generated_at = datetime.now(UTC)
+    report_provenance_value = report_provenance()
     invalid_before_health = len(invalid)
     health_inputs, health_summary = _health_measurements(
         health_paths,
@@ -1521,6 +1587,13 @@ def build_report(
     else:
         health_summary["input_status"] = "valid" if health_inputs else "absent"
     invalid_before_dogfood = len(invalid)
+    if dogfood_paths and report_provenance_value["repository_dirty"]:
+        invalid.append(
+            {
+                "path": str(REPORT_REPOSITORY),
+                "error": "dogfood qualification report repository is dirty",
+            }
+        )
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(
         dogfood_paths,
         invalid,
@@ -1553,7 +1626,7 @@ def build_report(
         "artifact_kind": "launch_reliability_measurements",
         "report_status": "invalid" if invalid else "ok",
         "generated_at": report_generated_at.isoformat().replace("+00:00", "Z"),
-        "provenance": report_provenance(),
+        "provenance": report_provenance_value,
         "inputs": {
             "matrix_artifacts": [
                 _input_reference(path) for path, _ in matrix_artifacts
@@ -1613,6 +1686,14 @@ def build_report(
         },
         "health_fault_matrix": health_summary,
         "dogfood_series": dogfood_summary,
+        "qualification": {
+            "status": ("not_qualified" if dogfood_paths else "not_requested"),
+            "dogfood_attestation": "operator_self_attested",
+            "reason": (
+                "Dogfood measures are diagnostic-only until an external CI or release "
+                "attestation receipt is supplied."
+            ),
+        },
         "measures": {
             "automatic_recovery_time": observed_or_fallback(
                 "automatic_recovery_time",

@@ -43,7 +43,19 @@ def _dogfood_provenance() -> dict[str, object]:
         "repository": str(REPO_ROOT),
         "repository_dirty": False,
         "sampled_binary": {
-            "build_identity": f"fixture+{git_sha[:8]}",
+            "build_identity": {
+                "facade_path": str(DOGFOOD_GENERATOR),
+                "facade": {
+                    "commit": git_sha,
+                    "commit_short": git_sha[:8],
+                    "dirty": False,
+                },
+                "engine": {
+                    "commit": git_sha,
+                    "commit_short": git_sha[:8],
+                    "dirty": False,
+                },
+            },
             "path": str(DOGFOOD_GENERATOR),
             "sha256": MODULE._sha256(DOGFOOD_GENERATOR),
         },
@@ -57,6 +69,7 @@ def _write_signed_dogfood(path: Path, payload: dict[str, object]) -> Path:
         "artifact_kind": "launch_reliability_dogfood_challenge",
         "challenge_id": f"test-{path.stem}",
         "created_at": "2026-08-04T11:00:00Z",
+        "expires_at": "2026-08-05T11:00:00Z",
         "issuer": "scripts/qa/launch-reliability-measurements.py",
         "key": base64.urlsafe_b64encode(key).decode("ascii"),
         "nonce": f"nonce-{path.stem}",
@@ -75,6 +88,16 @@ def _write_signed_dogfood(path: Path, payload: dict[str, object]) -> Path:
     ).hexdigest()
     path.write_text(json.dumps(payload))
     return challenge_path
+
+
+@pytest.fixture(autouse=True)
+def _clean_report_provenance(monkeypatch):
+    original = MODULE.report_provenance()
+    monkeypatch.setattr(
+        MODULE,
+        "report_provenance",
+        lambda: {**original, "repository_dirty": False, "harness_file_dirty": False},
+    )
 
 
 def _matrix(
@@ -1131,6 +1154,24 @@ def test_unknown_dogfood_truth_is_not_admissible_evidence(tmp_path: Path, field:
 
     assert report["report_status"] == "invalid"
     assert message in report["inputs"]["invalid_artifacts"][0]["error"]
+
+
+def test_dogfood_report_rejects_a_dirty_report_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    series = tmp_path / "dirty-report.json"
+    _dogfood_series(series)
+    paths, challenges = _split_dogfood_series(series, count=1)
+    provenance = MODULE.report_provenance()
+    monkeypatch.setattr(
+        MODULE,
+        "report_provenance",
+        lambda: {**provenance, "repository_dirty": True},
+    )
+
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
+
+    assert report["report_status"] == "invalid"
+    assert "report repository is dirty" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["dogfood_series"]["input_status"] == "invalid"
 
 
 def test_dogfood_provenance_must_match_current_revision(tmp_path: Path):

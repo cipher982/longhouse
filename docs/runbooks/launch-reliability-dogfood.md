@@ -9,9 +9,10 @@ snapshot.
 
 - Run from a clean qualification checkout at the exact Longhouse commit being
   measured. Keep artifacts outside the checkout.
-- Create one private reporter challenge from that checkout before collecting.
-  The challenge binds artifacts to the collector revision and signs each
-  episode; keep the challenge file private and pass it to the final report.
+- Create one private reporter challenge per episode from that checkout before
+  collecting. The challenge binds one artifact to the collector revision and
+  provides tamper evidence; keep challenge files private and pass them to the
+  final report.
 - Supply an independent expected health state, producer-freshness state, red
   eligibility, and action. A value copied from the observed snapshot is not
   independent ground truth.
@@ -33,8 +34,19 @@ uv run --project server python scripts/qa/launch-reliability-measurements.py \
 ```
 
 The command refuses a dirty checkout. Do not commit or copy the challenge into
-the repository. If the source commit or collector changes, create a new
-challenge.
+the repository. It expires after 24 hours and cannot be reused for another
+episode. If the source commit or collector changes, create new challenges.
+
+The sampled binary must be built and installed from this same clean checkout.
+For the local dogfood install, use `make dogfood-refresh`, then verify:
+
+```bash
+longhouse build-identity --json
+```
+
+The reported facade and engine commits must equal the qualification checkout
+SHA and both must report `dirty=false`. This refresh changes the local runtime;
+use the qualification machine/workflow designated for the run.
 
 ## Collect one episode
 
@@ -42,7 +54,7 @@ The expected fields must come from the fault injection or operator record:
 
 ```bash
 python3 scripts/qa/launch_reliability_dogfood.py \
-  --challenge /tmp/longhouse-dogfood-challenge.json \
+  --challenge /tmp/longhouse-dogfood-challenge-a.json \
   --output /tmp/longhouse-dogfood-episode-a.json \
   --episode-id provider-recovery-a \
   --longhouse-bin /Users/davidrose/.local/bin/longhouse \
@@ -85,12 +97,18 @@ uv run --project server python scripts/qa/launch-reliability-measurements.py \
   --dogfood-series /tmp/longhouse-dogfood-episode-a.json \
   --dogfood-series /tmp/longhouse-dogfood-episode-b.json \
   --dogfood-series /tmp/longhouse-dogfood-episode-c.json \
-  --dogfood-challenge /tmp/longhouse-dogfood-challenge.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge-a.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge-b.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge-c.json \
   --output /tmp/launch-reliability-measurements.json
 ```
 
 The report must have `report_status=ok`, `dogfood_series.input_status=valid`,
-and an eligible observation window. The sampled binary must still exist at the
+and an eligible observation window. The report's `qualification.status` remains
+`not_qualified` for these operator-held challenge artifacts: they are
+diagnostic self-attestation, not an independent release attestation. An
+external CI/release receipt is required before quoting the dogfood metrics as
+launch evidence. The sampled binary must still exist at the
 recorded path, have the recorded hash, and report a build identity containing
 the measured source commit. A stale installed binary therefore fails closed
 instead of qualifying an older implementation. Any invalid episode clears the

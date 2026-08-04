@@ -101,10 +101,10 @@ def provenance(root: Path) -> dict[str, Any]:
     }
 
 
-def _binary_identity(path: Path) -> tuple[dict[str, str] | None, str | None]:
+def _binary_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
         result = subprocess.run(
-            [str(path), "build-identity"],
+            [str(path), "build-identity", "--json"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -112,10 +112,35 @@ def _binary_identity(path: Path) -> tuple[dict[str, str] | None, str | None]:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"longhouse build identity failed: {type(exc).__name__}: {exc}"
-    identity = (result.stdout or "").strip()
-    if result.returncode != 0 or not identity:
+    raw_identity = (result.stdout or "").strip()
+    if result.returncode != 0 or not raw_identity:
         detail = (result.stderr or result.stdout or "no output").strip()[-500:]
         return None, f"longhouse build identity exited {result.returncode}: {detail}"
+    try:
+        identity = json.loads(raw_identity)
+    except json.JSONDecodeError as exc:
+        return None, f"longhouse build identity returned invalid JSON: {exc}"
+    if not isinstance(identity, dict):
+        return None, "longhouse build identity returned a non-object JSON value"
+    facade = identity.get("facade")
+    engine = identity.get("engine")
+    if not isinstance(facade, dict) or not isinstance(engine, dict):
+        return None, "longhouse build identity is missing facade or engine identity"
+    for label, value in (("facade", facade), ("engine", engine)):
+        commit = value.get("commit")
+        if (
+            not isinstance(commit, str)
+            or len(commit) != 40
+            or any(character not in "0123456789abcdefABCDEF" for character in commit)
+        ):
+            return None, f"longhouse {label} build identity has an invalid commit"
+        if not isinstance(value.get("commit_short"), str) or not value["commit_short"]:
+            return None, f"longhouse {label} build identity has no commit_short"
+        if not isinstance(value.get("dirty"), bool):
+            return None, f"longhouse {label} build identity has invalid dirty flag"
+    if facade["commit"] != engine["commit"]:
+        return None, "longhouse facade and engine build identities disagree"
+    identity["facade_path"] = str(path)
     return {
         "build_identity": identity,
         "path": str(path),
@@ -138,6 +163,10 @@ def _load_challenge(path: Path, *, root: Path) -> tuple[dict[str, Any], bytes]:
         raise ValueError("dogfood challenge has no challenge_id")
     if not isinstance(payload.get("nonce"), str) or not payload["nonce"]:
         raise ValueError("dogfood challenge has no nonce")
+    created_at = _parse_timestamp(payload.get("created_at"))
+    expires_at = _parse_timestamp(payload.get("expires_at"))
+    if expires_at <= created_at:
+        raise ValueError("dogfood challenge expires_at must follow created_at")
     try:
         key = base64.urlsafe_b64decode(str(payload.get("key") or "").encode("ascii"))
     except (ValueError, UnicodeEncodeError) as exc:
@@ -372,7 +401,18 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         episode["event_bearing_issue"] = issue
     if conservation is not None:
         episode["evidence_conservation"] = conservation
-    observation_errors = [detail for detail in (binary_error, error) if detail]
+    challenge_time_error = None
+    if challenge_payload is not None:
+        observed_time = _parse_timestamp(observed_at)
+        created_time = _parse_timestamp(challenge_payload["created_at"])
+        expires_time = _parse_timestamp(challenge_payload["expires_at"])
+        if observed_time < created_time:
+            challenge_time_error = "observation predates dogfood challenge creation"
+        elif observed_time > expires_time:
+            challenge_time_error = "observation is after dogfood challenge expiry"
+    observation_errors = [
+        detail for detail in (binary_error, error, challenge_time_error) if detail
+    ]
     if observation_errors:
         # The measurement consumer rejects any episode carrying this field.
         # Keeping the diagnostic artifact makes the failed observation
