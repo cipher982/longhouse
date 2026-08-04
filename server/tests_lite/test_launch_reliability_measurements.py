@@ -58,6 +58,40 @@ def _matrix(
     path.write_text(json.dumps(payload))
 
 
+def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object = None) -> None:
+    episodes = []
+    for index, observed_at in enumerate(
+        ("2026-08-04T12:00:00Z", "2026-08-04T12:30:00Z", "2026-08-04T13:00:00Z")
+    ):
+        episodes.append(
+            {
+                "episode_id": "same" if duplicate_ids else f"episode-{index}",
+                "observed_at": observed_at,
+                "recovery_duration_seconds": index + 1 if recovery is None else recovery,
+                "expected": {
+                    "health_state": "broken",
+                    "red_eligible": True,
+                    "producer_freshness": "stale",
+                    "action": "inspect_local_health",
+                },
+                "observed": {
+                    "health_state": "broken",
+                    "producer_freshness": "stale",
+                    "suggested_action_ids": ["inspect_local_health"],
+                },
+            }
+        )
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "launch_reliability_dogfood_series",
+                "episodes": episodes,
+            }
+        )
+    )
+
+
 def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Path):
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
@@ -274,9 +308,15 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
                         "episode_id": "episode-1",
                         "observed_at": "2026-08-04T12:00:10Z",
                         "recovery_duration_seconds": 10.0,
-                        "expected": {"state": "degraded", "action": "inspect_storage_source"},
+                        "expected": {
+                            "health_state": "degraded",
+                            "red_eligible": False,
+                            "producer_freshness": "fresh",
+                            "action": "inspect_storage_source",
+                        },
                         "observed": {
                             "health_state": "degraded",
+                            "producer_freshness": "fresh",
                             "suggested_action_ids": ["inspect_storage_source"],
                         },
                         "event_bearing_issue": {
@@ -295,16 +335,22 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
                     },
                     {
                         "episode_id": "episode-2",
-                        "observed_at": "2026-08-04T12:01:30Z",
+                        "observed_at": "2026-08-04T12:30:10Z",
                         "recovery_duration_seconds": 12.0,
-                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "expected": {
+                            "health_state": "broken",
+                            "red_eligible": True,
+                            "producer_freshness": "stale",
+                            "action": "inspect_local_health",
+                        },
                         "observed": {
                             "health_state": "broken",
+                            "producer_freshness": "stale",
                             "suggested_action_ids": ["inspect_local_health"],
                         },
                         "event_bearing_issue": {
                             "status": "unresolved",
-                            "opened_at": "2026-08-04T12:00:00Z",
+                            "opened_at": "2026-08-04T12:30:00Z",
                         },
                         "evidence_conservation": {
                             "source_events": 2,
@@ -315,6 +361,34 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
                             "unresolved_events": 0,
                         },
                     },
+                    {
+                        "episode_id": "episode-3",
+                        "observed_at": "2026-08-04T13:00:30Z",
+                        "recovery_duration_seconds": 14.0,
+                        "expected": {
+                            "health_state": "broken",
+                            "red_eligible": True,
+                            "producer_freshness": "stale",
+                            "action": "inspect_local_health",
+                        },
+                        "observed": {
+                            "health_state": "broken",
+                            "producer_freshness": "stale",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
+                        "event_bearing_issue": {
+                            "status": "unresolved",
+                            "opened_at": "2026-08-04T12:00:00Z",
+                        },
+                        "evidence_conservation": {
+                            "source_events": 3,
+                            "archived_events": 2,
+                            "replayed_events": 1,
+                            "duplicate_events": 1,
+                            "discarded_events": 0,
+                            "unresolved_events": 1,
+                        },
+                    },
                 ],
             }
         )
@@ -323,21 +397,22 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     report = MODULE.build_report([], dogfood_paths=[series])
 
     assert report["report_status"] == "ok"
-    assert report["dogfood_series"]["episode_count"] == 2
-    assert report["dogfood_series"]["automatic_recovery_time"]["sample_count"] == 2
+    assert report["dogfood_series"]["episode_count"] == 3
+    assert report["dogfood_series"]["observation_window"]["status"] == "eligible"
+    assert report["dogfood_series"]["automatic_recovery_time"]["sample_count"] == 3
     assert report["measures"]["false_red_rate"]["scope"] == "dogfood_episode_series"
     assert report["measures"]["false_red_rate"]["rate"] == 0.0
     assert report["measures"]["hidden_failure_rate"]["rate"] == 0.0
     assert report["measures"]["action_coverage"]["rate"] == 1.0
-    assert report["measures"]["unresolved_event_bearing_issue_age"]["max_age_seconds"] == 90.0
+    assert report["measures"]["unresolved_event_bearing_issue_age"]["max_age_seconds"] == 3630.0
     conservation = report["measures"]["duplicate_replayed_discarded_evidence"]
     assert conservation["totals"] == {
-        "archived_events": 5,
+        "archived_events": 7,
         "discarded_events": 0,
-        "duplicate_events": 1,
-        "replayed_events": 1,
-        "source_events": 6,
-        "unresolved_events": 1,
+        "duplicate_events": 2,
+        "replayed_events": 2,
+        "source_events": 9,
+        "unresolved_events": 2,
     }
     assert conservation["conservation_status"] == "complete"
 
@@ -347,6 +422,7 @@ def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
     series.write_text(
         json.dumps(
             {
+                "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
                 "episodes": [
                     {
@@ -371,3 +447,68 @@ def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
     assert report["report_status"] == "invalid"
     assert "accounts for more events" in report["inputs"]["invalid_artifacts"][0]["error"]
     assert report["dogfood_series"]["episode_count"] == 0
+
+
+def test_duplicate_dogfood_path_is_counted_once(tmp_path: Path):
+    series = tmp_path / "dogfood.json"
+    _dogfood_series(series)
+
+    report = MODULE.build_report([], dogfood_paths=[series, series])
+
+    assert report["report_status"] == "ok"
+    assert report["dogfood_series"]["episode_count"] == 3
+    assert report["dogfood_series"]["input_status"] == "valid"
+    assert report["measures"]["automatic_recovery_time"]["sample_count"] == 3
+
+
+def test_duplicate_dogfood_episode_id_and_nonfinite_duration_fail_closed(tmp_path: Path):
+    duplicate = tmp_path / "duplicate.json"
+    _dogfood_series(duplicate, duplicate_ids=True)
+    duplicate_report = MODULE.build_report([], dogfood_paths=[duplicate])
+    assert duplicate_report["report_status"] == "invalid"
+    assert "duplicate episode_id" in duplicate_report["inputs"]["invalid_artifacts"][0]["error"]
+    assert duplicate_report["measures"]["automatic_recovery_time"]["status"] == "not_observed"
+
+    nonfinite = tmp_path / "nonfinite.json"
+    _dogfood_series(nonfinite, recovery=float("nan"))
+    nonfinite_report = MODULE.build_report([], dogfood_paths=[nonfinite])
+    assert nonfinite_report["report_status"] == "invalid"
+    assert "must be non-negative" in nonfinite_report["inputs"]["invalid_artifacts"][0]["error"]
+
+
+def test_discarded_evidence_is_visible_as_a_separate_conservation_state(tmp_path: Path):
+    series = tmp_path / "discard.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    payload["episodes"][0]["evidence_conservation"] = {
+        "source_events": 2,
+        "archived_events": 1,
+        "replayed_events": 0,
+        "duplicate_events": 0,
+        "discarded_events": 1,
+        "unresolved_events": 0,
+    }
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    conservation = report["measures"]["duplicate_replayed_discarded_evidence"]
+    assert conservation["conservation_status"] == "complete_with_discard"
+    assert conservation["totals"]["discarded_events"] == 1
+
+
+def test_future_issue_resolution_fails_closed(tmp_path: Path):
+    series = tmp_path / "future-resolution.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    payload["episodes"][0]["event_bearing_issue"] = {
+        "status": "resolved",
+        "opened_at": "2026-08-04T11:59:00Z",
+        "resolved_at": "2026-08-04T14:00:00Z",
+    }
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "invalid"
+    assert "after observed_at" in report["inputs"]["invalid_artifacts"][0]["error"]

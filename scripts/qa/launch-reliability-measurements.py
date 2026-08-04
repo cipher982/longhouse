@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import statistics
 import subprocess
 import sys
@@ -25,6 +26,9 @@ from typing import Any, Iterable
 MATRIX_FILENAME = "installed-managed-launch-fault-matrix.json"
 EXPECTED_PROVIDERS = frozenset({"claude", "codex", "cursor", "opencode"})
 DOGFOOD_ARTIFACT_KIND = "launch_reliability_dogfood_series"
+DOGFOOD_SCHEMA_VERSION = 1
+MIN_DOGFOOD_EPISODES = 3
+MIN_DOGFOOD_SPAN_SECONDS = 3600.0
 CONSERVATION_FIELDS = (
     "source_events",
     "archived_events",
@@ -33,6 +37,8 @@ CONSERVATION_FIELDS = (
     "discarded_events",
     "unresolved_events",
 )
+HEALTH_STATES = frozenset({"healthy", "degraded", "broken", "unknown"})
+PRODUCER_FRESHNESS_STATES = frozenset({"fresh", "stale", "unknown"})
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -218,6 +224,30 @@ def _nonnegative_count(value: Any, *, label: str) -> int:
     return value
 
 
+def _health_truth(episode: dict[str, Any], *, label: str) -> None:
+    expected = episode.get("expected")
+    observed = episode.get("observed")
+    if expected is None and observed is None:
+        return
+    if not isinstance(expected, dict) or not isinstance(observed, dict):
+        raise ValueError(f"{label} expected and observed health truth must both be objects")
+    for side, value in (("expected", expected), ("observed", observed)):
+        if value.get("health_state") not in HEALTH_STATES:
+            raise ValueError(f"{label}.{side}.health_state is invalid")
+        if value.get("producer_freshness") not in PRODUCER_FRESHNESS_STATES:
+            raise ValueError(f"{label}.{side}.producer_freshness is invalid")
+    if not isinstance(expected.get("red_eligible"), bool):
+        raise ValueError(f"{label}.expected.red_eligible must be boolean")
+    action = expected.get("action")
+    if action is not None and not isinstance(action, str):
+        raise ValueError(f"{label}.expected.action must be a string or null")
+    suggested = observed.get("suggested_action_ids")
+    if suggested is not None and (
+        not isinstance(suggested, list) or not all(isinstance(item, str) for item in suggested)
+    ):
+        raise ValueError(f"{label}.observed.suggested_action_ids must be a string list")
+
+
 def _load_dogfood_series(
     paths: Iterable[Path],
     invalid: list[dict[str, str]],
@@ -226,27 +256,44 @@ def _load_dogfood_series(
 
     references: list[dict[str, str]] = []
     episodes: list[dict[str, Any]] = []
+    seen_paths: set[Path] = set()
+    seen_episode_ids: set[str] = set()
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
         try:
             artifact = _json(path)
             if artifact.get("artifact_kind") != DOGFOOD_ARTIFACT_KIND:
                 raise ValueError(f"artifact_kind must be {DOGFOOD_ARTIFACT_KIND!r}")
+            if artifact.get("schema_version") != DOGFOOD_SCHEMA_VERSION:
+                raise ValueError(f"schema_version must be {DOGFOOD_SCHEMA_VERSION}")
             raw_episodes = artifact.get("episodes")
             if not isinstance(raw_episodes, list) or not raw_episodes:
                 raise ValueError("dogfood artifact has no non-empty episodes list")
             loaded_episodes: list[dict[str, Any]] = []
+            loaded_ids: set[str] = set()
             for index, episode in enumerate(raw_episodes):
                 if not isinstance(episode, dict):
                     raise ValueError(f"episode {index} is not an object")
                 if not isinstance(episode.get("episode_id"), str) or not episode["episode_id"]:
                     raise ValueError(f"episode {index} has no episode_id")
-                _timestamp(episode.get("observed_at"), label=f"episode {index}.observed_at")
+                observed_at = _timestamp(
+                    episode.get("observed_at"),
+                    label=f"episode {index}.observed_at",
+                )
+                episode_id = episode["episode_id"]
+                if episode_id in seen_episode_ids or episode_id in loaded_ids:
+                    raise ValueError(f"duplicate episode_id: {episode_id}")
+                loaded_ids.add(episode_id)
+                _health_truth(episode, label=f"episode {index}")
                 recovery = episode.get("recovery_duration_seconds")
                 if recovery is not None and (
                     isinstance(recovery, bool)
                     or not isinstance(recovery, (int, float))
                     or recovery < 0
+                    or not math.isfinite(float(recovery))
                 ):
                     raise ValueError(
                         f"episode {index}.recovery_duration_seconds must be non-negative"
@@ -273,11 +320,11 @@ def _load_dogfood_series(
                             raise ValueError(
                                 f"episode {index}.event_bearing_issue.resolved_at precedes opened_at"
                             )
+                        if resolved_at > observed_at:
+                            raise ValueError(
+                                f"episode {index}.event_bearing_issue.resolved_at is after observed_at"
+                            )
                     else:
-                        observed_at = _timestamp(
-                            episode.get("observed_at"),
-                            label=f"episode {index}.observed_at",
-                        )
                         opened_at = _timestamp(
                             issue.get("opened_at"),
                             label=f"episode {index}.event_bearing_issue.opened_at",
@@ -303,8 +350,14 @@ def _load_dogfood_series(
                         raise ValueError(
                             f"episode {index}.evidence_conservation accounts for more events than source_events"
                         )
-                loaded_episodes.append({**episode, "_source_path": str(path)})
+                    for field in ("replayed_events", "duplicate_events"):
+                        if conservation[field] > conservation["source_events"]:
+                            raise ValueError(
+                                f"episode {index}.evidence_conservation.{field} exceeds source_events"
+                            )
+                loaded_episodes.append(dict(episode))
             episodes.extend(loaded_episodes)
+            seen_episode_ids.update(loaded_ids)
             references.append(_input_reference(path))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
@@ -317,6 +370,30 @@ def _dogfood_summary(
 ) -> dict[str, Any]:
     """Summarize only facts present in the retained dogfood observations."""
 
+    observed_times = sorted(
+        _timestamp(episode["observed_at"], label="episode.observed_at")
+        for episode in episodes
+    )
+    first_observed_at = (
+        observed_times[0].isoformat().replace("+00:00", "Z") if observed_times else None
+    )
+    last_observed_at = (
+        observed_times[-1].isoformat().replace("+00:00", "Z") if observed_times else None
+    )
+    span_seconds = (
+        (observed_times[-1] - observed_times[0]).total_seconds()
+        if observed_times
+        else None
+    )
+    series_eligible = bool(
+        len(observed_times) >= MIN_DOGFOOD_EPISODES
+        and span_seconds is not None
+        and span_seconds >= MIN_DOGFOOD_SPAN_SECONDS
+    )
+    series_reason = None if series_eligible else (
+        f"requires at least {MIN_DOGFOOD_EPISODES} episodes spanning "
+        f"{MIN_DOGFOOD_SPAN_SECONDS:g} seconds"
+    )
     recovery = [
         float(episode["recovery_duration_seconds"])
         for episode in episodes
@@ -327,21 +404,27 @@ def _dogfood_summary(
         for episode in episodes
         if isinstance(episode.get("expected"), dict)
         and isinstance(episode.get("observed"), dict)
-        and isinstance(episode["expected"].get("state"), str)
+        and isinstance(episode["expected"].get("health_state"), str)
         and isinstance(episode["observed"].get("health_state"), str)
     ]
     broken_cases = sum(episode["observed"]["health_state"] == "broken" for episode in health)
     false_red_cases = sum(
         episode["observed"]["health_state"] == "broken"
-        and episode["expected"]["state"] != "broken"
+        and not episode["expected"]["red_eligible"]
         for episode in health
     )
     eligible_failure_cases = sum(
-        episode["expected"]["state"] in {"broken", "degraded"} for episode in health
+        episode["expected"]["red_eligible"]
+        or episode["expected"]["producer_freshness"] != "fresh"
+        for episode in health
     )
     hidden_failure_cases = sum(
-        episode["expected"]["state"] in {"broken", "degraded"}
+        (
+            episode["expected"]["red_eligible"]
+            or episode["expected"]["producer_freshness"] != "fresh"
+        )
         and episode["observed"]["health_state"] == "healthy"
+        and episode["observed"]["producer_freshness"] == "fresh"
         for episode in health
     )
     actionable = [
@@ -363,17 +446,9 @@ def _dogfood_summary(
             continue
         observed_at = _timestamp(episode["observed_at"], label="episode.observed_at")
         opened_at = _timestamp(issue["opened_at"], label="event_bearing_issue.opened_at")
-        end_at = (
-            observed_at
-            if issue["status"] == "unresolved"
-            else _timestamp(issue["resolved_at"], label="event_bearing_issue.resolved_at")
-        )
-        age = (end_at - opened_at).total_seconds()
-        if age < 0:
-            continue
         if issue["status"] == "unresolved":
             unresolved_issues += 1
-            issue_ages.append(age)
+            issue_ages.append((observed_at - opened_at).total_seconds())
 
     conservation = [
         episode["evidence_conservation"]
@@ -393,8 +468,19 @@ def _dogfood_summary(
         "scope": "dogfood_episode_series",
         "episode_count": len(episodes),
         "source": references,
+        "observation_window": {
+            "status": "eligible" if series_eligible else "insufficient",
+            "reason": series_reason,
+            "first_observed_at": first_observed_at,
+            "last_observed_at": last_observed_at,
+            "span_seconds": span_seconds,
+            "distinct_observation_count": len(set(observed_times)),
+            "minimum_episode_count": MIN_DOGFOOD_EPISODES,
+            "minimum_span_seconds": MIN_DOGFOOD_SPAN_SECONDS,
+        },
         "automatic_recovery_time": {
-            "status": "observed" if recovery else "not_observed",
+            "status": "observed" if series_eligible and recovery else "not_observed",
+            **({} if series_eligible else {"reason": series_reason}),
             "sample_count": len(recovery),
             "seconds": {
                 "min": min(recovery) if recovery else None,
@@ -403,31 +489,38 @@ def _dogfood_summary(
             },
         },
         "false_red_rate": {
-            "status": "observed" if broken_cases else "not_observed",
+            "status": "observed" if series_eligible and broken_cases else "not_observed",
+            **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "numerator": false_red_cases,
             "denominator": broken_cases,
             "rate": false_red_cases / broken_cases if broken_cases else None,
+            "numerator_definition": "dogfood_observed_broken_cases_expected_red_ineligible",
             "denominator_definition": "dogfood_observed_broken_cases",
         },
         "hidden_failure_rate": {
-            "status": "observed" if eligible_failure_cases else "not_observed",
+            "status": "observed" if series_eligible and eligible_failure_cases else "not_observed",
+            **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "numerator": hidden_failure_cases,
             "denominator": eligible_failure_cases,
             "rate": hidden_failure_cases / eligible_failure_cases if eligible_failure_cases else None,
-            "denominator_definition": "dogfood_expected_broken_or_degraded_cases",
+            "numerator_definition": "dogfood_expected_risk_observed_healthy_and_fresh",
+            "denominator_definition": "dogfood_expected_red_risk_or_stale_producer_cases",
         },
         "action_coverage": {
-            "status": "observed" if actionable else "not_observed",
+            "status": "observed" if series_eligible and actionable else "not_observed",
+            **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "numerator": action_pass,
             "denominator": len(actionable),
             "rate": action_pass / len(actionable) if actionable else None,
+            "numerator_definition": "dogfood_expected_action_present_in_observed_actions",
             "denominator_definition": "dogfood_cases_with_a_non_none_expected_action",
         },
         "unresolved_event_bearing_issue_age": {
-            "status": "observed" if issue_ages else "not_observed",
+            "status": "observed" if series_eligible and issue_ages else "not_observed",
+            **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "unresolved_count": unresolved_issues,
             "sample_count": len(issue_ages),
@@ -436,14 +529,19 @@ def _dogfood_summary(
             "denominator_definition": "dogfood_unresolved_event_bearing_issues",
         },
         "duplicate_replayed_discarded_evidence": {
-            "status": "observed" if conservation else "not_observed",
+            "status": "observed" if series_eligible and conservation else "not_observed",
+            **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "sample_count": len(conservation),
             "totals": conservation_totals,
             "accounted_events": accounted_events,
             "unaccounted_events": source_events - accounted_events if conservation else None,
             "conservation_status": (
-                "complete" if conservation and source_events == accounted_events else "gap"
+                "complete"
+                if conservation and source_events == accounted_events and conservation_totals["discarded_events"] == 0
+                else "complete_with_discard"
+                if conservation and source_events == accounted_events
+                else "gap"
             )
             if conservation
             else None,
@@ -639,19 +737,40 @@ def build_report(
                     harness_levels[level] += 1
 
     health_inputs, health_summary = _health_measurements(health_paths, invalid)
+    invalid_before_dogfood = len(invalid)
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(dogfood_paths, invalid)
     dogfood_summary = _dogfood_summary(dogfood_episodes, dogfood_inputs)
+    dogfood_invalid = len(invalid) > invalid_before_dogfood
+    dogfood_summary["input_status"] = (
+        "invalid" if dogfood_invalid else "valid" if dogfood_inputs else "absent"
+    )
+    if dogfood_invalid:
+        dogfood_summary["observation_window"]["status"] = "invalid"
+        for metric_name in (
+            "automatic_recovery_time",
+            "false_red_rate",
+            "hidden_failure_rate",
+            "action_coverage",
+            "unresolved_event_bearing_issue_age",
+            "duplicate_replayed_discarded_evidence",
+        ):
+            dogfood_summary[metric_name]["status"] = "not_observed"
+            dogfood_summary[metric_name]["reason"] = "one or more dogfood artifacts failed validation"
 
     def observed_or_fallback(name: str, fallback: dict[str, Any]) -> dict[str, Any]:
         candidate = dogfood_summary[name]
-        return candidate if candidate.get("status") == "observed" else fallback
+        return (
+            candidate
+            if dogfood_summary["input_status"] == "valid" and candidate.get("status") == "observed"
+            else fallback
+        )
 
     controlled_false_red = health_summary["measurements"]["false_red_rate"]
     controlled_hidden_failure = health_summary["measurements"]["hidden_failure_rate"]
     controlled_action_coverage = health_summary["measurements"]["action_coverage"]
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_kind": "launch_reliability_measurements",
         "report_status": "invalid" if invalid else "ok",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
