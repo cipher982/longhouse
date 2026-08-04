@@ -1229,6 +1229,23 @@ def test_dogfood_challenge_bounds_episode_times_and_duration(tmp_path: Path):
     assert "cannot exceed 24 hours" in report["inputs"]["invalid_artifacts"][0]["error"]
 
 
+@pytest.mark.parametrize("identity_path", ["facade_path", "engine_path"])
+def test_dogfood_binary_identity_paths_are_bound(tmp_path: Path, identity_path: str):
+    series = tmp_path / f"identity-{identity_path}.json"
+    _dogfood_series(series)
+    paths, challenges = _split_dogfood_series(series, count=1)
+    payload = json.loads(paths[0].read_text())
+    payload["provenance"]["sampled_binary"]["build_identity"][identity_path] = str(tmp_path / "different-binary")
+    payload.pop("challenge", None)
+    payload.pop("signature", None)
+    challenges[0] = _write_signed_dogfood(paths[0], payload)
+
+    report = MODULE.build_report([], dogfood_paths=paths, dogfood_challenge_paths=challenges)
+
+    assert report["report_status"] == "invalid"
+    assert "identity path does not match" in report["inputs"]["invalid_artifacts"][0]["error"]
+
+
 def test_dogfood_provenance_must_match_current_revision(tmp_path: Path):
     series = tmp_path / "wrong-provenance.json"
     _dogfood_series(series)
