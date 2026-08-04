@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 
@@ -66,7 +68,31 @@ _catalog_db_dependency = catalog_db_dependency()
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
 _catalog_attention_tasks: set[asyncio.Task] = set()
-_catalog_attention_locks: dict[str, asyncio.Lock] = {}
+
+
+@dataclass
+class _CatalogAttentionLockState:
+    lock: asyncio.Lock
+    references: int = 0
+
+
+_catalog_attention_locks: dict[str, _CatalogAttentionLockState] = {}
+
+
+@asynccontextmanager
+async def _catalog_attention_lock(session_id: str):
+    state = _catalog_attention_locks.get(session_id)
+    if state is None:
+        state = _CatalogAttentionLockState(lock=asyncio.Lock())
+        _catalog_attention_locks[session_id] = state
+    state.references += 1
+    try:
+        async with state.lock:
+            yield
+    finally:
+        state.references -= 1
+        if state.references == 0 and not state.lock.locked() and _catalog_attention_locks.get(session_id) is state:
+            _catalog_attention_locks.pop(session_id, None)
 
 
 def _catalog_attention_notification(action: dict) -> SessionAttentionPush | SessionAttentionResolutionPush:
@@ -116,8 +142,7 @@ async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> 
         if not session_id:
             logging.getLogger(__name__).error("Ignoring catalog APNs action without a session id")
             continue
-        lock = _catalog_attention_locks.setdefault(session_id, asyncio.Lock())
-        async with lock:
+        async with _catalog_attention_lock(session_id):
             try:
                 notification = _catalog_attention_notification(action)
                 notification_event_id = str(action["notification_event_id"])

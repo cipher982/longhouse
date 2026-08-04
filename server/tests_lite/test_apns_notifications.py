@@ -29,6 +29,7 @@ from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistra
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
+from zerg.routers.runtime import _catalog_attention_locks
 from zerg.routers.runtime import _catalog_attention_notification
 from zerg.routers.runtime import _dispatch_catalog_attention_actions
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
@@ -145,6 +146,7 @@ def test_catalog_attention_dispatch_commits_accepted_send_and_rejects_unknown_ki
             "attention_push_at": occurred_at.isoformat(),
         },
     )
+    assert session_id not in _catalog_attention_locks
     with pytest.raises(ValueError):
         _catalog_attention_notification({**action, "kind": "unexpected"})
 
