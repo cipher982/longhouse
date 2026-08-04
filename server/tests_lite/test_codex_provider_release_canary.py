@@ -238,7 +238,7 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
             "--state-root",
             str(state_root),
             "--reason",
-            "provider_release_canary",
+            "bridge_stop",
             "--force",
         ]
     ]

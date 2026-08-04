@@ -852,7 +852,7 @@ def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
         if seen_at is None:
             process.claude_development_channel_prompt_seen_at = now
             return
-        if now - seen_at < 0.25:
+        if now - seen_at < 1.0:
             return
         process.send("\r")
         process.claude_development_channel_acceptance_sent = True
@@ -1324,10 +1324,28 @@ def _control_send(
             raise RuntimeError(f"{spec.provider} terminal control owner is no longer live")
         process.send(text + "\r")
         return {"method": "provider_tty_bootstrap" if initial else "provider_tty", "returncode": 0}
-    completed = subprocess.run(command, cwd=args.repo_root, capture_output=True, text=True, timeout=30, check=False)
-    if completed.returncode:
-        raise RuntimeError(f"{spec.provider} managed control send failed: {completed.stderr[-1000:]}")
-    return {"method": "longhouse_control", "returncode": completed.returncode, "stdout": completed.stdout[-2000:]}
+    deadline = time.monotonic() + 30 if spec.provider == "cursor" else time.monotonic()
+    attempts = 0
+    completed: subprocess.CompletedProcess[str]
+    while True:
+        attempts += 1
+        completed = subprocess.run(command, cwd=args.repo_root, capture_output=True, text=True, timeout=30, check=False)
+        if completed.returncode == 0:
+            break
+        detail = f"{completed.stdout}\n{completed.stderr}"
+        if spec.provider != "cursor" or "provider_not_idle" not in detail or time.monotonic() >= deadline:
+            raise RuntimeError(f"{spec.provider} managed control send failed: {completed.stderr[-1000:]}")
+        # Cursor's native TUI can publish its Helm lease before it reaches its
+        # first idle prompt. The managed socket rejects this request without
+        # injecting text, so retrying is safe and keeps provider control
+        # authoritative instead of falling back to a raw PTY write.
+        time.sleep(0.25)
+    return {
+        "method": "longhouse_control",
+        "returncode": completed.returncode,
+        "attempts": attempts,
+        "stdout": completed.stdout[-2000:],
+    }
 
 
 def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, *, force: bool) -> dict[str, Any]:

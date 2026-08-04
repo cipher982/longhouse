@@ -1190,8 +1190,13 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
             session_id,
             "--state-root",
             str(_bridge_state_root(isolation_root)),
+            # `bridge_stop` is one of the provider terminal reasons that
+            # retains the native Codex continuation contract. The canary is
+            # deliberately testing cold Resume after a clean owner shutdown;
+            # a synthetic reason would correctly be treated as non-resumable
+            # and delete the contract before the hosted assertion.
             "--reason",
-            "provider_release_canary",
+            "bridge_stop",
             "--force",
         ],
         cwd=args.repo_root,

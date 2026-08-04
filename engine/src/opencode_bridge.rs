@@ -99,9 +99,15 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     let binary = resolve_binary(config.opencode_bin)?;
     let password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let log_path = state_dir.join("logs").join(format!("{session_id}.log"));
+    // A Resume starts a fresh `opencode serve` process but reuses the
+    // Longhouse session's state/log filename. Truncating the log makes the
+    // readiness URL belong to this server generation; appending would let
+    // `read_listen_url` observe a dead URL from the previous owner before the
+    // new process has emitted its own listener line.
     let log = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&log_path)?;
     let mut command = Command::new(&binary);
     let engine = std::env::current_exe().context("resolve native engine for OpenCode MCP")?;

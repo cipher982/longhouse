@@ -673,6 +673,46 @@ def test_cursor_initial_seed_uses_managed_control_after_tui_ready(tmp_path: Path
     assert process.sent == []
 
 
+def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, monkeypatch) -> None:
+    args = _args(tmp_path)
+
+    class FakeProviderProcess:
+        class Process:
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        process = Process()
+        sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProviderProcess()
+    commands: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        if len(commands) == 1:
+            return subprocess.CompletedProcess(argv, 1, "", "provider_not_idle")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+    result = _control_send(
+        SPECS["cursor"],
+        args,
+        {"session_id": "session-1"},
+        process,  # type: ignore[arg-type]
+        "seed",
+        initial=True,
+    )
+
+    assert result["attempts"] == 2
+    assert len(commands) == 2
+    assert process.sent == []
+
+
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
     receipt = _cleanup_processes(SPECS["claude"], (), [{"session_id": "session-without-provider-pid"}])
 
