@@ -339,7 +339,13 @@ def _validated_live_interaction_artifacts(
     ):
         return False
     try:
-        materialized_root = Path(os.path.commonpath((str(observation_path.parent), str(events_path.parent)))).resolve(strict=True)
+        evidence_root = observation_path.parent.parent.resolve(strict=True)
+        declared_source_root = observation.get("native_source_root")
+        if isinstance(declared_source_root, str) and declared_source_root.strip():
+            materialized_root = Path(declared_source_root).expanduser().resolve(strict=True)
+            materialized_root.relative_to(evidence_root)
+        else:
+            materialized_root = Path(os.path.commonpath((str(observation_path.parent), str(events_path.parent)))).resolve(strict=True)
         independent = interaction_semantics.evaluate_observation(
             provider,
             observation,
