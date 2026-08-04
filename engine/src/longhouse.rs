@@ -1059,6 +1059,43 @@ fn claude_registration_issue(
     None
 }
 
+fn abort_claude_registration_in_background(
+    url: &str,
+    token: &str,
+    response: ManagedLaunchResponse,
+) {
+    let url = url.to_string();
+    let token = token.to_string();
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            return;
+        };
+        drop(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ));
+    });
+}
+
+fn resolve_claude_provider_session_id(
+    response: Option<&ManagedLaunchResponse>,
+    resume_target: Option<&ClaudeResumeTarget>,
+    payload: &serde_json::Value,
+) -> Option<String> {
+    response
+        .and_then(|response| response.provider_session_id.clone())
+        .or_else(|| resume_target.map(|target| target.provider_session_id.clone()))
+        .or_else(|| {
+            payload
+                .get("provider_session_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+}
+
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
@@ -1139,28 +1176,21 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     } else {
         payload.get("session_id").and_then(serde_json::Value::as_str)
     };
-    let registration = if resume_target.is_some() {
-        register_managed_launch(
-            &runtime,
-            &url,
-            &token,
-            "Claude resume",
-            &payload,
-            expected_session_id,
-        )
-    } else {
-        register_managed_launch_with_timeout(
-            &runtime,
-            &url,
-            &token,
-            "Claude",
-            &payload,
-            expected_session_id,
-            // A healthy host normally answers within this window. A slower or
-            // unavailable host must not hold the user's provider TUI hostage.
-            Duration::from_millis(2000),
-        )
-    };
+    let registration = register_managed_launch_with_timeout(
+        &runtime,
+        &url,
+        &token,
+        if resume_target.is_some() {
+            "Claude resume"
+        } else {
+            "Claude"
+        },
+        &payload,
+        expected_session_id,
+        // A healthy host normally answers within this window. A slower or
+        // unavailable host must not hold either a new or resumed provider TUI.
+        Duration::from_millis(2000),
+    );
     let mut response: Option<ManagedLaunchResponse> = match registration {
         Ok(response) => Some(response),
         Err(error) => {
@@ -1182,7 +1212,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|response| claude_registration_issue(response, expected_provider_session_id))
     {
-        response = None;
+        if let Some(invalid) = response.take() {
+            abort_claude_registration_in_background(&url, &token, invalid);
+        }
         eprintln!(
             "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
         );
@@ -1217,10 +1249,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             )
             .to_string()
         });
-    let provider_session_id = response
-        .as_ref()
-        .and_then(|response| response.provider_session_id.clone())
-        .or_else(|| payload.get("provider_session_id").and_then(|value| value.as_str()).map(str::to_owned))
+    let provider_session_id = resolve_claude_provider_session_id(
+        response.as_ref(),
+        resume_target.as_ref(),
+        &payload,
+    )
         .context("Longhouse did not return a Claude provider session")?;
     let mut launch_transaction = response.as_ref().map(|response| {
         ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
@@ -3613,6 +3646,20 @@ mod tests {
         assert!(
             claude_registration_issue(&response, Some("provider-session"))
                 .is_some_and(|issue| issue.contains("coordination authority"))
+        );
+    }
+
+    #[test]
+    fn degraded_claude_resume_retains_the_original_provider_session() {
+        let target = ClaudeResumeTarget {
+            session_id: "managed-session".to_string(),
+            provider_session_id: "retained-provider-session".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            permission_mode: PermissionMode::Bypass,
+        };
+        assert_eq!(
+            resolve_claude_provider_session_id(None, Some(&target), &json!({})).as_deref(),
+            Some("retained-provider-session")
         );
     }
 

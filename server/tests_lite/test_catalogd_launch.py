@@ -204,8 +204,10 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
         resumed = await client.call("session.launch.local.resume.v2", {"resume": resume})
         assert resumed["created"] is True
         assert resumed["run_id"] != initial["run_id"]
+        assert resumed["provider_session_id"] == provider_thread_id
         replay = await client.call("session.launch.local.resume.v2", {"resume": resume})
         assert replay["exact_replay"] is True
+        assert replay["provider_session_id"] == provider_thread_id
 
         second = {**resume, "resume_attempt_id": str(uuid4())}
         with pytest.raises(CatalogRemoteError) as exc_info:

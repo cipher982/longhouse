@@ -1636,7 +1636,7 @@ async def launch_managed_local_this_device(
             launch_actor=body.launch_actor,
             launch_surface=body.launch_surface,
             session_id=body.session_id,
-            provider_session_id=body.provider_session_id,
+            provider_session_id=body.provider_session_id or body.provider_thread_id,
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.

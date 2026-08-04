@@ -3240,6 +3240,21 @@ class CatalogStore:
                     observed_at=observed_at,
                     can_send_input=0 if requires_readiness_proof else None,
                 )
+                persisted_provider_alias = (
+                    orm.query(LiveSessionThreadAlias)
+                    .filter(
+                        LiveSessionThreadAlias.thread_id == str(thread_id),
+                        LiveSessionThreadAlias.provider == plan.provider,
+                        LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                    )
+                    .one_or_none()
+                )
+                persisted_provider_session_id = (
+                    str(persisted_provider_alias.alias_value).strip() if persisted_provider_alias is not None else None
+                )
+                expected_provider_session_id = str(plan.provider_session_id or "").strip() or None
+                if persisted_provider_session_id != expected_provider_session_id:
+                    raise RuntimeError("persisted provider_session_id does not match the launch plan")
                 upsert_live_launch_readiness(
                     orm,
                     session_id=session_id,
@@ -3277,7 +3292,7 @@ class CatalogStore:
                 "exact_replay": False,
                 "idempotency_conflict": False,
                 "run_id": str(run_id),
-                "provider_session_id": str(plan.provider_session_id or "").strip() or None,
+                "provider_session_id": persisted_provider_session_id,
                 "launch": _json_launch_result(result),
                 "commit_seq": str(commit_seq),
             }
@@ -3334,6 +3349,7 @@ class CatalogStore:
                         "exact_replay": exact,
                         "conflict": None if exact else "resume attempt identity was reused with different attributes",
                         "run_id": run_id,
+                        "provider_session_id": str(resume["provider_thread_id"]),
                         "launch": _json_launch_result(result) if result is not None else None,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
@@ -3467,6 +3483,7 @@ class CatalogStore:
                 "exact_replay": False,
                 "conflict": None,
                 "run_id": run_id,
+                "provider_session_id": str(resume["provider_thread_id"]),
                 "launch": _json_launch_result(result),
                 "commit_seq": str(commit_seq),
             }
