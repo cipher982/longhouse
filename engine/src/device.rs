@@ -1037,10 +1037,12 @@ fn native_desktop_suggested_actions(
     engine_payload: Option<&Value>,
     reasons: &[String],
 ) -> Vec<String> {
-    if reasons
-        .iter()
-        .any(|reason| reason == "storage_v2_sources_blocked")
-    {
+    if reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "storage_v2_sources_blocked" | "storage_v2_sources_unresolved"
+        )
+    }) {
         let outbox = engine_payload
             .and_then(|value| value.get("storage_v2_outbox"))
             .and_then(Value::as_object);
@@ -3496,6 +3498,27 @@ mod tests {
                 "storage_v2_sources_proof_unknown".to_string(),
             ]),
             vec!["inspect_storage_source"]
+        );
+    }
+
+    #[test]
+    fn native_desktop_health_scopes_unresolved_storage_action_by_block_kind() {
+        let unresolved = serde_json::json!({
+            "storage_v2_outbox": {
+                "unresolved_blocked_source_count": 2,
+                "latest_unresolved_block_source_epoch": "f43d0939-160b-4725-82c9-02daaacf5516",
+                "latest_block_kind": "source_epoch_conflict_unresolved"
+            }
+        });
+
+        assert_eq!(
+            native_desktop_suggested_actions(
+                Some(&unresolved),
+                &["storage_v2_sources_unresolved".to_string()]
+            ),
+            vec![
+                "Inspect retained source evidence with longhouse shipping inspect --source-epoch f43d0939-160b-4725-82c9-02daaacf5516 --json before retrying or discarding it."
+            ]
         );
     }
 
