@@ -474,25 +474,35 @@ failed_launch_state="$(launch_attempt_state "$failed_session_id")"
   || fail "failed Cursor startup recorded $failed_launch_state instead of failed"
 echo "ok: provider startup failure aborts the registered launch"
 
-# A provider image that cannot exec must fail before the launcher records local
-# readiness. This guards the exec-status pipe against silently treating EOF as
-# a successful provider handoff.
-nonexec_cursor_bin="$BIN_DIR/nonexec-cursor-agent"
-printf '#!/bin/sh\nexit 0\n' >"$nonexec_cursor_bin"
-chmod 644 "$nonexec_cursor_bin"
+# A provider image that cannot exec after `create-chat` must fail before the
+# launcher records local readiness. This guards the exec-status pipe against
+# silently treating EOF as a successful provider handoff; a non-executable
+# file would fail earlier during binary resolution and would not exercise the
+# final provider exec.
+execfail_cursor_bin="$BIN_DIR/execfail-cursor-agent"
+cat >"$execfail_cursor_bin" <<'PY'
+#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:2] == ["create-chat"]:
+    print("00000000-0000-0000-0000-000000000001")
+    raise SystemExit(0)
+raise SystemExit(127)
+PY
+chmod 755 "$execfail_cursor_bin"
 nonexec_launch_out="$TEST_ROOT/cursor-nonexec.out"
 set +e
 run_launch_bounded "$nonexec_launch_out" 90 \
-  "$BIN_DIR/longhouse" cursor --verbose --cwd "$HOME_DIR" --cursor-bin "$nonexec_cursor_bin"
+  "$BIN_DIR/longhouse" cursor --verbose --cwd "$HOME_DIR" --cursor-bin "$execfail_cursor_bin"
 nonexec_launch_status=$?
 set -e
-[[ "$nonexec_launch_status" != "0" ]] || fail "non-executable Cursor provider returned success"
+[[ "$nonexec_launch_status" != "0" ]] || fail "Cursor final provider exec failure returned success"
 nonexec_retry_count=0
 if [[ -d "$HOME_DIR/.longhouse/agent/managed-local/registration-retries" ]]; then
   nonexec_retry_count="$(find "$HOME_DIR/.longhouse/agent/managed-local/registration-retries" -name '*.json' -type f -print | wc -l | tr -d ' ')"
 fi
 [[ "$nonexec_retry_count" == "0" ]] \
-  || fail "non-executable Cursor provider left a durable registration retry intent"
+  || fail "Cursor final provider exec failure left a durable registration retry intent"
 echo "ok: provider exec failure aborts before local readiness"
 
 # The resume leg of coordination authority, per provider, against the real

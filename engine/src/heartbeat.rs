@@ -2523,7 +2523,7 @@ fn resolved_managed_cursor_session(
             hook_seen_at: None,
             join_keys,
         },
-        reason_codes: Vec::new(),
+        reason_codes: obs.map(|obs| obs.reason_codes.clone()).unwrap_or_default(),
     }
 }
 
@@ -4189,6 +4189,7 @@ mod tests {
             cursor_process_start_time: Some("Tue Jul  8 22:50:20 2026".to_string()),
             started_at: "2026-07-08T22:50:19Z".to_string(),
             updated_at: "2026-07-08T22:50:19Z".to_string(),
+            reason_codes: Vec::new(),
             launcher_alive: true,
             live: true,
         }

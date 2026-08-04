@@ -952,17 +952,22 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             match provider_owner_alive(&intent) {
                 Some(true) => {}
                 Some(false) => {
-                    exhaust_retry_intent(
-                        &mut intent,
-                        "managed provider owner is no longer live; inspect the managed session",
+                    // The wrapper may have been killed after local readiness
+                    // but before it could persist `provider_exited`. Register
+                    // once and report an explicit post-hoc abort so the host
+                    // does not turn this ordinary owner loss into a red,
+                    // exhausted recovery incident.
+                    intent.provider_exited = true;
+                    intent.last_error = Some(
+                        "managed provider owner is no longer live; recording post-hoc launch abort"
+                            .into(),
                     );
                     let _ = persist_retry_intent_at(&path, &intent);
                     tracing::warn!(
                         path = %path.display(),
                         action_id = "inspect_managed_session",
-                        "Skipped managed launch registration after provider owner exited"
+                        "Managed provider owner exited before launch recovery completed; recording post-hoc abort"
                     );
-                    continue;
                 }
                 None => {
                     // The owner identity is unverifiable, not evidence that

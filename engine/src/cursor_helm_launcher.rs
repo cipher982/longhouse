@@ -110,6 +110,23 @@ struct ResumeClaim {
     permission_mode: String,
 }
 
+const COORDINATION_AUTHORITY_DEGRADED_REASON: &str = "managed_session_control_degraded";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoordinationTokenStatus {
+    token: Option<String>,
+    reason_code: Option<String>,
+}
+
+impl CoordinationTokenStatus {
+    fn unavailable() -> Self {
+        Self {
+            token: None,
+            reason_code: Some(COORDINATION_AUTHORITY_DEGRADED_REASON.to_string()),
+        }
+    }
+}
+
 fn normalize_permission_mode(value: &str) -> anyhow::Result<String> {
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
         "auto_approve" => Ok("auto_approve".into()),
@@ -426,16 +443,22 @@ struct CursorMcpConfigState {
     sessions: BTreeMap<String, CursorMcpConfigOwner>,
 }
 
-fn coordination_token(
+fn coordination_token_status(
     config: &LaunchConfig,
     registration: Option<&ManagedLaunchResponse>,
     session_id: &str,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<CoordinationTokenStatus> {
     if let Some(token) = registration.and_then(ManagedLaunchResponse::coordination_token) {
-        return Ok(Some(token.to_owned()));
+        return Ok(CoordinationTokenStatus {
+            token: Some(token.to_owned()),
+            reason_code: None,
+        });
     }
     if config.resume_session.is_none() {
-        return Ok(None);
+        return Ok(CoordinationTokenStatus {
+            token: None,
+            reason_code: None,
+        });
     }
     let machine = match home(config.config_dir.as_deref()) {
         Ok(root) => root.join("machine"),
@@ -443,7 +466,7 @@ fn coordination_token(
             eprintln!(
                 "Longhouse warning: Cursor resume started without coordination authority; could not locate machine state: {error:#}"
             );
-            return Ok(None);
+            return Ok(CoordinationTokenStatus::unavailable());
         }
     };
     let state: Option<Value> = match fs::read(machine.join("state.json"))
@@ -467,7 +490,7 @@ fn coordination_token(
         eprintln!(
             "Longhouse warning: Cursor resume started without coordination authority; no Longhouse URL is configured"
         );
-        return Ok(None);
+        return Ok(CoordinationTokenStatus::unavailable());
     };
     let Some(device_token) = config.token.as_deref().map(str::to_owned).or_else(|| {
         fs::read_to_string(machine.join("device-token"))
@@ -478,7 +501,7 @@ fn coordination_token(
         eprintln!(
             "Longhouse warning: Cursor resume started without coordination authority; no device token is configured"
         );
-        return Ok(None);
+        return Ok(CoordinationTokenStatus::unavailable());
     };
     let endpoint = format!(
         "{}/api/agents/sessions/{session_id}/coordination-token",
@@ -507,14 +530,25 @@ fn coordination_token(
             .context("Longhouse returned empty coordination authority")
     });
     match result {
-        Ok(token) => Ok(token),
+        Ok(token) => Ok(CoordinationTokenStatus {
+            token,
+            reason_code: None,
+        }),
         Err(error) => {
             eprintln!(
                 "Longhouse warning: Cursor resume started without coordination authority; remote coordination is unavailable: {error:#}"
             );
-            Ok(None)
+            Ok(CoordinationTokenStatus::unavailable())
         }
     }
+}
+
+fn coordination_token(
+    config: &LaunchConfig,
+    registration: Option<&ManagedLaunchResponse>,
+    session_id: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(coordination_token_status(config, registration, session_id)?.token)
 }
 
 fn write_cursor_mcp_config(
@@ -850,6 +884,7 @@ fn serve(
     conversation: &str,
     launch_id: &str,
     coordination_token: Option<&str>,
+    coordination_reason_code: Option<&str>,
 ) {
     // Accepted sockets inherit nonblocking mode on macOS. Read one bounded
     // newline-framed message with a deadline; partial reads are never commands.
@@ -894,7 +929,7 @@ fn serve(
             Some(token) => response(&mut stream, json!({"ok":true,"coordination_token":token})),
             None => response(
                 &mut stream,
-                json!({"ok":false,"error":{"code":"session_not_attached","message":"coordination authority is unavailable"}}),
+                json!({"ok":false,"error":{"code":"session_not_attached","reason_code":coordination_reason_code.unwrap_or("managed_session_control_degraded"),"message":"coordination authority is unavailable"}}),
             ),
         },
         Some("send")
@@ -1150,7 +1185,8 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     {
         anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
     }
-    let coordination_token = coordination_token(&config, Some(&registered), &session_id)?;
+    let coordination_status = coordination_token_status(&config, Some(&registered), &session_id)?;
+    let coordination_token = coordination_status.token.clone();
     let _mcp_config = write_cursor_mcp_config(&dir, &cwd, &session_id)?;
     write_pending_claim(
         &dir,
@@ -1327,7 +1363,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         let now = Utc::now().to_rfc3339();
         write_json(
             &dir.join(format!("{session_id}.json")),
-            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if degraded_registration.is_some() { "degraded" } else { "registered" },"started_at":now,"updated_at":now}),
+            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if degraded_registration.is_some() { "degraded" } else { "registered" },"reason_codes":coordination_status.reason_code.iter().cloned().collect::<Vec<_>>(),"started_at":now,"updated_at":now}),
         )?;
         let terminal = Terminal(0, raw(0)?);
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
@@ -1370,6 +1406,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let server_conversation = conversation.clone();
     let server_launch = launch_id.clone();
     let server_coordination_token = coordination_token.clone();
+    let server_coordination_reason_code = coordination_status.reason_code.clone();
     let server = thread::spawn(move || {
         while !socket_stop.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -1385,6 +1422,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                     &server_conversation,
                     &server_launch,
                     server_coordination_token.as_deref(),
+                    server_coordination_reason_code.as_deref(),
                 ),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(std::time::Duration::from_millis(25))
@@ -1547,6 +1585,7 @@ mod tests {
             "session-id",
             "conversation-id",
             "launch-id",
+            None,
             None,
         );
         let mut response = String::new();
@@ -1739,6 +1778,13 @@ mod tests {
             coordination_token(&config, None, "11111111-1111-4111-8111-111111111111").unwrap(),
             None
         );
+        let status =
+            coordination_token_status(&config, None, "11111111-1111-4111-8111-111111111111")
+                .unwrap();
+        assert_eq!(
+            status.reason_code.as_deref(),
+            Some(COORDINATION_AUTHORITY_DEGRADED_REASON)
+        );
     }
 
     #[test]
@@ -1762,6 +1808,7 @@ mod tests {
                 "conversation",
                 "launch",
                 None,
+                Some(COORDINATION_AUTHORITY_DEGRADED_REASON),
             );
         });
 
@@ -1773,6 +1820,7 @@ mod tests {
         worker.join().unwrap();
 
         assert!(response_body.contains("session_not_attached"));
+        assert!(response_body.contains(COORDINATION_AUTHORITY_DEGRADED_REASON));
         assert!(response_body.contains("coordination authority is unavailable"));
     }
 
@@ -1856,6 +1904,7 @@ mod tests {
             "session-id",
             "conversation-id",
             "launch-id",
+            None,
             None,
         );
         let mut malformed = String::new();

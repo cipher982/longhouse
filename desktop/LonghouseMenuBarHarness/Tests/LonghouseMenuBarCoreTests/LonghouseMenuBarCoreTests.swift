@@ -1054,6 +1054,30 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func freeDiskSpaceDryRunReturnsVisibleFeedback() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Disk space is critically low",
+            reasons: ["disk_critically_low"],
+            suggestedActions: ["free_disk_space"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.freeDiskSpace, snapshot: snapshot)
+
+        #expect(feedback?.style == .info)
+        #expect(feedback?.title == "Free disk space dry run recorded")
+    }
+
+    @Test
     func stopCommandDescriptionRoutesByProvider() throws {
         let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
 

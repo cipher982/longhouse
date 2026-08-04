@@ -5,6 +5,7 @@ public enum HarnessAction: String, Codable {
     case refresh
     case runDoctor
     case inspectStorageSource
+    case freeDiskSpace
     case repairInstall
     case stopManagedBridge
     case openLogs
@@ -174,6 +175,29 @@ public struct SpyHealthActionSink: HealthActionSink {
                 style: .failure,
                 title: "Source evidence could not open",
                 detail: "Longhouse could not open Terminal to inspect retained durable source evidence."
+            )
+        case .freeDiskSpace:
+            guard let settingsURL = URL(string: "x-apple.systempreferences:com.apple.settings.Storage") else {
+                return feedback(
+                    for: action,
+                    style: .failure,
+                    title: "Storage settings could not open",
+                    detail: "The macOS storage settings URL is unavailable."
+                )
+            }
+            if NSWorkspace.shared.open(settingsURL) {
+                return feedback(
+                    for: action,
+                    style: .success,
+                    title: "Opened Storage settings",
+                    detail: "Free local disk space before continuing to rely on durable shipping."
+                )
+            }
+            return feedback(
+                for: action,
+                style: .failure,
+                title: "Storage settings could not open",
+                detail: "Open System Settings > General > Storage and free local disk space."
             )
         case .repairInstall:
             return startRepair(snapshot: snapshot)
@@ -789,6 +813,13 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: snapshot.storageInspectionSourceEpoch.map {
                     "The harness logged `longhouse shipping inspect --source-epoch \($0) --json` without opening Terminal."
                 } ?? "The harness logged `longhouse shipping inspect --json` without opening Terminal."
+            )
+        case .freeDiskSpace:
+            return feedback(
+                for: action,
+                style: .info,
+                title: "Free disk space dry run recorded",
+                detail: "The harness logged the macOS Storage settings action without opening System Settings."
             )
         case .repairInstall:
             if snapshot.isInstallLocationBlocked {

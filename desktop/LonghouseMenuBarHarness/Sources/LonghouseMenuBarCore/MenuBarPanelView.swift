@@ -864,6 +864,13 @@ public struct MenuBarPanelView: View {
                         Label("Inspect local health", systemImage: "stethoscope")
                             .frame(maxWidth: .infinity)
                     }
+                } else if snapshot.suggestedActionIds?.contains("free_disk_space") == true {
+                    Button {
+                        perform(.freeDiskSpace)
+                    } label: {
+                        Label("Free disk space", systemImage: "internaldrive")
+                            .frame(maxWidth: .infinity)
+                    }
                 } else if snapshot.suggestedActionIds?.contains("repair_machine") == true {
                     Button {
                         perform(.repairInstall)

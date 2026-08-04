@@ -3240,34 +3240,20 @@ fn run_foreground_command_after_spawn(
         .unwrap_or(false);
     if !handed_off {
         eprintln!(
-            "Longhouse warning: could not hand the terminal to the managed provider; continuing in degraded terminal-ownership mode"
+            "Longhouse warning: could not hand the terminal to the managed provider; stopping the provider to avoid a background terminal hang"
         );
-        // The pre-spawn terminal probe controls whether the trampoline created
-        // a child process group. If foreground handoff unexpectedly races and
-        // still fails, keep cleanup PID-scoped; a process-group leader cannot
-        // be safely reparented into the wrapper's group.
-        let degraded_process_group = None;
         unsafe {
-            libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
             libc::close(release_fds[1]);
+            libc::close(child_exec_status_read);
             libc::signal(libc::SIGTTOU, old_sigttou);
         }
-        let exec_result = wait_for_provider_exec(child_exec_status_read);
-        unsafe {
-            libc::close(child_exec_status_read);
-        }
-        if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
-            terminate_and_reap_child(&mut child, degraded_process_group);
-            if let Some(termios) = saved_termios {
-                unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) };
-            }
-            return Err(error);
-        }
-        let status = wait_for_child_or_signal(&mut child, &signal, degraded_process_group);
         if let Some(termios) = saved_termios {
             unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) };
         }
-        return status;
+        terminate_and_reap_child(&mut child, child_process_group);
+        anyhow::bail!(
+            "could not hand the terminal to the managed provider; provider was stopped safely"
+        );
     }
     unsafe {
         libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
