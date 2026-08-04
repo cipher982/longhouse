@@ -484,7 +484,19 @@ impl ManagedObservationSnapshot {
                 .filter(|row| row.server_alive || row.has_tui_attachment)
                 .cloned()
                 .collect(),
-            cursor: self.cursor.iter().filter(|row| row.live).cloned().collect(),
+            // Keep a dead Cursor row when it still names a run.  Cursor Helm's
+            // launcher is the process owner, so an abrupt owner loss makes the
+            // entire observation non-live.  Dropping that row here would also
+            // drop the only exact pid/start-time evidence that can close the
+            // run on the next full process snapshot.  Lease projection still
+            // filters `live`, so retaining this row is evidence-only and does
+            // not make a stale control lease visible.
+            cursor: self
+                .cursor
+                .iter()
+                .filter(|row| row.live || row.run_id.is_some())
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -5016,6 +5028,43 @@ mod tests {
         let current = with_history.current_only();
         assert_eq!(current.codex.len(), 1);
         assert_eq!(current.codex[0].session_id, first.codex[0].session_id);
+    }
+
+    #[test]
+    fn current_only_retains_dead_cursor_run_for_terminal_evidence() {
+        let dead = managed_cursor_helm_scan::CursorHelmObservation {
+            session_id: "dead-cursor".to_string(),
+            provider_session_id: Some("cursor-thread".to_string()),
+            run_id: Some("run-dead-cursor".to_string()),
+            connection_id: None,
+            lease_generation: None,
+            state_file: PathBuf::from("/tmp/dead-cursor.json"),
+            socket_path: Some(PathBuf::from("/tmp/dead-cursor.sock")),
+            cwd: Some("/tmp/project".to_string()),
+            launcher_pid: Some(1234),
+            launcher_process_start_time: Some("Tue Jul  8 22:50:19 2026".to_string()),
+            cursor_pid: Some(1235),
+            cursor_process_start_time: Some("Tue Jul  8 22:50:20 2026".to_string()),
+            started_at: "2026-07-08T22:50:19Z".to_string(),
+            updated_at: "2026-07-08T22:50:19Z".to_string(),
+            launcher_alive: false,
+            live: false,
+        };
+        let snapshot = ManagedObservationSnapshot {
+            cursor: vec![dead.clone()],
+            ..ManagedObservationSnapshot::default()
+        };
+
+        let retained = snapshot.current_only();
+        assert_eq!(retained.cursor, vec![dead]);
+
+        let mut no_run = snapshot.cursor[0].clone();
+        no_run.run_id = None;
+        let without_run = ManagedObservationSnapshot {
+            cursor: vec![no_run],
+            ..ManagedObservationSnapshot::default()
+        };
+        assert!(without_run.current_only().cursor.is_empty());
     }
 
     #[test]
