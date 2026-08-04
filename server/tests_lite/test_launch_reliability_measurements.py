@@ -171,3 +171,16 @@ def test_report_has_self_provenance():
     assert provenance["sha256"]
     assert provenance["path"].endswith("scripts/qa/launch-reliability-measurements.py")
     assert isinstance(provenance["argv"], list)
+
+
+def test_full_run_requires_exact_two_launches_per_provider(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["providers"] = payload["providers"][:-1]
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["full_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == []

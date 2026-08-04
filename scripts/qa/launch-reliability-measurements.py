@@ -58,12 +58,12 @@ def report_provenance() -> dict[str, Any]:
     repository = path.parents[2]
     relative_path = path.relative_to(repository)
     status_lines = _git(repository, "status", "--porcelain", "--untracked-files=all").splitlines()
-    file_marker = f" {relative_path}"
+    file_status = _git(repository, "status", "--porcelain", "--untracked-files=all", "--", str(relative_path))
     return {
         "argv": list(sys.argv),
         "cwd": str(Path.cwd()),
         "git_sha": _git(repository, "rev-parse", "HEAD"),
-        "harness_file_dirty": any(line.endswith(file_marker) or line.endswith(f"{relative_path}") for line in status_lines),
+        "harness_file_dirty": bool(file_status),
         "path": str(path),
         "repository": str(repository),
         "repository_dirty": bool(status_lines),
@@ -100,10 +100,12 @@ def discover_matrix_artifacts(inputs: Iterable[Path]) -> list[Path]:
 
 
 def _is_full_run(artifact: dict[str, Any]) -> bool:
-    providers = {str(entry.get("provider") or "") for entry in artifact.get("providers") or [] if isinstance(entry, dict)}
+    provider_counts = Counter(
+        str(entry.get("provider") or "") for entry in artifact.get("providers") or [] if isinstance(entry, dict)
+    )
     return (
-        len(artifact.get("providers") or []) >= 8
-        and EXPECTED_PROVIDERS.issubset(providers)
+        len(artifact.get("providers") or []) == 8
+        and provider_counts == {provider: 2 for provider in EXPECTED_PROVIDERS}
         and artifact.get("artifact_kind") == "installed_managed_launch_fault_matrix"
     )
 
@@ -152,6 +154,24 @@ def _measured_run(artifact: dict[str, Any]) -> bool:
     )
 
 
+def _excluded_run_reason(artifact: dict[str, Any]) -> str | None:
+    if not _is_full_run(artifact):
+        return "not_exact_four_provider_eight_launch_run"
+    measurements = artifact.get("measurements") or {}
+    harness = artifact.get("harness") or {}
+    if measurements.get("recovery_duration_seconds") is None or measurements.get("run_duration_seconds") is None:
+        return "missing_timing_measurements"
+    if harness.get("repository_dirty") is None or harness.get("harness_file_dirty") is None:
+        return "missing_clean_harness_provenance"
+    if harness.get("repository_dirty") is not False or harness.get("harness_file_dirty") is not False:
+        return "dirty_harness_or_repository"
+    return None
+
+
+def _input_reference(path: Path) -> dict[str, str]:
+    return {"path": str(path), "sha256": _sha256(path)}
+
+
 def _successful_recovery(artifact: dict[str, Any]) -> bool:
     before = artifact.get("retry_intents_before_recovery")
     after = artifact.get("retry_intents_after_recovery")
@@ -182,6 +202,11 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
 
     full = [(path, artifact) for path, artifact in matrix_artifacts if _is_full_run(artifact)]
     measured = [(path, artifact) for path, artifact in full if _measured_run(artifact)]
+    excluded = [
+        {"path": str(path), "reason": reason}
+        for path, artifact in full
+        if (reason := _excluded_run_reason(artifact)) is not None
+    ]
     successful = [(path, artifact) for path, artifact in measured if _successful_recovery(artifact)]
     recovery_seconds = [float(artifact["measurements"]["recovery_duration_seconds"]) for _, artifact in successful]
     run_seconds = [float(artifact["measurements"]["run_duration_seconds"]) for _, artifact in successful]
@@ -268,8 +293,8 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "provenance": report_provenance(),
         "inputs": {
-            "matrix_artifacts": [str(path) for path, _ in matrix_artifacts],
-            "provider_harness_artifacts": harness_inputs,
+            "matrix_artifacts": [_input_reference(path) for path, _ in matrix_artifacts],
+            "provider_harness_artifacts": [_input_reference(Path(path)) for path in harness_inputs],
             "invalid_artifacts": invalid,
         },
         "matrix": {
@@ -304,6 +329,7 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
                 "max": max(run_seconds) if run_seconds else None,
             },
             "history": history,
+            "excluded_full_runs": excluded,
         },
         "provider_scenarios": {
             "result_status_counts": dict(sorted(harness_results.items())),
