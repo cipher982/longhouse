@@ -36,15 +36,18 @@ def _matrix(
     auth = {provider: {"status": "ready"} for provider in ("claude", "codex", "opencode", "cursor")}
     if auth_gap:
         auth["cursor"] = {"status": "missing"}
+    startup_failures = []
+    if auth_gap:
+        startup_failures.append({"provider": "cursor", "qualification": "harness_precondition_unmet"})
+    if provider_failure:
+        startup_failures.append({"provider": "claude", "qualification": "provider_owned_start_failure"})
     payload = {
         "artifact_kind": "installed_managed_launch_fault_matrix",
         "generated_at": "2026-08-04T16:00:00Z",
         "verdict": verdict,
         "providers": providers,
         "provider_auth": auth,
-        "provider_startup_failures": (
-            [{"provider": "claude", "qualification": "provider_owned_start_failure"}] if provider_failure else []
-        ),
+        "provider_startup_failures": startup_failures,
         "retry_intents_before_recovery": 8,
         "retry_intents_after_recovery": retry_after,
         "measurements": {"recovery_duration_seconds": 5.0, "run_duration_seconds": 100.0},
@@ -71,7 +74,8 @@ def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Pa
     assert matrix["cleanup_pass_rate"] == 1.0
     assert len(matrix["auth_precondition_runs"]) == 1
     assert len(matrix["provider_owned_failure_runs"]) == 1
-    assert matrix["history"][0]["startup_failures"]["harness_precondition"] == 0
+    assert matrix["startup_failure_totals"] == {"harness_precondition": 1, "provider_owned": 1, "unknown": 0}
+    assert matrix["history"][0]["startup_failures"]["harness_precondition"] == 1
     assert matrix["history"][1]["startup_failures"]["provider_owned"] == 1
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
 
@@ -129,3 +133,17 @@ def test_missing_matrix_input_fails_closed(tmp_path: Path):
         assert "does not exist" in str(exc)
     else:
         raise AssertionError("missing matrix input must fail closed")
+
+
+def test_malformed_provider_harness_marks_report_invalid(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    harness = tmp_path / "harness.json"
+    harness.write_text(json.dumps({"artifact_kind": "universal_agent_harness_run"}))
+
+    report = MODULE.build_report([matrix], [harness])
+
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {"path": str(harness), "error": "provider harness artifact has no results list"}
+    ]

@@ -136,8 +136,8 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
     full = [(path, artifact) for path, artifact in matrix_artifacts if _is_full_run(artifact)]
     measured = [(path, artifact) for path, artifact in full if _measured_run(artifact)]
     successful = [(path, artifact) for path, artifact in measured if _successful_recovery(artifact)]
-    recovery_seconds = [float(artifact["measurements"]["recovery_duration_seconds"]) for _, artifact in measured]
-    run_seconds = [float(artifact["measurements"]["run_duration_seconds"]) for _, artifact in measured]
+    recovery_seconds = [float(artifact["measurements"]["recovery_duration_seconds"]) for _, artifact in successful]
+    run_seconds = [float(artifact["measurements"]["run_duration_seconds"]) for _, artifact in successful]
     verdicts = Counter(str(artifact.get("verdict") or "unknown") for _, artifact in matrix_artifacts)
     auth_gap_runs = [
         {"path": str(path), "providers": _auth_gaps(artifact)}
@@ -149,6 +149,9 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         for path, artifact in measured
         if _startup_failure_counts(artifact)["provider_owned"]
     ]
+    startup_failure_totals = Counter()
+    for _, artifact in measured:
+        startup_failure_totals.update(_startup_failure_counts(artifact))
 
     history = []
     for path, artifact in measured:
@@ -185,6 +188,9 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
             continue
+        if not isinstance(artifact.get("results"), list):
+            invalid.append({"path": str(path), "error": "provider harness artifact has no results list"})
+            continue
         harness_inputs.append(str(path))
         for result in artifact.get("results") or []:
             if not isinstance(result, dict):
@@ -211,6 +217,7 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
     report = {
         "schema_version": 1,
         "artifact_kind": "launch_reliability_measurements",
+        "report_status": "invalid" if invalid else "ok",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "inputs": {
             "matrix_artifacts": [str(path) for path, _ in matrix_artifacts],
@@ -232,6 +239,7 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
             ),
             "auth_precondition_runs": auth_gap_runs,
             "provider_owned_failure_runs": provider_failures,
+            "startup_failure_totals": dict(sorted(startup_failure_totals.items())),
             "recovery_duration_seconds": {
                 "count": len(recovery_seconds),
                 "min": min(recovery_seconds) if recovery_seconds else None,
