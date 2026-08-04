@@ -643,11 +643,11 @@ fn apply_archive_repair_control(
     payload.archive_backlog.pause_reason = None;
     payload.archive_backlog.pause_updated_at = None;
     if mode == ArchiveRepairMode::Paused {
-        payload.archive_backlog.state = "paused".to_string();
         payload.archive_backlog.pause_actor = control.actor.clone();
         payload.archive_backlog.pause_reason = control.reason.clone();
         payload.archive_backlog.pause_updated_at = control.updated_at.clone();
-        if payload.archive_backlog.pending_ranges > 0 {
+        if payload.archive_backlog.dead_ranges == 0 && payload.archive_backlog.pending_ranges > 0 {
+            payload.archive_backlog.state = "paused".to_string();
             return;
         }
     }
@@ -6954,6 +6954,26 @@ mod tests {
         assert_eq!(
             payload.archive_backlog.pause_updated_at.as_deref(),
             Some("2026-07-13T12:00:00Z")
+        );
+    }
+
+    #[test]
+    fn test_archive_pause_does_not_mask_dead_letter_state() {
+        let mut payload = empty_heartbeat_payload();
+        payload.archive_backlog.pending_ranges = 2;
+        payload.archive_backlog.dead_ranges = 1;
+        let control = ArchiveRepairControl {
+            mode: Some("paused".to_string()),
+            actor: Some("menu_bar".to_string()),
+            ..Default::default()
+        };
+
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Trickle);
+
+        assert_eq!(payload.archive_backlog.state, "dead_lettered");
+        assert_eq!(
+            payload.archive_backlog.pause_actor.as_deref(),
+            Some("menu_bar")
         );
     }
 

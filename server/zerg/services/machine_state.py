@@ -203,13 +203,16 @@ def machine_state_source_hash(state: MachineState | None) -> str | None:
         "machine_name": state.machine_name,
         "desktop_app_enabled": state.desktop_app_enabled,
         "desired_bundle_version": state.desired_bundle_version,
-        "archive_repair_mode": _default_archive_repair_mode_for_url(state.runtime_url),
     }
+    # Only hosted installs need the migration signal. Self-hosted installs
+    # already use the historical drain default and should not hash-rotate.
+    if default_archive_repair_mode_for_url(state.runtime_url) == "trickle":
+        payload["archive_repair_mode"] = "trickle"
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _default_archive_repair_mode_for_url(url: str | None) -> str:
+def default_archive_repair_mode_for_url(url: str | None) -> str:
     """Keep the installed service posture in the launch-state hash."""
     try:
         hostname = urlparse(url or "").hostname or ""

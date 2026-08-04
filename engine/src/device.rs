@@ -781,13 +781,25 @@ fn native_fast_health_from_parts(
     };
     let storage_block_proof_unknown =
         unresolved_blocked_source_count.is_none() && blocked_source_count > 0;
-    let archive_repair_paused = object
+    let archive_backlog = object
         .and_then(|value| value.get("archive_backlog"))
-        .and_then(Value::as_object)
-        .is_some_and(|value| {
-            value.get("mode").and_then(Value::as_str) == Some("paused")
-                || value.get("state").and_then(Value::as_str) == Some("paused")
-        });
+        .and_then(Value::as_object);
+    let archive_repair_paused = archive_backlog.is_some_and(|value| {
+        value.get("mode").and_then(Value::as_str) == Some("paused")
+            || value.get("state").and_then(Value::as_str) == Some("paused")
+    });
+    let archive_dead_lettered = archive_backlog.is_some_and(|value| {
+        value
+            .get("dead_ranges")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+            || value
+                .get("dead_bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+    });
     let transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
@@ -833,6 +845,9 @@ fn native_fast_health_from_parts(
     }
     if dead_count > 0 {
         reasons.push("spool_dead_letters".to_string());
+    }
+    if archive_dead_lettered {
+        reasons.push("archive_dead_lettered".to_string());
     }
     if archive_repair_paused {
         reasons.push("archive_repair_paused".to_string());
@@ -2000,10 +2015,11 @@ fn machine_state_hash(
             .map(|value| Value::from(value.to_string()))
             .unwrap_or(Value::Null),
     );
-    payload.insert(
-        "archive_repair_mode",
-        Value::from(default_archive_repair_mode_for_url(runtime_url)),
-    );
+    // Only hosted installs need the migration signal. Self-hosted installs
+    // already use the historical drain default and should not hash-rotate.
+    if default_archive_repair_mode_for_url(runtime_url) == "trickle" {
+        payload.insert("archive_repair_mode", Value::from("trickle"));
+    }
     let encoded = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     format!("{:x}", Sha256::digest(encoded.as_bytes()))
 }
@@ -3780,6 +3796,35 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"archive_repair_paused".to_string()));
+        assert_eq!(
+            native_desktop_suggested_action_ids(&health.reasons),
+            vec!["inspect_archive"]
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_archive_dead_letters() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "archive_backlog": {
+                    "state": "dead_lettered",
+                    "mode": "trickle",
+                    "dead_ranges": 2,
+                    "dead_bytes": 4096
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"archive_dead_lettered".to_string()));
         assert_eq!(
             native_desktop_suggested_action_ids(&health.reasons),
             vec!["inspect_archive"]
@@ -5589,7 +5634,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
         assert_eq!(
             hash,
-            "a6ce8e28a8d367b76f96f347168128fdc2cd40194072824220bcdac531235145"
+            "323c324778672b567522d29687b14f1e273951dbba28ff1dc10f3bd8c5d2c09f"
         );
     }
 }
