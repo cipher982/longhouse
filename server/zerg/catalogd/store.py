@@ -147,6 +147,7 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
     {
         "archive_backlog",
         "history_import",
+        "managed_launch_recovery",
         "last_ship_error_kind",
         "last_ship_error_message",
         "ship_attempts_10m",

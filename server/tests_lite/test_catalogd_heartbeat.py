@@ -286,6 +286,7 @@ async def test_machine_health_read_is_owner_scoped_latest_and_privacy_bounded(da
                         {
                             "archive_backlog": {"padding": "x" * (200 * 1024)},
                             "history_import": {"state": "unavailable"},
+                            "managed_launch_recovery": {"active_count": 1, "exhausted_count": 2},
                             "ship_attempts_10m": 4,
                             "private_source_path": "/private/source.jsonl",
                         }
@@ -322,6 +323,7 @@ async def test_machine_health_read_is_owner_scoped_latest_and_privacy_bounded(da
         assert len(heartbeat["raw_json"].encode("utf-8")) <= 32 * 1024
         assert projected_raw == {
             "history_import": {"state": "unavailable"},
+            "managed_launch_recovery": {"active_count": 1, "exhausted_count": 2},
             "ship_attempts_10m": 4,
         }
     finally:
