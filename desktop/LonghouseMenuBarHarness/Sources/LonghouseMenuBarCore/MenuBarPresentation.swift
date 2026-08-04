@@ -222,6 +222,11 @@ extension HealthSnapshot {
         if !hasEngineEvidence {
             durableValue = "Unknown"
             durablePromotion = .unavailable
+        } else if reasons.contains("storage_v2_outbox_unreadable")
+                    || engineStatus?.payload?.storageV2Outbox?.malformedCounter == true
+                    || storageBlockProofUnknown {
+            durableValue = "Unknown"
+            durablePromotion = reasons.contains("storage_v2_outbox_unreadable") ? .repair : .inspect
         } else if storageBlockedCount > 0 {
             durableValue = "\(storageBlockedCount) source conflict\(storageBlockedCount == 1 ? "" : "s")"
             durablePromotion = storageBlockRequiresRepair ? .repair : .inspect

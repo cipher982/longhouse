@@ -302,6 +302,32 @@ def test_unreadable_storage_outbox_is_broken_and_actionable():
     assert (state, severity) == ("broken", "red")
 
 
+def test_null_storage_outbox_is_broken_and_actionable():
+    state, severity, headline, reasons, actions = _classify_health(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "payload": {"storage_v2_outbox": None},
+        },
+        transport_sample=None,
+        transport_assessment=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    assert (state, severity) == ("broken", "red")
+    assert headline == "Source upload state unavailable"
+    assert reasons == ["storage_v2_outbox_unreadable"]
+    assert actions == [
+        "Run: longhouse local-health --fast --json",
+        "Inspect the storage-v2 outbox error in engine-status.json.",
+    ]
+
+
 def test_storage_reasons_use_a_stable_source_inspection_action_id():
     assert _suggested_action_ids(["storage_v2_sources_blocked", "storage_v2_sources_proof_unknown"]) == ["inspect_storage_source"]
 

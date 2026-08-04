@@ -438,6 +438,7 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
     managed-launch recovery is already known to be broken on the owner host.
     """
     raw = _heartbeat_payload(row)
+    storage_present = "storage_v2_outbox" in raw
     storage_value = raw.get("storage_v2_outbox")
     storage = storage_value if isinstance(storage_value, dict) else None
     recovery = raw.get("managed_launch_recovery")
@@ -446,7 +447,7 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
     broken_reasons: list[str] = []
     degraded_reasons: list[str] = []
 
-    if storage is None and storage_value is not None:
+    if storage is None and storage_present:
         reasons.append("storage_v2_outbox_unreadable")
         broken_reasons.append("storage_v2_outbox_unreadable")
     elif storage is not None:
@@ -476,7 +477,7 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
         if unresolved is not None and unresolved > 0:
             reasons.append("storage_v2_sources_unresolved")
             broken_reasons.append("storage_v2_sources_unresolved")
-        elif proof_unknown:
+        if proof_unknown:
             reasons.append("storage_v2_sources_proof_unknown")
             degraded_reasons.append("storage_v2_sources_proof_unknown")
         if str(storage.get("error") or "").strip():

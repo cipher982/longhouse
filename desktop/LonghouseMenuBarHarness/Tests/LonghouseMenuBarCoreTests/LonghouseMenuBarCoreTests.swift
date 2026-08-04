@@ -2847,6 +2847,19 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func unreadableStorageOutboxDoesNotRenderDurableFactAsClear() {
+        let snapshot = presentationSnapshot(
+            reasons: ["storage_v2_outbox_unreadable"],
+            sessions: []
+        )
+        let facts = snapshot.menuBarPresentation(relativeTo: Date()).facts
+        let durable = facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(durable?.value == "Unknown")
+        #expect(durable?.promotion == .repair)
+    }
+
+    @Test
     func absentSessionEvidenceIsNotAnObservedAbsence() {
         let blind = makeHealthySnapshot(sessions: nil)
         let observed = makeHealthySnapshot(sessions: [])

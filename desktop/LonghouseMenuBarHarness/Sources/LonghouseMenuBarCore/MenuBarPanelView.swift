@@ -864,6 +864,13 @@ public struct MenuBarPanelView: View {
                         Label("Inspect local health", systemImage: "stethoscope")
                             .frame(maxWidth: .infinity)
                     }
+                } else if snapshot.suggestedActionIds?.contains("inspect_storage_outbox") == true {
+                    Button {
+                        perform(.runDoctor)
+                    } label: {
+                        Label("Inspect storage outbox", systemImage: "externaldrive.badge.questionmark")
+                            .frame(maxWidth: .infinity)
+                    }
                 } else if snapshot.suggestedActionIds?.contains("free_disk_space") == true {
                     Button {
                         perform(.freeDiskSpace)

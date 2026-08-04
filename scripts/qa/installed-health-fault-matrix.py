@@ -37,6 +37,7 @@ CASES = (
     "negative_source_count",
     "null_source_count",
     "malformed_storage_payload",
+    "null_storage_payload",
     "unreadable_storage_outbox",
     "payload_rejected",
     "managed_launch_recovery_active",
@@ -373,6 +374,16 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                 "reason": "storage_v2_outbox_unreadable",
                 "action": "inspect_storage_outbox",
             }
+        elif case == "null_storage_payload":
+            write_status(
+                root,
+                current_status(storage_v2_outbox=None),
+            )
+            expected = {
+                "state": "broken",
+                "reason": "storage_v2_outbox_unreadable",
+                "action": "inspect_storage_outbox",
+            }
         elif case == "unreadable_storage_outbox":
             write_status(
                 root,
@@ -490,6 +501,16 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
             if observed["payload"].get("suggested_actions") != expected_actions:
                 raise AssertionError(
                     "expected malformed storage payload guidance, got "
+                    f"{observed['payload'].get('suggested_actions')!r}"
+                )
+        elif case == "null_storage_payload":
+            expected_actions = [
+                "Run: longhouse local-health --fast --json",
+                "Inspect the storage-v2 outbox error in engine-status.json.",
+            ]
+            if observed["payload"].get("suggested_actions") != expected_actions:
+                raise AssertionError(
+                    "expected null storage payload guidance, got "
                     f"{observed['payload'].get('suggested_actions')!r}"
                 )
         elif case in {"negative_source_count", "null_source_count"}:

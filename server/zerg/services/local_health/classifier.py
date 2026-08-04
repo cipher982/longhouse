@@ -715,8 +715,9 @@ def _health_classification_context(
     archive_pending_bytes = int(archive_repair.get("pending_bytes") or 0)
     archive_dead_ranges = int(archive_repair.get("dead_ranges") or 0)
     archive_dead_bytes = int(archive_repair.get("dead_bytes") or 0)
+    storage_outbox_present = "storage_v2_outbox" in payload
     storage_v2_outbox_value = payload.get("storage_v2_outbox")
-    storage_outbox_payload_invalid = storage_v2_outbox_value is not None and not isinstance(storage_v2_outbox_value, dict)
+    storage_outbox_payload_invalid = storage_outbox_present and not isinstance(storage_v2_outbox_value, dict)
     storage_v2_outbox = storage_v2_outbox_value if isinstance(storage_v2_outbox_value, dict) else {}
     blocked_source_value = storage_v2_outbox.get("blocked_source_count")
     unresolved_source_value = storage_v2_outbox.get("unresolved_blocked_source_count")
