@@ -698,6 +698,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "installed_provider_launch_while_runtime_host_unavailable",
                 "durable_registration_retry_intent_per_provider",
                 "machine_agent_registration_recovery_after_runtime_host_restart",
+                "installed_provider_exit_and_detach_cleanup",
             ],
             "providers": results,
             "retry_intents_before_recovery": len(selected_providers),
