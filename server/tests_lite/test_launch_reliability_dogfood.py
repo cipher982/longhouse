@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -198,3 +199,34 @@ def test_binary_name_resolves_through_path():
     resolved = collector._resolve_binary(Path("python3"))
     assert resolved.is_absolute()
     assert resolved.name.startswith("python3")
+
+
+def test_challenge_window_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _git_repo(tmp_path)
+    provenance = {
+        "git_sha": "a" * 40,
+        "generator_sha256": "b" * 64,
+        "repository_dirty": False,
+        "generator_dirty": False,
+    }
+    monkeypatch.setattr(collector, "provenance", lambda root: provenance)
+    challenge = tmp_path / "challenge.json"
+    challenge.write_text(
+        json.dumps(
+            {
+                "artifact_kind": collector.CHALLENGE_ARTIFACT_KIND,
+                "issuer": collector.CHALLENGE_ISSUER,
+                "schema_version": collector.CHALLENGE_SCHEMA_VERSION,
+                "challenge_id": "challenge-1",
+                "nonce": "nonce-1",
+                "created_at": "2026-08-05T00:00:00Z",
+                "expires_at": "2026-08-06T01:00:00Z",
+                "key": base64.urlsafe_b64encode(b"k" * 32).decode("ascii"),
+                "provenance": provenance,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not exceed 24 hours"):
+        collector._load_challenge(challenge, root=tmp_path)

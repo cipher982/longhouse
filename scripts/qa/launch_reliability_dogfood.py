@@ -22,6 +22,7 @@ import subprocess
 import sys
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +178,10 @@ def _load_challenge(path: Path, *, root: Path) -> tuple[dict[str, Any], bytes]:
     expires_at = _parse_timestamp(payload.get("expires_at"))
     if expires_at <= created_at:
         raise ValueError("dogfood challenge expires_at must follow created_at")
+    created_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    expires_time = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    if expires_time - created_time > timedelta(hours=24):
+        raise ValueError("dogfood challenge window must not exceed 24 hours")
     try:
         key = base64.urlsafe_b64decode(str(payload.get("key") or "").encode("ascii"))
     except (ValueError, UnicodeEncodeError) as exc:
