@@ -1942,6 +1942,10 @@ def launch_attempt_states(
 def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_started_at = utc_now()
+    run_started_monotonic = time.monotonic()
+    args._run_started_at = run_started_at
+    args._run_started_monotonic = run_started_monotonic
     evidence_root = (
         args.evidence_root
         or repo_root / ".build/canaries/installed-managed-launch-fault-matrix" / stamp
@@ -1963,6 +1967,12 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     selected_providers = tuple(args.provider or PROVIDERS)
     args._selected_providers = selected_providers
     provider_auth: dict[str, Any] = {}
+    host_outage_started_at: str | None = None
+    host_recovery_started_at: str | None = None
+    host_recovery_started_monotonic: float | None = None
+    recovery_completed_at: str | None = None
+    recovery_completed_monotonic: float | None = None
+    cleanup_completed_at: str | None = None
     try:
         longhouse_bin = resolve_file(
             args.longhouse_bin or os.environ.get("LONGHOUSE_FAULT_LONGHOUSE_BIN"),
@@ -1996,6 +2006,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         stop_host(host)
         stop_processes_for_root(temp_root)
         host = None
+        host_outage_started_at = utc_now()
 
         for provider in selected_providers:
             result, live = run_provider_live(
@@ -2375,6 +2386,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "log": str(cold_log),
             }
 
+        host_recovery_started_at = utc_now()
+        host_recovery_started_monotonic = time.monotonic()
         host = start_host(temp_root, evidence_root, port=port, ordinal=2)
         if engine is None:
             engine_log = evidence_root / "machine-agent.log"
@@ -2431,6 +2444,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             60,
             "installed registration retry convergence after Runtime Host recovery",
         )
+        recovery_completed_at = utc_now()
+        recovery_completed_monotonic = time.monotonic()
         last_launch_states: dict[str, str | None] = {}
         args._last_launch_states = last_launch_states
 
@@ -2498,6 +2513,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             result["returncode"] = cleanup["returncode"]
             result["detached_cleanup"] = cleanup
         live_commands.clear()
+        cleanup_completed_at = utc_now()
         if engine_handle is not None:
             engine_handle.close()
             engine_handle = None
@@ -2558,6 +2574,27 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "runtime_host_port": port,
             "machine_agent_log": str(engine_log) if engine_log else None,
             "evidence_root": str(evidence_root),
+            "measurements": {
+                "run_started_at": run_started_at,
+                "run_completed_at": utc_now(),
+                "run_duration_seconds": round(
+                    time.monotonic() - run_started_monotonic, 3
+                ),
+                "host_outage_started_at": host_outage_started_at,
+                "host_recovery_started_at": host_recovery_started_at,
+                "retry_queue_converged_at": recovery_completed_at,
+                "recovery_duration_seconds": (
+                    round(
+                        recovery_completed_monotonic
+                        - host_recovery_started_monotonic,
+                        3,
+                    )
+                    if recovery_completed_monotonic is not None
+                    and host_recovery_started_monotonic is not None
+                    else None
+                ),
+                "cleanup_completed_at": cleanup_completed_at,
+            },
         }
     finally:
         primary_exception = sys.exc_info()[1]
@@ -2674,6 +2711,19 @@ def main(argv: list[str] | None = None) -> int:
             "temporary_root": str(getattr(args, "_temporary_root", "")),
             "provider_auth": getattr(args, "_provider_auth", {}),
             "harness": harness_provenance(),
+            "measurements": {
+                "run_started_at": getattr(args, "_run_started_at", None),
+                "run_failed_at": utc_now(),
+                "run_duration_seconds": (
+                    round(
+                        time.monotonic()
+                        - float(getattr(args, "_run_started_monotonic")),
+                        3,
+                    )
+                    if getattr(args, "_run_started_monotonic", None) is not None
+                    else None
+                ),
+            },
         }
     evidence_root = Path(
         artifact.get("evidence_root")
