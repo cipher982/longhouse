@@ -178,7 +178,9 @@ fn prepare_next_envelope_with_limit(
     }
     let session_id_override = durable_session_id.as_deref();
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
-    let source_revision = if provider.eq_ignore_ascii_case("antigravity") {
+    let source_revision = if provider.eq_ignore_ascii_case("antigravity")
+        || is_cursor_agent_transcript_path(provider, path)
+    {
         Some(hash_file(path)?)
     } else {
         None
@@ -3268,6 +3270,18 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex_hash(Sha256::digest(bytes).into()))
 }
 
+/// Cursor's agent transcript JSONL is a live provider-owned projection rather
+/// than an append-only file. Cursor may rewrite an existing line while a turn
+/// is still in flight, so a byte offset that was valid for the previous file
+/// contents can land in the middle of a different line. Source revisions make
+/// that rewrite an explicit source epoch and restart framing at byte zero.
+fn is_cursor_agent_transcript_path(provider: &str, path: &Path) -> bool {
+    provider.eq_ignore_ascii_case("cursor")
+        && path
+            .components()
+            .any(|component| component.as_os_str() == "agent-transcripts")
+}
+
 fn hex_hash(hash: [u8; 32]) -> String {
     hash.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -4489,6 +4503,44 @@ mod tests {
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn cursor_agent_transcript_rewrite_rotates_source_epoch_before_framing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".cursor")
+            .join("projects/workspace/agent-transcripts/session/transcript.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let first = br#"{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}
+"#;
+        fs::write(&path, first).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let initial = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &initial);
+
+        // Cursor may replace an in-flight JSONL record in place. The new
+        // content is longer, so the old byte cursor would point into its
+        // middle if the source stayed in the same epoch.
+        let rewritten = br#"{"role":"user","message":{"content":[{"type":"text","text":"hello after a live rewrite"}]}}
+"#;
+        fs::write(&path, rewritten).unwrap();
+
+        let replacement = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+            .unwrap()
+            .unwrap();
+        let initial_epoch = initial.source_epoch.to_string();
+        assert_ne!(replacement.source_epoch, initial.source_epoch);
+        assert_eq!(replacement.range_start, 0);
+        assert_eq!(replacement.range_end, rewritten.len() as u64);
+        assert_eq!(
+            replacement.envelope.predecessor_source_epoch.as_deref(),
+            Some(initial_epoch.as_str())
         );
     }
 
