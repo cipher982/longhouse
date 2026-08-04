@@ -131,6 +131,8 @@ def test_claude_profile_bootstrap_accepts_observed_main_tui_as_completion(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             self.process = SimpleNamespace(poll=lambda: None)
             self.sent: list[str] = []
+            self.recording = Path(str(_kwargs["recording"]))
+            self.claude_permission_acceptance_sent = False
 
         def drain(self) -> None:
             pass
