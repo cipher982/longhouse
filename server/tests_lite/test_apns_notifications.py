@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -27,6 +28,8 @@ from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistra
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
+from zerg.routers.runtime import _catalog_attention_notification
+from zerg.routers.runtime import _dispatch_catalog_attention_actions
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
 from zerg.services.apns_sender import APNSDeviceTarget
@@ -67,6 +70,42 @@ def _db_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def test_catalog_attention_dispatch_rolls_back_rejected_send():
+    session_id = str(uuid4())
+    occurred_at = datetime.now(timezone.utc).replace(microsecond=0)
+    action = {
+        "kind": "attention",
+        "session_id": session_id,
+        "state": "stalled",
+        "occurred_at": occurred_at.isoformat(),
+        "title": "Catalog stalled session",
+        "summary": "No provider progress",
+        "project": "zerg",
+        "provider": "codex",
+        "tool_name": "Shell",
+        "targets": [{"device_token": "c" * 64, "push_environment": "sandbox"}],
+    }
+    catalogd = SimpleNamespace(call=AsyncMock())
+    notification = _catalog_attention_notification(action)
+    assert isinstance(notification, SessionAttentionPush)
+    assert notification.alert_title == "May be stalled"
+    assert notification.alert_body == "No provider progress; inspect the session"
+
+    with patch("zerg.routers.runtime.send_session_attention_push", new=AsyncMock(return_value=False)):
+        asyncio.run(_dispatch_catalog_attention_actions([action], catalogd))
+
+    catalogd.call.assert_awaited_once_with(
+        "notification.apns.attention.rollback.v2",
+        {
+            "session_id": session_id,
+            "action": "attention",
+            "state": "stalled",
+            "occurred_at": occurred_at.isoformat(),
+            "attention_push_at": occurred_at.isoformat(),
+        },
+    )
 
 
 def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):
@@ -576,12 +615,14 @@ def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
                 )
                 assert response.status_code == 204, response.text
 
-    assert send_mock.await_count == 2
-    assert resolution_send_mock.await_count == 2
+    assert send_mock.await_count == 3
+    assert resolution_send_mock.await_count == 3
     assert send_mock.await_args_list[0].args[0].occurred_at == t0
-    assert send_mock.await_args_list[1].args[0].occurred_at == t0 + timedelta(seconds=35)
+    assert send_mock.await_args_list[1].args[0].occurred_at == t0 + timedelta(seconds=10)
+    assert send_mock.await_args_list[2].args[0].occurred_at == t0 + timedelta(seconds=35)
     assert resolution_send_mock.await_args_list[0].args[0].occurred_at == t0 + timedelta(seconds=5)
-    assert resolution_send_mock.await_args_list[1].args[0].occurred_at == t0 + timedelta(seconds=36)
+    assert resolution_send_mock.await_args_list[1].args[0].occurred_at == t0 + timedelta(seconds=15)
+    assert resolution_send_mock.await_args_list[2].args[0].occurred_at == t0 + timedelta(seconds=36)
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         assert session is not None
@@ -1041,6 +1082,8 @@ def test_runtime_stall_notification_creates_one_attention_event_and_resolves(tmp
                 ("stalled", 0, True),
                 ("stalled", 5 * 60, True),
                 ("idle", 6 * 60, False),
+                ("stalled", 10 * 60, True),
+                ("idle", 11 * 60, False),
             ]:
                 FrozenDateTime.current = t0 + timedelta(seconds=seconds)
                 response = client.post(
@@ -1050,8 +1093,8 @@ def test_runtime_stall_notification_creates_one_attention_event_and_resolves(tmp
                 )
                 assert response.status_code == 200, response.text
 
-    assert send_mock.await_count == 1
-    resolution_send_mock.assert_awaited_once()
+    assert send_mock.await_count == 2
+    assert resolution_send_mock.await_count == 2
 
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -1063,7 +1106,7 @@ def test_runtime_stall_notification_creates_one_attention_event_and_resolves(tmp
             .order_by(NotificationEvent.event_started_at.asc())
             .all()
         )
-        assert [event.event_type for event in events] == ["session_stalled"]
+        assert [event.event_type for event in events] == ["session_stalled", "session_stalled"]
         assert events[0].delivered_at is not None
         assert events[0].resolved_at is not None
 
@@ -2158,13 +2201,33 @@ def test_stalled_attention_push_is_once_per_episode_and_resolves(tmp_path):
             occurred_at=t0 + timedelta(minutes=6),
             targets=(target,),
         )
+        third = prepare_session_attention_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            previous_state=None,
+            current_state="stalled",
+            occurred_at=t0 + timedelta(minutes=10),
+            targets=(target,),
+        )
+        second_resolution = prepare_session_attention_resolution_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            previous_state="stalled",
+            current_state="idle",
+            occurred_at=t0 + timedelta(minutes=11),
+            targets=(target,),
+        )
 
         assert first is not None
         assert first.state == "stalled"
         assert first.alert_title == "May be stalled"
-        assert "control remains available" in first.alert_body
+        assert "inspect the session" in first.alert_body
         assert second is None
         assert resolution is not None
         assert resolution.previous_state == "stalled"
+        assert third is not None
+        assert second_resolution is not None
 
     engine.dispose()

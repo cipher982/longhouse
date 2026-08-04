@@ -108,6 +108,132 @@ _CONTROL_LEASE_TTL = timedelta(minutes=15)
 _EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _SHADOW_PARITY_ENV = "LONGHOUSE_SHADOW_PARITY_ENABLED"
+
+
+def _live_attention_targets(orm: Session, owner_id: int) -> list[dict[str, str]]:
+    rows = (
+        orm.query(LiveAPNSDeviceRegistration)
+        .filter(
+            LiveAPNSDeviceRegistration.owner_id == owner_id,
+            LiveAPNSDeviceRegistration.platform == "ios",
+            LiveAPNSDeviceRegistration.revoked_at.is_(None),
+        )
+        .all()
+    )
+    return [
+        {
+            "device_token": str(row.device_token),
+            "push_environment": str(row.push_environment or "sandbox"),
+        }
+        for row in rows
+    ]
+
+
+def _live_attention_owner_id(orm: Session, session_id: str) -> int | None:
+    owner = orm.query(LiveSession.owner_id).filter(LiveSession.session_id == session_id).scalar()
+    try:
+        return int(owner) if owner is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _live_runtime_attention_actions(
+    orm: Session,
+    *,
+    events: list[Any],
+    updated_keys: set[str],
+    observed_at: datetime,
+) -> list[dict[str, Any]]:
+    """Atomically prepare catalog-owned stall alerts and resolutions."""
+
+    stall_sessions = {
+        str(event.session_id)
+        for event in events
+        if event.session_id is not None
+        and event.runtime_key in updated_keys
+        and event.kind == "phase_signal"
+        and isinstance(event.payload, dict)
+        and event.payload.get("stall_notification") is True
+    }
+    session_ids = {str(event.session_id) for event in events if event.session_id is not None and event.runtime_key in updated_keys}
+    actions: list[dict[str, Any]] = []
+    for session_id in sorted(session_ids):
+        catalog = orm.get(LiveSessionCatalog, session_id)
+        runtime = (
+            orm.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id == session_id)
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .first()
+        )
+        if catalog is None or runtime is None:
+            continue
+
+        raw_stamp = str(catalog.last_attention_push_state or "").strip()
+        phase = str(runtime.phase or "").strip()
+        owner_id = _live_attention_owner_id(orm, session_id)
+        if owner_id is None:
+            continue
+        user = orm.get(LiveUser, owner_id)
+        prefs = dict(getattr(user, "prefs", None) or {}) if user is not None else {}
+        if bool(prefs.get("apns_enabled", True)) is False or bool(catalog.notification_muted):
+            continue
+
+        targets = _live_attention_targets(orm, owner_id)
+        if phase == "stalled" and session_id in stall_sessions and raw_stamp != "stalled":
+            if not targets:
+                continue
+            occurred_at = next(
+                (
+                    event.occurred_at
+                    for event in events
+                    if event.session_id is not None
+                    and str(event.session_id) == session_id
+                    and event.kind == "phase_signal"
+                    and isinstance(event.payload, dict)
+                    and event.payload.get("stall_notification") is True
+                ),
+                observed_at,
+            )
+            title = str(catalog.summary_title or catalog.anchor_title or catalog.project or f"{catalog.provider} session")
+            summary = str(catalog.summary or title)
+            catalog.last_attention_push_state = "stalled"
+            catalog.last_attention_push_at = occurred_at
+            actions.append(
+                {
+                    "kind": "attention",
+                    "owner_id": owner_id,
+                    "session_id": session_id,
+                    "state": "stalled",
+                    "occurred_at": occurred_at.isoformat(),
+                    "title": title,
+                    "summary": summary,
+                    "project": catalog.project,
+                    "provider": catalog.provider,
+                    "tool_name": runtime.active_tool,
+                    "targets": targets,
+                }
+            )
+        elif phase != "stalled" and raw_stamp == "stalled":
+            occurred_at = runtime.last_runtime_signal_at or observed_at
+            attention_push_at = catalog.last_attention_push_at or occurred_at
+            catalog.last_attention_push_state = "stalled:resolved"
+            catalog.last_attention_push_at = attention_push_at
+            if targets:
+                actions.append(
+                    {
+                        "kind": "resolution",
+                        "owner_id": owner_id,
+                        "session_id": session_id,
+                        "state": "stalled",
+                        "current_state": phase or "unknown",
+                        "occurred_at": occurred_at.isoformat(),
+                        "attention_push_at": attention_push_at.isoformat(),
+                        "targets": targets,
+                    }
+                )
+    return actions
+
+
 _MAX_PARITY_DELTAS = 2_048
 _RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
     (1.0, 100),
@@ -1860,6 +1986,12 @@ class CatalogStore:
             try:
                 result = ingest_live_runtime_events(orm, events)
                 updated_keys = set(result.updated_runtime_keys)
+                attention_actions = _live_runtime_attention_actions(
+                    orm,
+                    events=events,
+                    updated_keys=updated_keys,
+                    observed_at=observed_at,
+                )
                 resume_session_ids = {
                     str(event.session_id)
                     for event in events
@@ -1932,10 +2064,51 @@ class CatalogStore:
             finally:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, observed_at)
-            return {
+            response = {
                 **result.model_dump(mode="json"),
                 "commit_seq": str(commit_seq),
             }
+            if attention_actions:
+                response["attention_actions"] = attention_actions
+            return response
+
+    def rollback_apns_attention(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        state: str,
+        occurred_at: datetime,
+        attention_push_at: datetime,
+    ) -> dict[str, Any]:
+        """Undo a catalog attention stamp after APNs rejected the send."""
+
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            changed = False
+            try:
+                catalog = orm.get(LiveSessionCatalog, session_id)
+                if catalog is not None:
+                    current = str(catalog.last_attention_push_state or "").strip()
+                    expected_at = _as_aware_utc(attention_push_at)
+                    current_at = _as_aware_utc(catalog.last_attention_push_at)
+                    same_at = expected_at is not None and current_at is not None and abs((current_at - expected_at).total_seconds()) < 0.001
+                    if action == "attention" and current == state and same_at:
+                        catalog.last_attention_push_state = None
+                        catalog.last_attention_push_at = None
+                        changed = True
+                    elif action == "resolution" and current == f"{state}:resolved" and same_at:
+                        catalog.last_attention_push_state = state
+                        catalog.last_attention_push_at = expected_at
+                        changed = True
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, occurred_at) if changed else _current_commit_seq(connection)
+            return {"rolled_back": changed, "commit_seq": str(commit_seq)}
 
     def register_interaction(self, *, interaction: dict[str, Any]) -> dict[str, Any]:
         """Register one held interaction and its canonical runtime state."""

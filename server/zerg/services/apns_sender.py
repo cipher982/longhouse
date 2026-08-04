@@ -489,10 +489,13 @@ def prepare_session_attention_push(
         return None
 
     last_attention_push_at = _as_aware_utc(session.last_attention_push_at)
-    last_attention_push_state = _base_attention_state(session.last_attention_push_state)
-    is_repeat_attention_state = last_attention_push_state == current_state
-    if is_repeat_attention_state and (
-        current_state == "stalled" or last_attention_push_at is None or (occurred_at - last_attention_push_at) < ATTENTION_PUSH_DEBOUNCE
+    raw_last_attention_push_state = str(session.last_attention_push_state or "").strip()
+    last_attention_push_state = _base_attention_state(raw_last_attention_push_state)
+    is_repeat_attention_state = last_attention_push_state == current_state and not raw_last_attention_push_state.endswith(":resolved")
+    if (
+        is_repeat_attention_state
+        and last_attention_push_at is not None
+        and (current_state == "stalled" or (occurred_at - last_attention_push_at) < ATTENTION_PUSH_DEBOUNCE)
     ):
         return None
 
@@ -1484,7 +1487,7 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
     if state == "blocked":
         parts.append(f"Blocked on {tool_name}" if tool_name else "Blocked")
     elif state == "stalled":
-        parts.append("No provider progress; control remains available")
+        parts.append("No provider progress; inspect the session")
     parts.append(title)
     return _trim_alert_text(" · ".join(parts))
 

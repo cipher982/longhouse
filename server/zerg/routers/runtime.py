@@ -28,6 +28,9 @@ from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
+from zerg.services.apns_sender import APNSDeviceTarget
+from zerg.services.apns_sender import SessionAttentionPush
+from zerg.services.apns_sender import SessionAttentionResolutionPush
 from zerg.services.apns_sender import active_ios_targets_for_owner
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
@@ -36,6 +39,8 @@ from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
+from zerg.services.apns_sender import send_session_attention_push
+from zerg.services.apns_sender import send_session_attention_resolution_push
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
@@ -60,6 +65,82 @@ _catalog_db_dependency = catalog_db_dependency()
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
+
+
+def _catalog_attention_notification(action: dict) -> SessionAttentionPush | SessionAttentionResolutionPush:
+    targets = tuple(
+        APNSDeviceTarget(
+            device_token=str(target["device_token"]),
+            push_environment=str(target["push_environment"]),
+        )
+        for target in action.get("targets", [])
+    )
+    occurred_at = datetime.fromisoformat(str(action["occurred_at"]))
+    session_id = str(action["session_id"])
+    if action.get("kind") == "resolution":
+        return SessionAttentionResolutionPush(
+            session_id=session_id,
+            previous_state="stalled",
+            current_state=str(action.get("current_state") or "unknown"),
+            occurred_at=occurred_at,
+            attention_push_at=datetime.fromisoformat(str(action["attention_push_at"])),
+            collapse_id=f"lh-attn-resolved-{session_id}",
+            targets=targets,
+        )
+    return SessionAttentionPush(
+        session_id=session_id,
+        state="stalled",
+        occurred_at=occurred_at,
+        title=str(action.get("title") or "Managed session"),
+        summary=str(action.get("summary") or action.get("title") or "Managed session"),
+        project=action.get("project"),
+        provider=action.get("provider"),
+        tool_name=action.get("tool_name"),
+        alert_title="May be stalled",
+        alert_body="No provider progress; inspect the session",
+        collapse_id=f"lh-attn-{session_id}",
+        targets=targets,
+        event_type="session_stalled",
+        stamp_state="stalled",
+    )
+
+
+async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> None:
+    for action in actions:
+        notification = _catalog_attention_notification(action)
+        accepted = False
+        try:
+            if isinstance(notification, SessionAttentionResolutionPush):
+                accepted = await send_session_attention_resolution_push(notification)
+            else:
+                accepted = await send_session_attention_push(notification)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Catalog APNs attention dispatch failed for session %s",
+                notification.session_id,
+            )
+        if accepted:
+            continue
+        try:
+            await catalogd.call(
+                "notification.apns.attention.rollback.v2",
+                {
+                    "session_id": notification.session_id,
+                    "action": "resolution" if isinstance(notification, SessionAttentionResolutionPush) else "attention",
+                    "state": "stalled",
+                    "occurred_at": notification.occurred_at.isoformat(),
+                    "attention_push_at": (
+                        notification.attention_push_at.isoformat()
+                        if isinstance(notification, SessionAttentionResolutionPush)
+                        else notification.occurred_at.isoformat()
+                    ),
+                },
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Catalog APNs attention rollback failed for session %s",
+                notification.session_id,
+            )
 
 
 def _no_runtime_db():
@@ -548,6 +629,9 @@ async def ingest_runtime_observation_batch(
                             turn=next_turn,
                             client=catalogd,
                         )
+            attention_actions = raw_result.pop("attention_actions", [])
+            if not isinstance(attention_actions, list):
+                attention_actions = []
             commit_seq = raw_result.pop("commit_seq", None)
             if not isinstance(commit_seq, str) or not commit_seq.isdecimal():
                 raise HTTPException(
@@ -564,6 +648,9 @@ async def ingest_runtime_observation_batch(
             response.headers["X-Catalog-Commit-Seq"] = commit_seq
             response.headers["X-Runtime-Label"] = "catalogd-runtime-state"
             _publish_runtime_updates(result, catalog_commit_seq=commit_seq)
+            if attention_actions:
+                task = asyncio.create_task(_dispatch_catalog_attention_actions(attention_actions, catalogd))
+                task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
             return result
 
         if live_store_configured():
@@ -800,6 +887,8 @@ def _preview_seq(preview: dict) -> int:
 
 def _previous_attention_state_from_session(session: AgentSession) -> str | None:
     value = str(session.last_attention_push_state or "").strip()
+    if value.endswith(":resolved"):
+        return None
     base = value.split(":", 1)[0]
     if base in {"blocked", "stalled", "needs_user", "needs_answer"}:
         return base

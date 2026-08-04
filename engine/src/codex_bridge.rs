@@ -4680,7 +4680,6 @@ impl CodexRuntimeTracker {
                 .as_ref()
                 .map(|item| item.started_at.elapsed().as_millis() as u64),
             "active_item_count": self.active_items.len(),
-            "control_stream": "open",
             "app_server": {
                 "pid": episode.app_server_pid,
                 "pgid": episode.app_server_pgid,
@@ -4688,11 +4687,10 @@ impl CodexRuntimeTracker {
             },
             "rollout": {
                 "path": rollout_path.and_then(|path| path.to_str()),
-                "length": rollout_metadata
-                    .as_ref()
-                    .map(|metadata| metadata.len())
-                    .or(self.last_rollout_len),
+                "metadata_observed": rollout_metadata.is_some(),
+                "length": rollout_metadata.as_ref().map(|metadata| metadata.len()),
                 "modified_at": rollout_modified_at,
+                "growth_observed": self.last_rollout_growth_at.is_some(),
                 "seconds_since_observed_growth": self
                     .last_rollout_growth_at
                     .map(|at| at.elapsed().as_secs()),
@@ -5044,8 +5042,8 @@ impl CodexRuntimeTracker {
         self.last_app_server_pgid = app_server_pgid;
     }
 
-    fn take_stall_notification(&mut self) -> bool {
-        std::mem::take(&mut self.stall_notification_pending)
+    fn stall_notification_pending(&self) -> bool {
+        self.stall_notification_pending
     }
 
     fn primary_running_tool(&self) -> Option<String> {
@@ -5224,7 +5222,7 @@ async fn emit_runtime_updates(
                     )
                 });
                 let stall_notification =
-                    (phase == "stalled") && context.runtime_tracker.take_stall_notification();
+                    (phase == "stalled") && context.runtime_tracker.stall_notification_pending();
                 context
                     .runtime
                     .post_phase(
@@ -8971,8 +8969,8 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "first evaluation enters the episode"
         );
-        assert!(tracker.take_stall_notification());
-        assert!(!tracker.take_stall_notification());
+        assert!(tracker.stall_notification_pending());
+        assert!(tracker.stall_notification_pending());
         assert!(
             !tracker.refresh_stall_state(None, Some(stopped_fact())),
             "subsequent keepalives must not re-enter the same episode"
@@ -8988,7 +8986,7 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "a later silence is a new episode"
         );
-        assert!(tracker.take_stall_notification());
+        assert!(tracker.stall_notification_pending());
         assert_eq!(
             tracker.stall_episode.as_ref().unwrap().turn_epoch,
             first_epoch

@@ -290,6 +290,8 @@ class CatalogDaemon:
             return await self._upsert_apns_live_activity(request)
         if request.method == "notification.apns.live_activity.end.v2":
             return await self._end_apns_live_activity(request)
+        if request.method == "notification.apns.attention.rollback.v2":
+            return await self._rollback_apns_attention(request)
         if request.method == "directed_input.create.v2":
             return await self._create_directed_input(request)
         if request.method == "directed_input.link_receipt.v2":
@@ -1074,6 +1076,31 @@ class CatalogDaemon:
             owner_id=owner_id,
             activity_id=activity_id,
             ended_at=ended_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _rollback_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "action", "state", "occurred_at", "attention_push_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "notification.apns.attention.rollback.v2 has invalid parameters")
+        try:
+            session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
+            action = _bounded_text(request.params["action"], "action", 32)
+            state = _bounded_text(request.params["state"], "state", 32)
+            occurred_at = _parse_datetime(request.params["occurred_at"], "occurred_at")
+            attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if action not in {"attention", "resolution"} or state != "stalled":
+            return self._error(request, "invalid_request", "attention rollback action or state is invalid")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.rollback_apns_attention,
+            session_id=session_id,
+            action=action,
+            state=state,
+            occurred_at=occurred_at,
+            attention_push_at=attention_push_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

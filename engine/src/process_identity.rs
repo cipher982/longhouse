@@ -288,8 +288,15 @@ impl ProcessLineage {
 pub fn try_collect_process_snapshots() -> Option<HashMap<u32, ProcessSnapshot>> {
     let mut command = Command::new("ps");
     command.args(["-axo", "pid=,ppid=,pgid=,tty=,stat=,lstart=,command="]);
-    let output = output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT)?;
+    let output = match output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT) {
+        Some(output) => output,
+        None => {
+            tracing::warn!("managed stall process snapshot unavailable: ps timed out or failed");
+            return None;
+        }
+    };
     if !output.status.success() {
+        tracing::warn!(status = ?output.status.code(), "managed stall process snapshot unavailable: ps failed");
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
@@ -300,6 +307,12 @@ pub fn try_collect_process_snapshots() -> Option<HashMap<u32, ProcessSnapshot>> 
         .map(|snapshot| (snapshot.fact.pid, snapshot))
         .collect::<HashMap<_, _>>();
     if snapshots.len() != line_count || !snapshots.contains_key(&std::process::id()) {
+        tracing::warn!(
+            parsed = snapshots.len(),
+            lines = line_count,
+            current_pid = std::process::id(),
+            "managed stall process snapshot rejected: incomplete inventory"
+        );
         return None;
     }
     Some(snapshots)
@@ -569,6 +582,25 @@ mod tests {
         assert_eq!(snapshot.fact.stat, "Ts");
         assert_eq!(snapshot.fact.lstart, "Tue Aug  4 20:00:00 2026");
         assert_eq!(snapshot.fact.command, "/bin/zsh -lc sleep 300");
+    }
+
+    #[test]
+    fn parse_process_snapshot_inventory_fixture_preserves_all_rows() {
+        let fixture = [
+            "16956   900 16956 ?? Ss   Tue Aug  4 20:00:00 2026 codex app-server",
+            "17210     1 16956 ?? Ts   Tue Aug  4 20:01:00 2026 /bin/zsh -lc sleep 300",
+            "17300 16956 16956 ?? S    Tue Aug  4 20:02:00 2026 /bin/sh -c echo done",
+        ];
+        let snapshots = fixture
+            .iter()
+            .filter_map(|line| parse_process_snapshot(line))
+            .map(|snapshot| (snapshot.fact.pid, snapshot))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(snapshots.len(), fixture.len());
+        assert_eq!(snapshots[&17210].ppid, 1);
+        assert_eq!(snapshots[&17300].pgid, 16956);
+        assert_eq!(snapshots[&16956].fact.command, "codex app-server");
     }
 
     #[test]

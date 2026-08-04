@@ -318,6 +318,8 @@ class LiveSessionCatalog(LiveBase):
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
     permission_mode = Column(String(32), nullable=False, server_default=text("'bypass'"))
+    last_attention_push_state = Column(String(64), nullable=True)
+    last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=True, index=True)
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,10 +14,13 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.schema import read_catalog_meta
 from zerg.catalogd.server import CatalogDaemon
+from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionLivePreview
+from zerg.models.live_store import LiveUser
 
 
 @pytest.fixture
@@ -159,4 +162,105 @@ async def test_runtime_apply_rejects_invalid_batch_without_catalog_commit(daemon
     with engine.connect() as connection:
         assert connection.execute(LiveRuntimeState.__table__.select()).first() is None
         assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert().values(id=7, email="catalog@example.com", prefs={})
+        )
+        connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id=session_id,
+                owner_id="7",
+                provider="codex",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="codex",
+                environment="dev",
+                project="zerg",
+                summary_title="Catalog stalled session",
+                started_at=now,
+            )
+        )
+        connection.execute(
+            LiveAPNSDeviceRegistration.__table__.insert().values(
+                id=str(uuid4()),
+                owner_id=7,
+                platform="ios",
+                device_token="c" * 64,
+                push_environment="sandbox",
+                created_at=now,
+                updated_at=now,
+                last_seen_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        stalled_event = {
+            **_event(
+                session_id=session_id,
+                runtime_key=f"codex:{session_id}",
+                dedupe_key="catalog-stalled-1",
+                occurred_at=now,
+            ),
+            "phase": "stalled",
+            "tool_name": "Shell",
+            "payload": {"stall_notification": True},
+        }
+        stalled = await client.call("session.runtime.apply.v2", {"events": [stalled_event]})
+        assert stalled["attention_actions"][0]["kind"] == "attention"
+        assert stalled["attention_actions"][0]["state"] == "stalled"
+
+        resolved_event = {
+            **_event(
+                session_id=session_id,
+                runtime_key=f"codex:{session_id}",
+                dedupe_key="catalog-stalled-resolved-1",
+                occurred_at=now,
+            ),
+            "phase": "idle",
+            "tool_name": None,
+        }
+        resolved = await client.call("session.runtime.apply.v2", {"events": [resolved_event]})
+        assert resolved["attention_actions"][0]["kind"] == "resolution"
+
+        rolled_back = await client.call(
+            "notification.apns.attention.rollback.v2",
+            {
+                "session_id": session_id,
+                "action": "resolution",
+                "state": "stalled",
+                "occurred_at": (now + timedelta(minutes=1)).isoformat(),
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert rolled_back["rolled_back"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        catalog = connection.execute(
+            LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
+        ).mappings().one()
+        assert catalog["last_attention_push_state"] == "stalled"
     engine.dispose()
