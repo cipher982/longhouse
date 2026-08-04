@@ -176,10 +176,10 @@ def _load_challenge(path: Path, *, root: Path) -> tuple[dict[str, Any], bytes]:
         raise ValueError("dogfood challenge has no nonce")
     created_at = _parse_timestamp(payload.get("created_at"))
     expires_at = _parse_timestamp(payload.get("expires_at"))
-    if expires_at <= created_at:
-        raise ValueError("dogfood challenge expires_at must follow created_at")
     created_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     expires_time = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    if expires_time <= created_time:
+        raise ValueError("dogfood challenge expires_at must follow created_at")
     if expires_time - created_time > timedelta(hours=24):
         raise ValueError("dogfood challenge window must not exceed 24 hours")
     try:

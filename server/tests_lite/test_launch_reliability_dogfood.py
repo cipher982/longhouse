@@ -230,3 +230,34 @@ def test_challenge_window_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     with pytest.raises(ValueError, match="must not exceed 24 hours"):
         collector._load_challenge(challenge, root=tmp_path)
+
+
+def test_challenge_expiry_uses_datetime_ordering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _git_repo(tmp_path)
+    provenance = {
+        "git_sha": "a" * 40,
+        "generator_sha256": "b" * 64,
+        "repository_dirty": False,
+        "generator_dirty": False,
+    }
+    monkeypatch.setattr(collector, "provenance", lambda root: provenance)
+    challenge = tmp_path / "challenge.json"
+    challenge.write_text(
+        json.dumps(
+            {
+                "artifact_kind": collector.CHALLENGE_ARTIFACT_KIND,
+                "issuer": collector.CHALLENGE_ISSUER,
+                "schema_version": collector.CHALLENGE_SCHEMA_VERSION,
+                "challenge_id": "challenge-1",
+                "nonce": "nonce-1",
+                "created_at": "2026-08-05T00:00:00.500Z",
+                "expires_at": "2026-08-05T00:00:00Z",
+                "key": base64.urlsafe_b64encode(b"k" * 32).decode("ascii"),
+                "provenance": provenance,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must follow created_at"):
+        collector._load_challenge(challenge, root=tmp_path)
