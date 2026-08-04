@@ -18,10 +18,11 @@ import statistics
 import subprocess
 import sys
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
+from typing import Iterable
 
 MATRIX_FILENAME = "installed-managed-launch-fault-matrix.json"
 EXPECTED_PROVIDERS = frozenset({"claude", "codex", "cursor", "opencode"})
@@ -39,6 +40,8 @@ CONSERVATION_FIELDS = (
 )
 HEALTH_STATES = frozenset({"healthy", "degraded", "broken", "unknown"})
 PRODUCER_FRESHNESS_STATES = frozenset({"fresh", "stale", "unknown"})
+HEALTH_ARTIFACT_KIND = "installed_native_health_fault_matrix"
+HEALTH_SCHEMA_VERSION = 1
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -488,7 +491,7 @@ def _dogfood_summary(
         for field in ("archived_events", "discarded_events", "unresolved_events")
     )
     source_events = conservation_totals["source_events"]
-    return {
+    summary = {
         "scope": "dogfood_episode_series",
         "episode_count": len(episodes),
         "source": references,
@@ -582,6 +585,18 @@ def _dogfood_summary(
             "denominator_definition": "dogfood_source_events",
         },
     }
+    if not series_eligible:
+        summary["source"] = []
+        for metric_name in (
+            "automatic_recovery_time",
+            "false_red_rate",
+            "hidden_failure_rate",
+            "action_coverage",
+            "unresolved_event_bearing_issue_age",
+            "duplicate_replayed_discarded_evidence",
+        ):
+            summary[metric_name]["source"] = []
+    return summary
 
 
 def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
@@ -633,7 +648,12 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
             metric["conservation_status"] = None
 
 
-def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, Any]]:
+def _health_measurements(
+    paths: Iterable[Path],
+    invalid: list[dict[str, str]],
+    *,
+    as_of: datetime,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
     references: list[dict[str, str]] = []
     seen_paths: set[Path] = set()
     seen_hashes: set[str] = set()
@@ -658,18 +678,62 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
             continue
-        results = artifact.get("results")
-        if not isinstance(results, list):
-            invalid.append({"path": str(path), "error": "health artifact has no results list"})
+        try:
+            if artifact.get("artifact_kind") != HEALTH_ARTIFACT_KIND:
+                raise ValueError(f"health artifact_kind must be {HEALTH_ARTIFACT_KIND}")
+            if artifact.get("schema_version") != HEALTH_SCHEMA_VERSION:
+                raise ValueError(f"health schema_version must be {HEALTH_SCHEMA_VERSION}")
+            generated_at = _timestamp(artifact.get("generated_at"), label="health.generated_at")
+            if generated_at > as_of:
+                raise ValueError("health.generated_at is after report generation time")
+            implementation = artifact.get("implementation")
+            if not isinstance(implementation, dict):
+                raise ValueError("health implementation provenance must be an object")
+            implementation_sha = implementation.get("sha256")
+            if not isinstance(implementation_sha, str) or len(implementation_sha) != 64 or any(
+                character not in "0123456789abcdefABCDEF" for character in implementation_sha
+            ):
+                raise ValueError("health implementation.sha256 must be a 64-character SHA-256")
+            if implementation.get("returncode") != 0:
+                raise ValueError("health implementation.returncode must be zero")
+            results = artifact.get("results")
+            if not isinstance(results, list):
+                raise ValueError("health artifact has no results list")
+            validated_results: list[tuple[str, str, str, set[str]]] = []
+            for index, result in enumerate(results):
+                if not isinstance(result, dict):
+                    raise ValueError(f"health result {index} must be an object")
+                expected = result.get("expected")
+                observed = result.get("observed")
+                if not isinstance(expected, dict) or not isinstance(observed, dict):
+                    raise ValueError(f"health result {index} must include expected and observed objects")
+                expected_state = expected.get("state")
+                if expected_state not in HEALTH_STATES:
+                    raise ValueError(f"health result {index}.expected.state is invalid")
+                observed_state = observed.get("health_state")
+                if observed_state not in HEALTH_STATES:
+                    raise ValueError(f"health result {index}.observed.health_state is invalid")
+                expected_action = expected.get("action")
+                if not isinstance(expected_action, str) or not expected_action:
+                    raise ValueError(f"health result {index}.expected.action must be a non-empty string")
+                suggested_actions = observed.get("suggested_action_ids")
+                if not isinstance(suggested_actions, list) or not all(
+                    isinstance(value, str) and value for value in suggested_actions
+                ):
+                    raise ValueError(f"health result {index}.observed.suggested_action_ids must be a string list")
+                collected_at = observed.get("collected_at")
+                if collected_at is not None and _timestamp(
+                    collected_at, label=f"health result {index}.observed.collected_at"
+                ) > generated_at:
+                    raise ValueError(f"health result {index}.observed.collected_at is after health.generated_at")
+                validated_results.append(
+                    (expected_state, observed_state, expected_action, set(suggested_actions))
+                )
+        except ValueError as exc:
+            invalid.append({"path": str(path), "error": str(exc)})
             continue
         references.append(_input_reference(path))
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            expected = result.get("expected") or {}
-            observed = result.get("observed") or {}
-            expected_state = str(expected.get("state") or "unknown")
-            observed_state = str(observed.get("health_state") or "unknown")
+        for expected_state, observed_state, expected_action, suggested in validated_results:
             total += 1
             if observed_state == "broken":
                 broken_cases += 1
@@ -679,10 +743,8 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
                 eligible_failure_cases += 1
                 if observed_state == "healthy":
                     hidden_failure_cases += 1
-            expected_action = str(expected.get("action") or "none")
             if expected_action != "none":
                 action_total += 1
-                suggested = {str(value) for value in observed.get("suggested_action_ids") or []}
                 if expected_action in suggested:
                     action_pass += 1
 
@@ -849,7 +911,11 @@ def build_report(
                     harness_levels[level] += 1
 
     report_generated_at = datetime.now(UTC)
-    health_inputs, health_summary = _health_measurements(health_paths, invalid)
+    health_inputs, health_summary = _health_measurements(
+        health_paths,
+        invalid,
+        as_of=report_generated_at,
+    )
     invalid_before_dogfood = len(invalid)
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(
         dogfood_paths,

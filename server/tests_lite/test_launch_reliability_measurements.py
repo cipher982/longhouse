@@ -98,6 +98,16 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
     )
 
 
+def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "artifact_kind": "installed_native_health_fault_matrix",
+        "schema_version": 1,
+        "generated_at": "2026-08-04T13:00:30Z",
+        "implementation": {"sha256": "0" * 64, "returncode": 0},
+        "results": results,
+    }
+
+
 def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Path):
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
@@ -265,8 +275,8 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
     matrix = tmp_path / "health.json"
     matrix.write_text(
         json.dumps(
-            {
-                "results": [
+            _health_artifact(
+                [
                     {
                         "expected": {"state": "broken", "action": "inspect_local_health"},
                         "observed": {"health_state": "broken", "suggested_action_ids": ["inspect_local_health"]},
@@ -280,7 +290,7 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
                         "observed": {"health_state": "broken", "suggested_action_ids": []},
                     },
                 ]
-            }
+            )
         )
     )
 
@@ -311,14 +321,14 @@ def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path:
     matrix = tmp_path / "health.json"
     matrix.write_text(
         json.dumps(
-            {
-                "results": [
+            _health_artifact(
+                [
                     {
                         "expected": {"state": "healthy", "action": "none"},
                         "observed": {"health_state": "healthy", "suggested_action_ids": []},
                     }
                 ]
-            }
+            )
         )
     )
 
@@ -336,8 +346,8 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
     matrix = tmp_path / "health.json"
     matrix.write_text(
         json.dumps(
-            {
-                "results": [
+            _health_artifact(
+                [
                     {
                         "expected": {"state": "broken", "action": "inspect_local_health"},
                         "observed": {
@@ -346,7 +356,7 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
                         },
                     }
                 ]
-            }
+            )
         )
     )
     matrix_copy = tmp_path / "health-copy.json"
@@ -356,6 +366,39 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
 
     assert report["health_fault_matrix"]["case_count"] == 1
     assert report["measures"]["false_red_rate"]["denominator"] == 1
+
+
+def test_malformed_health_label_invalidates_the_entire_artifact(tmp_path: Path):
+    matrix = tmp_path / "health.json"
+    matrix.write_text(
+        json.dumps(
+            _health_artifact(
+                [
+                    {
+                        "expected": {"state": "not-a-health-state", "action": "none"},
+                        "observed": {"health_state": "healthy", "suggested_action_ids": []},
+                    },
+                    {
+                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "observed": {
+                            "health_state": "healthy",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
+                    },
+                ]
+            )
+        )
+    )
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["report_status"] == "invalid"
+    assert report["health_fault_matrix"]["case_count"] == 0
+    assert report["measures"]["hidden_failure_rate"]["status"] == "not_observed"
+    assert report["inputs"]["health_artifacts"] == []
+    assert report["inputs"]["invalid_artifacts"] == [
+        {"path": str(matrix), "error": "health result 0.expected.state is invalid"}
+    ]
 
 
 def test_repeated_matrix_content_is_counted_once(tmp_path: Path):
