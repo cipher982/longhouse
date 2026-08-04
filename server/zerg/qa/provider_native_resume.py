@@ -395,6 +395,7 @@ def _start_transcript_shipper(
     engine_environment = dict(environment)
     engine_environment["HOME"] = str(home)
     engine_environment["LONGHOUSE_HOME"] = str(longhouse_home)
+    environment["LONGHOUSE_HOME"] = str(longhouse_home)
     if provider != "claude":
         # A Codex/OpenCode/Cursor qualification may inherit the factory's
         # staged Claude profile. Do not let the shipper use that profile as a
@@ -932,6 +933,8 @@ def _command_from_resume_intent(
     args: argparse.Namespace,
     session_id: str,
     intent: dict[str, Any],
+    *,
+    use_credential_files: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     expected_argv = [
         "longhouse",
@@ -953,14 +956,10 @@ def _command_from_resume_intent(
     if not identity_valid:
         raise RuntimeError("provider-neutral Resume intent did not match the exact session, provider, cwd, and native selector")
     selector_index = expected_argv.index(spec.resume_flag)
-    overrides = [
-        "--url",
-        args.api_url,
-        "--token",
-        args.agents_token,
-        spec.binary_flag,
-        str(args.provider_bin),
-    ]
+    overrides = ["--url", args.api_url]
+    if not use_credential_files:
+        overrides.extend(("--token", args.agents_token))
+    overrides.extend((spec.binary_flag, str(args.provider_bin)))
     if spec.provider == "cursor":
         overrides.extend(("--permission-mode", "auto_approve"))
     command = [str(args.longhouse_cli), *expected_argv[1:selector_index], *overrides, *expected_argv[selector_index:]]
@@ -973,10 +972,10 @@ def _command_from_resume_intent(
         "executed_argv_sha256": f"sha256:{hashlib.sha256(json.dumps(command, separators=(',', ':')).encode()).hexdigest()}",
         "factory_overrides": [
             "runtime_host",
-            "agents_token",
             "provider_binary",
             *(("permission_mode",) if spec.provider == "cursor" else ()),
         ],
+        "credential_source": "disposable_machine_file" if use_credential_files else "argv_token",
     }
     return command, receipt
 
@@ -1084,7 +1083,13 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
     }
 
 
-def _launch_command(spec: ProviderSpec, args: argparse.Namespace, session_id: str | None) -> list[str]:
+def _launch_command(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    session_id: str | None,
+    *,
+    use_credential_files: bool = False,
+) -> list[str]:
     command = [
         str(args.longhouse_cli),
         spec.provider,
@@ -1092,11 +1097,10 @@ def _launch_command(spec: ProviderSpec, args: argparse.Namespace, session_id: st
         str(args.repo_root),
         "--url",
         args.api_url,
-        "--token",
-        args.agents_token,
-        spec.binary_flag,
-        str(args.provider_bin),
     ]
+    if not use_credential_files:
+        command.extend(("--token", args.agents_token))
+    command.extend((spec.binary_flag, str(args.provider_bin)))
     if spec.provider == "cursor":
         command.extend(("--permission-mode", "auto_approve"))
     if session_id is not None:
@@ -1188,7 +1192,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         initial = PtyProcess(
-            _launch_command(spec, args, None),
+            _launch_command(spec, args, None, use_credential_files=True),
             cwd=args.repo_root,
             env=environment,
             recording=root / "initial.tty",
@@ -1224,6 +1228,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             args,
             initial_state["session_id"],
             resume_intent,
+            use_credential_files=True,
         )
         _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         resumed = PtyProcess(

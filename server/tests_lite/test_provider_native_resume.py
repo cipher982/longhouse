@@ -226,6 +226,10 @@ def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path)
         assert command[command.index(selector) + 1] == session_id
         assert command[command.index(SPECS[provider].binary_flag) + 1] == str(args.provider_bin)
 
+        secure_command = _launch_command(SPECS[provider], args, session_id, use_credential_files=True)
+        assert args.agents_token not in secure_command
+        assert secure_command[secure_command.index(selector) + 1] == session_id
+
 
 @pytest.mark.parametrize(
     ("provider", "selector"),
