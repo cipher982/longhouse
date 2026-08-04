@@ -98,3 +98,126 @@ def test_success_measurements_include_post_teardown_completion() -> None:
         "cleanup_completed_at"
     ]
     assert result["measurements"]["run_duration_seconds"] == 4.0
+
+
+def test_temporary_root_deletion_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    temporary_root = tmp_path / "temporary-root"
+    temporary_root.mkdir()
+
+    def fail_rmtree(*args: object, **kwargs: object) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(_MODULE.shutil, "rmtree", fail_rmtree)
+
+    with pytest.raises(_MODULE.ProcessScanFailure, match="deletion failed"):
+        _MODULE.remove_temporary_root(temporary_root)
+
+
+def test_run_matrix_records_completion_after_teardown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    events: list[str] = []
+    provider_root: Path | None = None
+    retry_count_calls = 0
+
+    class FakeEngine:
+        def wait(self, **kwargs: object) -> None:
+            return None
+
+    def fake_resolve_file(raw: str | None, name: str) -> Path:
+        return tmp_path / name
+
+    def fake_run_provider_live(*args: object, **kwargs: object) -> tuple[dict, None]:
+        nonlocal provider_root
+        provider_root = kwargs["root"]
+        return (
+            {
+                "provider": "claude",
+                "launch_intent_created": True,
+                "provider_cwd": str(provider_root / "provider"),
+                "session_id_observed": "session-1",
+                "provider_ready_observed": True,
+                "startup_failure": None,
+                "provider_pid": 123,
+                "launcher_pid": 456,
+            },
+            None,
+        )
+
+    def fake_read_retry_count(root: Path) -> int:
+        nonlocal retry_count_calls
+        retry_count_calls += 1
+        return 1 if retry_count_calls == 1 else 0
+
+    def fake_read_retry_intents(root: Path) -> list[dict[str, object]]:
+        assert provider_root is not None
+        return [
+            {
+                "provider_name": "claude",
+                "expected_session_id": "session-1",
+                "provider_ready": True,
+                "provider_pid": 123,
+                "provider_process_start_time": "start-1",
+                "provider_exited": False,
+                "launcher_pid": 456,
+                "attempts": 1,
+            }
+        ]
+
+    def fake_record_success_measurements(
+        artifact: dict[str, object], **kwargs: object
+    ) -> dict[str, object]:
+        nonlocal measurement_helper_called
+        measurement_helper_called = True
+        assert events == ["temporary-root-deleted"]
+        return artifact
+
+    original_rmtree = _MODULE.shutil.rmtree
+    measurement_helper_called = False
+
+    def tracked_rmtree(path: Path, **kwargs: object) -> None:
+        events.append("temporary-root-deleted")
+        original_rmtree(path, **kwargs)
+
+    monkeypatch.setattr(_MODULE, "resolve_file", fake_resolve_file)
+    monkeypatch.setattr(_MODULE, "version_probe", lambda path: {"returncode": 0})
+    monkeypatch.setattr(_MODULE, "run_provider_live", fake_run_provider_live)
+    monkeypatch.setattr(_MODULE, "read_retry_count", fake_read_retry_count)
+    monkeypatch.setattr(_MODULE, "read_retry_intents", fake_read_retry_intents)
+    monkeypatch.setattr(
+        _MODULE, "retry_intent_matches_launch", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "launch_attempt_states",
+        lambda *args: {"session-1": "adopted"},
+    )
+    monkeypatch.setattr(_MODULE, "start_host", lambda *args, **kwargs: object())
+    monkeypatch.setattr(_MODULE, "stop_host", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_MODULE, "stop_processes_for_root", lambda *args: None)
+    monkeypatch.setattr(_MODULE, "create_device_token", lambda *args: "token")
+    monkeypatch.setattr(_MODULE, "runtime_env", lambda *args: {})
+    monkeypatch.setattr(_MODULE, "kill_group", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_MODULE.subprocess, "Popen", lambda *args, **kwargs: FakeEngine())
+    monkeypatch.setattr(_MODULE, "source_provenance", lambda path: {})
+    monkeypatch.setattr(_MODULE, "harness_provenance", lambda: {})
+    monkeypatch.setattr(_MODULE.shutil, "rmtree", tracked_rmtree)
+    monkeypatch.setattr(
+        _MODULE, "record_success_measurements", fake_record_success_measurements
+    )
+
+    args = SimpleNamespace(
+        longhouse_bin=None,
+        engine_bin=None,
+        evidence_root=tmp_path / "evidence",
+        provider=["claude"],
+        credentialed=False,
+        concurrent=False,
+        cold_restart=False,
+        allow_unqualified_recovery=False,
+    )
+
+    _MODULE.run_matrix(args)
+    assert measurement_helper_called is True

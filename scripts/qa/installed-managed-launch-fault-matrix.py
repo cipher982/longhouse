@@ -190,7 +190,7 @@ def source_provenance(path: Path) -> dict[str, Any]:
 
 
 def harness_provenance() -> dict[str, Any]:
-    """Bind evidence to the exact harness bytes, commit, and invocation."""
+    """Bind evidence to the harness and Runtime Host checkout."""
 
     path = Path(__file__).resolve()
     repository = path.parents[2]
@@ -207,13 +207,32 @@ def harness_provenance() -> dict[str, Any]:
         text=True,
         check=False,
     )
+    repository_status = subprocess.run(
+        ["git", "-C", str(repository), "status", "--short"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    repository_git_sha = revision.stdout.strip() if revision.returncode == 0 else None
+    harness_file_dirty = (
+        bool(dirty.stdout.strip()) if dirty.returncode == 0 else None
+    )
+    repository_dirty = (
+        bool(repository_status.stdout.strip())
+        if repository_status.returncode == 0
+        else None
+    )
     return {
         "path": str(path),
-        "git_sha": revision.stdout.strip() if revision.returncode == 0 else None,
+        "git_sha": repository_git_sha,
+        "repository": str(repository),
+        "repository_git_sha": repository_git_sha,
+        "repository_dirty": repository_dirty,
         "sha256": sha256_file(path),
         "argv": list(sys.argv),
         "cwd": os.getcwd(),
-        "dirty": bool(dirty.stdout.strip()) if dirty.returncode == 0 else None,
+        "dirty": repository_dirty,
+        "harness_file_dirty": harness_file_dirty,
     }
 
 
@@ -228,6 +247,20 @@ def resolve_file(raw: str | None, name: str) -> Path:
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
         raise RuntimeError(f"provider executable is not runnable: {candidate}")
     return candidate
+
+
+def remove_temporary_root(temp_root: Path) -> None:
+    """Remove the disposable credential root or fail closed."""
+    try:
+        shutil.rmtree(temp_root)
+    except Exception as error:  # noqa: BLE001 - cleanup must be reported.
+        raise ProcessScanFailure(
+            f"temporary-root deletion failed for {temp_root}: {error}"
+        ) from error
+    if temp_root.exists():
+        raise ProcessScanFailure(
+            f"temporary-root deletion left the path present: {temp_root}"
+        )
 
 
 def version_probe(path: Path) -> dict[str, Any]:
@@ -2661,7 +2694,12 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 f"temporary-root cleanup {type(error).__name__}: {error}"
             )
         if os.environ.get("LONGHOUSE_KEEP_INSTALLED_FAULT_ROOT") != "1":
-            shutil.rmtree(temp_root, ignore_errors=True)
+            try:
+                remove_temporary_root(temp_root)
+            except Exception as error:  # noqa: BLE001 - cleanup must be reported.
+                cleanup_errors.append(
+                    f"temporary-root deletion {type(error).__name__}: {error}"
+                )
         cleanup_completed_at = utc_now()
         cleanup_completed_monotonic = time.monotonic()
         if cleanup_errors:
