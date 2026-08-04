@@ -1827,10 +1827,10 @@ class RecallCoverage(BaseModel):
     projector: str = Field(min_length=1)
     cutover_certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
     cutover_certified_at: str = Field(min_length=1)
-    catalog_lag_count: int = Field(ge=0)
+    catalog_lag_count: int = Field(ge=0, le=100)
     catalog_indexed_through: str = Field(pattern=r"^[0-9]+$")
     catalog_oldest_lag_at: Optional[str] = None
-    catalog_oldest_lag_seconds: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    catalog_oldest_lag_seconds: Optional[float] = Field(default=None, ge=0, le=300, allow_inf_nan=False)
     catalog_commit_seq: str = Field(pattern=r"^[0-9]+$")
     catalog_observed_at: str = Field(min_length=1)
     resident_stale: bool
@@ -1850,6 +1850,8 @@ class RecallCoverage(BaseModel):
             raise ValueError("cutover certificate cannot exceed the observed catalog watermark")
         if self.catalog_lag_count == 0 and (self.catalog_oldest_lag_at is not None or self.catalog_oldest_lag_seconds is not None):
             raise ValueError("zero catalog lag cannot have an oldest lag")
+        if self.catalog_lag_count == 0 and self.catalog_indexed_through != self.catalog_commit_seq:
+            raise ValueError("complete recall coverage requires the current catalog watermark")
         if self.catalog_lag_count > 0 and (self.catalog_oldest_lag_at is None or self.catalog_oldest_lag_seconds is None):
             raise ValueError("nonzero catalog lag requires its oldest age")
         if self.expected_sessions != self.published_sessions:

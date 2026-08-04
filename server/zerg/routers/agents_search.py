@@ -165,6 +165,8 @@ class _ProjectorCoveragePayload(BaseModel):
     def validate_head_shape(self) -> "_ProjectorCoveragePayload":
         if self.lag_count == 0 and (self.oldest_lag_at is not None or self.oldest_lag_seconds is not None):
             raise ValueError("zero projector lag cannot have an oldest lag")
+        if self.lag_count == 0 and self.indexed_through != self.commit_seq:
+            raise ValueError("zero projector lag requires the current catalog watermark")
         if self.lag_count > 0 and (self.oldest_lag_at is None or self.oldest_lag_seconds is None):
             raise ValueError("nonzero projector lag requires its oldest age")
         if self.certificate is not None and int(self.certificate.certified_commit_seq) > int(self.commit_seq):
