@@ -3311,8 +3311,8 @@ fn print_native_fast_local_health(health: &NativeFastLocalHealth) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
     use serde_json::json;
+    use std::collections::BTreeSet;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
