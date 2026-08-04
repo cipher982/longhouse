@@ -56,6 +56,7 @@ def test_provider_runtime_environment_isolated_from_worker_profile(tmp_path: Pat
     assert environment["XDG_CONFIG_HOME"] == str(provider_home / ".config")
     assert environment["XDG_DATA_HOME"] == str(provider_home / ".local" / "share")
     assert environment["XDG_CACHE_HOME"] == str(provider_home / ".cache")
+    assert environment["LONGHOUSE_HOME"] == str(tmp_path / "isolation" / "longhouse")
     assert environment["PROBE_VALUE"] == "preserved"
     assert "CODEX_API_KEY" not in environment
     assert "OPENAI_API_KEY" not in environment
@@ -87,6 +88,7 @@ def test_start_bridge_passes_isolated_environment_to_engine(
     assert isinstance(environment, dict)
     assert environment["HOME"] == str(isolation_root / "provider-home")
     assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
+    assert environment["LONGHOUSE_HOME"] == str(isolation_root / "longhouse")
     assert environment["LONGHOUSE_CODEX_BRIDGE_TOKEN"] == "test-agents-token"
 
 

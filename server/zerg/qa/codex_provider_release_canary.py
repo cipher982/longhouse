@@ -972,6 +972,12 @@ def _provider_runtime_environment(
             "XDG_CONFIG_HOME": str(xdg_config_home),
             "XDG_DATA_HOME": str(xdg_data_home),
             "XDG_CACHE_HOME": str(xdg_cache_home),
+            # The bridge and the qualification's Machine Agent must share the
+            # same Longhouse home.  Without this explicit binding the bridge
+            # falls back to provider_home/.longhouse while the shipper watches
+            # isolation_root/longhouse, so its durable terminal event never
+            # reaches the Runtime Host and Resume remains run_active.
+            "LONGHOUSE_HOME": str(isolation_root / "longhouse"),
         }
     )
     return environment
