@@ -185,23 +185,58 @@ struct LonghouseMenuBarCoreTests {
         let snapshot = presentationSnapshot(
             reasons: ["storage_v2_sources_blocked"],
             sessions: [presentationSession(phase: "needs permission")],
-            storageBlocked: 1
+            storageBlocked: 1,
+            storageBlockKind: "source_epoch_conflict_unresolved"
         )
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .repair)
-        #expect(presentation.headline == "Durable upload blocked for 1 source")
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
     }
 
     @Test
     func nativePayloadConflictPromotesRepairWithoutReasonCode() {
-        let snapshot = presentationSnapshot(sessions: [], storageBlocked: 2)
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 2,
+            storageBlockKind: "source_epoch_conflict_unresolved"
+        )
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .repair)
-        #expect(presentation.headline == "Durable upload blocked for 2 sources")
+        #expect(presentation.headline == "Durable upload needs inspection for 2 sources")
+    }
+
+    @Test
+    func reconcilableSourceConflictStaysAmber() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 2,
+            storageBlockKind: "source_epoch_conflict"
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let durable = presentation.facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Source upload reconciliation pending for 2 sources")
+        #expect(durable?.promotion == .inspect)
+    }
+
+    @Test
+    func unknownSourceConflictRequiresInspection() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 1,
+            storageBlockKind: nil
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
     }
 
     @Test
@@ -2955,6 +2990,7 @@ private func presentationSnapshot(
     sessions: [ManagedSessionSnapshot],
     archive: ArchiveBacklogStatus? = nil,
     storageBlocked: Int = 0,
+    storageBlockKind: String? = nil,
     storagePending: Int = 0,
     shipFailures: Int = 0,
     isOffline: Bool = false,
@@ -2976,7 +3012,7 @@ private func presentationSnapshot(
                 spoolPendingCount: 0, spoolDeadCount: 0, archiveBacklog: archive,
                 storageV2Outbox: StorageV2OutboxStatus(
                     pendingCount: storagePending, pendingBytes: 0, blockedSourceCount: storageBlocked,
-                    blockedBytes: 0, latestBlockKind: nil, latestBlockDetail: nil,
+                    blockedBytes: 0, latestBlockKind: storageBlockKind, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, consecutiveShipFailures: shipFailures, diskFreeBytes: nil,

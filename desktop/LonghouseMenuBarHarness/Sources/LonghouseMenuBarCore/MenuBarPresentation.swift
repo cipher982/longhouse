@@ -78,7 +78,7 @@ extension HealthSnapshot {
         let idle = max(0, sessions.count - needsUser - working - blocked - degraded - unavailable - unknown)
 
         let repairReasons: Set<String> = [
-            "storage_v2_sources_blocked", "storage_v2_outbox_unreadable",
+            "storage_v2_outbox_unreadable",
             "service_stopped", "spool_dead", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
@@ -94,13 +94,15 @@ extension HealthSnapshot {
         let shippingFailures = engineStatus?.fresh == false
             ? 0
             : engineStatus?.payload?.consecutiveShipFailures ?? 0
+        let storageBlockRequiresRepair = self.storageBlockRequiresRepair
+        let storageBlockIsRecovering = self.storageBlockIsRecovering
 
         let promotion: MenuBarPromotion
-        if storageBlockedCount > 0 || !repairReasons.isDisjoint(with: reasons) || isSetupRequired || isInstallLocationBlocked {
+        if storageBlockRequiresRepair || !repairReasons.isDisjoint(with: reasons) || isSetupRequired || isInstallLocationBlocked {
             promotion = .repair
         } else if needsUser > 0 {
             promotion = .needsUser
-        } else if degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
+        } else if storageBlockIsRecovering || degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
         } else if !unavailableReasons.isDisjoint(with: reasons)
             || engineStatus?.error != nil
@@ -112,8 +114,8 @@ extension HealthSnapshot {
 
         let headline: String
         switch promotion {
-        case .repair where storageBlockedCount > 0:
-            headline = "Durable upload blocked for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+        case .repair where storageBlockRequiresRepair:
+            headline = "Durable upload needs inspection for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .repair where isSetupRequired:
             headline = "Finish setup on this Mac"
         case .repair where isInstallLocationBlocked:
@@ -122,6 +124,8 @@ extension HealthSnapshot {
             headline = "Local shipping needs repair"
         case .needsUser:
             headline = "\(needsUser) session\(needsUser == 1 ? "" : "s") need\(needsUser == 1 ? "s" : "") you"
+        case .inspect where storageBlockIsRecovering:
+            headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where degraded > 0:
             headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
         case .inspect where shippingFailures > 0:
@@ -200,7 +204,7 @@ extension HealthSnapshot {
             durablePromotion = .unavailable
         } else if storageBlockedCount > 0 {
             durableValue = "\(storageBlockedCount) source conflict\(storageBlockedCount == 1 ? "" : "s")"
-            durablePromotion = .repair
+            durablePromotion = storageBlockRequiresRepair ? .repair : .inspect
         } else if storagePendingCount > 0 {
             durableValue = "\(storagePendingCount) pending"
             durablePromotion = .normal

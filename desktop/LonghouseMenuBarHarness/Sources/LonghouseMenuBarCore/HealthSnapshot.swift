@@ -481,6 +481,28 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         engineStatus?.payload?.storageV2Outbox?.blockedSourceCount ?? 0
     }
 
+    /// A blocked source is not automatically a data-loss incident. The
+    /// shipper leaves a source in `source_epoch_conflict` while its typed
+    /// reconciliation path can still make progress. Only an unresolved or
+    /// unknown block kind should promote the machine to repair severity.
+    public var storageBlockKind: String? {
+        engineStatus?.payload?.storageV2Outbox?.latestBlockKind
+    }
+
+    public var storageBlockRequiresRepair: Bool {
+        guard storageBlockedCount > 0 else { return false }
+        switch storageBlockKind {
+        case "source_epoch_conflict", "render_generation_revision_conflict":
+            return false
+        default:
+            return true
+        }
+    }
+
+    public var storageBlockIsRecovering: Bool {
+        storageBlockedCount > 0 && !storageBlockRequiresRepair
+    }
+
     public var pipelineValueLabel: String {
         let pending = engineStatus?.payload?.spoolPendingCount ?? 0
         let dead = engineStatus?.payload?.spoolDeadCount ?? 0

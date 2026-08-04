@@ -839,6 +839,11 @@ fn native_desktop_health_from_parts(
         })
     });
 
+    let suggested_actions = native_desktop_suggested_actions(
+        engine_payload.as_ref(),
+        &fast.reasons,
+    );
+
     NativeDesktopHealth {
         schema_version: 1,
         collection_tier: "native_fast",
@@ -847,9 +852,7 @@ fn native_desktop_health_from_parts(
         severity,
         headline: fast.headline,
         reasons: fast.reasons,
-        // The rollup that produces real remediation text is `_classify_health`,
-        // which is not ported yet. Emit nothing rather than inventing advice.
-        suggested_actions: Vec::new(),
+        suggested_actions,
         engine_status: NativeDesktopEngineStatus {
             path: fast.engine_status.path,
             exists: fast.engine_status.exists,
@@ -871,6 +874,39 @@ fn native_desktop_health_from_parts(
         control_channel: fast.control_channel,
         build: fast.build,
     }
+}
+
+fn native_desktop_suggested_actions(
+    engine_payload: Option<&Value>,
+    reasons: &[String],
+) -> Vec<String> {
+    if reasons.iter().any(|reason| reason == "storage_v2_sources_blocked") {
+        let block_kind = engine_payload
+            .and_then(|value| value.get("storage_v2_outbox"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("latest_block_kind"))
+            .and_then(Value::as_str);
+        return match block_kind {
+            Some("source_epoch_conflict" | "render_generation_revision_conflict") => vec![
+                "Source reconciliation is pending; inspect engine-status.json for progress."
+                    .to_string(),
+            ],
+            _ => vec![
+                "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
+                    .to_string(),
+            ],
+        };
+    }
+    if reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_outbox_unreadable")
+    {
+        return vec![
+            "Run: longhouse doctor".to_string(),
+            "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
+        ];
+    }
+    Vec::new()
 }
 
 fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
@@ -3106,6 +3142,36 @@ mod tests {
         assert_eq!(value["managed_summary"]["attached_count"], 1);
         // Never claimed, because this producer does not look for orphan bridges.
         assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+    }
+
+    #[test]
+    fn native_desktop_health_scopes_storage_actions_by_block_kind() {
+        let reconciling = serde_json::json!({
+            "storage_v2_outbox": {
+                "latest_block_kind": "source_epoch_conflict"
+            }
+        });
+        let unresolved = serde_json::json!({
+            "storage_v2_outbox": {
+                "latest_block_kind": "source_epoch_conflict_unresolved"
+            }
+        });
+        let reasons = vec!["storage_v2_sources_blocked".to_string()];
+
+        let reconciling_actions =
+            native_desktop_suggested_actions(Some(&reconciling), &reasons);
+        let unresolved_actions = native_desktop_suggested_actions(Some(&unresolved), &reasons);
+
+        assert_eq!(
+            reconciling_actions,
+            vec!["Source reconciliation is pending; inspect engine-status.json for progress."]
+        );
+        assert_eq!(
+            unresolved_actions,
+            vec![
+                "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
+            ]
+        );
     }
 
     /// The canonical envelope both the Rust golden test and the Swift consumer

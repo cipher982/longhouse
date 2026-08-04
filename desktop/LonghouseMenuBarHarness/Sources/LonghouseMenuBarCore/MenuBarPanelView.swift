@@ -447,8 +447,8 @@ public struct MenuBarPanelView: View {
     }
 
     private var repairGuidance: String {
-        if snapshot.storageBlockedCount > 0 {
-            return "Local source evidence is retained. Inspect the source conflict before retrying or discarding it."
+        if snapshot.storageBlockRequiresRepair {
+            return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
         }
         if snapshot.isSetupRequired {
             return "Finish setup to install the local agent and connect this Mac."
@@ -829,11 +829,22 @@ public struct MenuBarPanelView: View {
 
     private var watchingActions: some View {
         VStack(spacing: 8) {
-            Button {
-                perform(.repairInstall)
-            } label: {
-                Label("Repair", systemImage: "wrench.and.screwdriver")
-                    .frame(maxWidth: .infinity)
+            Group {
+                if snapshot.storageBlockRequiresRepair {
+                    Button {
+                        perform(.runDoctor)
+                    } label: {
+                        Label("Inspect source evidence", systemImage: "doc.text.magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Repair", systemImage: "wrench.and.screwdriver")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
