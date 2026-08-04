@@ -762,25 +762,45 @@ fn native_fast_health_from_parts(
         .and_then(|value| value.get("spool_dead_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let blocked_source_count = object
-        .and_then(|value| value.get("storage_v2_outbox"))
-        .and_then(Value::as_object)
+    let storage_outbox_value = object.and_then(|value| value.get("storage_v2_outbox"));
+    let storage_outbox = storage_outbox_value.and_then(Value::as_object);
+    let storage_counter_is_invalid = |key: &str| {
+        storage_outbox
+            .and_then(|value| value.get(key))
+            .is_some_and(|value| value.as_u64().is_none())
+    };
+    let blocked_source_count = storage_outbox
         .and_then(|value| value.get("blocked_source_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let unresolved_blocked_source_count = object
-        .and_then(|value| value.get("storage_v2_outbox"))
-        .and_then(Value::as_object)
+    let unresolved_blocked_source_count = storage_outbox
         .and_then(|value| value.get("unresolved_blocked_source_count"))
         .and_then(Value::as_u64);
+    let storage_counter_proof_unknown = [
+        "blocked_source_count",
+        "reconciling_blocked_source_count",
+        "unresolved_blocked_source_count",
+    ]
+    .into_iter()
+    .any(storage_counter_is_invalid);
     let storage_block_requires_repair = match unresolved_blocked_source_count {
         Some(unresolved) => unresolved > 0,
         // A legacy payload has no aggregate proof. The latest block kind
         // cannot classify older retained sources without risking false green.
         None => false,
     };
-    let storage_block_proof_unknown =
-        unresolved_blocked_source_count.is_none() && blocked_source_count > 0;
+    let storage_block_proof_unknown = storage_counter_proof_unknown
+        || (unresolved_blocked_source_count.is_none() && blocked_source_count > 0);
+    let storage_outbox_unreadable = match storage_outbox_value {
+        Some(value) if !value.is_object() => true,
+        Some(_) => storage_outbox
+            .and_then(|value| value.get("error"))
+            .is_some_and(|error| match error {
+                Value::String(value) => !value.trim().is_empty(),
+                _ => !error.is_null(),
+            }),
+        None => false,
+    };
     let archive_backlog = object
         .and_then(|value| value.get("archive_backlog"))
         .and_then(Value::as_object);
@@ -861,6 +881,9 @@ fn native_fast_health_from_parts(
     if storage_block_requires_repair {
         reasons.push("storage_v2_sources_unresolved".to_string());
     }
+    if storage_outbox_unreadable {
+        reasons.push("storage_v2_outbox_unreadable".to_string());
+    }
     if managed_launch_recovery.exhausted_count > 0 {
         reasons.push("managed_launch_recovery_exhausted".to_string());
     }
@@ -902,6 +925,21 @@ fn native_fast_health_from_parts(
         .any(|reason| reason == "storage_v2_sources_unresolved")
     {
         "Longhouse has unresolved durable source evidence"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_exhausted")
+    {
+        "Longhouse could not recover a managed session"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_unreadable")
+    {
+        "Managed session recovery state is unreadable"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_outbox_unreadable")
+    {
+        "Source upload state unavailable"
     } else {
         match health_state.as_str() {
             "healthy" => "Longhouse native fast health is healthy",
@@ -1081,9 +1119,14 @@ fn native_desktop_suggested_actions(
     let has_storage_action = reasons.iter().any(|reason| {
         matches!(
             reason.as_str(),
-            "storage_v2_sources_blocked" | "storage_v2_sources_unresolved"
+            "storage_v2_sources_blocked"
+                | "storage_v2_sources_unresolved"
+                | "storage_v2_sources_proof_unknown"
         )
     });
+    let storage_proof_unknown = reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_sources_proof_unknown");
     let has_storage_outbox_action = reasons
         .iter()
         .any(|reason| reason == "storage_v2_outbox_unreadable");
@@ -1119,10 +1162,10 @@ fn native_desktop_suggested_actions(
             Some(unresolved) if unresolved > 0 => vec![
                 format!("Inspect retained source evidence with {inspect_command} before retrying or discarding it."),
             ],
-            Some(_) => vec![
+            Some(_) if !storage_proof_unknown => vec![
                 format!("Inspect retained source evidence: {inspect_command}."),
             ],
-            None => vec![
+            _ => vec![
                 "Update Longhouse and inspect the retained source evidence."
                     .to_string(),
             ],
@@ -3846,6 +3889,66 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_blocked".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_unreadable_storage_outbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {"error": "database locked"}
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_outbox_unreadable".to_string()));
+        assert_eq!(
+            native_desktop_suggested_action_ids(&health.reasons),
+            vec!["inspect_storage_outbox"]
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_does_not_treat_malformed_storage_count_as_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2.0,
+                    "unresolved_blocked_source_count": 0
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert_eq!(
+            health.reasons,
+            vec!["storage_v2_sources_proof_unknown".to_string()]
+        );
+        assert_eq!(
+            native_desktop_suggested_actions(
+                Some(&json!({
+                    "storage_v2_outbox": {
+                        "blocked_source_count": 2.0,
+                        "unresolved_blocked_source_count": 0
+                    }
+                })),
+                &health.reasons
+            ),
+            vec!["Update Longhouse and inspect the retained source evidence.".to_string()]
+        );
     }
 
     #[test]

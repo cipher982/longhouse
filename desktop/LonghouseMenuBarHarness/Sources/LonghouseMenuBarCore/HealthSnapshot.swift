@@ -509,16 +509,23 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     /// The latest block kind cannot classify every retained source, so expose
     /// that version skew as inspectable uncertainty instead of health.
     public var storageBlockProofUnknown: Bool {
-        storageBlockedCount > 0
-            && engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount == nil
+        if reasons.contains("storage_v2_sources_proof_unknown") {
+            return true
+        }
+        guard let storage = engineStatus?.payload?.storageV2Outbox else { return false }
+        return storage.malformedCounter
+            || (storageBlockedCount > 0 && storage.unresolvedBlockedSourceCount == nil)
     }
 
     public var storageBlockRequiresRepair: Bool {
-        guard storageBlockedCount > 0 else { return false }
-        if engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount != nil {
-            return storageUnresolvedBlockCount > 0
+        if reasons.contains("storage_v2_sources_unresolved") {
+            return true
         }
-        return false
+        guard let storage = engineStatus?.payload?.storageV2Outbox,
+              !storage.malformedCounter,
+              storageBlockedCount > 0
+        else { return false }
+        return storageUnresolvedBlockCount > 0
     }
 
     public var storageBlockIsRecovering: Bool {
@@ -1501,6 +1508,10 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
     public let latestBlockDetail: String?
     public let byteLimit: UInt64?
     public let error: String?
+    /// A producer emitted a present storage counter with an unsupported JSON
+    /// type. Keep the envelope decodable and expose proof uncertainty rather
+    /// than silently turning the value into zero.
+    public let malformedCounter: Bool
 
     public init(
         pendingCount: Int?, pendingBytes: UInt64?, blockedSourceCount: Int?,
@@ -1509,7 +1520,7 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
         blockedBytes: UInt64?, latestBlockSourceEpoch: String? = nil,
         latestUnresolvedBlockSourceEpoch: String? = nil,
         latestBlockKind: String?, latestBlockDetail: String?,
-        byteLimit: UInt64?, error: String?
+        byteLimit: UInt64?, error: String?, malformedCounter: Bool = false
     ) {
         self.pendingCount = pendingCount
         self.pendingBytes = pendingBytes
@@ -1523,6 +1534,69 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
         self.latestBlockDetail = latestBlockDetail
         self.byteLimit = byteLimit
         self.error = error
+        self.malformedCounter = malformedCounter
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pendingCount
+        case pendingBytes
+        case blockedSourceCount
+        case reconcilingBlockedSourceCount
+        case unresolvedBlockedSourceCount
+        case blockedBytes
+        case latestBlockSourceEpoch
+        case latestUnresolvedBlockSourceEpoch
+        case latestBlockKind
+        case latestBlockDetail
+        case byteLimit
+        case error
+    }
+
+    private static func decodeLossyInt(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> (value: Int?, malformed: Bool) {
+        guard container.contains(key) else { return (nil, false) }
+        if (try? container.decodeNil(forKey: key)) == true {
+            return (nil, false)
+        }
+        do {
+            return (try container.decode(Int.self, forKey: key), false)
+        } catch {
+            return (nil, true)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let pendingCount = Self.decodeLossyInt(from: container, forKey: .pendingCount)
+        let blockedSourceCount = Self.decodeLossyInt(from: container, forKey: .blockedSourceCount)
+        let reconcilingBlockedSourceCount = Self.decodeLossyInt(
+            from: container,
+            forKey: .reconcilingBlockedSourceCount
+        )
+        let unresolvedBlockedSourceCount = Self.decodeLossyInt(
+            from: container,
+            forKey: .unresolvedBlockedSourceCount
+        )
+        self.init(
+            pendingCount: pendingCount.value,
+            pendingBytes: try container.decodeIfPresent(UInt64.self, forKey: .pendingBytes),
+            blockedSourceCount: blockedSourceCount.value,
+            reconcilingBlockedSourceCount: reconcilingBlockedSourceCount.value,
+            unresolvedBlockedSourceCount: unresolvedBlockedSourceCount.value,
+            blockedBytes: try container.decodeIfPresent(UInt64.self, forKey: .blockedBytes),
+            latestBlockSourceEpoch: try container.decodeIfPresent(String.self, forKey: .latestBlockSourceEpoch),
+            latestUnresolvedBlockSourceEpoch: try container.decodeIfPresent(String.self, forKey: .latestUnresolvedBlockSourceEpoch),
+            latestBlockKind: try container.decodeIfPresent(String.self, forKey: .latestBlockKind),
+            latestBlockDetail: try container.decodeIfPresent(String.self, forKey: .latestBlockDetail),
+            byteLimit: try container.decodeIfPresent(UInt64.self, forKey: .byteLimit),
+            error: try container.decodeIfPresent(String.self, forKey: .error),
+            malformedCounter: pendingCount.malformed
+                || blockedSourceCount.malformed
+                || reconcilingBlockedSourceCount.malformed
+                || unresolvedBlockedSourceCount.malformed
+        )
     }
 }
 

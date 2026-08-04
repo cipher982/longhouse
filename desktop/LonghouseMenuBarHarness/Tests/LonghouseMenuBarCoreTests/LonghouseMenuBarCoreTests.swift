@@ -3103,6 +3103,40 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func malformedStorageCounterKeepsNativeEnvelopeDecodableAndInspectable() throws {
+        let data = Data("""
+        {
+          "schema_version": 1,
+          "collected_at": "2026-08-04T20:00:00Z",
+          "health_state": "degraded",
+          "severity": "yellow",
+          "headline": "Longhouse native fast health needs attention",
+          "reasons": ["storage_v2_sources_proof_unknown"],
+          "suggested_actions": ["Update Longhouse and inspect the retained source evidence."],
+          "suggested_action_ids": ["inspect_storage_source"],
+          "engine_status": {
+            "path": "/tmp/engine-status.json",
+            "exists": true,
+            "fresh": true,
+            "age_seconds": 1,
+            "payload": {
+              "storage_v2_outbox": {
+                "blocked_source_count": "malformed",
+                "unresolved_blocked_source_count": 0
+              }
+            }
+          }
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+
+        #expect(snapshot.storageBlockProofUnknown)
+        #expect(snapshot.storageBlockRequiresRepair == false)
+        #expect(snapshot.suggestedActionIds == ["inspect_storage_source"])
+    }
+
+    @Test
     func projectionWithoutRuntimeHostAuthorityIsLeftAlone() {
         let localOnly = ManagedSessionSnapshot(
             sessionId: "s2", provider: "claude", workspaceLabel: "longhouse",

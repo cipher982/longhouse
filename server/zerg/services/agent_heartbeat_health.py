@@ -413,12 +413,21 @@ def _heartbeat_payload(row: Any) -> dict[str, Any]:
 
 
 def _nonnegative_int(value: Any) -> int:
-    if value is None or isinstance(value, bool):
+    if value is None or isinstance(value, bool) or not isinstance(value, int):
         return 0
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
+    return max(0, value)
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _counter_is_malformed(value: Any) -> bool:
+    return value is not None and _optional_nonnegative_int(value) is None
 
 
 def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
@@ -429,25 +438,36 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
     managed-launch recovery is already known to be broken on the owner host.
     """
     raw = _heartbeat_payload(row)
-    storage = raw.get("storage_v2_outbox")
-    storage = storage if isinstance(storage, dict) else None
+    storage_value = raw.get("storage_v2_outbox")
+    storage = storage_value if isinstance(storage_value, dict) else None
     recovery = raw.get("managed_launch_recovery")
     recovery = recovery if isinstance(recovery, dict) else None
     reasons: list[str] = []
     broken_reasons: list[str] = []
     degraded_reasons: list[str] = []
 
-    if storage is not None:
-        blocked = _nonnegative_int(storage.get("blocked_source_count"))
+    if storage is None and storage_value is not None:
+        reasons.append("storage_v2_outbox_unreadable")
+        degraded_reasons.append("storage_v2_outbox_unreadable")
+    elif storage is not None:
+        blocked_value = storage.get("blocked_source_count")
         unresolved_value = storage.get("unresolved_blocked_source_count")
-        unresolved = _nonnegative_int(unresolved_value) if unresolved_value is not None else None
+        reconciling_value = storage.get("reconciling_blocked_source_count")
+        blocked = _nonnegative_int(blocked_value)
+        unresolved = _optional_nonnegative_int(unresolved_value)
+        proof_unknown = (
+            _counter_is_malformed(blocked_value)
+            or _counter_is_malformed(unresolved_value)
+            or _counter_is_malformed(reconciling_value)
+            or (unresolved is None and blocked > 0)
+        )
         if blocked > 0 and (unresolved is None or unresolved == 0):
             reasons.append("storage_v2_sources_blocked")
             degraded_reasons.append("storage_v2_sources_blocked")
         if unresolved is not None and unresolved > 0:
             reasons.append("storage_v2_sources_unresolved")
             broken_reasons.append("storage_v2_sources_unresolved")
-        elif blocked > 0 and unresolved is None:
+        elif proof_unknown:
             reasons.append("storage_v2_sources_proof_unknown")
             degraded_reasons.append("storage_v2_sources_proof_unknown")
         if str(storage.get("error") or "").strip():

@@ -112,6 +112,11 @@ def _optional_nonnegative_int(value: Any) -> int | None:
     return value
 
 
+def _counter_is_malformed(value: Any) -> bool:
+    """Return whether a present health counter cannot be trusted."""
+    return value is not None and _optional_nonnegative_int(value) is None
+
+
 @dataclass
 class _HealthClassificationContext:
     service_status: str
@@ -707,12 +712,20 @@ def _health_classification_context(
     archive_pending_bytes = int(archive_repair.get("pending_bytes") or 0)
     archive_dead_ranges = int(archive_repair.get("dead_ranges") or 0)
     archive_dead_bytes = int(archive_repair.get("dead_bytes") or 0)
-    storage_v2_outbox = payload.get("storage_v2_outbox") or {}
-    if not isinstance(storage_v2_outbox, dict):
-        storage_v2_outbox = {}
-    blocked_source_count = _nonnegative_int(storage_v2_outbox.get("blocked_source_count"))
-    unresolved_blocked_source_count = _optional_nonnegative_int(storage_v2_outbox.get("unresolved_blocked_source_count"))
-    storage_block_proof_unknown = unresolved_blocked_source_count is None and blocked_source_count > 0
+    storage_v2_outbox_value = payload.get("storage_v2_outbox")
+    storage_outbox_payload_invalid = storage_v2_outbox_value is not None and not isinstance(storage_v2_outbox_value, dict)
+    storage_v2_outbox = storage_v2_outbox_value if isinstance(storage_v2_outbox_value, dict) else {}
+    blocked_source_value = storage_v2_outbox.get("blocked_source_count")
+    unresolved_source_value = storage_v2_outbox.get("unresolved_blocked_source_count")
+    reconciling_source_value = storage_v2_outbox.get("reconciling_blocked_source_count")
+    blocked_source_count = _nonnegative_int(blocked_source_value)
+    unresolved_blocked_source_count = _optional_nonnegative_int(unresolved_source_value)
+    storage_block_proof_unknown = not storage_outbox_payload_invalid and (
+        _counter_is_malformed(blocked_source_value)
+        or _counter_is_malformed(unresolved_source_value)
+        or _counter_is_malformed(reconciling_source_value)
+        or (unresolved_blocked_source_count is None and blocked_source_count > 0)
+    )
     latest_block_source_epoch = str(storage_v2_outbox.get("latest_block_source_epoch") or "").strip() or None
     latest_unresolved_block_source_epoch = str(storage_v2_outbox.get("latest_unresolved_block_source_epoch") or "").strip() or None
     if unresolved_blocked_source_count is None:
@@ -748,7 +761,11 @@ def _health_classification_context(
         storage_block_proof_unknown=storage_block_proof_unknown,
         storage_latest_block_source_epoch=latest_block_source_epoch,
         storage_latest_unresolved_block_source_epoch=latest_unresolved_block_source_epoch,
-        storage_outbox_error=str(storage_v2_outbox.get("error") or "").strip() or None,
+        storage_outbox_error=(
+            "storage_v2_outbox payload is not an object"
+            if storage_outbox_payload_invalid
+            else str(storage_v2_outbox.get("error") or "").strip() or None
+        ),
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
         outbox_oldest=outbox.get("oldest_age_seconds"),

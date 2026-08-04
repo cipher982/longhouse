@@ -213,6 +213,53 @@ def test_malformed_storage_proof_is_attention_not_classifier_failure():
     assert actions == ["Update Longhouse and inspect the retained source evidence."]
 
 
+def test_malformed_storage_counter_is_attention_not_false_green():
+    context = _health_classification_context(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "payload": {
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2.0,
+                    "unresolved_blocked_source_count": 0,
+                }
+            },
+        },
+        transport_sample=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    reasons, actions = _collect_health_reasons(context, transport_assessment=None)
+    assert reasons == ["storage_v2_sources_proof_unknown"]
+    assert actions == ["Update Longhouse and inspect the retained source evidence."]
+
+
+def test_unreadable_storage_outbox_is_degraded_and_actionable():
+    context = _health_classification_context(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "payload": {"storage_v2_outbox": {"error": "database locked"}},
+        },
+        transport_sample=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    reasons, actions = _collect_health_reasons(context, transport_assessment=None)
+    assert reasons == ["storage_v2_outbox_unreadable"]
+    assert actions == ["Inspect the storage-v2 outbox database error in engine-status.json"]
+
+
 def test_storage_reasons_use_a_stable_source_inspection_action_id():
     assert _suggested_action_ids(["storage_v2_sources_blocked", "storage_v2_sources_proof_unknown"]) == ["inspect_storage_source"]
 

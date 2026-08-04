@@ -115,6 +115,39 @@ def test_hosted_machine_health_projects_storage_and_managed_recovery_facts():
     )
 
 
+def test_hosted_machine_health_keeps_malformed_storage_counts_degraded():
+    facts = machine_health_service._local_health_facts_from_heartbeat(
+        SimpleNamespace(
+            raw_json=json.dumps(
+                {
+                    "storage_v2_outbox": {
+                        "blocked_source_count": 2.0,
+                        "unresolved_blocked_source_count": 0,
+                    }
+                }
+            )
+        )
+    )
+
+    assert facts["reasons"] == ("storage_v2_sources_proof_unknown",)
+    assert facts["broken_reasons"] == ()
+    assert facts["degraded_reasons"] == ("storage_v2_sources_proof_unknown",)
+
+
+def test_hosted_machine_health_surfaces_unreadable_storage_outbox():
+    facts = machine_health_service._local_health_facts_from_heartbeat(
+        SimpleNamespace(
+            raw_json=json.dumps(
+                {"storage_v2_outbox": {"error": "database locked"}}
+            )
+        )
+    )
+
+    assert facts["reasons"] == ("storage_v2_outbox_unreadable",)
+    assert facts["broken_reasons"] == ()
+    assert facts["degraded_reasons"] == ("storage_v2_outbox_unreadable",)
+
+
 def test_machine_health_surfaces_explicit_archive_pause_without_backlog():
     pinned_now = datetime(2026, 8, 4, 4, 30, 0, tzinfo=timezone.utc)
     row = SimpleNamespace(
