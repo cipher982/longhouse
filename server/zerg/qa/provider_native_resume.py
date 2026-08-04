@@ -1676,6 +1676,12 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
         method = "opencode_bridge_stop"
     else:
         process.send("\x04")
+        if spec.provider == "claude":
+            # Claude's TUI asks for a second EOF after the first one; without
+            # it the harness falls back to SIGTERM and the clean-exit cell is
+            # indistinguishable from a forced process loss.
+            time.sleep(0.2)
+            process.send("\x04")
         method = "claude_terminal_eof"
     exit_code = process.wait(30 if spec.provider == "opencode" else 10)
     fallback_signal: str | None = None
