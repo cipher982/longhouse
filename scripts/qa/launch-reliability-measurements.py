@@ -238,7 +238,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
     scope = "installed_health_fault_matrix"
     measurements = {
         "false_red_rate": {
-            "status": "observed" if total else "not_observed",
+            "status": "observed" if broken_cases else "not_observed",
             "scope": scope,
             "basis": "fault_matrix_expected_state",
             "numerator": false_red_cases,
@@ -249,10 +249,11 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
             "source": references,
         },
         "hidden_failure_rate": {
-            "status": "observed" if total else "not_observed",
+            "status": "observed" if eligible_failure_cases else "not_observed",
             "scope": scope,
             "numerator": hidden_failure_cases,
             "denominator": eligible_failure_cases,
+            "numerator_definition": "observed_healthy_expected_broken_or_degraded",
             "denominator_definition": "expected_broken_or_degraded_cases",
             "rate": (hidden_failure_cases / eligible_failure_cases) if eligible_failure_cases else None,
             "source": references,

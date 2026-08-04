@@ -230,7 +230,30 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
     }
     assert report["measures"]["hidden_failure_rate"]["numerator"] == 1
     assert report["measures"]["hidden_failure_rate"]["denominator"] == 2
+    assert report["measures"]["hidden_failure_rate"]["numerator_definition"] == "observed_healthy_expected_broken_or_degraded"
     assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "expected_broken_or_degraded_cases"
     assert report["measures"]["action_coverage"]["numerator"] == 1
     assert report["measures"]["action_coverage"]["denominator"] == 2
     assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_expected_action"
+
+
+def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path: Path):
+    matrix = tmp_path / "health.json"
+    matrix.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "expected": {"state": "healthy", "action": "none"},
+                        "observed": {"health_state": "healthy", "suggested_action_ids": []},
+                    }
+                ]
+            }
+        )
+    )
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["measures"]["false_red_rate"]["status"] == "not_observed"
+    assert report["measures"]["hidden_failure_rate"]["status"] == "not_observed"
+    assert report["measures"]["action_coverage"]["status"] == "not_observed"
