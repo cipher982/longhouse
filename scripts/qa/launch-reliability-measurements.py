@@ -142,7 +142,9 @@ HEALTH_EXPECTATIONS = {
     },
 }
 EXPECTED_HEALTH_SCENARIOS = frozenset(HEALTH_EXPECTATIONS)
-KNOWN_ACTION_IDS = frozenset(contract["action"] for contract in HEALTH_EXPECTATIONS.values())
+KNOWN_ACTION_IDS = frozenset(
+    contract["action"] for contract in HEALTH_EXPECTATIONS.values()
+)
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -180,7 +182,9 @@ def report_provenance() -> dict[str, Any]:
     path = Path(__file__).resolve()
     repository = path.parents[2]
     relative_path = path.relative_to(repository)
-    status_lines = _git(repository, "status", "--porcelain", "--untracked-files=all").splitlines()
+    status_lines = _git(
+        repository, "status", "--porcelain", "--untracked-files=all"
+    ).splitlines()
     file_status = _git(
         repository,
         "status",
@@ -232,7 +236,9 @@ def create_dogfood_challenge(path: Path) -> dict[str, Any]:
         "artifact_kind": DOGFOOD_CHALLENGE_ARTIFACT_KIND,
         "challenge_id": secrets.token_hex(16),
         "created_at": created_at.isoformat().replace("+00:00", "Z"),
-        "expires_at": (created_at + timedelta(hours=24)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (created_at + timedelta(hours=24))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "issuer": DOGFOOD_CHALLENGE_ISSUER,
         "key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii"),
         "nonce": secrets.token_urlsafe(32),
@@ -245,7 +251,9 @@ def create_dogfood_challenge(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _load_dogfood_challenges(paths: Iterable[Path], invalid: list[dict[str, str]]) -> dict[str, tuple[str, bytes, datetime, datetime]]:
+def _load_dogfood_challenges(
+    paths: Iterable[Path], invalid: list[dict[str, str]]
+) -> dict[str, tuple[str, bytes, datetime, datetime]]:
     challenges: dict[str, tuple[str, bytes, datetime, datetime]] = {}
     for raw_path in paths:
         path = raw_path.expanduser().resolve()
@@ -263,8 +271,12 @@ def _load_dogfood_challenges(paths: Iterable[Path], invalid: list[dict[str, str]
                 raise ValueError("dogfood challenge has no challenge_id")
             if not isinstance(nonce, str) or not nonce:
                 raise ValueError("dogfood challenge has no nonce")
-            created_at = _timestamp(payload.get("created_at"), label="dogfood challenge created_at")
-            expires_at = _timestamp(payload.get("expires_at"), label="dogfood challenge expires_at")
+            created_at = _timestamp(
+                payload.get("created_at"), label="dogfood challenge created_at"
+            )
+            expires_at = _timestamp(
+                payload.get("expires_at"), label="dogfood challenge expires_at"
+            )
             if expires_at <= created_at:
                 raise ValueError("dogfood challenge expires_at must follow created_at")
             if expires_at - created_at > timedelta(hours=24):
@@ -283,10 +295,17 @@ def _load_dogfood_challenges(paths: Iterable[Path], invalid: list[dict[str, str]
                 raise ValueError("dogfood challenge has no provenance")
             current = _collector_provenance()
             if provenance.get("git_sha") != current.get("git_sha"):
-                raise ValueError("dogfood challenge source revision does not match the report")
+                raise ValueError(
+                    "dogfood challenge source revision does not match the report"
+                )
             if provenance.get("generator_sha256") != current.get("generator_sha256"):
-                raise ValueError("dogfood challenge collector hash does not match the report")
-            if provenance.get("repository_dirty") is not False or provenance.get("generator_dirty") is not False:
+                raise ValueError(
+                    "dogfood challenge collector hash does not match the report"
+                )
+            if (
+                provenance.get("repository_dirty") is not False
+                or provenance.get("generator_dirty") is not False
+            ):
                 raise ValueError("dogfood challenge provenance is dirty")
             if challenge_id in challenges:
                 raise ValueError(f"duplicate dogfood challenge_id: {challenge_id}")
@@ -330,7 +349,11 @@ def discover_matrix_artifacts(inputs: Iterable[Path]) -> list[Path]:
 
 
 def _is_full_run(artifact: dict[str, Any]) -> bool:
-    provider_counts = Counter(str(entry.get("provider") or "") for entry in artifact.get("providers") or [] if isinstance(entry, dict))
+    provider_counts = Counter(
+        str(entry.get("provider") or "")
+        for entry in artifact.get("providers") or []
+        if isinstance(entry, dict)
+    )
     return (
         len(artifact.get("providers") or []) == 8
         and provider_counts == {provider: 2 for provider in EXPECTED_PROVIDERS}
@@ -387,11 +410,20 @@ def _excluded_run_reason(artifact: dict[str, Any]) -> str | None:
         return "not_exact_four_provider_eight_launch_run"
     measurements = artifact.get("measurements") or {}
     harness = artifact.get("harness") or {}
-    if measurements.get("recovery_duration_seconds") is None or measurements.get("run_duration_seconds") is None:
+    if (
+        measurements.get("recovery_duration_seconds") is None
+        or measurements.get("run_duration_seconds") is None
+    ):
         return "missing_timing_measurements"
-    if harness.get("repository_dirty") is None or harness.get("harness_file_dirty") is None:
+    if (
+        harness.get("repository_dirty") is None
+        or harness.get("harness_file_dirty") is None
+    ):
         return "missing_clean_harness_provenance"
-    if harness.get("repository_dirty") is not False or harness.get("harness_file_dirty") is not False:
+    if (
+        harness.get("repository_dirty") is not False
+        or harness.get("harness_file_dirty") is not False
+    ):
         return "dirty_harness_or_repository"
     return None
 
@@ -460,26 +492,38 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
     try:
         generator_relative = generator_path.relative_to(repository)
     except ValueError as exc:
-        raise ValueError("dogfood generator is outside the recorded repository") from exc
+        raise ValueError(
+            "dogfood generator is outside the recorded repository"
+        ) from exc
     if generator_relative != DOGFOOD_GENERATOR_RELATIVE:
         raise ValueError("dogfood generator is not at the canonical path")
     if _sha256(generator_path) != generator_sha:
         raise ValueError("dogfood generator hash does not match its recorded path")
     current_generator = REPORT_REPOSITORY / DOGFOOD_GENERATOR_RELATIVE
     if _sha256(current_generator) != generator_sha:
-        raise ValueError("dogfood generator does not match the current report collector")
+        raise ValueError(
+            "dogfood generator does not match the current report collector"
+        )
     git_sha = provenance.get("git_sha")
-    if not isinstance(git_sha, str) or len(git_sha) != 40 or any(character not in "0123456789abcdefABCDEF" for character in git_sha):
+    if (
+        not isinstance(git_sha, str)
+        or len(git_sha) != 40
+        or any(character not in "0123456789abcdefABCDEF" for character in git_sha)
+    ):
         raise ValueError("dogfood.provenance.git_sha must be a 40-character SHA-1")
     try:
         recorded_repository_sha = _git(repository, "rev-parse", "HEAD")
         report_repository_sha = _git(REPORT_REPOSITORY, "rev-parse", "HEAD")
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise ValueError("dogfood provenance repository is not a readable Git checkout") from exc
+        raise ValueError(
+            "dogfood provenance repository is not a readable Git checkout"
+        ) from exc
     if recorded_repository_sha != git_sha:
         raise ValueError("dogfood provenance git_sha does not match its repository")
     if report_repository_sha != git_sha:
-        raise ValueError("dogfood provenance git_sha does not match the report source revision")
+        raise ValueError(
+            "dogfood provenance git_sha does not match the report source revision"
+        )
     sampled_binary = provenance.get("sampled_binary")
     if not isinstance(sampled_binary, dict):
         raise ValueError("dogfood.provenance.sampled_binary is required")
@@ -505,7 +549,9 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
     ):
         raise ValueError("dogfood paired engine sha256 is invalid")
     if not isinstance(build_identity, dict):
-        raise ValueError("dogfood sampled binary build identity must be structured JSON")
+        raise ValueError(
+            "dogfood sampled binary build identity must be structured JSON"
+        )
     binary_path = Path(binary_path_value).expanduser().resolve()
     if not binary_path.is_file():
         raise ValueError("dogfood sampled binary no longer exists")
@@ -517,17 +563,25 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
     if _sha256(engine_path) != engine_sha:
         raise ValueError("dogfood paired engine changed after collection")
     if build_identity.get("engine_path") != str(engine_path):
-        raise ValueError("dogfood paired engine identity path does not match the sampled path")
+        raise ValueError(
+            "dogfood paired engine identity path does not match the sampled path"
+        )
     if build_identity.get("facade_path") != str(binary_path):
-        raise ValueError("dogfood sampled binary identity path does not match the sampled path")
+        raise ValueError(
+            "dogfood sampled binary identity path does not match the sampled path"
+        )
     for label in ("facade", "engine"):
         identity = build_identity.get(label)
         if not isinstance(identity, dict):
             raise ValueError(f"dogfood sampled binary identity has no {label} record")
         if identity.get("commit") != git_sha:
-            raise ValueError(f"dogfood sampled binary {label} commit does not match the source revision")
+            raise ValueError(
+                f"dogfood sampled binary {label} commit does not match the source revision"
+            )
         if identity.get("commit_short") != git_sha[:8]:
-            raise ValueError(f"dogfood sampled binary {label} commit_short does not match the source revision")
+            raise ValueError(
+                f"dogfood sampled binary {label} commit_short does not match the source revision"
+            )
         if identity.get("dirty") is not False:
             raise ValueError(f"dogfood sampled binary {label} is dirty")
 
@@ -542,7 +596,9 @@ def _health_truth(episode: dict[str, Any], *, label: str) -> None:
     expected = episode.get("expected")
     observed = episode.get("observed")
     if not isinstance(expected, dict) or not isinstance(observed, dict):
-        raise ValueError(f"{label} must include expected and observed health truth objects")
+        raise ValueError(
+            f"{label} must include expected and observed health truth objects"
+        )
     for side, value in (("expected", expected), ("observed", observed)):
         if value.get("health_state") not in HEALTH_STATES - {"unknown"}:
             raise ValueError(f"{label}.{side}.health_state is invalid")
@@ -551,13 +607,20 @@ def _health_truth(episode: dict[str, Any], *, label: str) -> None:
     if not isinstance(expected.get("red_eligible"), bool):
         raise ValueError(f"{label}.expected.red_eligible must be boolean")
     action = expected.get("action")
-    if action is not None and (not isinstance(action, str) or action not in KNOWN_ACTION_IDS):
+    if action is not None and (
+        not isinstance(action, str) or action not in KNOWN_ACTION_IDS
+    ):
         raise ValueError(f"{label}.expected.action must be a known action id or null")
     suggested = observed.get("suggested_action_ids")
     if suggested is not None and (
-        not isinstance(suggested, list) or not all(isinstance(item, str) and item in KNOWN_ACTION_IDS for item in suggested)
+        not isinstance(suggested, list)
+        or not all(
+            isinstance(item, str) and item in KNOWN_ACTION_IDS for item in suggested
+        )
     ):
-        raise ValueError(f"{label}.observed.suggested_action_ids must contain known action ids")
+        raise ValueError(
+            f"{label}.observed.suggested_action_ids must contain known action ids"
+        )
 
 
 def _load_dogfood_series(
@@ -587,7 +650,9 @@ def _load_dogfood_series(
             content_hash = _sha256(path)
             if content_hash in seen_hashes:
                 if deduplicated is not None:
-                    deduplicated.append({"path": str(path), "reason": "duplicate_content"})
+                    deduplicated.append(
+                        {"path": str(path), "reason": "duplicate_content"}
+                    )
                 continue
             seen_paths.add(path)
             seen_hashes.add(content_hash)
@@ -606,7 +671,9 @@ def _load_dogfood_series(
             if not isinstance(challenge_nonce, str) or not challenge_nonce:
                 raise ValueError("dogfood artifact has no challenge nonce")
             if challenge_id not in challenges:
-                raise ValueError("dogfood artifact challenge is not provided to the report")
+                raise ValueError(
+                    "dogfood artifact challenge is not provided to the report"
+                )
             (
                 expected_nonce,
                 challenge_key,
@@ -620,16 +687,24 @@ def _load_dogfood_series(
                 raise ValueError("dogfood artifact has no valid signature")
             unsigned = dict(artifact)
             unsigned.pop("signature", None)
-            expected_signature = hmac.new(challenge_key, _canonical_json(unsigned), hashlib.sha256).hexdigest()
+            expected_signature = hmac.new(
+                challenge_key, _canonical_json(unsigned), hashlib.sha256
+            ).hexdigest()
             if not hmac.compare_digest(signature, expected_signature):
                 raise ValueError("dogfood artifact signature does not verify")
-            generated_at = _timestamp(artifact.get("generated_at"), label="dogfood.generated_at")
+            generated_at = _timestamp(
+                artifact.get("generated_at"), label="dogfood.generated_at"
+            )
             if as_of is not None and generated_at > as_of:
                 raise ValueError("dogfood.generated_at is after report generation time")
             if generated_at < challenge_created_at:
-                raise ValueError("dogfood.generated_at predates dogfood challenge creation")
+                raise ValueError(
+                    "dogfood.generated_at predates dogfood challenge creation"
+                )
             if generated_at > challenge_expires_at:
-                raise ValueError("dogfood.generated_at is after dogfood challenge expiry")
+                raise ValueError(
+                    "dogfood.generated_at is after dogfood challenge expiry"
+                )
             if challenge_id in seen_challenge_ids:
                 raise ValueError(f"dogfood challenge_id is reused: {challenge_id}")
             seen_challenge_ids.add(challenge_id)
@@ -650,8 +725,13 @@ def _load_dogfood_series(
                 if not isinstance(episode, dict):
                     raise ValueError(f"episode {index} is not an object")
                 if "observation_error" in episode:
-                    raise ValueError(f"episode {index} contains observation_error and is not admissible evidence")
-                if not isinstance(episode.get("episode_id"), str) or not episode["episode_id"]:
+                    raise ValueError(
+                        f"episode {index} contains observation_error and is not admissible evidence"
+                    )
+                if (
+                    not isinstance(episode.get("episode_id"), str)
+                    or not episode["episode_id"]
+                ):
                     raise ValueError(f"episode {index} has no episode_id")
                 observed_at = _timestamp(
                     episode.get("observed_at"),
@@ -662,17 +742,29 @@ def _load_dogfood_series(
                     label=f"episode {index}.collector_started_at",
                 )
                 if collector_started_at > observed_at:
-                    raise ValueError(f"episode {index}.collector_started_at is after observed_at")
+                    raise ValueError(
+                        f"episode {index}.collector_started_at is after observed_at"
+                    )
                 if collector_started_at < challenge_created_at:
-                    raise ValueError(f"episode {index}.collector_started_at predates dogfood challenge creation")
+                    raise ValueError(
+                        f"episode {index}.collector_started_at predates dogfood challenge creation"
+                    )
                 if collector_started_at > challenge_expires_at:
-                    raise ValueError(f"episode {index}.collector_started_at is after dogfood challenge expiry")
+                    raise ValueError(
+                        f"episode {index}.collector_started_at is after dogfood challenge expiry"
+                    )
                 if observed_at < challenge_created_at:
-                    raise ValueError(f"episode {index}.observed_at predates dogfood challenge creation")
+                    raise ValueError(
+                        f"episode {index}.observed_at predates dogfood challenge creation"
+                    )
                 if observed_at > challenge_expires_at:
-                    raise ValueError(f"episode {index}.observed_at is after dogfood challenge expiry")
+                    raise ValueError(
+                        f"episode {index}.observed_at is after dogfood challenge expiry"
+                    )
                 if observed_at > generated_at:
-                    raise ValueError(f"episode {index}.observed_at is after dogfood.generated_at")
+                    raise ValueError(
+                        f"episode {index}.observed_at is after dogfood.generated_at"
+                    )
                 episode_id = episode["episode_id"]
                 if episode_id in seen_episode_ids or episode_id in loaded_ids:
                     raise ValueError(f"duplicate episode_id: {episode_id}")
@@ -685,13 +777,19 @@ def _load_dogfood_series(
                     or recovery < 0
                     or not math.isfinite(float(recovery))
                 ):
-                    raise ValueError(f"episode {index}.recovery_duration_seconds must be non-negative")
+                    raise ValueError(
+                        f"episode {index}.recovery_duration_seconds must be non-negative"
+                    )
                 issue = episode.get("event_bearing_issue")
                 if issue is not None:
                     if not isinstance(issue, dict):
-                        raise ValueError(f"episode {index}.event_bearing_issue is not an object")
+                        raise ValueError(
+                            f"episode {index}.event_bearing_issue is not an object"
+                        )
                     if issue.get("status") not in {"resolved", "unresolved"}:
-                        raise ValueError(f"episode {index}.event_bearing_issue.status must be resolved or unresolved")
+                        raise ValueError(
+                            f"episode {index}.event_bearing_issue.status must be resolved or unresolved"
+                        )
                     _timestamp(
                         issue.get("opened_at"),
                         label=f"episode {index}.event_bearing_issue.opened_at",
@@ -706,20 +804,28 @@ def _load_dogfood_series(
                             label=f"episode {index}.event_bearing_issue.opened_at",
                         )
                         if resolved_at < opened_at:
-                            raise ValueError(f"episode {index}.event_bearing_issue.resolved_at precedes opened_at")
+                            raise ValueError(
+                                f"episode {index}.event_bearing_issue.resolved_at precedes opened_at"
+                            )
                         if resolved_at > observed_at:
-                            raise ValueError(f"episode {index}.event_bearing_issue.resolved_at is after observed_at")
+                            raise ValueError(
+                                f"episode {index}.event_bearing_issue.resolved_at is after observed_at"
+                            )
                     else:
                         opened_at = _timestamp(
                             issue.get("opened_at"),
                             label=f"episode {index}.event_bearing_issue.opened_at",
                         )
                         if observed_at < opened_at:
-                            raise ValueError(f"episode {index}.observed_at precedes event_bearing_issue.opened_at")
+                            raise ValueError(
+                                f"episode {index}.observed_at precedes event_bearing_issue.opened_at"
+                            )
                 conservation = episode.get("evidence_conservation")
                 if conservation is not None:
                     if not isinstance(conservation, dict):
-                        raise ValueError(f"episode {index}.evidence_conservation is not an object")
+                        raise ValueError(
+                            f"episode {index}.evidence_conservation is not an object"
+                        )
                     for field in CONSERVATION_FIELDS:
                         _nonnegative_count(
                             conservation.get(field),
@@ -734,10 +840,14 @@ def _load_dogfood_series(
                         )
                     )
                     if accounted > conservation["source_events"]:
-                        raise ValueError(f"episode {index}.evidence_conservation accounts for more events than source_events")
+                        raise ValueError(
+                            f"episode {index}.evidence_conservation accounts for more events than source_events"
+                        )
                     for field in ("replayed_events", "duplicate_events"):
                         if conservation[field] > conservation["source_events"]:
-                            raise ValueError(f"episode {index}.evidence_conservation.{field} exceeds source_events")
+                            raise ValueError(
+                                f"episode {index}.evidence_conservation.{field} exceeds source_events"
+                            )
                 loaded_episodes.append(dict(episode))
             episodes.extend(loaded_episodes)
             seen_episode_ids.update(loaded_ids)
@@ -753,10 +863,23 @@ def _dogfood_summary(
 ) -> dict[str, Any]:
     """Summarize only facts present in the retained dogfood observations."""
 
-    observed_times = sorted(_timestamp(episode["observed_at"], label="episode.observed_at") for episode in episodes)
-    first_observed_at = observed_times[0].isoformat().replace("+00:00", "Z") if observed_times else None
-    last_observed_at = observed_times[-1].isoformat().replace("+00:00", "Z") if observed_times else None
-    span_seconds = (observed_times[-1] - observed_times[0]).total_seconds() if observed_times else None
+    observed_times = sorted(
+        _timestamp(episode["observed_at"], label="episode.observed_at")
+        for episode in episodes
+    )
+    first_observed_at = (
+        observed_times[0].isoformat().replace("+00:00", "Z") if observed_times else None
+    )
+    last_observed_at = (
+        observed_times[-1].isoformat().replace("+00:00", "Z")
+        if observed_times
+        else None
+    )
+    span_seconds = (
+        (observed_times[-1] - observed_times[0]).total_seconds()
+        if observed_times
+        else None
+    )
     distinct_observation_count = len(set(observed_times))
     series_eligible = bool(
         len(observed_times) >= MIN_DOGFOOD_EPISODES
@@ -765,9 +888,18 @@ def _dogfood_summary(
         and span_seconds >= MIN_DOGFOOD_SPAN_SECONDS
     )
     series_reason = (
-        None if series_eligible else (f"requires at least {MIN_DOGFOOD_EPISODES} episodes spanning {MIN_DOGFOOD_SPAN_SECONDS:g} seconds")
+        None
+        if series_eligible
+        else (
+            f"requires at least {MIN_DOGFOOD_EPISODES} episodes spanning "
+            f"{MIN_DOGFOOD_SPAN_SECONDS:g} seconds"
+        )
     )
-    recovery = [float(episode["recovery_duration_seconds"]) for episode in episodes if episode.get("recovery_duration_seconds") is not None]
+    recovery = [
+        float(episode["recovery_duration_seconds"])
+        for episode in episodes
+        if episode.get("recovery_duration_seconds") is not None
+    ]
     health = [
         episode
         for episode in episodes
@@ -776,20 +908,39 @@ def _dogfood_summary(
         and isinstance(episode["expected"].get("health_state"), str)
         and isinstance(episode["observed"].get("health_state"), str)
     ]
-    broken_cases = sum(episode["observed"]["health_state"] == "broken" for episode in health)
-    false_red_cases = sum(episode["observed"]["health_state"] == "broken" and not episode["expected"]["red_eligible"] for episode in health)
+    broken_cases = sum(
+        episode["observed"]["health_state"] == "broken" for episode in health
+    )
+    false_red_cases = sum(
+        episode["observed"]["health_state"] == "broken"
+        and not episode["expected"]["red_eligible"]
+        for episode in health
+    )
     eligible_failure_cases = sum(
-        episode["expected"]["red_eligible"] or episode["expected"]["producer_freshness"] != "fresh" for episode in health
+        episode["expected"]["red_eligible"]
+        or episode["expected"]["producer_freshness"] != "fresh"
+        for episode in health
     )
     hidden_failure_cases = sum(
-        (episode["expected"]["red_eligible"] or episode["expected"]["producer_freshness"] != "fresh")
+        (
+            episode["expected"]["red_eligible"]
+            or episode["expected"]["producer_freshness"] != "fresh"
+        )
         and episode["observed"]["health_state"] == "healthy"
         and episode["observed"]["producer_freshness"] == "fresh"
         for episode in health
     )
-    actionable = [episode for episode in health if episode["expected"].get("action") not in {None, "none"}]
+    actionable = [
+        episode
+        for episode in health
+        if episode["expected"].get("action") not in {None, "none"}
+    ]
     action_pass = sum(
-        episode["expected"]["action"] in {str(value) for value in episode["observed"].get("suggested_action_ids") or []}
+        episode["expected"]["action"]
+        in {
+            str(value)
+            for value in episode["observed"].get("suggested_action_ids") or []
+        }
         for episode in actionable
     )
 
@@ -800,14 +951,26 @@ def _dogfood_summary(
         if not isinstance(issue, dict):
             continue
         observed_at = _timestamp(episode["observed_at"], label="episode.observed_at")
-        opened_at = _timestamp(issue["opened_at"], label="event_bearing_issue.opened_at")
+        opened_at = _timestamp(
+            issue["opened_at"], label="event_bearing_issue.opened_at"
+        )
         if issue["status"] == "unresolved":
             unresolved_issues += 1
             issue_ages.append((observed_at - opened_at).total_seconds())
 
-    conservation = [episode["evidence_conservation"] for episode in episodes if isinstance(episode.get("evidence_conservation"), dict)]
-    conservation_totals = {field: sum(item[field] for item in conservation) for field in CONSERVATION_FIELDS}
-    accounted_events = sum(conservation_totals[field] for field in ("archived_events", "discarded_events", "unresolved_events"))
+    conservation = [
+        episode["evidence_conservation"]
+        for episode in episodes
+        if isinstance(episode.get("evidence_conservation"), dict)
+    ]
+    conservation_totals = {
+        field: sum(item[field] for item in conservation)
+        for field in CONSERVATION_FIELDS
+    }
+    accounted_events = sum(
+        conservation_totals[field]
+        for field in ("archived_events", "discarded_events", "unresolved_events")
+    )
     source_events = conservation_totals["source_events"]
     summary = {
         "scope": "dogfood_episode_series",
@@ -839,29 +1002,39 @@ def _dogfood_summary(
             "sample_count": len(recovery) if series_eligible else None,
             "seconds": {
                 "min": min(recovery) if series_eligible and recovery else None,
-                "median": statistics.median(recovery) if series_eligible and recovery else None,
+                "median": statistics.median(recovery)
+                if series_eligible and recovery
+                else None,
                 "max": max(recovery) if series_eligible and recovery else None,
             },
         },
         "false_red_rate": {
-            "status": "observed" if series_eligible and broken_cases else "not_observed",
+            "status": "observed"
+            if series_eligible and broken_cases
+            else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
             "numerator": false_red_cases if series_eligible else None,
             "denominator": broken_cases if series_eligible else None,
-            "rate": false_red_cases / broken_cases if series_eligible and broken_cases else None,
+            "rate": false_red_cases / broken_cases
+            if series_eligible and broken_cases
+            else None,
             "numerator_definition": "dogfood_observed_broken_cases_expected_red_ineligible",
             "denominator_definition": "dogfood_observed_broken_cases",
         },
         "hidden_failure_rate": {
-            "status": "observed" if series_eligible and eligible_failure_cases else "not_observed",
+            "status": "observed"
+            if series_eligible and eligible_failure_cases
+            else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
             "numerator": hidden_failure_cases if series_eligible else None,
             "denominator": eligible_failure_cases if series_eligible else None,
-            "rate": hidden_failure_cases / eligible_failure_cases if series_eligible and eligible_failure_cases else None,
+            "rate": hidden_failure_cases / eligible_failure_cases
+            if series_eligible and eligible_failure_cases
+            else None,
             "numerator_definition": "dogfood_expected_risk_observed_healthy_and_fresh",
             "denominator_definition": "dogfood_expected_red_risk_or_nonfresh_producer_cases",
         },
@@ -872,7 +1045,9 @@ def _dogfood_summary(
             "source": references,
             "numerator": action_pass if series_eligible else None,
             "denominator": len(actionable) if series_eligible else None,
-            "rate": action_pass / len(actionable) if series_eligible and actionable else None,
+            "rate": action_pass / len(actionable)
+            if series_eligible and actionable
+            else None,
             "numerator_definition": "dogfood_expected_action_present_in_observed_actions",
             "denominator_definition": "dogfood_cases_with_a_non_none_expected_action",
         },
@@ -883,24 +1058,39 @@ def _dogfood_summary(
             "source": references,
             "unresolved_count": unresolved_issues if series_eligible else None,
             "sample_count": len(issue_ages) if series_eligible else None,
-            "max_age_seconds": max(issue_ages) if series_eligible and issue_ages else None,
-            "median_age_seconds": statistics.median(issue_ages) if series_eligible and issue_ages else None,
+            "max_age_seconds": max(issue_ages)
+            if series_eligible and issue_ages
+            else None,
+            "median_age_seconds": statistics.median(issue_ages)
+            if series_eligible and issue_ages
+            else None,
             "denominator_definition": "dogfood_unresolved_event_bearing_issues",
         },
         "duplicate_replayed_discarded_evidence": {
-            "status": "observed" if series_eligible and conservation else "not_observed",
+            "status": "observed"
+            if series_eligible and conservation
+            else "not_observed",
             **({} if series_eligible else {"reason": series_reason}),
             "scope": "dogfood_episode_series",
             "source": references,
             "sample_count": len(conservation) if series_eligible else None,
-            "totals": conservation_totals if series_eligible else {field: None for field in CONSERVATION_FIELDS},
+            "totals": conservation_totals
+            if series_eligible
+            else {field: None for field in CONSERVATION_FIELDS},
             "accounted_events": accounted_events if series_eligible else None,
-            "unaccounted_events": source_events - accounted_events if series_eligible and conservation else None,
+            "unaccounted_events": source_events - accounted_events
+            if series_eligible and conservation
+            else None,
             "conservation_status": (
                 "complete"
-                if series_eligible and conservation and source_events == accounted_events and conservation_totals["discarded_events"] == 0
+                if series_eligible
+                and conservation
+                and source_events == accounted_events
+                and conservation_totals["discarded_events"] == 0
                 else "complete_with_discard"
-                if series_eligible and conservation and source_events == accounted_events
+                if series_eligible
+                and conservation
+                and source_events == accounted_events
                 else "gap"
             )
             if series_eligible and conservation
@@ -1024,10 +1214,14 @@ def _health_measurements(
             if artifact.get("artifact_kind") != HEALTH_ARTIFACT_KIND:
                 raise ValueError(f"health artifact_kind must be {HEALTH_ARTIFACT_KIND}")
             if artifact.get("schema_version") != HEALTH_SCHEMA_VERSION:
-                raise ValueError(f"health schema_version must be {HEALTH_SCHEMA_VERSION}")
+                raise ValueError(
+                    f"health schema_version must be {HEALTH_SCHEMA_VERSION}"
+                )
             if artifact.get("verdict") != "green":
                 raise ValueError("health verdict must be green")
-            generated_at = _timestamp(artifact.get("generated_at"), label="health.generated_at")
+            generated_at = _timestamp(
+                artifact.get("generated_at"), label="health.generated_at"
+            )
             if generated_at > as_of:
                 raise ValueError("health.generated_at is after report generation time")
             if (as_of - generated_at).total_seconds() > MAX_HEALTH_ARTIFACT_AGE_SECONDS:
@@ -1041,11 +1235,18 @@ def _health_measurements(
             if (
                 not isinstance(implementation_sha, str)
                 or len(implementation_sha) != 64
-                or any(character not in "0123456789abcdefABCDEF" for character in implementation_sha)
+                or any(
+                    character not in "0123456789abcdefABCDEF"
+                    for character in implementation_sha
+                )
             ):
-                raise ValueError("health implementation.sha256 must be a 64-character SHA-256")
+                raise ValueError(
+                    "health implementation.sha256 must be a 64-character SHA-256"
+                )
             if len(set(implementation_sha.lower())) == 1:
-                raise ValueError("health implementation.sha256 must identify a concrete binary")
+                raise ValueError(
+                    "health implementation.sha256 must identify a concrete binary"
+                )
             if implementation.get("returncode") != 0:
                 raise ValueError("health implementation.returncode must be zero")
             scenarios = artifact.get("scenarios")
@@ -1055,9 +1256,13 @@ def _health_measurements(
                 or not all(isinstance(value, str) and value for value in scenarios)
                 or len(set(scenarios)) != len(scenarios)
             ):
-                raise ValueError("health scenarios must be a non-empty unique string list")
+                raise ValueError(
+                    "health scenarios must be a non-empty unique string list"
+                )
             if set(scenarios) != EXPECTED_HEALTH_SCENARIOS:
-                raise ValueError("health scenarios do not match the canonical fault matrix")
+                raise ValueError(
+                    "health scenarios do not match the canonical fault matrix"
+                )
             identity = (
                 generated_at.isoformat(),
                 implementation_sha.lower(),
@@ -1073,34 +1278,58 @@ def _health_measurements(
                     raise ValueError(f"health result {index} must be an object")
                 case = result.get("case")
                 if not isinstance(case, str) or not case or case in seen_cases:
-                    raise ValueError(f"health result {index}.case must be a unique non-empty string")
+                    raise ValueError(
+                        f"health result {index}.case must be a unique non-empty string"
+                    )
                 if case not in EXPECTED_HEALTH_SCENARIOS:
-                    raise ValueError(f"health result {index}.case is not listed in health scenarios")
+                    raise ValueError(
+                        f"health result {index}.case is not listed in health scenarios"
+                    )
                 seen_cases.add(case)
                 expected = result.get("expected")
                 observed = result.get("observed")
                 if not isinstance(expected, dict) or not isinstance(observed, dict):
-                    raise ValueError(f"health result {index} must include expected and observed objects")
+                    raise ValueError(
+                        f"health result {index} must include expected and observed objects"
+                    )
                 expected_state = expected.get("state")
                 if expected_state not in HEALTH_STATES:
                     raise ValueError(f"health result {index}.expected.state is invalid")
                 contract = HEALTH_EXPECTATIONS[case]
-                if any(expected.get(field) != value for field, value in contract.items()):
-                    raise ValueError(f"health result {index}.expected does not match the canonical fault matrix")
+                if any(
+                    expected.get(field) != value for field, value in contract.items()
+                ):
+                    raise ValueError(
+                        f"health result {index}.expected does not match the canonical fault matrix"
+                    )
                 observed_state = observed.get("health_state")
                 if observed_state not in HEALTH_STATES:
-                    raise ValueError(f"health result {index}.observed.health_state is invalid")
+                    raise ValueError(
+                        f"health result {index}.observed.health_state is invalid"
+                    )
                 expected_action = expected.get("action")
                 if not isinstance(expected_action, str) or not expected_action:
-                    raise ValueError(f"health result {index}.expected.action must be a non-empty string")
+                    raise ValueError(
+                        f"health result {index}.expected.action must be a non-empty string"
+                    )
                 suggested_actions = observed.get("suggested_action_ids")
-                if not isinstance(suggested_actions, list) or not all(isinstance(value, str) and value for value in suggested_actions):
-                    raise ValueError(f"health result {index}.observed.suggested_action_ids must be a string list")
+                if not isinstance(suggested_actions, list) or not all(
+                    isinstance(value, str) and value for value in suggested_actions
+                ):
+                    raise ValueError(
+                        f"health result {index}.observed.suggested_action_ids must be a string list"
+                    )
                 collected_at = observed.get("collected_at")
-                collected_at_value = _timestamp(collected_at, label=f"health result {index}.observed.collected_at")
+                collected_at_value = _timestamp(
+                    collected_at, label=f"health result {index}.observed.collected_at"
+                )
                 if collected_at_value > generated_at:
-                    raise ValueError(f"health result {index}.observed.collected_at is after health.generated_at")
-                if (generated_at - collected_at_value).total_seconds() > MAX_HEALTH_OBSERVATION_AGE_SECONDS:
+                    raise ValueError(
+                        f"health result {index}.observed.collected_at is after health.generated_at"
+                    )
+                if (
+                    generated_at - collected_at_value
+                ).total_seconds() > MAX_HEALTH_OBSERVATION_AGE_SECONDS:
                     raise ValueError(
                         f"health result {index}.observed.collected_at is older than "
                         f"{MAX_HEALTH_OBSERVATION_AGE_SECONDS:g} seconds before health.generated_at"
@@ -1115,7 +1344,9 @@ def _health_measurements(
                     )
                 )
             if seen_cases != EXPECTED_HEALTH_SCENARIOS:
-                raise ValueError("health results must cover every declared scenario exactly once")
+                raise ValueError(
+                    "health results must cover every declared scenario exactly once"
+                )
             canonical_results = sorted(results, key=lambda value: value["case"])
             fingerprint = hashlib.sha256(
                 json.dumps(
@@ -1165,7 +1396,13 @@ def _health_measurements(
     measurements = {
         "false_red_rate": {
             "status": "observed" if broken_cases else "not_observed",
-            **({} if broken_cases else {"reason": "no observed broken cases in supplied health fault matrix"}),
+            **(
+                {}
+                if broken_cases
+                else {
+                    "reason": "no observed broken cases in supplied health fault matrix"
+                }
+            ),
             "scope": scope,
             "basis": "fault_matrix_expected_state",
             "numerator": false_red_cases,
@@ -1177,18 +1414,32 @@ def _health_measurements(
         },
         "hidden_failure_rate": {
             "status": "observed" if eligible_failure_cases else "not_observed",
-            **({} if eligible_failure_cases else {"reason": "no expected broken/degraded cases in supplied health fault matrix"}),
+            **(
+                {}
+                if eligible_failure_cases
+                else {
+                    "reason": "no expected broken/degraded cases in supplied health fault matrix"
+                }
+            ),
             "scope": scope,
             "numerator": hidden_failure_cases,
             "denominator": eligible_failure_cases,
             "numerator_definition": "observed_healthy_expected_broken_or_degraded",
             "denominator_definition": "expected_broken_or_degraded_cases",
-            "rate": (hidden_failure_cases / eligible_failure_cases) if eligible_failure_cases else None,
+            "rate": (hidden_failure_cases / eligible_failure_cases)
+            if eligible_failure_cases
+            else None,
             "source": references,
         },
         "action_coverage": {
             "status": "observed" if action_total else "not_observed",
-            **({} if action_total else {"reason": "no cases with an expected action in supplied health fault matrix"}),
+            **(
+                {}
+                if action_total
+                else {
+                    "reason": "no cases with an expected action in supplied health fault matrix"
+                }
+            ),
             "scope": scope,
             "numerator": action_pass,
             "denominator": action_total,
@@ -1246,15 +1497,41 @@ def build_report(
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"path": str(path), "error": str(exc)})
 
-    full = [(path, artifact) for path, artifact in matrix_artifacts if _is_full_run(artifact)]
+    full = [
+        (path, artifact)
+        for path, artifact in matrix_artifacts
+        if _is_full_run(artifact)
+    ]
     measured = [(path, artifact) for path, artifact in full if _measured_run(artifact)]
-    excluded = [{"path": str(path), "reason": reason} for path, artifact in full if (reason := _excluded_run_reason(artifact)) is not None]
-    successful = [(path, artifact) for path, artifact in measured if _successful_recovery(artifact)]
-    cleanup_statuses = [status for _, artifact in measured for status in _cleanup_statuses(artifact)]
-    recovery_seconds = [float(artifact["measurements"]["recovery_duration_seconds"]) for _, artifact in successful]
-    run_seconds = [float(artifact["measurements"]["run_duration_seconds"]) for _, artifact in successful]
-    verdicts = Counter(str(artifact.get("verdict") or "unknown") for _, artifact in matrix_artifacts)
-    auth_gap_runs = [{"path": str(path), "providers": _auth_gaps(artifact)} for path, artifact in measured if _auth_gaps(artifact)]
+    excluded = [
+        {"path": str(path), "reason": reason}
+        for path, artifact in full
+        if (reason := _excluded_run_reason(artifact)) is not None
+    ]
+    successful = [
+        (path, artifact)
+        for path, artifact in measured
+        if _successful_recovery(artifact)
+    ]
+    cleanup_statuses = [
+        status for _, artifact in measured for status in _cleanup_statuses(artifact)
+    ]
+    recovery_seconds = [
+        float(artifact["measurements"]["recovery_duration_seconds"])
+        for _, artifact in successful
+    ]
+    run_seconds = [
+        float(artifact["measurements"]["run_duration_seconds"])
+        for _, artifact in successful
+    ]
+    verdicts = Counter(
+        str(artifact.get("verdict") or "unknown") for _, artifact in matrix_artifacts
+    )
+    auth_gap_runs = [
+        {"path": str(path), "providers": _auth_gaps(artifact)}
+        for path, artifact in measured
+        if _auth_gaps(artifact)
+    ]
     provider_failures = [
         {
             "path": str(path),
@@ -1284,10 +1561,16 @@ def build_report(
                 "cleanup": {"pass": cleanup.count("pass"), "total": len(cleanup)},
                 "auth_gaps": _auth_gaps(artifact),
                 "startup_failures": _startup_failure_counts(artifact),
-                "recovery_duration_seconds": measurements.get("recovery_duration_seconds"),
+                "recovery_duration_seconds": measurements.get(
+                    "recovery_duration_seconds"
+                ),
                 "run_duration_seconds": measurements.get("run_duration_seconds"),
-                "harness_repository_git_sha": (artifact.get("harness") or {}).get("repository_git_sha"),
-                "implementation_source_git_sha": ((artifact.get("implementation") or {}).get("longhouse") or {}).get("source_git_sha"),
+                "harness_repository_git_sha": (artifact.get("harness") or {}).get(
+                    "repository_git_sha"
+                ),
+                "implementation_source_git_sha": (
+                    (artifact.get("implementation") or {}).get("longhouse") or {}
+                ).get("source_git_sha"),
             }
         )
 
@@ -1326,7 +1609,9 @@ def build_report(
                 continue
             status = str(result.get("status") or "unknown")
             harness_results[status] += 1
-            operation_evidence = (result.get("data") or {}).get("operation_evidence", {})
+            operation_evidence = (result.get("data") or {}).get(
+                "operation_evidence", {}
+            )
             for operation, evidence in operation_evidence.items():
                 if isinstance(evidence, dict):
                     operation_status = str(evidence.get("status") or "unknown")
@@ -1337,7 +1622,9 @@ def build_report(
                                 "provider": str(result.get("provider") or "unknown"),
                                 "scenario": str(result.get("scenario") or "unknown"),
                                 "operation": str(operation),
-                                "failure_code": str(evidence.get("failure_code") or "unknown"),
+                                "failure_code": str(
+                                    evidence.get("failure_code") or "unknown"
+                                ),
                             }
                         )
                     level = str(evidence.get("level") or "unknown")
@@ -1373,14 +1660,21 @@ def build_report(
     )
     dogfood_summary = _dogfood_summary(dogfood_episodes, dogfood_inputs)
     dogfood_invalid = len(invalid) > invalid_before_dogfood
-    dogfood_summary["input_status"] = "invalid" if dogfood_invalid else "valid" if dogfood_inputs else "absent"
+    dogfood_summary["input_status"] = (
+        "invalid" if dogfood_invalid else "valid" if dogfood_inputs else "absent"
+    )
     dogfood_summary["deduplicated_inputs"] = dogfood_deduplicated
     if dogfood_invalid:
         _invalidate_dogfood_summary(dogfood_summary)
 
     def observed_or_fallback(name: str, fallback: dict[str, Any]) -> dict[str, Any]:
         candidate = dogfood_summary[name]
-        return candidate if dogfood_summary["input_status"] == "valid" and candidate.get("status") == "observed" else fallback
+        return (
+            candidate
+            if dogfood_summary["input_status"] == "valid"
+            and candidate.get("status") == "observed"
+            else fallback
+        )
 
     controlled_false_red = health_summary["measurements"]["false_red_rate"]
     controlled_hidden_failure = health_summary["measurements"]["hidden_failure_rate"]
@@ -1393,8 +1687,12 @@ def build_report(
         "generated_at": report_generated_at.isoformat().replace("+00:00", "Z"),
         "provenance": report_provenance_value,
         "inputs": {
-            "matrix_artifacts": [_input_reference(path) for path, _ in matrix_artifacts],
-            "provider_harness_artifacts": [_input_reference(Path(path)) for path in harness_inputs],
+            "matrix_artifacts": [
+                _input_reference(path) for path, _ in matrix_artifacts
+            ],
+            "provider_harness_artifacts": [
+                _input_reference(Path(path)) for path in harness_inputs
+            ],
             "health_artifacts": health_inputs,
             "dogfood_series_artifacts": dogfood_inputs,
             "dogfood_deduplicated_artifacts": dogfood_deduplicated,
@@ -1409,7 +1707,11 @@ def build_report(
             "retry_drain_rate": (len(successful) / len(measured)) if measured else None,
             "retry_drain_sample_count": len(measured),
             "retry_drain_denominator": "measured_clean_runs",
-            "cleanup_pass_rate": (cleanup_statuses.count("pass") / len(cleanup_statuses) if cleanup_statuses else None),
+            "cleanup_pass_rate": (
+                cleanup_statuses.count("pass") / len(cleanup_statuses)
+                if cleanup_statuses
+                else None
+            ),
             "cleanup_pass_count": cleanup_statuses.count("pass"),
             "cleanup_scope_count": len(cleanup_statuses),
             "cleanup_rate_denominator": "measured_cleanup_scopes",
@@ -1422,7 +1724,9 @@ def build_report(
             "recovery_duration_seconds": {
                 "count": len(recovery_seconds),
                 "min": min(recovery_seconds) if recovery_seconds else None,
-                "median": statistics.median(recovery_seconds) if recovery_seconds else None,
+                "median": statistics.median(recovery_seconds)
+                if recovery_seconds
+                else None,
                 "max": max(recovery_seconds) if recovery_seconds else None,
             },
             "run_duration_seconds": {
@@ -1445,7 +1749,10 @@ def build_report(
         "qualification": {
             "status": ("not_qualified" if dogfood_paths else "not_requested"),
             "dogfood_attestation": "operator_self_attested",
-            "reason": ("Dogfood measures are diagnostic-only until an external CI or release attestation receipt is supplied."),
+            "reason": (
+                "Dogfood measures are diagnostic-only until an external CI or release "
+                "attestation receipt is supplied."
+            ),
         },
         "measures": {
             "automatic_recovery_time": observed_or_fallback(
@@ -1457,19 +1764,24 @@ def build_report(
                     "source": [_input_reference(path) for path, _ in successful],
                     "seconds": {
                         "min": min(recovery_seconds) if recovery_seconds else None,
-                        "median": statistics.median(recovery_seconds) if recovery_seconds else None,
+                        "median": statistics.median(recovery_seconds)
+                        if recovery_seconds
+                        else None,
                         "max": max(recovery_seconds) if recovery_seconds else None,
                     },
                 }
                 if successful
-                else _not_observed("no measured matrix run with a positive retry queue converged to zero and complete cleanup"),
+                else _not_observed(
+                    "no measured matrix run with a positive retry queue converged to zero and complete cleanup"
+                ),
             ),
             "false_red_rate": observed_or_fallback(
                 "false_red_rate",
                 controlled_false_red
                 if controlled_false_red["status"] == "observed"
                 else _not_observed(
-                    controlled_false_red.get("reason") or "retained artifacts do not include a user-action/data-risk ground-truth label"
+                    controlled_false_red.get("reason")
+                    or "retained artifacts do not include a user-action/data-risk ground-truth label"
                 ),
             ),
             "hidden_failure_rate": observed_or_fallback(
@@ -1477,7 +1789,8 @@ def build_report(
                 controlled_hidden_failure
                 if controlled_hidden_failure["status"] == "observed"
                 else _not_observed(
-                    controlled_hidden_failure.get("reason") or "no longitudinal producer-freshness truth series was supplied"
+                    controlled_hidden_failure.get("reason")
+                    or "no longitudinal producer-freshness truth series was supplied"
                 ),
             ),
             "unresolved_event_bearing_issue_age": observed_or_fallback(
@@ -1495,7 +1808,9 @@ def build_report(
             ),
             "duplicate_replayed_discarded_evidence": observed_or_fallback(
                 "duplicate_replayed_discarded_evidence",
-                _not_observed("matrix artifacts do not carry end-to-end evidence conservation counters"),
+                _not_observed(
+                    "matrix artifacts do not carry end-to-end evidence conservation counters"
+                ),
             ),
         },
     }
@@ -1544,7 +1859,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Create a private reporter-issued challenge and exit.",
     )
-    parser.add_argument("--output", type=Path, help="Write the report JSON to this path.")
+    parser.add_argument(
+        "--output", type=Path, help="Write the report JSON to this path."
+    )
     return parser
 
 
@@ -1552,7 +1869,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.create_dogfood_challenge is not None:
         if args.matrix_root or args.dogfood_series or args.dogfood_challenge:
-            raise SystemExit("--create-dogfood-challenge cannot be combined with report inputs")
+            raise SystemExit(
+                "--create-dogfood-challenge cannot be combined with report inputs"
+            )
         try:
             create_dogfood_challenge(args.create_dogfood_challenge)
         except (OSError, ValueError, subprocess.CalledProcessError) as exc:
