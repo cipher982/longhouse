@@ -376,6 +376,7 @@ class PtyProcess:
         self.recording = recording
         self.claude_permission_acceptance_sent = False
         self.claude_development_channel_acceptance_sent = False
+        self.claude_development_channel_prompt_seen_at: float | None = None
         self.cursor_workspace_trust_sent = False
         self.recording.parent.mkdir(parents=True, exist_ok=True)
         self._stream = self.recording.open("ab", buffering=0)
@@ -842,10 +843,18 @@ def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
     compact = re.sub(r"\s+", "", _terminal_text(process.recording)).lower()
     if "loadingdevelopmentchannel" in compact and "iamusingthisforlocaldevelopment" in compact and "exit" in compact:
         # Claude renders an unnumbered selector with the local-development
-        # acknowledgement before Exit. Move to the first option explicitly,
-        # then confirm it; numeric input and a bare Enter are not reliable
-        # across Claude TUI builds because the initial cursor can differ.
-        process.send("\x1b[A\r")
+        # acknowledgement before Exit. The provider docs say the first option
+        # is selected by default. Let the screen finish entering its input
+        # mode before accepting it; sending an arrow during the render race
+        # leaves the provider at this prompt without registering the channel.
+        seen_at = getattr(process, "claude_development_channel_prompt_seen_at", None)
+        now = time.monotonic()
+        if seen_at is None:
+            process.claude_development_channel_prompt_seen_at = now
+            return
+        if now - seen_at < 0.25:
+            return
+        process.send("\r")
         process.claude_development_channel_acceptance_sent = True
 
 
@@ -1293,7 +1302,7 @@ def _control_send(
 ) -> dict[str, Any]:
     if spec.provider == "claude":
         command = [str(args.engine), "claude-channel", "send", "--session-id", state["session_id"], "--text", text]
-    elif spec.provider == "cursor" and not initial:
+    elif spec.provider == "cursor":
         command = [str(args.engine), "cursor-helm", "send", "--session-id", state["session_id"], "--text", text]
     else:
         if process.process.poll() is not None:
