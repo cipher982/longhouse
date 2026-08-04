@@ -273,7 +273,7 @@ def _validate_resume_intent(
         intent.get("available") is True
         and intent.get("session_id") == session_id
         and intent.get("provider") == "codex"
-        and intent.get("cwd") == str(args.repo_root)
+        and intent.get("cwd") == str(cwd)
         and intent.get("handoff") == "terminal_command"
         and intent.get("argv") == expected_argv
     )
@@ -729,6 +729,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "native_resume_command": native_resume_command,
             "bridge_subscribed": resumed_before_activity.get("thread_subscription_status") == "subscribed",
             "post_resume_provider_activity": resumed_state.get("last_turn_status") == "completed",
+            "post_resume_response_correlated": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),
             "post_resume_marker_in_assistant_transcript": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),
             "stale_input_rejected": stale_input_receipt["rejected"] is True,
             "stale_generation_dispatched": stale_generation_dispatched,
