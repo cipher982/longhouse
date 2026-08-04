@@ -113,6 +113,7 @@ async def test_recall_tool_forwards_provider_filter():
             "max_results": 3,
             "context_turns": 4,
             "context_mode": "active_context",
+            "mode": "auto",
             "project": "zerg",
             "provider": "codex",
         },

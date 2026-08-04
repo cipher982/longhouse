@@ -7774,14 +7774,23 @@ export interface components {
         };
         /**
          * RecallCoverage
-         * @description Complete-corpus certificate observed by a successful dense request.
+         * @description What the dense lane actually searched, and how far it is proven current.
+         *
+         *     This used to assert a totally complete corpus: equality between expected and
+         *     published counts, an empty missing-session list, and a live head inside fixed
+         *     age/size bounds. On an append-only corpus those predicates are false almost
+         *     always -- one session mid-projection made them false for the whole tenant --
+         *     so the dense lane answered nothing during ordinary operation while reporting
+         *     a typed "incomplete corpus" fault that read like corruption.
+         *
+         *     Completeness of a moving corpus is freshness, not integrity. So coverage now
+         *     reports a watermark: the corpus is proven current through
+         *     ``complete_through_commit_seq``, with the lag beyond it named explicitly.
+         *     Physical integrity is still absolute -- the four corruption counters below
+         *     stay ``Literal[0]`` and still fail the request closed, because a corrupt or
+         *     unlocatable vector is wrong rather than merely stale.
          */
         RecallCoverage: {
-            /**
-             * Ready
-             * @constant
-             */
-            ready: true;
             /** Projector */
             projector: string;
             /** Cutover Certified Commit Seq */
@@ -7792,6 +7801,13 @@ export interface components {
             search_store_id: string;
             /** Search Schema Generation */
             search_schema_generation: string;
+            /** Complete Through Commit Seq */
+            complete_through_commit_seq: string;
+            /**
+             * Complete
+             * @description True when nothing is lagging: the watermark is the catalog head.
+             */
+            complete: boolean;
             /** Catalog Lag Count */
             catalog_lag_count: number;
             /** Catalog Indexed Through */
@@ -7836,6 +7852,30 @@ export interface components {
             episode_count_mismatches: 0;
             /** Missing Session Ids */
             missing_session_ids?: string[];
+            /**
+             * Unpublished Sessions
+             * @default 0
+             */
+            unpublished_sessions: number;
+        };
+        /**
+         * RecallLaneFailure
+         * @description A lane that was requested, could not run, and cost only its own results.
+         */
+        RecallLaneFailure: {
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "lexical" | "dense";
+            /** Status Code */
+            status_code: number;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Reason */
+            reason?: string | null;
         };
         /**
          * RecallMatch
@@ -7916,6 +7956,11 @@ export interface components {
              * @description Retrieval lanes that actually ran for this request. A dead lane went unnoticed for days because a response could not say which lanes produced it; this makes that visible to the caller.
              */
             lanes?: ("lexical" | "dense")[];
+            /**
+             * Degraded
+             * @description Lanes that were requested but could not run. Present so a partial answer is never mistaken for a complete one: `lanes` says what produced these results, `degraded` says what is missing and why.
+             */
+            degraded?: components["schemas"]["RecallLaneFailure"][];
             /** Embedding Model */
             embedding_model?: string | null;
             /** Embedding Dims */

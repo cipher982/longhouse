@@ -83,7 +83,7 @@ class SearchDaemon:
         self._dense_refresh_generation = 0
         self._dense_refreshed_generation = 0
         self._dense_refresh_waiters: list[tuple[int, asyncio.Future[None]]] = []
-        self._dense_known_incomplete = False
+        self._dense_known_unservable = False
         self._closing = False
         self._executor: ThreadPoolExecutor | None = None
         self._read_workers: asyncio.Queue[_ReadWorker] | None = None
@@ -134,7 +134,7 @@ class SearchDaemon:
             # an honest miss.
             self._dense_index = ResidentEpisodeIndex(model=ACTIVE_EMBEDDING_MODEL, dims=ACTIVE_EMBEDDING_DIMS)
             self._dense_index.load(self._connection)
-            self._dense_known_incomplete = not self._dense_index.coverage.ready
+            self._dense_known_unservable = not self._dense_index.coverage.integrity_ready
             logger.info("searchd resident index loaded vectors=%d", self._dense_index.size)
             # The commit -> invalidate -> coalesced refresh ordering below is
             # correct because mutations and snapshot loads share exactly one
@@ -277,7 +277,9 @@ class SearchDaemon:
                     lambda store: store.ping(),
                     deadline_mono_ns=int(request.deadline_mono_ns),
                 )
-                coverage = self._dense_index.coverage.as_dict() if self._dense_index is not None else {"ready": False}
+                coverage = (
+                    self._dense_index.coverage.as_dict() if self._dense_index is not None else {"integrity_ready": False, "complete": False}
+                )
                 return self._result(request, {**ping, "pid": os.getpid(), "embedding_coverage": coverage})
             if request.method == "search.index.object.v2":
                 params = _index_object_params(request.params)
@@ -321,7 +323,11 @@ class SearchDaemon:
                     raise _ResidentEpisodeIndexUnavailable
                 if params["model"] != self._dense_index.model or params["dims"] != self._dense_index.dims:
                     raise _EmbeddingSpaceMismatch
-                if not self._dense_index.coverage.ready:
+                # Integrity gates serving; completeness does not. A session that
+                # has not finished projecting yet makes the corpus less fresh,
+                # which the coverage payload reports to the caller. A corrupt or
+                # unlocatable vector makes it wrong, and still fails closed.
+                if not self._dense_index.coverage.integrity_ready:
                     raise _EmbeddingCoverageIncomplete
                 query = np.frombuffer(params.pop("query_embedding"), dtype="float32")
                 params.pop("model", None)
@@ -448,48 +454,23 @@ class SearchDaemon:
         if store is None or executor is None:
             return result
         dense_index = self._dense_index
-        dense_index.invalidate(allow_stale_reads=not self._dense_known_incomplete)
+        dense_index.invalidate(allow_stale_reads=not self._dense_known_unservable)
         refresh_active = self._dense_refresh_task is not None and not self._dense_refresh_task.done()
-        if self._dense_known_incomplete and not refresh_active:
-            # A globally incomplete corpus cannot serve dense recall. Rebuilding
-            # and validating the full matrix after each backfill session only
-            # burns CPU and stalls interactive lexical reads while preserving
-            # the same closed gate. The relational precheck has no authority to
-            # open coverage; it only tells us when a full validated rebuild has
-            # become worthwhile.
-            try:
-                candidate_complete = await asyncio.get_running_loop().run_in_executor(
-                    executor,
-                    lambda: store.embedding_snapshot_candidate_complete(
-                        model=ACTIVE_EMBEDDING_MODEL,
-                        dims=ACTIVE_EMBEDDING_DIMS,
-                    ),
-                )
-            except asyncio.CancelledError:
-                if self._closing:
-                    return result
-                raise
-            except Exception:
-                # The mutation is already durable and the gate is closed. A
-                # failed optimization precheck must not turn that commit into a
-                # client-visible failure; a later mutation or cold start will
-                # reconstruct the resident snapshot from SQLite.
-                logger.exception("searchd dense snapshot candidate precheck failed")
-                return result
-            if not candidate_complete:
-                return result
+        if self._dense_known_unservable and not refresh_active:
+            # The last full load found non-finite, unnormalized, unlocatable, or
+            # non-contiguous vectors, so dense recall is closed until those
+            # specific sessions are rewritten. Rebuilding and validating the
+            # whole matrix on every unrelated write only burns CPU and stalls
+            # interactive lexical reads while the gate stays shut, so rebuild
+            # only when a mutation touches a session that is actually blocking.
+            #
+            # This used to also run a relational completeness precheck, because
+            # an incomplete corpus could not serve either. Incompleteness is now
+            # served and reported rather than gated, so completeness no longer
+            # tells us anything about whether a rebuild is worthwhile here.
             blocking_session_ids = dense_index.nonrelational_blocking_session_ids
             mutation_session_id = kwargs.get("session_id")
             if blocking_session_ids and isinstance(mutation_session_id, str) and mutation_session_id not in blocking_session_ids:
-                # The relational corpus is complete, but the last full load
-                # found non-finite or unnormalized vectors in specific
-                # sessions. Rebuild only when one of those sessions changes;
-                # unrelated writes cannot repair a value-level invariant.
-                # Relational blocker ids must not be used here: a moving
-                # backlog can clear the old set, acquire a new blocker, and
-                # finally become complete on a session absent from that stale
-                # snapshot. Suppressing that final rebuild leaves the gate
-                # closed until restart despite a complete durable corpus.
                 return result
             if self._closing:
                 return result
@@ -516,7 +497,7 @@ class SearchDaemon:
                             self._executor,
                             lambda: self._dense_index.load(self._connection),
                         )
-                        self._dense_known_incomplete = not self._dense_index.coverage.ready
+                        self._dense_known_unservable = not self._dense_index.coverage.integrity_ready
                         break
                     except asyncio.CancelledError:
                         raise

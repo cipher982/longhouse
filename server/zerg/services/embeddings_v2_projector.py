@@ -32,6 +32,12 @@ SOURCE_PAGE_SIZE = 1_000
 PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "1")))
 PROJECTOR_IDLE_POLL_SECONDS = 5.0
 PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_LEASE_SECONDS", "900")))
+# Projects whose sessions are machine-generated load-test fixtures rather than
+# work anyone will ever recall. Matching on project name is weaker than a flag on
+# the session record would be; it is what the bench harness actually distinguishes
+# itself by today (it writes under /tmp/longhouse-bench), and a stray real project
+# with this name would only lose semantic recall, not correctness.
+SYNTHETIC_PROJECTS = frozenset({"longhouse-bench"})
 
 
 class EmbeddingPublicationPending(RuntimeError):
@@ -185,6 +191,15 @@ class EmbeddingsV2Projector:
         snapshot_session = snapshot.get("session")
         if not isinstance(snapshot_session, dict) or not isinstance(snapshot_session.get("owner_id"), str):
             raise ValueError("catalog omitted embedding session owner")
+        if snapshot_session.get("project") in SYNTHETIC_PROJECTS:
+            # Load-test payloads are byte-identical across thousands of sessions,
+            # so they cluster in the vector space and occupy top-k slots against
+            # real queries. They also ran under ordinary environments (`local`,
+            # `runnervm*`), so the query-time environment filter cannot exclude
+            # them. Keeping them out of the index is cheaper and more honest than
+            # filtering them at read time.
+            await self.search.call("search.session.delete.v2", {"session_id": session_id})
+            return True
         expected_owner_id = snapshot_session["owner_id"]
         records: list[dict[str, object]] = []
         owner_id: str | None = None
@@ -246,7 +261,10 @@ class EmbeddingsV2Projector:
         assert owner_id is not None and provider is not None
         for index, record in enumerate(records):
             record["id"] = index
-        chunks = list(iter_turn_chunks(records, provider=provider))
+        # Budget with the model's own tokenizer so the text hashed here is
+        # exactly the text the model reads. Anything else re-truncates inside
+        # the encoder and drops the episode's tail without a trace.
+        chunks = list(iter_turn_chunks(records, provider=provider, truncate_to_budget=get_local_embedder().truncate_document))
         hashes_result = await self.search.call(
             "search.embedding.hashes.v2", {"session_id": session_id, "model": config.model, "dims": config.dims}
         )

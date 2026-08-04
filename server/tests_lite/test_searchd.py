@@ -303,89 +303,6 @@ def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
     finally:
         connection.close()
 
-
-def test_embedding_snapshot_candidate_requires_current_publication_and_episode_count(tmp_path):
-    connection = open_search_database(tmp_path / "search.db")
-    store = SearchStore(connection)
-    session_id = str(uuid4())
-    generation_id = str(uuid4())
-    owner_id = "owner-1"
-    episodes = [
-        {
-            "episode_ordinal": ordinal,
-            "event_index_start": ordinal,
-            "event_index_end": ordinal + 1,
-            "start_order_time_us": 100 + ordinal,
-            "content_hash": f"{ordinal + 1:064x}",
-            "embedding": np.array([1 - ordinal, ordinal], dtype=np.float32).tobytes(),
-        }
-        for ordinal in range(2)
-    ]
-    try:
-        connection.execute(
-            """
-            INSERT INTO session_index (
-                session_id, generation_id, owner_id, desired_revision, indexed_through,
-                object_count, object_set_hash, event_count, user_messages, assistant_messages,
-                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
-                started_at, published_at
-            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
-            """,
-            (session_id, generation_id, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is False
-
-        store.write_episode_embeddings(
-            session_id=session_id,
-            owner_id=owner_id,
-            generation_id=generation_id,
-            revision=1,
-            model="test-model",
-            dims=2,
-            complete=True,
-            desired_episode_ordinals=[0, 1],
-            episodes=episodes,
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is True
-
-        connection.execute(
-            "UPDATE episode_embeddings SET episode_ordinal = 2 WHERE session_id = ? AND episode_ordinal = 1",
-            (session_id,),
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is False
-        connection.execute(
-            "UPDATE episode_embeddings SET episode_ordinal = 1 WHERE session_id = ? AND episode_ordinal = 2",
-            (session_id,),
-        )
-        connection.execute(
-            "UPDATE episode_embeddings SET start_order_time_us = NULL WHERE session_id = ? AND episode_ordinal = 1",
-            (session_id,),
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is False
-        connection.execute(
-            "UPDATE episode_embeddings SET start_order_time_us = 101 WHERE session_id = ? AND episode_ordinal = 1",
-            (session_id,),
-        )
-        connection.execute(
-            "UPDATE episode_embeddings SET embedding = X'00' WHERE session_id = ? AND episode_ordinal = 1",
-            (session_id,),
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is False
-        connection.execute(
-            "UPDATE episode_embeddings SET embedding = ? WHERE session_id = ? AND episode_ordinal = 1",
-            (episodes[1]["embedding"], session_id),
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is True
-
-        connection.execute(
-            "DELETE FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = 1",
-            (session_id,),
-        )
-        assert store.embedding_snapshot_candidate_complete(model="test-model", dims=2) is False
-    finally:
-        connection.close()
-
-
 def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
     """A same-generation revision bump must move reused vectors to the new fence."""
 
@@ -967,9 +884,15 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
     }
     try:
         await daemon._run(publish_stub)
-        with pytest.raises(CatalogRemoteError) as incomplete:
-            await client.call("search.embedding.query.v2", query_params)
-        assert incomplete.value.code == "embedding_coverage_incomplete"
+        # A session that has not been embedded yet makes the corpus less fresh,
+        # not wrong. It used to refuse every dense query in the store; now the
+        # query runs and the shortfall is reported back to the caller.
+        unpublished = await client.call("search.embedding.query.v2", query_params)
+        assert unpublished["results"] == []
+        assert unpublished["coverage"]["integrity_ready"] is True
+        assert unpublished["coverage"]["complete"] is False
+        assert unpublished["coverage"]["unpublished_sessions"] == 1
+        assert unpublished["coverage"]["missing_session_ids"] == [session_id]
 
         with pytest.raises(CatalogRemoteError) as mismatch:
             await client.call("search.embedding.query.v2", {**query_params, "model": "wrong-space"})
@@ -1011,7 +934,9 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
         assert query_result["store_id"] == (await client.call("search.ping.v2"))["store_id"]
         assert query_result["schema_generation"] == SCHEMA_GENERATION
         assert query_result["coverage"] == {
-            "ready": True,
+            "integrity_ready": True,
+            "complete": True,
+            "unpublished_sessions": 0,
             "expected_sessions": 1,
             "published_sessions": 1,
             "expected_episodes": 1,
@@ -1027,7 +952,8 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
         await client.call("search.session.delete.v2", {"session_id": session_id})
         deleted_result = await client.call("search.embedding.query.v2", query_params)
         assert deleted_result["results"] == []
-        assert deleted_result["coverage"]["ready"] is True
+        assert deleted_result["coverage"]["integrity_ready"] is True
+        assert deleted_result["coverage"]["complete"] is True
         assert deleted_result["coverage"]["expected_sessions"] == 0
     finally:
         await client.close()
@@ -1054,14 +980,14 @@ async def test_dense_refresh_coalesces_concurrent_writer_mutations(tmp_path):
     try:
         await asyncio.gather(*(daemon._run_with_dense_refresh(lambda value=value: {"value": value}) for value in range(12)))
         assert 1 <= loads < 12
-        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.integrity_ready is True
     finally:
         await daemon.close()
         socket_parent.rmdir()
 
 
 @pytest.mark.asyncio
-async def test_dense_refresh_defers_full_rebuild_while_publications_are_known_incomplete(tmp_path):
+async def test_dense_refresh_defers_full_rebuild_while_a_corrupt_session_blocks_it(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)
     daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
@@ -1078,95 +1004,24 @@ async def test_dense_refresh_defers_full_rebuild_while_publications_are_known_in
 
     daemon._dense_index.load = counted_load
     daemon._dense_index.invalidate(allow_stale_reads=False)
-    daemon._dense_known_incomplete = True
-    daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: False
+    daemon._dense_known_unservable = True
+    daemon._dense_index._nonrelational_blocking_session_ids = frozenset({"bad-session"})
     try:
-        result = await daemon._run_with_dense_refresh(lambda: {"committed": True})
+        # An unrelated session's write cannot repair a value-level defect, so
+        # rebuilding the whole matrix for it only burns CPU behind a shut gate.
+        result = await daemon._run_with_dense_refresh(lambda session_id: {"committed": True}, session_id="other-session")
         assert result == {"committed": True}
         assert loads == 0
-        assert daemon._dense_index.coverage.ready is False
+        assert daemon._dense_index.coverage.integrity_ready is False
         assert daemon._dense_index.coverage.as_dict()["stale"] is True
 
-        daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: True
-        assert await daemon._run_with_dense_refresh(lambda: {"committed": True}) == {"committed": True}
+        # Rewriting the blocking session is the only thing that can clear it.
+        assert await daemon._run_with_dense_refresh(lambda session_id: {"committed": True}, session_id="bad-session") == {
+            "committed": True
+        }
         assert loads == 1
-        assert daemon._dense_index.coverage.ready is True
-        assert daemon._dense_known_incomplete is False
-    finally:
-        await daemon.close()
-        socket_parent.rmdir()
-
-
-@pytest.mark.asyncio
-async def test_dense_refresh_deferral_uses_real_incomplete_then_complete_publications(tmp_path):
-    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
-    socket_parent.mkdir(mode=0o700)
-    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
-    await daemon.start()
-    assert daemon._dense_index is not None
-    assert daemon._store is not None
-    session_id = str(uuid4())
-    generation_id = str(uuid4())
-    owner_id = "owner-1"
-
-    def insert_incomplete_session():
-        assert daemon._connection is not None
-        daemon._connection.execute(
-            """
-            INSERT INTO session_index (
-                session_id, generation_id, owner_id, desired_revision, indexed_through,
-                object_count, object_set_hash, event_count, user_messages, assistant_messages,
-                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
-                started_at, published_at
-            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
-            """,
-            (session_id, generation_id, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
-        )
-
-    try:
-        await daemon._run(insert_incomplete_session)
-        await daemon._run_with_dense_refresh(lambda: {"published": True})
-        assert daemon._dense_known_incomplete is True
-        assert daemon._dense_index.coverage.ready is False
-
-        original_load = daemon._dense_index.load
-        loads = 0
-
-        def counted_load(connection):
-            nonlocal loads
-            loads += 1
-            original_load(connection)
-
-        daemon._dense_index.load = counted_load
-        await daemon._run_with_dense_refresh(lambda: {"committed": True})
-        assert loads == 0
-
-        vector = np.zeros(ACTIVE_EMBEDDING_DIMS, dtype=np.float32)
-        vector[0] = 1.0
-        await daemon._run_with_dense_refresh(
-            daemon._store.write_episode_embeddings,
-            session_id=session_id,
-            owner_id=owner_id,
-            generation_id=generation_id,
-            revision=1,
-            model=ACTIVE_EMBEDDING_MODEL,
-            dims=ACTIVE_EMBEDDING_DIMS,
-            complete=True,
-            desired_episode_ordinals=[0],
-            episodes=[
-                {
-                    "episode_ordinal": 0,
-                    "event_index_start": 0,
-                    "event_index_end": 1,
-                    "start_order_time_us": 100,
-                    "content_hash": "a" * 64,
-                    "embedding": vector.tobytes(),
-                }
-            ],
-        )
-        assert loads == 1
-        assert daemon._dense_index.coverage.ready is True
-        assert daemon._dense_index.coverage.as_dict()["stale"] is False
+        assert daemon._dense_index.coverage.integrity_ready is True
+        assert daemon._dense_known_unservable is False
     finally:
         await daemon.close()
         socket_parent.rmdir()
@@ -1191,14 +1046,14 @@ async def test_dense_refresh_retries_nonrelational_failure_only_for_blocking_ses
     daemon._dense_index.load = counted_load
     daemon._dense_index.invalidate()
     daemon._dense_index._nonrelational_blocking_session_ids = frozenset({"bad-session"})
-    daemon._dense_known_incomplete = True
+    daemon._dense_known_unservable = True
     daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: True
     try:
         await daemon._run_with_dense_refresh(lambda session_id: {"session_id": session_id}, session_id="other-session")
         assert loads == 0
         await daemon._run_with_dense_refresh(lambda session_id: {"session_id": session_id}, session_id="bad-session")
         assert loads == 1
-        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.integrity_ready is True
     finally:
         await daemon.close()
         socket_parent.rmdir()
@@ -1224,12 +1079,12 @@ async def test_dense_refresh_does_not_treat_stale_relational_blockers_as_value_f
     daemon._dense_index.invalidate()
     daemon._dense_index._blocking_session_ids = frozenset({"old-missing-publication"})
     daemon._dense_index._nonrelational_blocking_session_ids = frozenset()
-    daemon._dense_known_incomplete = True
+    daemon._dense_known_unservable = True
     daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: True
     try:
         await daemon._run_with_dense_refresh(lambda session_id: {"session_id": session_id}, session_id="new-final-blocker")
         assert loads == 1
-        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.integrity_ready is True
     finally:
         await daemon.close()
         socket_parent.rmdir()
@@ -1257,7 +1112,7 @@ async def test_dense_refresh_retries_without_reopening_coverage_gate(tmp_path):
         result = await daemon._run_with_dense_refresh(lambda: {"committed": True})
         assert result == {"committed": True}
         assert attempts == 2
-        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.integrity_ready is True
     finally:
         await daemon.close()
         socket_parent.rmdir()
@@ -1292,43 +1147,6 @@ async def test_searchd_close_acknowledges_committed_refresh_waiter(tmp_path):
         if close_task is not None:
             await asyncio.gather(close_task, return_exceptions=True)
         else:
-            await daemon.close()
-        socket_parent.rmdir()
-
-
-@pytest.mark.asyncio
-async def test_searchd_close_acknowledges_commit_during_incomplete_precheck(tmp_path):
-    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
-    socket_parent.mkdir(mode=0o700)
-    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
-    await daemon.start()
-    assert daemon._dense_index is not None
-    assert daemon._store is not None
-    entered = threading.Event()
-    release = threading.Event()
-
-    def blocked_candidate(**_kwargs):
-        entered.set()
-        assert release.wait(timeout=2)
-        return False
-
-    daemon._dense_index.invalidate()
-    daemon._dense_known_incomplete = True
-    daemon._store.embedding_snapshot_candidate_complete = blocked_candidate
-    mutation = asyncio.create_task(daemon._run_with_dense_refresh(lambda: {"committed": True}))
-    release_timer: threading.Timer | None = None
-    try:
-        assert await asyncio.to_thread(entered.wait, 1)
-        release_timer = threading.Timer(0.05, release.set)
-        release_timer.start()
-        await daemon.close()
-        assert await mutation == {"committed": True}
-    finally:
-        release.set()
-        if release_timer is not None:
-            release_timer.join(timeout=1)
-        await asyncio.gather(mutation, return_exceptions=True)
-        if daemon._connection is not None:
             await daemon.close()
         socket_parent.rmdir()
 
@@ -1369,14 +1187,14 @@ async def test_dense_serves_last_validated_snapshot_until_coalesced_refresh_is_p
     }
     try:
         assert await asyncio.to_thread(entered.wait, 1)
-        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.integrity_ready is True
         assert daemon._dense_index.coverage.stale is True
         stale = await client.call("search.embedding.query.v2", query)
-        assert stale["coverage"]["ready"] is True
+        assert stale["coverage"]["integrity_ready"] is True
         assert stale["coverage"]["stale"] is True
         release.set()
         assert await mutation == {"committed": True}
-        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.integrity_ready is True
         assert daemon._dense_index.coverage.stale is False
     finally:
         release.set()

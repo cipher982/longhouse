@@ -669,61 +669,6 @@ class SearchStore:
             raise
         return {"vectors": max(0, vectors), "publications": max(0, publications)}
 
-    def embedding_snapshot_candidate_complete(self, *, model: str, dims: int) -> bool:
-        """Return whether a full resident rebuild could open the coverage gate.
-
-        This checks relational publication/count/ordinal invariants plus cheap
-        blob-size and locator structure. Floating-point finiteness and
-        normalization remain the resident index loader's responsibility. A
-        false result is enough to avoid rebuilding an index that cannot
-        possibly be served yet; a true result still requires the full
-        validation before coverage opens.
-        """
-
-        row = self.connection.execute(
-            """
-            WITH current_episode_counts AS (
-                SELECT e.session_id,
-                       COUNT(*) AS episode_count,
-                       MIN(e.episode_ordinal) AS minimum_ordinal,
-                       MAX(e.episode_ordinal) AS maximum_ordinal,
-                       SUM(
-                           CASE
-                               WHEN e.episode_ordinal < 0
-                                 OR e.start_order_time_us IS NULL
-                                 OR LENGTH(e.embedding) != ?
-                               THEN 1 ELSE 0
-                           END
-                       ) AS structurally_invalid_count
-                FROM episode_embeddings e
-                JOIN session_index s
-                  ON s.session_id = e.session_id
-                 AND s.generation_id = e.generation_id
-                 AND s.indexed_through = e.revision
-                WHERE e.model = ? AND e.dims = ?
-                GROUP BY e.session_id
-            )
-            SELECT COUNT(*) AS incomplete_count
-            FROM session_index s
-            LEFT JOIN embedding_publications p
-              ON p.session_id = s.session_id
-             AND p.model = ?
-             AND p.dims = ?
-             AND p.generation_id = s.generation_id
-             AND p.revision = s.indexed_through
-            LEFT JOIN current_episode_counts c ON c.session_id = s.session_id
-            WHERE p.session_id IS NULL
-               OR COALESCE(c.episode_count, 0) != p.expected_episode_count
-               OR COALESCE(c.structurally_invalid_count, 0) != 0
-               OR (
-                   p.expected_episode_count > 0
-                   AND (c.minimum_ordinal != 0 OR c.maximum_ordinal != p.expected_episode_count - 1)
-               )
-            """,
-            (dims * 4, model, dims, model, dims),
-        ).fetchone()
-        return int(row["incomplete_count"]) == 0
-
     def ping(self) -> dict[str, object]:
         row = self.connection.execute("SELECT COUNT(*) AS count FROM session_index").fetchone()
         metadata = self.connection.execute("SELECT store_id FROM search_meta WHERE singleton = 1").fetchone()

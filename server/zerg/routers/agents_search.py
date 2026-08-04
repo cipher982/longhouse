@@ -32,10 +32,10 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.searchd_supervisor import get_searchd_client
-from zerg.services.session_views import RECALL_LIVE_HEAD_MAX_AGE_SECONDS
-from zerg.services.session_views import RECALL_LIVE_HEAD_MAX_SESSIONS
+from zerg.services.session_views import RECALL_COVERAGE_MAX_NAMED_SESSIONS
 from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import RecallCoverage
+from zerg.services.session_views import RecallLaneFailure
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SessionResponse
@@ -99,9 +99,19 @@ class _DenseQueryPayload(BaseModel):
 
 
 class _EmbeddingCoveragePayload(BaseModel):
+    """searchd's own account of the snapshot it just searched.
+
+    The four corruption counters stay ``Literal[0]``: searchd refuses to serve a
+    corrupt matrix, so seeing a nonzero count here means the daemon contradicted
+    itself and the response must not be trusted. Publication shortfall is
+    ordinary lag and is carried through to the caller instead of rejected.
+    """
+
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    ready: Literal[True]
+    integrity_ready: Literal[True]
+    complete: bool
+    unpublished_sessions: int = Field(ge=0)
     expected_sessions: int = Field(ge=0)
     published_sessions: int = Field(ge=0)
     expected_episodes: int = Field(ge=0)
@@ -110,15 +120,19 @@ class _EmbeddingCoveragePayload(BaseModel):
     unnormalized_vectors: Literal[0]
     unlocatable_episodes: Literal[0]
     episode_count_mismatches: Literal[0]
-    missing_session_ids: list[str] = Field(default_factory=list, max_length=0)
+    missing_session_ids: list[str] = Field(default_factory=list)
     stale: bool
 
     @model_validator(mode="after")
-    def validate_complete_coverage(self) -> "_EmbeddingCoveragePayload":
-        if self.expected_sessions != self.published_sessions:
-            raise ValueError("resident coverage is missing session publications")
-        if self.expected_episodes != self.current_episodes:
-            raise ValueError("resident coverage is missing episodes")
+    def validate_coverage_shape(self) -> "_EmbeddingCoveragePayload":
+        if self.published_sessions > self.expected_sessions:
+            raise ValueError("resident coverage published more sessions than it expects")
+        if self.current_episodes > self.expected_episodes:
+            raise ValueError("resident coverage holds more episodes than it expects")
+        if self.unpublished_sessions != self.expected_sessions - self.published_sessions:
+            raise ValueError("resident coverage shortfall is inconsistent")
+        if self.complete != (self.unpublished_sessions == 0 and self.current_episodes == self.expected_episodes):
+            raise ValueError("resident completeness contradicts its own counts")
         return self
 
 
@@ -267,24 +281,18 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _P
     embedding_coverage = await coverage(EMBEDDING_PROJECTOR_ID)
     certificate_missing = embedding_coverage.certificate is None
     store_binding_missing = embedding_coverage.store_binding is None
-    head_too_large = embedding_coverage.lag_count > RECALL_LIVE_HEAD_MAX_SESSIONS
-    head_too_old = (
-        embedding_coverage.oldest_lag_seconds is not None and embedding_coverage.oldest_lag_seconds > RECALL_LIVE_HEAD_MAX_AGE_SECONDS
-    )
-    if certificate_missing or store_binding_missing or head_too_large or head_too_old:
-        reason = (
-            "cutover_not_certified"
-            if certificate_missing
-            else "store_binding_missing"
-            if store_binding_missing
-            else "live_head_exceeds_bounds"
-        )
+    # Lag is no longer a refusal. "No proof exists" and "proof exists for a
+    # prefix" are different states, and only the first is a fault: without a
+    # cutover certificate or a store binding there is nothing to reason about,
+    # so serving would be a guess. With them, the corpus is provably current
+    # through a watermark that the caller receives on every response.
+    if certificate_missing or store_binding_missing:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "code": "embedding_coverage_incomplete",
-                "message": "The active embedding corpus is incomplete.",
-                "reason": reason,
+                "code": "embedding_coverage_unproven",
+                "message": "The embedding corpus has no cutover proof to search against.",
+                "reason": ("cutover_not_certified" if certificate_missing else "store_binding_missing"),
                 "catalog_coverage": {
                     EMBEDDING_PROJECTOR_ID: embedding_coverage.model_dump(),
                 },
@@ -656,8 +664,15 @@ async def _semantic_recall(
             if len(matches) >= max_results:
                 break
         resident = dense_payload.coverage
+        # `indexed_through` is one below the oldest lagging revision, so it is
+        # exactly the point the corpus is provably current through. It was
+        # already computed and returned by catalogd and simply never used; the
+        # gate looked at lag age instead, which is why a single unfinished
+        # session could refuse the whole corpus.
         coverage = RecallCoverage(
-            ready=True,
+            complete_through_commit_seq=catalog_coverage.indexed_through,
+            complete=catalog_coverage.lag_count == 0,
+            unpublished_sessions=resident.unpublished_sessions,
             projector=EMBEDDING_PROJECTOR_ID,
             cutover_certified_commit_seq=catalog_coverage.certificate.certified_commit_seq,
             cutover_certified_at=catalog_coverage.certificate.certified_at,
@@ -678,7 +693,7 @@ async def _semantic_recall(
             unnormalized_vectors=resident.unnormalized_vectors,
             unlocatable_episodes=resident.unlocatable_episodes,
             episode_count_mismatches=resident.episode_count_mismatches,
-            missing_session_ids=resident.missing_session_ids,
+            missing_session_ids=resident.missing_session_ids[:RECALL_COVERAGE_MAX_NAMED_SESSIONS],
         )
         return _DenseRecallResult(matches=matches, coverage=coverage)
 
@@ -795,6 +810,33 @@ def _discovery_budget(*, remaining_seconds: float, context_turns: int) -> float:
 
     hydration_reserve = HYDRATION_RESERVED_SECONDS if context_turns > 0 else 0.0
     return max(0.05, remaining_seconds - hydration_reserve)
+
+
+def _lane_result(outcome: object, *, lane: Literal["lexical", "dense"], degraded: list["RecallLaneFailure"]):
+    """Unwrap one lane's gathered outcome, recording a typed failure if it faulted.
+
+    Only `HTTPException` is treated as a lane fault. Anything else is a bug in
+    this process rather than a lane being unavailable, and swallowing it would
+    reproduce the original defect in a new place: a silently missing lane that
+    looks exactly like an honest miss.
+    """
+
+    if not isinstance(outcome, BaseException):
+        return outcome
+    if not isinstance(outcome, HTTPException):
+        raise outcome
+    detail = outcome.detail if isinstance(outcome.detail, dict) else {}
+    degraded.append(
+        RecallLaneFailure(
+            lane=lane,
+            status_code=outcome.status_code,
+            code=str(detail.get("code") or "lane_unavailable"),
+            message=str(detail.get("message") or "The lane could not run."),
+            reason=(str(detail["reason"]) if detail.get("reason") is not None else None),
+        )
+    )
+    logger.warning("Recall lane degraded lane=%s code=%s", lane, detail.get("code"))
+    return None
 
 
 def _rank_single_lane(
@@ -1188,18 +1230,41 @@ async def recall_sessions(
     # Each mode runs exactly the lanes it names. `semantic` used to run lexical
     # first and fuse, which made the lane-specific evaluation meaningless: every
     # mode measured some amount of lexical.
+    degraded: list[RecallLaneFailure] = []
     if mode == "lexical":
         matches = _rank_single_lane(await lexical(), limit=max_results, lane="lexical")
         lanes = ("lexical",)
         dense_result = None
     elif mode == "semantic":
+        # The caller named exactly one lane. Failing it is the whole answer, so
+        # this still raises rather than returning an empty success.
         dense_result = await dense()
         matches = _rank_single_lane(dense_result.matches, limit=max_results, lane="dense")
         lanes = ("dense",)
     else:
-        lexical_matches, dense_result = await asyncio.gather(lexical(), dense())
-        matches = _rrf_merge_recall_matches(lexical_matches, dense_result.matches, limit=max_results)
-        lanes = ("lexical", "dense")
+        # `auto` used to gather without `return_exceptions`, so a dense fault
+        # propagated and threw away lexical results that had already been
+        # computed. An agent asking a reasonable question got a 503 and a hint
+        # to go use plain string search instead. A lane that cannot run costs
+        # its own results and says so; it does not cost the request.
+        lexical_outcome, dense_outcome = await asyncio.gather(lexical(), dense(), return_exceptions=True)
+        lexical_matches = _lane_result(lexical_outcome, lane="lexical", degraded=degraded)
+        dense_result = _lane_result(dense_outcome, lane="dense", degraded=degraded)
+        if lexical_matches is None and dense_result is None:
+            # Both lanes are down: there is no partial answer to report, so
+            # surface the lexical fault rather than inventing a summary.
+            raise lexical_outcome if isinstance(lexical_outcome, BaseException) else RuntimeError("recall produced no lanes")
+        served: list[Literal["lexical", "dense"]] = []
+        if lexical_matches is not None:
+            served.append("lexical")
+        if dense_result is not None:
+            served.append("dense")
+        matches = _rrf_merge_recall_matches(
+            lexical_matches or [],
+            dense_result.matches if dense_result is not None else [],
+            limit=max_results,
+        )
+        lanes = tuple(served)
 
     # Hydrate after fusion, not before. Hydrating the lexical list first meant
     # semantic matches never reached the hydrator at all — they were appended
@@ -1229,6 +1294,7 @@ async def recall_sessions(
             matches=matches,
             total=len(matches),
             lanes=list(lanes),
+            degraded=degraded,
             embedding_model=ACTIVE_EMBEDDING_MODEL,
             embedding_dims=ACTIVE_EMBEDDING_DIMS,
             embedding_revision=EMBEDDING_ARTIFACT_REVISION,
@@ -1239,5 +1305,6 @@ async def recall_sessions(
         matches=matches,
         total=len(matches),
         lanes=list(lanes),
+        degraded=degraded,
         server_commit=_server_build_commit(),
     )

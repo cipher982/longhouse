@@ -7925,16 +7925,32 @@ class CatalogStore:
             if projector != "search-v2":
                 eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
             if projector == EMBEDDING_PROJECTOR_ID:
+                # Embeddings read episode text from searchd's *published* render
+                # generation, so a session is only workable up to the revision
+                # search-v2 has actually completed. This used to require
+                # search-v2 to have reached the embedding row's desired revision.
+                # Both rows take desired_revision from the same catalog
+                # watermark, so that reduced to "search-v2 has zero lag on this
+                # session" -- and a session lags embeddings precisely when it
+                # also lags search-v2. The claim could only fire in the instant
+                # between search-v2 completing and the next write arriving, so
+                # any session under active projection was never claimable and
+                # the embedding projector inherited search-v2's entire backlog.
+                #
+                # Claim at what search-v2 has published instead. The row stays
+                # `desired > completed` and is re-claimed as search-v2 advances,
+                # so the projector always makes progress on the newest text that
+                # actually exists to embed.
                 search_state = table.alias("search_state")
                 eligible = (
                     connection.execute(
-                        select(table)
+                        select(table, search_state.c.completed_revision.label("search_completed_revision"))
                         .join(
                             search_state,
                             and_(
                                 search_state.c.projector == "search-v2",
                                 search_state.c.session_id == table.c.session_id,
-                                search_state.c.completed_revision >= table.c.desired_revision,
+                                search_state.c.completed_revision > table.c.completed_revision,
                             ),
                         )
                         .where(*eligible_predicates)
@@ -7963,11 +7979,19 @@ class CatalogStore:
             expires_at = now + timedelta(seconds=lease_seconds)
             for row in eligible:
                 session_key = row["session_id"]
+                # For embeddings this is search-v2's published revision, which is
+                # the newest text searchd can actually serve for this session.
+                # Every other projector claims its own desired revision. Bounded
+                # by desired_revision because `complete_projector_claim` rejects
+                # a completion past it, and the two projectors' desired
+                # revisions are not guaranteed to advance in lockstep.
+                search_completed = row.get("search_completed_revision")
+                claimed_revision = min(int(search_completed), int(row["desired_revision"])) if search_completed else row["desired_revision"]
                 connection.execute(
                     update(table)
                     .where(table.c.projector == projector, table.c.session_id == session_key)
                     .values(
-                        claimed_revision=row["desired_revision"],
+                        claimed_revision=claimed_revision,
                         claim_token=claim_token,
                         worker_id=worker_id,
                         claim_expires_at=expires_at,

@@ -302,6 +302,25 @@ fn coordination_tools() -> Vec<Value> {
             }),
         ),
         tool(
+            "recall",
+            "Read conversation evidence from past sessions by meaning, not just keyword. \
+             Use when you know the concept but not the phrase: \"what did we decide about \
+             auth?\". Searches a keyword lane and an embedding lane and fuses them. \
+             Returns the surrounding turns, not just session metadata — use \
+             search_sessions when you only need to find which session to open. The \
+             response names the lanes that ran in `lanes` and any that could not in \
+             `degraded`; results from a single lane are still real results.",
+            json!({
+                "query":{"type":"string","description":"What you are looking for, in natural language."},
+                "project":{"type":"string","description":"Optional project filter, e.g. g55"},
+                "provider":{"type":"string","description":"Optional provider filter"},
+                "since_days":{"type":"integer","default":90,"minimum":1,"maximum":365},
+                "max_results":{"type":"integer","default":5,"minimum":1,"maximum":25},
+                "context_turns":{"type":"integer","default":2,"minimum":0,"maximum":10,"description":"Turns of surrounding context to include around each match."},
+                "mode":{"type":"string","enum":["auto","lexical","semantic"],"default":"auto","description":"Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."},
+            }),
+        ),
+        tool(
             "peers",
             "List same-repo collaborators from the Longhouse wall. Live sessions only \
              unless active_only=false. This is a liveness tool, not a history tool — use \
@@ -448,6 +467,44 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 "limit",
                 clamp_i64(arguments.get("limit"), 10, 1, 100).to_string(),
             )])
+        }
+        "recall" => {
+            let Some(query) = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return tool_result(id, json!({"error":"recall requires a non-empty query"}));
+            };
+            let mode = arguments
+                .get("mode")
+                .and_then(Value::as_str)
+                .filter(|value| matches!(*value, "auto" | "lexical" | "semantic"))
+                .unwrap_or("auto");
+            let mut request = client
+                .get(format!("{base}/api/agents/recall"))
+                .query(&[("query", query), ("mode", mode)]);
+            for key in ["project", "provider"] {
+                if let Some(value) = arguments.get(key).and_then(Value::as_str) {
+                    request = request.query(&[(key, value)]);
+                }
+            }
+            // Clamp to the route's documented bounds rather than forwarding a 422
+            // that the advertised schema already told the caller to avoid.
+            request
+                .query(&[(
+                    "since_days",
+                    clamp_i64(arguments.get("since_days"), 90, 1, 365).to_string(),
+                )])
+                .query(&[(
+                    "max_results",
+                    clamp_i64(arguments.get("max_results"), 5, 1, 25).to_string(),
+                )])
+                .query(&[(
+                    "context_turns",
+                    clamp_i64(arguments.get("context_turns"), 2, 0, 10).to_string(),
+                )])
         }
         "tail" => {
             let Some(session_id) = arguments.get("session_id").and_then(Value::as_str) else {

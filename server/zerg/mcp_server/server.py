@@ -288,12 +288,20 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         max_results: int = 5,
         context_turns: int = 2,
         context_mode: str = "forensic",
+        mode: str = "auto",
     ) -> str:
-        """Retrieve lexical evidence from the canonical Longhouse session archive.
+        """Retrieve conversation evidence from the canonical Longhouse session archive.
 
-        Returns actual conversation evidence around relevant turns.
+        Searches two lanes: keyword (lexical) and meaning (dense embeddings).
         Use when you don't know the exact phrase but know the concept: "what was decided about auth?"
         NOT for session discovery → use search_sessions for that.
+
+        The response says which lanes actually ran. `lanes` lists the ones that
+        produced these results; `degraded` lists any that could not run and why.
+        Results from one lane are still real results — treat a degraded lane as
+        narrower coverage, not as a failed call. `coverage.complete_through_commit_seq`
+        is how current the embedded corpus is; `coverage.complete` is false when
+        sessions are still being indexed, which mainly affects the newest work.
 
         Args:
             query: Natural language description of what you are looking for.
@@ -303,9 +311,14 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             max_results: Max sessions to return content from (default 5).
             context_turns: Turns before/after match to include (default 2).
             context_mode: Context projection mode: forensic|active_context (default forensic).
+            mode: Which lanes to search — auto (both, default), lexical (keyword
+                only), or semantic (meaning only). Prefer auto: it fuses both and
+                degrades to whichever lane is available.
         """
         if context_mode not in {"forensic", "active_context"}:
             return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
+        if mode not in {"auto", "lexical", "semantic"}:
+            return json.dumps({"error": "mode must be one of: auto, lexical, semantic"})
 
         params: dict = {
             "query": query,
@@ -313,6 +326,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             "max_results": max_results,
             "context_turns": context_turns,
             "context_mode": context_mode,
+            "mode": mode,
         }
         if project:
             params["project"] = project
@@ -323,11 +337,11 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             resp = await client.get("/api/agents/recall", params=params)
             if resp.status_code != 200:
                 retry = None
-                if resp.status_code == 503:
-                    retry = (
-                        "Call search_sessions (lexical / semantic=false) for the "
-                        "same query, then tail the session with roles=user,assistant."
-                    )
+                if resp.status_code == 503 and mode == "semantic":
+                    # `auto` no longer fails when one lane is down, so the only
+                    # 503 worth redirecting is one the caller asked for by
+                    # pinning a single lane.
+                    retry = "Retry with mode=auto to search the lanes that are available."
                 return _format_api_error(resp, retry=retry)
             return resp.text
         except Exception as exc:

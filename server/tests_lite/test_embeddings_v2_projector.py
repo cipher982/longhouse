@@ -31,10 +31,21 @@ class FakeClient:
         return response(parsed) if callable(response) else response
 
 
-def _local_embedder(monkeypatch, function):
+def _local_embedder(monkeypatch, function, *, truncate_document=None):
+    """Stub the one seam the projector reaches the model through.
+
+    Episode text is budgeted with the model's own tokenizer, so truncation lives
+    on the embedder alongside the tokenizer that defines the budget. The default
+    stub is a no-op: these tests assert chunking and write batching, not the
+    truncation policy, which has its own coverage.
+    """
+
     monkeypatch.setattr(
         "zerg.services.embeddings_v2_projector.get_local_embedder",
-        lambda: SimpleNamespace(embed_documents=function),
+        lambda: SimpleNamespace(
+            embed_documents=function,
+            truncate_document=truncate_document or (lambda text: (text, False)),
+        ),
     )
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -20,7 +22,13 @@ from .tokens import truncate
 
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 EMBEDDING_MAX_CHUNKS_PER_PASS = int(os.getenv("EMBEDDING_MAX_CHUNKS_PER_PASS", "128"))
+# Only used when no model-budget truncator is supplied (tests and the pure
+# chunking path). Production passes the model's own tokenizer, because budgeting
+# an episode with a tokenizer the model does not use is what silently discarded
+# the tail of a third of all episodes.
 MAX_EMBEDDING_TOKENS = 1800
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -135,7 +143,12 @@ def _iter_clean_turns(events: list[Mapping[str, object]], *, provider: str | Non
         )
 
 
-def iter_turn_chunks(events: list[dict], *, provider: str | None = None) -> Iterator[EmbeddingChunk]:
+def iter_turn_chunks(
+    events: list[dict],
+    *,
+    provider: str | None = None,
+    truncate_to_budget: "Callable[[str], tuple[str, bool]] | None" = None,
+) -> Iterator[EmbeddingChunk]:
     """Yield episode-level embedding chunks without provider or DB work.
 
     An episode spans one user event through everything up to (but not
@@ -147,21 +160,23 @@ def iter_turn_chunks(events: list[dict], *, provider: str | None = None) -> Iter
     is most of a coding-agent transcript.
     """
     chunk_idx = 0
+    truncated_chunks = 0
     pending_texts: list[str] = []
     pending_start: int | None = None
     pending_end: int | None = None
     pending_source_id: int | None = None
 
     def _flush() -> EmbeddingChunk | None:
-        nonlocal chunk_idx
+        nonlocal chunk_idx, truncated_chunks
         if not pending_texts or pending_start is None:
             return None
         combined = "\n".join(pending_texts)
-        combined, _, _was_truncated = truncate(
-            combined,
-            MAX_EMBEDDING_TOKENS,
-            strategy="sandwich",
-        )
+        if truncate_to_budget is None:
+            combined, _, was_truncated = truncate(combined, MAX_EMBEDDING_TOKENS, strategy="sandwich")
+        else:
+            combined, was_truncated = truncate_to_budget(combined)
+        if was_truncated:
+            truncated_chunks += 1
         if not combined.strip():
             return None
         chunk = EmbeddingChunk(
@@ -194,3 +209,7 @@ def iter_turn_chunks(events: list[dict], *, provider: str | None = None) -> Iter
     chunk = _flush()
     if chunk is not None:
         yield chunk
+    if truncated_chunks:
+        # Truncation used to be computed and thrown away, so nothing downstream
+        # could tell a whole episode from a cut one.
+        logger.info("Embedding chunker truncated %d of %d episodes", truncated_chunks, chunk_idx)
