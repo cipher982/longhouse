@@ -16,6 +16,7 @@ import json
 import os
 import pty
 import pwd
+import re
 import select
 import signal
 import socket
@@ -38,6 +39,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
 QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
+_ANSI_CONTROL_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
 
 
 @dataclass(frozen=True)
@@ -410,6 +412,149 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _terminal_text(path: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    return _ANSI_CONTROL_RE.sub("", raw.decode("utf-8", "replace"))
+
+
+def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[str, Any]]:
+    """Retain provider-state identity without copying private state fields."""
+
+    rows: list[dict[str, Any]] = []
+    for path in _state_candidates(spec, home):
+        try:
+            payload = _read_json(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        normalized = _normalize_state(spec, payload, path)
+        if normalized is None:
+            continue
+        provider_pid_field = _provider_process_field(spec)
+        rows.append(
+            {
+                "path": str(path),
+                "provider": spec.provider,
+                "session_id": normalized.get("session_id"),
+                "provider_session_id": normalized.get("provider_session_id"),
+                "run_id": normalized.get("run_id"),
+                "connection_id": normalized.get("connection_id"),
+                provider_pid_field: normalized.get(provider_pid_field),
+                "keys": sorted(str(key) for key in payload),
+            }
+        )
+    return rows
+
+
+def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 20.0) -> None:
+    """Wait for the attached TUI, not merely the localhost bridge, to accept input."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        process.drain()
+        if process.process.poll() is not None:
+            raise RuntimeError("opencode Helm process exited before its TUI became ready")
+        compact = re.sub(r"\s+", "", _terminal_text(recording)).lower()
+        if "opencode" in compact and "connected" in compact:
+            return
+        time.sleep(0.1)
+    raise RuntimeError("opencode TUI did not publish its connected state")
+
+
+def _prepare_claude_profile(
+    *,
+    binary: Path,
+    home: Path,
+    workspace: Path,
+    environment: dict[str, str],
+    recording: Path,
+    timeout: float = 90.0,
+) -> dict[str, Any]:
+    """Complete Claude's real first-run onboarding in the disposable profile.
+
+    Claude persists this setup outside the Longhouse channel state. Launching
+    the managed facade against a fresh profile otherwise leaves it at the
+    theme/API-key/trust screens and no native channel state can be observed.
+    """
+
+    configured = str(environment.get("CLAUDE_CONFIG_DIR") or "").strip()
+    config_dir = Path(configured) if configured else home / ".claude"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    environment["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    bootstrap_environment = dict(environment)
+    bootstrap_environment["HOME"] = str(home)
+    process = PtyProcess(
+        [str(binary), "--name", "Longhouse qualification bootstrap", "--permission-mode", "dontAsk"],
+        cwd=workspace,
+        env=bootstrap_environment,
+        recording=recording,
+    )
+    theme_attempts = 0
+    api_key_attempts = 0
+    security_notes_attempts = 0
+    confirmed_trust = False
+    started = time.monotonic()
+    try:
+        deadline = started + timeout
+        while time.monotonic() < deadline:
+            process.drain()
+            if process.process.poll() is not None:
+                raise RuntimeError("Claude onboarding process exited before profile completion")
+            compact = re.sub(r"\s+", "", _terminal_text(recording))
+            if theme_attempts == 0 and "Choosethetextstyle" in compact:
+                process.send("\r")
+                theme_attempts += 1
+            elif "DetectedacustomAPIkey" in compact and api_key_attempts == 0:
+                process.send("\x1b[A")
+                api_key_attempts = 1
+            elif "DetectedacustomAPIkey" in compact and api_key_attempts == 1:
+                process.send("\r")
+                api_key_attempts = 2
+            elif security_notes_attempts == 0 and ("Securitynotes" in compact or "PressEnte" in compact):
+                process.send("\r")
+                security_notes_attempts += 1
+            elif not confirmed_trust and "Yes,Itrustthisfolder" in compact:
+                process.send("\r")
+                confirmed_trust = True
+            else:
+                try:
+                    profile = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    profile = {}
+                approved = profile.get("customApiKeyResponses") if isinstance(profile, dict) else None
+                if (
+                    isinstance(profile, dict)
+                    and profile.get("hasCompletedOnboarding") is True
+                    and isinstance(approved, dict)
+                    and bool(approved.get("approved"))
+                ):
+                    process.send("\x04")
+                    process.wait(10)
+                    return {
+                        "status": "pass",
+                        "profile": "isolated_disposable",
+                        "config_dir": str(config_dir),
+                        "has_completed_onboarding": True,
+                        "theme_attempts": theme_attempts,
+                        "api_key_attempts": api_key_attempts,
+                        "security_notes_attempts": security_notes_attempts,
+                        "trust_confirmed": confirmed_trust,
+                        "duration_seconds": round(time.monotonic() - started, 3),
+                    }
+            time.sleep(0.1)
+        raise RuntimeError(
+            "Claude onboarding did not complete "
+            f"(theme={theme_attempts}, api_key={api_key_attempts}, security={security_notes_attempts}, trust={confirmed_trust})"
+        )
+    finally:
+        if process.process.poll() is None:
+            process.kill_group(signal.SIGKILL)
+            process.wait(5)
+        process.close()
+
+
 def _state_candidates(spec: ProviderSpec, home: Path) -> list[Path]:
     roots = [home]
     configured = os.environ.get("CLAUDE_CONFIG_DIR")
@@ -452,7 +597,10 @@ def _wait_state(
         if process is not None:
             process.drain()
             if process.process.poll() is not None:
-                raise RuntimeError(f"{spec.provider} Helm process exited before publishing state")
+                diagnostics = _state_candidate_diagnostics(spec, home)
+                raise RuntimeError(
+                    f"{spec.provider} Helm process exited before publishing state; " f"candidates={json.dumps(diagnostics, sort_keys=True)}"
+                )
         for path in _state_candidates(spec, home):
             try:
                 state = _normalize_state(spec, _read_json(path), path)
@@ -471,7 +619,18 @@ def _wait_state(
             ):
                 return state
         time.sleep(0.2)
-    raise RuntimeError(f"{spec.provider} Helm state did not expose the registered run and connection")
+    diagnostics = _state_candidate_diagnostics(spec, home)
+    raise RuntimeError(
+        f"{spec.provider} Helm state did not expose the registered run and connection; "
+        f"candidates={json.dumps(diagnostics, sort_keys=True)}"
+    )
+
+
+class _RuntimeHostHTTPError(RuntimeError):
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        self.detail = detail
+        super().__init__(f"Runtime Host HTTP {status}: {detail}")
 
 
 def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
@@ -481,8 +640,23 @@ def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> di
         data=b"" if method == "POST" else None,
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw_detail = exc.read(4096).decode("utf-8", "replace")
+        except OSError:
+            raw_detail = ""
+        try:
+            parsed_detail = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            parsed_detail = raw_detail[:1000]
+        if isinstance(parsed_detail, dict):
+            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
+        else:
+            detail = str(parsed_detail)[:1000]
+        raise _RuntimeHostHTTPError(exc.code, detail) from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Runtime Host returned a non-object")
     return payload
@@ -505,6 +679,12 @@ def _wait_resume_intent(
                 f"sessions/{session_id}/resume-intent",
                 method="POST",
             )
+        except _RuntimeHostHTTPError as exc:
+            if exc.status in {401, 403}:
+                raise
+            last_reason = str(exc)
+            time.sleep(0.5)
+            continue
         except (OSError, urllib.error.URLError) as exc:
             last_reason = f"{type(exc).__name__}: {exc}"
             time.sleep(0.5)
@@ -737,12 +917,27 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     home = _isolated_provider_home()
     environment = os.environ.copy()
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
+    if spec.provider == "opencode":
+        configured_model = str(environment.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL") or "").strip()
+        if configured_model:
+            environment["LONGHOUSE_OPENCODE_MODEL"] = (
+                configured_model if configured_model.startswith("openrouter/") else f"openrouter/{configured_model}"
+            )
     initial: PtyProcess | None = None
     resumed: PtyProcess | None = None
     concurrent: PtyProcess | None = None
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
     try:
+        if spec.provider == "claude":
+            onboarding = _prepare_claude_profile(
+                binary=args.provider_bin,
+                home=home,
+                workspace=args.repo_root,
+                environment=environment,
+                recording=root / "claude-onboarding.tty",
+            )
+            _write_json(root / "claude-onboarding-receipt.json", onboarding)
         initial = PtyProcess(
             _launch_command(spec, args, None),
             cwd=args.repo_root,
@@ -751,6 +946,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         initial_state = _wait_state(spec, home, process=initial)
         initial.settle()
+        if spec.provider == "opencode":
+            _wait_opencode_tui_ready(initial, root / "initial.tty")
         states.append(initial_state)
         _write_json(root / "initial-bridge-state.json", initial_state)
         initial_provider_pid = _provider_process_pid(spec, initial_state)
@@ -794,6 +991,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             process=resumed,
         )
         resumed.settle()
+        if spec.provider == "opencode":
+            _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", resumed_state)
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
@@ -893,6 +1092,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain the exact causal failure
+        try:
+            _write_json(root / "state-candidates.json", _state_candidate_diagnostics(spec, home))
+        except (OSError, TypeError):
+            pass
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         redacted = _secret_scan(root, [args.agents_token])

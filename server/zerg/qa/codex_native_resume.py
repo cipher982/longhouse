@@ -105,6 +105,13 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
     ]
 
 
+class _RuntimeHostHTTPError(RuntimeError):
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        self.detail = detail
+        super().__init__(f"Runtime Host HTTP {status}: {detail}")
+
+
 def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
@@ -112,8 +119,23 @@ def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> di
         data=b"" if method == "POST" else None,
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw_detail = exc.read(4096).decode("utf-8", "replace")
+        except OSError:
+            raw_detail = ""
+        try:
+            parsed_detail = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            parsed_detail = raw_detail[:1000]
+        if isinstance(parsed_detail, dict):
+            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
+        else:
+            detail = str(parsed_detail)[:1000]
+        raise _RuntimeHostHTTPError(exc.code, detail) from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Runtime Host returned a non-object")
     return payload
@@ -130,6 +152,12 @@ def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: f
                 f"sessions/{session_id}/resume-intent",
                 method="POST",
             )
+        except _RuntimeHostHTTPError as exc:
+            if exc.status in {401, 403}:
+                raise
+            last_reason = str(exc)
+            time.sleep(0.5)
+            continue
         except (OSError, urllib.error.URLError) as exc:
             last_reason = f"{type(exc).__name__}: {exc}"
             time.sleep(0.5)

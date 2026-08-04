@@ -107,7 +107,11 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     let engine = std::env::current_exe().context("resolve native engine for OpenCode MCP")?;
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
-    let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token);
+    let model = std::env::var("LONGHOUSE_OPENCODE_MODEL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
     command
         .args([
             "serve",
@@ -198,8 +202,9 @@ fn opencode_mcp_config(
     engine: &Path,
     session_id: &str,
     coordination_token: &str,
+    model: Option<&str>,
 ) -> serde_json::Value {
-    json!({
+    let mut config = json!({
         "mcp": {
             "longhouse": {
                 "type": "local",
@@ -211,7 +216,11 @@ fn opencode_mcp_config(
                 "enabled": true,
             }
         }
-    })
+    });
+    if let Some(model) = model {
+        config["model"] = Value::String(model.to_owned());
+    }
+    config
 }
 
 fn configure_opencode_environment(
@@ -373,8 +382,13 @@ async fn monitor_opencode_events_once(
 ) -> Result<()> {
     let mut response = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
+        // OpenCode's long-lived SSE endpoint can close a compressed response
+        // without a complete compression trailer. Ask for identity bytes so
+        // the monitor can consume the event stream as the provider emits it.
+        .no_gzip()
         .build()?
         .get(format!("{server_url}/global/event"))
+        .header("Accept-Encoding", "identity")
         .basic_auth(username, Some(password))
         .send()
         .await?;
@@ -894,6 +908,7 @@ mod tests {
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             "session-secret",
+            None,
         );
         let server = &config["mcp"]["longhouse"];
         assert_eq!(server["command"][0], "/opt/longhouse-engine");
@@ -906,6 +921,17 @@ mod tests {
         assert_eq!(
             server["environment"]["LONGHOUSE_MANAGED_SESSION_ID"],
             "11111111-1111-4111-8111-111111111111"
+        );
+
+        let configured = opencode_mcp_config(
+            Path::new("/opt/longhouse-engine"),
+            "11111111-1111-4111-8111-111111111111",
+            "session-secret",
+            Some("openrouter/deepseek/deepseek-v4-flash"),
+        );
+        assert_eq!(
+            configured["model"],
+            "openrouter/deepseek/deepseek-v4-flash"
         );
 
         let mut command = Command::new("opencode");
