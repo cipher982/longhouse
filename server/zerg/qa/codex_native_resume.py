@@ -638,7 +638,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "fail", "failure_code": "codex_binary_missing"}))
         return 2
     result = run_native_resume(args)
-    print(json.dumps(result, sort_keys=True))
+    print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 
 
