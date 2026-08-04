@@ -60,7 +60,13 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
-        assert "transcript_shipper_receipt" in registration.required_artifacts
+        assert {
+            "transcript_shipper_receipt",
+            "initial_seed_send",
+            "initial_transcript_ship_receipt",
+            "post_resume_response_correlation",
+            "post_resume_transcript_ship_receipt",
+        } <= set(registration.required_artifacts)
 
 
 def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
