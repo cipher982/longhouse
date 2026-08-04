@@ -896,6 +896,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let blocked_epoch = Uuid::new_v4();
+        register_epoch(&conn, blocked_epoch, "blocked");
         let blocked = candidate(blocked_epoch, "blocked");
         persist_or_load(&mut conn, &blocked).unwrap();
         assert!(quarantine(
@@ -905,7 +906,9 @@ mod tests {
             "proof mismatch"
         )
         .unwrap());
-        let live = candidate(Uuid::new_v4(), "live");
+        let live_epoch = Uuid::new_v4();
+        register_epoch(&conn, live_epoch, "live");
+        let live = candidate(live_epoch, "live");
         persist_or_load(&mut conn, &live).unwrap();
 
         let state = snapshot(&conn).unwrap();
@@ -1167,5 +1170,16 @@ mod tests {
             block_kind: None,
             block_detail: None,
         }
+    }
+
+    fn register_epoch(conn: &rusqlite::Connection, source_epoch: Uuid, source_id: &str) {
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'fixture', ?2, 'fixture', 'initial', 1, ?3, ?3)",
+            params![source_epoch.to_string(), source_id, "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
     }
 }

@@ -1679,7 +1679,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "yellow",
             headline: "Longhouse archive repair is draining",
             reasons: ["archive_repair_draining"],
-            suggestedActions: ["Inspect archive backlog: longhouse archive status"],
+            suggestedActions: ["Inspect archive backlog: longhouse local-health --fast --json"],
             attention: AttentionSnapshot(
                 state: "watching",
                 summary: nil

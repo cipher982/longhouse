@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
+from typer.testing import CliRunner
+
+from zerg.cli.shipping import app
 from zerg.cli.shipping import _source_rows
 
 
@@ -67,3 +71,12 @@ def test_shipping_inspect_reads_exact_retained_source_proof(tmp_path):
     assert rows[0]["provider"] == "claude"
     assert rows[0]["opaque_source_id"] == "session-1"
     assert rows[0]["block_kind"] == "source_epoch_conflict_unresolved"
+
+
+def test_shipping_inspect_reports_missing_database_in_machine_output(tmp_path):
+    result = CliRunner().invoke(app, ["--state-root", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["database_exists"] is False
+    assert payload["rows"] == []

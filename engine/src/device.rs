@@ -1061,7 +1061,7 @@ fn native_desktop_suggested_actions(
         .any(|reason| reason == "storage_v2_outbox_unreadable")
     {
         return vec![
-            "Run: longhouse doctor".to_string(),
+            "Run: longhouse local-health --fast --json".to_string(),
             "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
         ];
     }

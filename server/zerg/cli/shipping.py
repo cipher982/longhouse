@@ -65,6 +65,7 @@ def inspect_command(
         "schema_version": 1,
         "action_id": "inspect_storage_source",
         "read_only": True,
+        "database_exists": database.is_file(),
         "database": str(database),
         "source_epoch": source_epoch,
         "rows": rows,
@@ -78,6 +79,9 @@ def inspect_command(
         return
     typer.echo("Durable shipping source evidence (read-only)")
     typer.echo(f"  database: {database}")
+    if not database.is_file():
+        typer.echo("  Database is not present; no local source evidence was inspected.")
+        return
     typer.echo(f"  rows: {len(rows)}")
     if not rows:
         typer.echo("  No retained source intents matched the requested scope.")

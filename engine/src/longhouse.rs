@@ -845,10 +845,12 @@ fn native_shipping_inspect(args: ShippingInspectArgs) -> anyhow::Result<()> {
         args.source_epoch.as_deref(),
         args.limit,
     )?;
+    let database_exists = database.is_file();
     let payload = json!({
         "schema_version": 1,
         "action_id": "inspect_storage_source",
         "read_only": true,
+        "database_exists": database_exists,
         "database": database,
         "source_epoch": args.source_epoch,
         "rows": rows,
@@ -866,6 +868,10 @@ fn native_shipping_inspect(args: ShippingInspectArgs) -> anyhow::Result<()> {
         .unwrap_or_default();
     println!("Durable shipping source evidence (read-only)");
     println!("  database: {}", database.display());
+    if !database_exists {
+        println!("  Database is not present; no local source evidence was inspected.");
+        return Ok(());
+    }
     println!("  rows: {}", rows.len());
     if rows.is_empty() {
         println!("  No retained source intents matched the requested scope.");
