@@ -23,39 +23,35 @@ pub struct ResumeContractObservation {
     pub valid_until: String,
 }
 
+/// Retained provider contracts are machine evidence, not provider transcript
+/// state. The daemon watches these directories so a contract created or
+/// removed after startup triggers a fresh evidence projection.
+pub fn resume_contract_dirs(longhouse_home: &Path) -> [PathBuf; 4] {
+    [
+        longhouse_home.join("managed-local/contracts/codex"),
+        longhouse_home.join("managed-local/contracts/claude"),
+        longhouse_home.join("managed-local/cursor-helm/binding-probes"),
+        longhouse_home.join("managed-local/opencode/bridge/sessions"),
+    ]
+}
+
 pub fn scan_resume_contracts(
     longhouse_home: &Path,
     now: DateTime<Utc>,
 ) -> Vec<ResumeContractObservation> {
     let mut observations = Vec::new();
-    scan_dir(
-        &longhouse_home.join("managed-local/contracts/codex"),
-        "codex",
-        now,
-        &mut observations,
-        validate_codex,
-    );
-    scan_dir(
-        &longhouse_home.join("managed-local/contracts/claude"),
-        "claude",
-        now,
-        &mut observations,
-        validate_claude,
-    );
-    scan_dir(
-        &longhouse_home.join("managed-local/cursor-helm/binding-probes"),
-        "cursor",
-        now,
-        &mut observations,
-        validate_cursor,
-    );
-    scan_dir(
-        &longhouse_home.join("managed-local/opencode/bridge/sessions"),
-        "opencode",
-        now,
-        &mut observations,
-        validate_opencode,
-    );
+    let validators: [(&str, Validator); 4] = [
+        ("codex", validate_codex),
+        ("claude", validate_claude),
+        ("cursor", validate_cursor),
+        ("opencode", validate_opencode),
+    ];
+    for ((provider, validate), dir) in validators
+        .into_iter()
+        .zip(resume_contract_dirs(longhouse_home))
+    {
+        scan_dir(&dir, provider, now, &mut observations, validate);
+    }
     observations.sort_by(|left, right| {
         (&left.provider, &left.session_id).cmp(&(&right.provider, &right.session_id))
     });

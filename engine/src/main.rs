@@ -190,9 +190,10 @@ fn resolve_codex_bridge_start_roots(
     isolation_root: Option<PathBuf>,
 ) -> anyhow::Result<(Option<PathBuf>, Option<PathBuf>)> {
     if let Some(root) = isolation_root {
+        let longhouse_home = root.join("longhouse");
         return Ok((
-            Some(root.join("codex-bridge")),
-            Some(root.join("longhouse")),
+            Some(longhouse_home.join("managed-local").join("codex-bridge")),
+            Some(longhouse_home),
         ));
     }
     if state_root.is_some() && longhouse_home.is_none() {
@@ -904,7 +905,9 @@ enum CodexBridgeCommands {
         #[arg(long)]
         longhouse_home: Option<PathBuf>,
 
-        /// Dev/test isolation root. Sets state root to <root>/codex-bridge and Longhouse home to <root>/longhouse.
+        /// Dev/test isolation root. Sets the bridge state root to
+        /// <root>/longhouse/managed-local/codex-bridge and Longhouse home to
+        /// <root>/longhouse.
         #[arg(long, conflicts_with_all = ["state_root", "longhouse_home"])]
         isolation_root: Option<PathBuf>,
 
@@ -2161,8 +2164,16 @@ mod tests {
         let (state_root, longhouse_home) =
             resolve_codex_bridge_start_roots(None, None, Some(root.clone())).unwrap();
 
-        assert_eq!(state_root, Some(root.join("codex-bridge")));
-        assert_eq!(longhouse_home, Some(root.join("longhouse")));
+        let expected_longhouse_home = root.join("longhouse");
+        assert_eq!(
+            state_root,
+            Some(
+                expected_longhouse_home
+                    .join("managed-local")
+                    .join("codex-bridge")
+            )
+        );
+        assert_eq!(longhouse_home, Some(expected_longhouse_home));
     }
 
     #[test]
