@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _cleanup_processes
@@ -129,6 +130,8 @@ def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
 
 def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
+    # The producer must read the generated, digest-pinned contract that the
+    # factory mounts as --repo-root; a synthetic tmp_path would bypass that seam.
     repo_root = Path(__file__).resolve().parents[2]
     exit_code = antigravity_resume_policy.main(
         [
@@ -158,3 +161,60 @@ def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -
     assert source["resume_capability"]["disposition"] == "policy_disabled"
     assert source["scenario_result"]["status"] == "pass"
     assert json.loads((evidence / "cleanup-receipt.json").read_text())["orphan_count"] == 0
+
+
+def test_antigravity_policy_contract_digest_matches_canonical_authority() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+
+    _contract, digest = antigravity_resume_policy._policy_contract(repo_root)
+
+    assert digest == managed_provider_contract_entry_digest("antigravity")
+
+
+@pytest.mark.parametrize(
+    ("reattach", "disposition"),
+    ((True, "policy_disabled"), (False, "implemented")),
+)
+def test_antigravity_policy_proof_fails_closed_when_contract_enables_resume(
+    tmp_path: Path,
+    reattach: bool,
+    disposition: str,
+) -> None:
+    manifest_path = tmp_path / "server/zerg/config/managed_provider_contracts.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": [
+                    {
+                        "provider": "antigravity",
+                        "reattach": reattach,
+                        "capabilities": {"session.resume.helm": {"disposition": disposition}},
+                    }
+                ],
+            }
+        )
+    )
+    evidence = tmp_path / "evidence"
+
+    exit_code = antigravity_resume_policy.main(
+        [
+            "--variant",
+            "policy_disabled",
+            "--evidence-root",
+            str(evidence),
+            "--repo-root",
+            str(tmp_path),
+            "--engine",
+            str(tmp_path / "engine"),
+            "--longhouse-cli",
+            str(tmp_path / "longhouse"),
+        ]
+    )
+
+    result = json.loads((evidence / "result.json").read_text())
+    assert exit_code == 0
+    assert result["status"] == "fail"
+    source = json.loads((evidence / "policy-source-receipt.json").read_text())
+    assert source["scenario_result"]["failure_code"] == "resume_unsupported_oracle_failed"
