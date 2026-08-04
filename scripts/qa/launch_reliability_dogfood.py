@@ -420,9 +420,13 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         episode["evidence_conservation"] = conservation
     challenge_time_error = None
     if challenge_payload is not None:
-        observed_time = _parse_timestamp(observed_at)
-        created_time = _parse_timestamp(challenge_payload["created_at"])
-        expires_time = _parse_timestamp(challenge_payload["expires_at"])
+        observed_time = datetime.fromisoformat(_parse_timestamp(observed_at).replace("Z", "+00:00"))
+        created_time = datetime.fromisoformat(
+            _parse_timestamp(challenge_payload["created_at"]).replace("Z", "+00:00")
+        )
+        expires_time = datetime.fromisoformat(
+            _parse_timestamp(challenge_payload["expires_at"]).replace("Z", "+00:00")
+        )
         if observed_time < created_time:
             challenge_time_error = "observation predates dogfood challenge creation"
         elif observed_time > expires_time:
