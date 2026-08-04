@@ -133,9 +133,17 @@ async def ingest_runtime_observation_batch(
         live_transcript_only = bool(events) and all(_is_bridge_live_transcript_event(ev) for ev in events)
         # Pick first non-empty tool_name per session for attention push context.
         tool_by_session: dict = {}
+        stall_notification_by_session: dict = {}
         for ev in events:
             if ev.session_id is not None and ev.tool_name:
                 tool_by_session.setdefault(ev.session_id, ev.tool_name)
+            if (
+                ev.session_id is not None
+                and ev.kind == "phase_signal"
+                and isinstance(ev.payload, dict)
+                and ev.payload.get("stall_notification") is True
+            ):
+                stall_notification_by_session[ev.session_id] = True
 
         if live_transcript_only:
             _publish_live_transcript_previews(events, now=now_utc)
@@ -170,6 +178,7 @@ async def ingest_runtime_observation_batch(
                 {
                     "session_id": sid,
                     "tool": tool_by_session.get(sid),
+                    "stall_notification": stall_notification_by_session.get(sid, False),
                     "auto_resume": any(
                         ev.session_id == sid
                         and ev.runtime_key in updated_runtime_keys
@@ -343,6 +352,17 @@ async def ingest_runtime_observation_batch(
                                 pause_request=active_pause_request,
                                 previous_state=previous_attention_state,
                                 occurred_at=now_utc,
+                                targets=ios_targets,
+                            )
+                        elif context.get("stall_notification") and canonical_state == "stalled":
+                            attention_push = prepare_session_attention_push(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                previous_state=previous_attention_state,
+                                current_state=canonical_state,
+                                occurred_at=now_utc,
+                                current_tool_name=context.get("tool"),
                                 targets=ios_targets,
                             )
                         else:
@@ -781,6 +801,6 @@ def _preview_seq(preview: dict) -> int:
 def _previous_attention_state_from_session(session: AgentSession) -> str | None:
     value = str(session.last_attention_push_state or "").strip()
     base = value.split(":", 1)[0]
-    if base in {"blocked", "needs_user", "needs_answer"}:
+    if base in {"blocked", "stalled", "needs_user", "needs_answer"}:
         return base
     return None

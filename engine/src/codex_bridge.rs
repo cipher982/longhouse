@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -492,8 +492,13 @@ struct CodexRuntimeTracker {
     active_turn_started_at: Option<Instant>,
     last_provider_progress_at: Option<Instant>,
     stall_episode: Option<StallEpisode>,
+    stall_notification_pending: bool,
+    last_process_identity_match: ProcessIdentityMatch,
+    last_app_server_pid: Option<u32>,
+    last_app_server_pgid: Option<i32>,
     last_keepalive_at: Option<Instant>,
     last_rollout_len: Option<u64>,
+    last_rollout_growth_at: Option<Instant>,
     attention_state: Option<CodexAttentionState>,
     active_items: BTreeMap<String, ActiveCodexItem>,
     next_item_sequence: u64,
@@ -505,6 +510,24 @@ enum StallTrigger {
     StoppedProcess,
     /// Silence long enough to outlast any legitimate quiet command.
     ProlongedSilence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ProcessIdentityMatch {
+    Verified,
+    Mismatch,
+    #[default]
+    Unknown,
+}
+
+impl ProcessIdentityMatch {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Mismatch => "mismatch",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl StallTrigger {
@@ -524,6 +547,9 @@ struct StallEpisode {
     oldest_item: Option<ActiveCodexItem>,
     oldest_item_id: Option<String>,
     stopped_process: Option<StoppedProcessFact>,
+    process_identity_match: ProcessIdentityMatch,
+    app_server_pid: Option<u32>,
+    app_server_pgid: Option<i32>,
 }
 
 /// An owned subprocess found stopped or zombied while a command was in flight.
@@ -538,6 +564,12 @@ struct StoppedProcessFact {
     stat: String,
     command: String,
     matched_by: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoppedProcessProbe {
+    process_identity_match: ProcessIdentityMatch,
+    stopped_process: Option<StoppedProcessFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4584,6 +4616,11 @@ impl CodexRuntimeTracker {
         self.active_turn_started_at = Some(now);
         self.last_provider_progress_at = Some(now);
         self.stall_episode = None;
+        self.stall_notification_pending = false;
+        self.last_process_identity_match = ProcessIdentityMatch::Unknown;
+        self.last_app_server_pid = None;
+        self.last_app_server_pgid = None;
+        self.last_rollout_growth_at = None;
     }
 
     fn clear_active_turn(&mut self) {
@@ -4592,7 +4629,12 @@ impl CodexRuntimeTracker {
         self.active_turn_started_at = None;
         self.last_provider_progress_at = None;
         self.stall_episode = None;
+        self.stall_notification_pending = false;
+        self.last_process_identity_match = ProcessIdentityMatch::Unknown;
+        self.last_app_server_pid = None;
+        self.last_app_server_pgid = None;
         self.last_rollout_len = None;
+        self.last_rollout_growth_at = None;
     }
 
     /// Record real provider progress. Returns true when this cleared a live stall
@@ -4604,13 +4646,23 @@ impl CodexRuntimeTracker {
         let was_stalled = self.stall_episode.is_some();
         self.last_provider_progress_at = Some(Instant::now());
         self.stall_episode = None;
+        self.stall_notification_pending = false;
         was_stalled
     }
 
     /// Evidence for the current stall episode. Reports only checkable facts; it
     /// never asserts a cause.
-    fn stall_evidence(&self, provider_turn_id: Option<&str>) -> Option<Value> {
+    fn stall_evidence(
+        &self,
+        provider_turn_id: Option<&str>,
+        rollout_path: Option<&Path>,
+    ) -> Option<Value> {
         let episode = self.stall_episode.as_ref()?;
+        let rollout_metadata = rollout_path.and_then(|path| fs::metadata(path).ok());
+        let rollout_modified_at = rollout_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok())
+            .map(|modified| DateTime::<Utc>::from(modified).to_rfc3339());
         Some(json!({
             "turn_epoch": episode.turn_epoch,
             "provider_turn_id": provider_turn_id,
@@ -4628,6 +4680,23 @@ impl CodexRuntimeTracker {
                 .as_ref()
                 .map(|item| item.started_at.elapsed().as_millis() as u64),
             "active_item_count": self.active_items.len(),
+            "control_stream": "open",
+            "app_server": {
+                "pid": episode.app_server_pid,
+                "pgid": episode.app_server_pgid,
+                "identity_match": episode.process_identity_match.as_str(),
+            },
+            "rollout": {
+                "path": rollout_path.and_then(|path| path.to_str()),
+                "length": rollout_metadata
+                    .as_ref()
+                    .map(|metadata| metadata.len())
+                    .or(self.last_rollout_len),
+                "modified_at": rollout_modified_at,
+                "seconds_since_observed_growth": self
+                    .last_rollout_growth_at
+                    .map(|at| at.elapsed().as_secs()),
+            },
             "stopped_process": episode.stopped_process.as_ref().map(|proc| json!({
                 "pid": proc.pid,
                 "ppid": proc.ppid,
@@ -4901,7 +4970,9 @@ impl CodexRuntimeTracker {
             self.last_rollout_len = Some(len);
             if grew {
                 self.last_provider_progress_at = Some(now);
+                self.last_rollout_growth_at = Some(now);
                 self.stall_episode = None;
+                self.stall_notification_pending = false;
                 return false;
             }
         }
@@ -4914,12 +4985,14 @@ impl CodexRuntimeTracker {
         }) {
             self.last_provider_progress_at = Some(now);
             self.stall_episode = None;
+            self.stall_notification_pending = false;
             return false;
         }
 
         // Waiting on the user is quiescent, not stalled.
         if self.attention_state.is_some() {
             self.stall_episode = None;
+            self.stall_notification_pending = false;
             return false;
         }
 
@@ -4952,8 +5025,27 @@ impl CodexRuntimeTracker {
             oldest_item,
             oldest_item_id,
             stopped_process,
+            process_identity_match: self.last_process_identity_match,
+            app_server_pid: self.last_app_server_pid,
+            app_server_pgid: self.last_app_server_pgid,
         });
+        self.stall_notification_pending = true;
         true
+    }
+
+    fn set_stall_probe_identity(
+        &mut self,
+        identity_match: ProcessIdentityMatch,
+        app_server_pid: Option<u32>,
+        app_server_pgid: Option<i32>,
+    ) {
+        self.last_process_identity_match = identity_match;
+        self.last_app_server_pid = app_server_pid;
+        self.last_app_server_pgid = app_server_pgid;
+    }
+
+    fn take_stall_notification(&mut self) -> bool {
+        std::mem::take(&mut self.stall_notification_pending)
     }
 
     fn primary_running_tool(&self) -> Option<String> {
@@ -5126,10 +5218,13 @@ async fn emit_runtime_updates(
                 let pause_request_still_pending = matches!(phase, "running" | "thinking")
                     && !context.pending_pause_requests.lock().await.is_empty();
                 let stall_evidence = (phase == "stalled").then(|| {
-                    context
-                        .runtime_tracker
-                        .stall_evidence(context.state.active_turn_id.as_deref())
+                    context.runtime_tracker.stall_evidence(
+                        context.state.active_turn_id.as_deref(),
+                        context.state.thread_path.as_deref().map(Path::new),
+                    )
                 });
+                let stall_notification =
+                    (phase == "stalled") && context.runtime_tracker.take_stall_notification();
                 context
                     .runtime
                     .post_phase(
@@ -5142,6 +5237,7 @@ async fn emit_runtime_updates(
                         tool_name,
                         pause_request_still_pending,
                         stall_evidence.flatten(),
+                        stall_notification,
                     )
                     .await;
             }
@@ -5235,17 +5331,60 @@ fn observe_rollout_len(context: &BridgeContext) -> Option<u64> {
 /// requires the recorded app-server PID to still be the same process (guarding
 /// PID reuse) and the candidate to be either a descendant or a member of the
 /// app-server's recorded process group.
-fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcessFact> {
-    let app_server_pid = context.state.app_server_pid?;
-    let recorded_start = context.state.app_server_process_start_time.as_deref()?;
-    let fact = crate::process_identity::try_collect_process_fact(app_server_pid)?;
-    let entries = crate::process_identity::try_collect_process_lineage()?;
-    find_stopped_owned_process(
-        &fact,
-        recorded_start,
+fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcessProbe> {
+    let snapshots = crate::process_identity::try_collect_process_snapshots();
+    probe_stopped_owned_process_from_snapshots(
+        context.state.app_server_pid,
+        context.state.app_server_process_start_time.as_deref(),
         context.state.app_server_pgid,
-        &entries,
+        snapshots.as_ref(),
     )
+}
+
+fn probe_stopped_owned_process_from_snapshots(
+    app_server_pid: Option<u32>,
+    recorded_start: Option<&str>,
+    app_server_pgid: Option<i32>,
+    snapshots: Option<&HashMap<u32, crate::process_identity::ProcessSnapshot>>,
+) -> Option<StoppedProcessProbe> {
+    let app_server_pid = app_server_pid?;
+    let snapshots = snapshots?;
+    let app_server = snapshots.get(&app_server_pid)?;
+    let process_identity_match = match recorded_start {
+        Some(recorded_start) if !recorded_start.trim().is_empty() => {
+            if crate::process_identity::lstart_matches_recorded(&app_server.fact, recorded_start) {
+                ProcessIdentityMatch::Verified
+            } else {
+                ProcessIdentityMatch::Mismatch
+            }
+        }
+        _ => ProcessIdentityMatch::Unknown,
+    };
+    let mut entries = snapshots
+        .values()
+        .map(|snapshot| crate::process_identity::ProcessLineage {
+            pid: snapshot.fact.pid,
+            ppid: snapshot.ppid,
+            pgid: snapshot.pgid,
+            stat: snapshot.fact.stat.clone(),
+            command: snapshot.fact.command.clone(),
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.pid);
+    let stopped_process = if process_identity_match == ProcessIdentityMatch::Verified {
+        find_stopped_owned_process(
+            &app_server.fact,
+            recorded_start.unwrap_or_default(),
+            app_server_pgid,
+            &entries,
+        )
+    } else {
+        None
+    };
+    Some(StoppedProcessProbe {
+        process_identity_match,
+        stopped_process,
+    })
 }
 
 /// Find a stopped command only when the app-server identity is fully proven.
@@ -5280,7 +5419,24 @@ fn find_stopped_owned_process(
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
     let rollout_len = observe_rollout_len(context);
     let stopped_process = if context.runtime_tracker.stall_probe_needed() {
-        probe_stopped_owned_process(context)
+        match probe_stopped_owned_process(context) {
+            Some(probe) => {
+                context.runtime_tracker.set_stall_probe_identity(
+                    probe.process_identity_match,
+                    context.state.app_server_pid,
+                    context.state.app_server_pgid,
+                );
+                probe.stopped_process
+            }
+            None => {
+                context.runtime_tracker.set_stall_probe_identity(
+                    ProcessIdentityMatch::Unknown,
+                    context.state.app_server_pid,
+                    context.state.app_server_pgid,
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -5417,6 +5573,7 @@ impl BridgeRuntimeSink {
         tool_name: Option<String>,
         pause_request_still_pending: bool,
         stall_evidence: Option<Value>,
+        stall_notification: bool,
     ) {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
@@ -5443,6 +5600,7 @@ impl BridgeRuntimeSink {
                 "thread_id": self.thread_id,
                 "pause_request_still_pending": pause_request_still_pending,
                 "stall": stall_evidence,
+                "stall_notification": stall_notification,
             }
         })]);
     }
@@ -8590,6 +8748,26 @@ mod tests {
     }
 
     #[test]
+    fn stopped_process_probe_treats_failed_or_incomplete_scan_as_unknown() {
+        assert!(probe_stopped_owned_process_from_snapshots(
+            Some(16956),
+            Some("Tue Aug 4 20:00:00 2026"),
+            Some(16956),
+            None,
+        )
+        .is_none());
+
+        let snapshots = HashMap::new();
+        assert!(probe_stopped_owned_process_from_snapshots(
+            Some(16956),
+            Some("Tue Aug 4 20:00:00 2026"),
+            Some(16956),
+            Some(&snapshots),
+        )
+        .is_none());
+    }
+
+    #[test]
     fn stopped_process_accepts_reparented_member_of_verified_app_server_group() {
         let entries = stopped_process_lineage();
         let fact = app_server_fact("Tue Aug 4 20:00:00 2026");
@@ -8626,7 +8804,7 @@ mod tests {
             "stalled",
             Some("shell"),
         );
-        let evidence = tracker.stall_evidence(None).expect("evidence");
+        let evidence = tracker.stall_evidence(None, None).expect("evidence");
         assert_eq!(evidence["turn_identity_missing"], json!(true));
     }
 
@@ -8652,6 +8830,7 @@ mod tests {
         let mut tracker = CodexRuntimeTracker::default();
         start_turn_with_command(&mut tracker);
         age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+        tracker.set_stall_probe_identity(ProcessIdentityMatch::Verified, Some(16956), Some(16956));
 
         assert_phase_update(
             tracker
@@ -8660,13 +8839,17 @@ mod tests {
             "stalled",
             Some("shell"),
         );
-        let evidence = tracker.stall_evidence(Some("turn-1")).expect("evidence");
+        let evidence = tracker
+            .stall_evidence(Some("turn-1"), None)
+            .expect("evidence");
         assert_eq!(evidence["trigger"], json!("stopped_process"));
         assert_eq!(evidence["stopped_process"]["pid"], json!(17210));
         assert_eq!(
             evidence["stopped_process"]["matched_by"],
             json!("process_group")
         );
+        assert_eq!(evidence["app_server"]["identity_match"], json!("verified"));
+        assert_eq!(evidence["app_server"]["pid"], json!(16956));
     }
 
     #[test]
@@ -8683,7 +8866,9 @@ mod tests {
             Some("shell"),
         );
         assert_eq!(
-            tracker.stall_evidence(Some("turn-1")).expect("evidence")["trigger"],
+            tracker
+                .stall_evidence(Some("turn-1"), None)
+                .expect("evidence")["trigger"],
             json!("prolonged_silence")
         );
     }
@@ -8786,6 +8971,8 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "first evaluation enters the episode"
         );
+        assert!(tracker.take_stall_notification());
+        assert!(!tracker.take_stall_notification());
         assert!(
             !tracker.refresh_stall_state(None, Some(stopped_fact())),
             "subsequent keepalives must not re-enter the same episode"
@@ -8801,6 +8988,7 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "a later silence is a new episode"
         );
+        assert!(tracker.take_stall_notification());
         assert_eq!(
             tracker.stall_episode.as_ref().unwrap().turn_epoch,
             first_epoch

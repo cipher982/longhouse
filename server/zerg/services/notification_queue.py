@@ -16,6 +16,7 @@ from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_BLOCKED
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER
+from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_STALLED
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_blocked_reminder_push
 from zerg.services.apns_sender import prepare_session_needs_answer_push
@@ -93,6 +94,15 @@ async def process_queued_notification_events(
         event_type = str(event.event_type)
 
         if event_type == NOTIFICATION_EVENT_SESSION_BLOCKED and current_state == "blocked":
+            push = prepare_session_attention_push(
+                db,
+                owner_id=owner_id,
+                session_id=session_uuid,
+                previous_state=previous_state,
+                current_state=current_state,
+                occurred_at=now,
+            )
+        elif event_type == NOTIFICATION_EVENT_SESSION_STALLED and current_state == "stalled":
             push = prepare_session_attention_push(
                 db,
                 owner_id=owner_id,

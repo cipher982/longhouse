@@ -29,11 +29,13 @@ from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
+from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import _attention_collapse_id
 from zerg.services.apns_sender import build_session_attention_payload
 from zerg.services.apns_sender import build_session_attention_resolution_payload
 from zerg.services.apns_sender import build_widget_timeline_payload
+from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_widget_timeline_push
@@ -949,6 +951,121 @@ def test_runtime_blocked_events_record_notification_event_and_reminder(tmp_path)
         assert [event.event_type for event in events] == ["session_blocked", "session_blocked_reminder"]
         assert all(event.delivered_at is not None for event in events)
         assert all(event.resolved_at is not None for event in events)
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_runtime_stall_notification_creates_one_attention_event_and_resolves(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="s" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=t0,
+                loop_mode="assist",
+                summary_title="Runtime stalled session",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    class FrozenDateTime(datetime):
+        current = t0
+
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    def runtime_payload(phase: str, seconds: int, *, stall_notification: bool = False) -> dict:
+        occurred_at = t0 + timedelta(seconds=seconds)
+        return {
+            "events": [
+                {
+                    "runtime_key": f"codex:{session_id}",
+                    "session_id": session_id,
+                    "provider": "codex",
+                    "device_id": "devbox",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": phase,
+                    "occurred_at": occurred_at.isoformat(),
+                    "freshness_ms": 10 * 60 * 1000,
+                    "dedupe_key": f"runtime-stall:{phase}:{seconds}",
+                    "payload": {"stall_notification": stall_notification},
+                }
+            ]
+        }
+
+    with (
+        patch("zerg.routers.runtime.datetime", FrozenDateTime),
+        patch("zerg.services.apns_sender.send_session_attention_push", send_mock),
+        patch("zerg.services.apns_sender.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            for phase, seconds, notify in [
+                ("stalled", 0, True),
+                ("stalled", 5 * 60, True),
+                ("idle", 6 * 60, False),
+            ]:
+                FrozenDateTime.current = t0 + timedelta(seconds=seconds)
+                response = client.post(
+                    "/agents/runtime/events/batch",
+                    json=runtime_payload(phase, seconds, stall_notification=notify),
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 200, response.text
+
+    assert send_mock.await_count == 1
+    resolution_send_mock.assert_awaited_once()
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "stalled:resolved"
+        events = (
+            db.query(NotificationEvent)
+            .filter(NotificationEvent.session_id == session_id)
+            .order_by(NotificationEvent.event_started_at.asc())
+            .all()
+        )
+        assert [event.event_type for event in events] == ["session_stalled"]
+        assert events[0].delivered_at is not None
+        assert events[0].resolved_at is not None
 
     _cleanup_overrides()
     engine.dispose()
@@ -1991,3 +2108,63 @@ def test_attention_payload_bounds_long_title_and_collapse_id():
     assert len(notification.collapse_id.encode("utf-8")) <= 64
     assert len(payload["title"]) <= 200
     assert payload["title"].endswith("…")
+
+
+def test_stalled_attention_push_is_once_per_episode_and_resolves(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    target = APNSDeviceTarget(device_token="c" * 64, push_environment="sandbox")
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=t0,
+                loop_mode="assist",
+                summary_title="Hung Codex turn",
+            )
+        )
+        db.commit()
+
+        first = prepare_session_attention_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            previous_state=None,
+            current_state="stalled",
+            occurred_at=t0,
+            targets=(target,),
+        )
+        second = prepare_session_attention_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            previous_state="stalled",
+            current_state="stalled",
+            occurred_at=t0 + timedelta(minutes=5),
+            targets=(target,),
+        )
+        resolution = prepare_session_attention_resolution_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            previous_state="stalled",
+            current_state="idle",
+            occurred_at=t0 + timedelta(minutes=6),
+            targets=(target,),
+        )
+
+        assert first is not None
+        assert first.state == "stalled"
+        assert first.alert_title == "May be stalled"
+        assert "control remains available" in first.alert_body
+        assert second is None
+        assert resolution is not None
+        assert resolution.previous_state == "stalled"
+
+    engine.dispose()
