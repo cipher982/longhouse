@@ -299,6 +299,26 @@ async def test_projector_cutover_certificate_requires_zero_lag_and_repair_revoke
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
+        unbound = await client.call(
+            "projector.coverage.certify.v2",
+            {"projector": projector, "observed_at": now.isoformat()},
+        )
+        assert unbound == {
+            "certified": False,
+            "created": False,
+            "reason": "store_not_bound",
+            "commit_seq": "0",
+        }
+        store_id = str(uuid4())
+        await client.call(
+            "projector.store.bind.v2",
+            {
+                "projector": projector,
+                "store_id": store_id,
+                "schema_generation": "searchd-test-v1",
+                "observed_at": now.isoformat(),
+            },
+        )
         await client.call(
             "projector.state.advance.v2",
             {
@@ -347,6 +367,10 @@ async def test_projector_cutover_certificate_requires_zero_lag_and_repair_revoke
 
         complete = await client.call("projector.coverage.read.v2", {"projector": projector})
         assert complete["certificate"]["certified_commit_seq"] == certified["certified_commit_seq"]
+        assert complete["store_binding"] == {
+            "store_id": store_id,
+            "schema_generation": "searchd-test-v1",
+        }
         assert complete["lag_count"] == 0
         assert complete["oldest_lag_at"] is None
         assert complete["oldest_lag_seconds"] is None

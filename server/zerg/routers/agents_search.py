@@ -84,6 +84,18 @@ class _DenseQueryPayload(BaseModel):
 
     results: list[_DenseEpisodeHit]
     coverage: "_EmbeddingCoveragePayload"
+    store_id: str
+    schema_generation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_store_identity(self) -> "_DenseQueryPayload":
+        try:
+            parsed = UUID(self.store_id)
+        except ValueError as exc:
+            raise ValueError("store_id must be a canonical UUID") from exc
+        if str(parsed) != self.store_id:
+            raise ValueError("store_id must be a canonical UUID")
+        return self
 
 
 class _EmbeddingCoveragePayload(BaseModel):
@@ -149,11 +161,29 @@ class _CutoverCertificatePayload(BaseModel):
     certified_at: str = Field(min_length=1)
 
 
+class _ProjectorStoreBindingPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    store_id: str
+    schema_generation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_store_id(self) -> "_ProjectorStoreBindingPayload":
+        try:
+            parsed = UUID(self.store_id)
+        except ValueError as exc:
+            raise ValueError("store_id must be a canonical UUID") from exc
+        if str(parsed) != self.store_id:
+            raise ValueError("store_id must be a canonical UUID")
+        return self
+
+
 class _ProjectorCoveragePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     projector: str = Field(min_length=1)
     certificate: _CutoverCertificatePayload | None
+    store_binding: _ProjectorStoreBindingPayload | None
     lag_count: int = Field(ge=0)
     indexed_through: str = Field(pattern=r"^[0-9]+$")
     oldest_lag_at: str | None
@@ -229,12 +259,19 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _P
 
     embedding_coverage = await coverage(EMBEDDING_PROJECTOR_ID)
     certificate_missing = embedding_coverage.certificate is None
+    store_binding_missing = embedding_coverage.store_binding is None
     head_too_large = embedding_coverage.lag_count > RECALL_LIVE_HEAD_MAX_SESSIONS
     head_too_old = (
         embedding_coverage.oldest_lag_seconds is not None and embedding_coverage.oldest_lag_seconds > RECALL_LIVE_HEAD_MAX_AGE_SECONDS
     )
-    if certificate_missing or head_too_large or head_too_old:
-        reason = "cutover_not_certified" if certificate_missing else "live_head_exceeds_bounds"
+    if certificate_missing or store_binding_missing or head_too_large or head_too_old:
+        reason = (
+            "cutover_not_certified"
+            if certificate_missing
+            else "store_binding_missing"
+            if store_binding_missing
+            else "live_head_exceeds_bounds"
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -574,6 +611,19 @@ async def _semantic_recall(
             catalog_coverage = await _require_complete_projection_coverage(
                 timeout_seconds=timeout_seconds,
             )
+        binding = catalog_coverage.store_binding
+        if binding is None or (dense_payload.store_id, dense_payload.schema_generation) != (
+            binding.store_id,
+            binding.schema_generation,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "embedding_coverage_incomplete",
+                    "message": "The active embedding corpus is incomplete.",
+                    "reason": "store_binding_mismatch",
+                },
+            )
         matches: list[RecallMatch] = []
         seen: set[str] = set()
         for raw_row in dense_payload.results:
@@ -604,6 +654,8 @@ async def _semantic_recall(
             projector=EMBEDDING_PROJECTOR_ID,
             cutover_certified_commit_seq=catalog_coverage.certificate.certified_commit_seq,
             cutover_certified_at=catalog_coverage.certificate.certified_at,
+            search_store_id=dense_payload.store_id,
+            search_schema_generation=dense_payload.schema_generation,
             catalog_lag_count=catalog_coverage.lag_count,
             catalog_indexed_through=catalog_coverage.indexed_through,
             catalog_oldest_lag_at=catalog_coverage.oldest_lag_at,

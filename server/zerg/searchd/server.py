@@ -77,6 +77,7 @@ class SearchDaemon:
         self._lock_handle = None
         self._connection = None
         self._store: SearchStore | None = None
+        self._store_identity: dict[str, str] | None = None
         self._dense_index: ResidentEpisodeIndex | None = None
         self._dense_refresh_task: asyncio.Task[None] | None = None
         self._dense_refresh_generation = 0
@@ -119,6 +120,11 @@ class SearchDaemon:
             self._connection = open_search_database(self.database_path)
             self._store = SearchStore(self._connection)
             self._store.startup_maintenance()
+            ping = self._store.ping()
+            self._store_identity = {
+                "store_id": str(ping["store_id"]),
+                "schema_generation": str(ping["schema_generation"]),
+            }
             pruned = self._store.prune_inactive_embedding_spaces(active_model=ACTIVE_EMBEDDING_MODEL)
             if pruned["vectors"] or pruned["publications"]:
                 logger.info("searchd pruned inactive embedding spaces %s", pruned)
@@ -171,6 +177,7 @@ class SearchDaemon:
             self._server = None
         self._unlink_socket()
         self._store = None
+        self._store_identity = None
         # Every refresh waiter represents a mutation already committed to
         # SQLite. A closing daemon need not rebuild a snapshot it will never
         # serve; acknowledge those commits and let the next start load them.
@@ -324,6 +331,7 @@ class SearchDaemon:
                     {
                         "results": self._dense_index.search(query, **params),
                         "coverage": self._dense_index.coverage.as_dict(),
+                        **(self._store_identity or {}),
                     },
                 )
             if request.method == "search.query.v2":

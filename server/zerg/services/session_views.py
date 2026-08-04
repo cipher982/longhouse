@@ -1831,6 +1831,8 @@ class RecallCoverage(BaseModel):
     projector: str = Field(min_length=1)
     cutover_certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
     cutover_certified_at: str = Field(min_length=1)
+    search_store_id: str
+    search_schema_generation: str = Field(min_length=1)
     catalog_lag_count: int = Field(ge=0, le=RECALL_LIVE_HEAD_MAX_SESSIONS)
     catalog_indexed_through: str = Field(pattern=r"^[0-9]+$")
     catalog_oldest_lag_at: Optional[str] = None
@@ -1855,6 +1857,12 @@ class RecallCoverage(BaseModel):
 
     @model_validator(mode="after")
     def validate_complete_coverage(self) -> "RecallCoverage":
+        try:
+            parsed_store_id = UUID(self.search_store_id)
+        except ValueError as exc:
+            raise ValueError("search_store_id must be a canonical UUID") from exc
+        if str(parsed_store_id) != self.search_store_id:
+            raise ValueError("search_store_id must be a canonical UUID")
         if int(self.cutover_certified_commit_seq) > int(self.catalog_commit_seq):
             raise ValueError("cutover certificate cannot exceed the observed catalog watermark")
         if self.catalog_lag_count == 0 and (self.catalog_oldest_lag_at is not None or self.catalog_oldest_lag_seconds is not None):

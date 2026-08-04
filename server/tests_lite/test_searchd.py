@@ -1008,6 +1008,8 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
         await client.call("search.embedding.write.v2", write_params)
         query_result = await client.call("search.embedding.query.v2", query_params)
         assert [row["session_id"] for row in query_result["results"]] == [session_id]
+        assert query_result["store_id"] == (await client.call("search.ping.v2"))["store_id"]
+        assert query_result["schema_generation"] == SCHEMA_GENERATION
         assert query_result["coverage"] == {
             "ready": True,
             "expected_sessions": 1,

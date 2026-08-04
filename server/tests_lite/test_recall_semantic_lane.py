@@ -17,6 +17,8 @@ from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch
 
 _REAL_COVERAGE_CHECK = agents_search._require_complete_projection_coverage
+_STORE_ID = "00000000-0000-4000-8000-000000000001"
+_SCHEMA_GENERATION = "searchd-test-v1"
 
 
 def _catalog_coverage(*, lag_count: int = 0, oldest_lag_seconds: float | None = None):
@@ -25,6 +27,10 @@ def _catalog_coverage(*, lag_count: int = 0, oldest_lag_seconds: float | None = 
         certificate=agents_search._CutoverCertificatePayload(
             certified_commit_seq="9",
             certified_at="2026-08-02T00:00:00+00:00",
+        ),
+        store_binding=agents_search._ProjectorStoreBindingPayload(
+            store_id=_STORE_ID,
+            schema_generation=_SCHEMA_GENERATION,
         ),
         lag_count=lag_count,
         indexed_through="9" if lag_count else "10",
@@ -149,6 +155,10 @@ async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(m
             return {
                 "projector": params["projector"],
                 "certificate": None,
+                "store_binding": {
+                    "store_id": _STORE_ID,
+                    "schema_generation": _SCHEMA_GENERATION,
+                },
                 "lag_count": 1,
                 "indexed_through": "9",
                 "oldest_lag_at": "2026-08-02T00:00:00+00:00",
@@ -186,6 +196,10 @@ async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkey
                 "certificate": {
                     "certified_commit_seq": "9",
                     "certified_at": "2026-08-02T00:00:00+00:00",
+                },
+                "store_binding": {
+                    "store_id": _STORE_ID,
+                    "schema_generation": _SCHEMA_GENERATION,
                 },
                 "lag_count": 0,
                 "indexed_through": "10",
@@ -357,6 +371,8 @@ async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch
                 }
             ],
             coverage=_resident_coverage(),
+            store_id=_STORE_ID,
+            schema_generation=_SCHEMA_GENERATION,
         )
 
     import zerg.services.local_embedder as local_embedder_module
@@ -378,6 +394,8 @@ async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch
     assert result.coverage.ready is True
     assert result.coverage.catalog_commit_seq == "10"
     assert result.coverage.cutover_certified_commit_seq == "9"
+    assert result.coverage.search_store_id == _STORE_ID
+    assert result.coverage.search_schema_generation == _SCHEMA_GENERATION
     assert result.coverage.resident_stale is False
     assert result.coverage.expected_episodes == 1
     assert seen["model"] == "test-model"
@@ -385,3 +403,43 @@ async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch
     assert seen["environment"] is None
     assert seen["exclude_environments"] == ["test", "e2e", "automation"]
     assert seen["since_iso"] is not None
+
+
+@pytest.mark.asyncio
+async def test_semantic_recall_rejects_resident_from_an_uncertified_store(monkeypatch):
+    """An old catalog certificate cannot bless a newly replaced empty store."""
+
+    fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: fake_config)
+
+    async def fake_generate_embedding(_text):
+        return np.array([1, 0], dtype=np.float32)
+
+    async def fake_query(**_kwargs):
+        return agents_search._DenseQueryPayload(
+            results=[],
+            coverage=_resident_coverage(),
+            store_id=str(uuid4()),
+            schema_generation=_SCHEMA_GENERATION,
+        )
+
+    import zerg.services.local_embedder as local_embedder_module
+
+    monkeypatch.setattr(local_embedder_module, "embed_query", fake_generate_embedding)
+    monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
+
+    with pytest.raises(agents_search.HTTPException) as incomplete:
+        await agents_search._semantic_recall(
+            query="important answer",
+            project=None,
+            provider=None,
+            since_days=90,
+            include_test=False,
+            include_automation=False,
+            max_results=5,
+            timeout_seconds=5.0,
+            owner_id=42,
+        )
+    assert incomplete.value.status_code == 503
+    assert incomplete.value.detail["code"] == "embedding_coverage_incomplete"
+    assert incomplete.value.detail["reason"] == "store_binding_mismatch"

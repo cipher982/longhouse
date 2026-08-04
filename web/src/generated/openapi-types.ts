@@ -7783,6 +7783,10 @@ export interface components {
             cutover_certified_commit_seq: string;
             /** Cutover Certified At */
             cutover_certified_at: string;
+            /** Search Store Id */
+            search_store_id: string;
+            /** Search Schema Generation */
+            search_schema_generation: string;
             /** Catalog Lag Count */
             catalog_lag_count: number;
             /** Catalog Indexed Through */

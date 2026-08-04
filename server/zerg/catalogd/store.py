@@ -8112,6 +8112,7 @@ class CatalogStore:
 
         states = ProjectorState.__table__
         certificates = ProjectorCutoverCertificate.__table__
+        bindings = ProjectorStoreBinding.__table__
         tombstones = LiveSessionTombstone.__table__
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
@@ -8129,6 +8130,7 @@ class CatalogStore:
                 ).where(*lag_predicate)
             ).one()
             certificate = connection.execute(select(certificates).where(certificates.c.projector == projector)).mappings().first()
+            binding = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
             commit_seq = _current_commit_seq(connection)
             oldest = _as_aware_utc(oldest_lag_at)
             return {
@@ -8139,6 +8141,14 @@ class CatalogStore:
                         "certified_at": _encode_datetime(certificate["certified_at"]),
                     }
                     if certificate is not None
+                    else None
+                ),
+                "store_binding": (
+                    {
+                        "store_id": str(binding["store_id"]),
+                        "schema_generation": str(binding["schema_generation"]),
+                    }
+                    if binding is not None
                     else None
                 ),
                 "lag_count": int(lag_count),
@@ -8159,8 +8169,17 @@ class CatalogStore:
 
         states = ProjectorState.__table__
         certificates = ProjectorCutoverCertificate.__table__
+        bindings = ProjectorStoreBinding.__table__
         tombstones = LiveSessionTombstone.__table__
         with _write_transaction(self.engine) as connection:
+            binding = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
+            if binding is None:
+                return {
+                    "certified": False,
+                    "created": False,
+                    "reason": "store_not_bound",
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
             existing = connection.execute(select(certificates).where(certificates.c.projector == projector)).mappings().first()
             if existing is not None:
                 return {
