@@ -255,5 +255,8 @@ def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path:
     report = MODULE.build_report([], health_paths=[matrix])
 
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
+    assert report["measures"]["false_red_rate"]["reason"] == "no observed broken cases in supplied health fault matrix"
     assert report["measures"]["hidden_failure_rate"]["status"] == "not_observed"
+    assert report["measures"]["hidden_failure_rate"]["reason"] == "no expected broken/degraded cases in supplied health fault matrix"
     assert report["measures"]["action_coverage"]["status"] == "not_observed"
+    assert report["measures"]["action_coverage"]["reason"] == "no cases with an expected action in supplied health fault matrix"

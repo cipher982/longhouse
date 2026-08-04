@@ -239,6 +239,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
     measurements = {
         "false_red_rate": {
             "status": "observed" if broken_cases else "not_observed",
+            **({} if broken_cases else {"reason": "no observed broken cases in supplied health fault matrix"}),
             "scope": scope,
             "basis": "fault_matrix_expected_state",
             "numerator": false_red_cases,
@@ -250,6 +251,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
         },
         "hidden_failure_rate": {
             "status": "observed" if eligible_failure_cases else "not_observed",
+            **({} if eligible_failure_cases else {"reason": "no expected broken/degraded cases in supplied health fault matrix"}),
             "scope": scope,
             "numerator": hidden_failure_cases,
             "denominator": eligible_failure_cases,
@@ -260,6 +262,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
         },
         "action_coverage": {
             "status": "observed" if action_total else "not_observed",
+            **({} if action_total else {"reason": "no cases with an expected action in supplied health fault matrix"}),
             "scope": scope,
             "numerator": action_pass,
             "denominator": action_total,
@@ -445,14 +448,23 @@ def build_report(
             ),
             "false_red_rate": health_summary["measurements"]["false_red_rate"]
             if health_summary["measurements"]["false_red_rate"]["status"] == "observed"
-            else _not_observed("retained artifacts do not include a user-action/data-risk ground-truth label"),
+            else _not_observed(
+                health_summary["measurements"]["false_red_rate"].get("reason")
+                or "retained artifacts do not include a user-action/data-risk ground-truth label"
+            ),
             "hidden_failure_rate": health_summary["measurements"]["hidden_failure_rate"]
             if health_summary["measurements"]["hidden_failure_rate"]["status"] == "observed"
-            else _not_observed("no longitudinal producer-freshness truth series was supplied"),
+            else _not_observed(
+                health_summary["measurements"]["hidden_failure_rate"].get("reason")
+                or "no longitudinal producer-freshness truth series was supplied"
+            ),
             "unresolved_event_bearing_issue_age": _not_observed("no event-bearing issue lifecycle series was supplied"),
             "action_coverage": health_summary["measurements"]["action_coverage"]
             if health_summary["measurements"]["action_coverage"]["status"] == "observed"
-            else _not_observed("local action tests are separate evidence and were not passed as a coverage artifact"),
+            else _not_observed(
+                health_summary["measurements"]["action_coverage"].get("reason")
+                or "local action tests are separate evidence and were not passed as a coverage artifact"
+            ),
             "duplicate_replayed_discarded_evidence": _not_observed("matrix artifacts do not carry end-to-end evidence conservation counters"),
         },
     }
