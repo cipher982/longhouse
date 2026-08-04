@@ -148,6 +148,7 @@ def _binary_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     if not engine_path.is_file():
         return None, "paired longhouse-engine does not exist"
     identity["facade_path"] = str(path)
+    identity["engine_path"] = str(engine_path)
     return {
         "build_identity": identity,
         "engine_path": str(engine_path),

@@ -55,6 +55,7 @@ def _dogfood_provenance() -> dict[str, object]:
                     "commit_short": git_sha[:8],
                     "dirty": False,
                 },
+                "engine_path": str(DOGFOOD_GENERATOR),
             },
             "engine_path": str(DOGFOOD_GENERATOR),
             "engine_sha256": MODULE._sha256(DOGFOOD_GENERATOR),

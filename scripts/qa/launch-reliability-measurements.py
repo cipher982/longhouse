@@ -562,6 +562,10 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
         raise ValueError("dogfood paired engine no longer exists")
     if _sha256(engine_path) != engine_sha:
         raise ValueError("dogfood paired engine changed after collection")
+    if build_identity.get("engine_path") != str(engine_path):
+        raise ValueError(
+            "dogfood paired engine identity path does not match the sampled path"
+        )
     if build_identity.get("facade_path") != str(binary_path):
         raise ValueError(
             "dogfood sampled binary identity path does not match the sampled path"
