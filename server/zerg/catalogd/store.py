@@ -148,6 +148,7 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
         "archive_backlog",
         "history_import",
         "managed_launch_recovery",
+        "storage_v2_outbox",
         "last_ship_error_kind",
         "last_ship_error_message",
         "ship_attempts_10m",
@@ -9887,10 +9888,61 @@ def _machine_health_heartbeat_dto(row) -> dict[str, Any]:
         projected_raw["history_import"] = {"state": "unavailable"}
         encoded_raw = json.dumps(projected_raw, separators=(",", ":"), sort_keys=True)
     if len(encoded_raw.encode("utf-8")) > _MACHINE_HEALTH_RAW_MAX_BYTES:
-        encoded_raw = "{}"
+        projected_raw = _bounded_machine_health_critical_raw(raw)
+        encoded_raw = json.dumps(projected_raw, separators=(",", ":"), sort_keys=True)
     assert len(encoded_raw.encode("utf-8")) <= _MACHINE_HEALTH_RAW_MAX_BYTES
     result["raw_json"] = encoded_raw
     return result
+
+
+def _bounded_machine_health_critical_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Retain bounded health evidence after oversized diagnostics are dropped."""
+
+    projected: dict[str, Any] = {}
+    storage = raw.get("storage_v2_outbox")
+    if isinstance(storage, dict):
+        bounded_storage: dict[str, Any] = {}
+        for key in (
+            "pending_count",
+            "pending_bytes",
+            "blocked_source_count",
+            "reconciling_blocked_source_count",
+            "unresolved_blocked_source_count",
+            "blocked_bytes",
+            "byte_limit",
+        ):
+            value = storage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                bounded_storage[key] = max(0, value)
+        for key in (
+            "latest_block_source_epoch",
+            "latest_unresolved_block_source_epoch",
+            "latest_block_kind",
+            "latest_block_detail",
+            "error",
+        ):
+            value = storage.get(key)
+            if isinstance(value, str) and value:
+                bounded_storage[key] = _truncate_utf8(value, 1024)
+        if bounded_storage:
+            projected["storage_v2_outbox"] = bounded_storage
+
+    recovery = raw.get("managed_launch_recovery")
+    if isinstance(recovery, dict):
+        bounded_recovery: dict[str, Any] = {}
+        for key in ("active_count", "exhausted_count"):
+            value = recovery.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                bounded_recovery[key] = max(0, value)
+        if isinstance(recovery.get("scan_error"), bool):
+            bounded_recovery["scan_error"] = recovery["scan_error"]
+        if bounded_recovery:
+            projected["managed_launch_recovery"] = bounded_recovery
+
+    history = raw.get("history_import")
+    if isinstance(history, dict) and isinstance(history.get("state"), str):
+        projected["history_import"] = {"state": _truncate_utf8(history["state"], 64)}
+    return projected
 
 
 def _runtime_dto(row, *, compact: bool) -> dict[str, Any] | None:

@@ -331,6 +331,40 @@ async def test_machine_health_read_is_owner_scoped_latest_and_privacy_bounded(da
         await daemon.close()
 
 
+def test_machine_health_projection_preserves_critical_evidence_after_size_fallback():
+    row = _heartbeat(
+        device_id="cinder",
+        received_at=datetime.now(UTC),
+        digest="digest",
+    )
+    row["raw_json"] = json.dumps(
+        {
+            "archive_backlog": {"padding": "x" * (200 * 1024)},
+            "storage_v2_outbox": {
+                "blocked_source_count": 2,
+                "unresolved_blocked_source_count": 1,
+                "error": "source conflict" * 10_000,
+            },
+            "managed_launch_recovery": {
+                "active_count": 1,
+                "exhausted_count": 2,
+                "scan_error": False,
+            },
+        }
+    )
+
+    projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
+
+    assert projected["storage_v2_outbox"]["blocked_source_count"] == 2
+    assert projected["storage_v2_outbox"]["unresolved_blocked_source_count"] == 1
+    assert len(projected["storage_v2_outbox"]["error"]) <= 1024
+    assert projected["managed_launch_recovery"] == {
+        "active_count": 1,
+        "exhausted_count": 2,
+        "scan_error": False,
+    }
+
+
 @pytest.mark.asyncio
 async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(daemon_paths):
     database_path, socket_path = daemon_paths
@@ -410,11 +444,7 @@ async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(dae
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
         stamps = (
-            connection.execute(
-                LiveHeartbeatStamp.__table__.select().order_by(
-                    LiveHeartbeatStamp.device_id, LiveHeartbeatStamp.received_at
-                )
-            )
+            connection.execute(LiveHeartbeatStamp.__table__.select().order_by(LiveHeartbeatStamp.device_id, LiveHeartbeatStamp.received_at))
             .mappings()
             .all()
         )
@@ -427,13 +457,8 @@ async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(dae
         current_stamp = next(row for row in stamps if row["sessions_digest"] == "new-digest")
         assert len(current_stamp["request_sha256"]) == 64
         assert json.loads(current_stamp["catalog_result_json"])["commit_seq"] == "1"
-        leases = {
-            row["session_id"]: row["state"]
-            for row in connection.execute(LiveControlLease.__table__.select()).mappings()
-        }
-        sessions = {
-            row["session_id"]: row["state"] for row in connection.execute(LiveSession.__table__.select()).mappings()
-        }
+        leases = {row["session_id"]: row["state"] for row in connection.execute(LiveControlLease.__table__.select()).mappings()}
+        sessions = {row["session_id"]: row["state"] for row in connection.execute(LiveSession.__table__.select()).mappings()}
         assert leases == {current_id: "attached", missing_id: "missing"}
         assert sessions == {current_id: "attached", missing_id: "missing"}
     engine.dispose()
