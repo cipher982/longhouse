@@ -11,6 +11,7 @@ from zerg.qa import antigravity_resume_policy
 from zerg.qa import codex_native_resume
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
+from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _isolated_provider_home
@@ -258,6 +259,29 @@ def test_wait_state_ignores_claude_contract_without_provider_pid(tmp_path: Path)
 
     assert state["state_path"] == str(native)
     assert state["claude_pid"] == 123
+
+
+def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
+    recording = tmp_path / "claude.tty"
+    recording.write_text("1. No, exit\n2. Yes, I accept\n", encoding="utf-8")
+
+    class FakeProcess:
+        claude_permission_acceptance_sent = False
+
+        def __init__(self) -> None:
+            self.recording = recording
+            self.sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProcess()
+
+    _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
+    _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
+
+    assert process.sent == ["\x1b[B\r"]
+    assert process.claude_permission_acceptance_sent is True
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:

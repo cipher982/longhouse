@@ -23,6 +23,8 @@ from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
 
+_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
+
 REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
     producer_revision=1,
@@ -115,7 +117,11 @@ class _RuntimeHostHTTPError(RuntimeError):
 def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers={"X-Agents-Token": token, "Accept": "application/json"},
+        headers={
+            "X-Agents-Token": token,
+            "Accept": "application/json",
+            "User-Agent": _RUNTIME_HOST_USER_AGENT,
+        },
         data=b"" if method == "POST" else None,
         method=method,
     )

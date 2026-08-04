@@ -157,6 +157,7 @@ class PtyProcess:
         termios.tcsetwinsize(slave, (40, 140))
         self.master = master
         self.recording = recording
+        self.claude_permission_acceptance_sent = False
         self.recording.parent.mkdir(parents=True, exist_ok=True)
         self._stream = self.recording.open("ab", buffering=0)
         self.process = subprocess.Popen(
@@ -462,6 +463,24 @@ def _terminal_text(path: Path) -> str:
     return _ANSI_CONTROL_RE.sub("", raw.decode("utf-8", "replace"))
 
 
+def _accept_claude_permission_prompt(process: PtyProcess) -> None:
+    """Accept Claude's first-run bypass-permissions acknowledgement.
+
+    The managed facade deliberately launches Claude in the sandboxed bypass
+    mode used by the qualification.  Recent Claude builds add a native TUI
+    acknowledgement for that mode before they publish the channel state.  It
+    is a provider startup control record, not a user turn, so the live probe
+    must acknowledge it before looking for the registered session.
+    """
+
+    if process.claude_permission_acceptance_sent:
+        return
+    compact = re.sub(r"\s+", "", _terminal_text(process.recording))
+    if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
+        process.send("\x1b[B\r")
+        process.claude_permission_acceptance_sent = True
+
+
 def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[str, Any]]:
     """Retain provider-state identity without copying private state fields."""
 
@@ -544,6 +563,7 @@ def _prepare_claude_profile(
             process.drain()
             if process.process.poll() is not None:
                 raise RuntimeError("Claude onboarding process exited before profile completion")
+            _accept_claude_permission_prompt(process)
             compact = re.sub(r"\s+", "", _terminal_text(recording))
             if theme_attempts == 0 and "Choosethetextstyle" in compact:
                 process.send("\r")
@@ -643,6 +663,8 @@ def _wait_state(
                 raise RuntimeError(
                     f"{spec.provider} Helm process exited before publishing state; candidates={json.dumps(diagnostics, sort_keys=True)}"
                 )
+            if spec.provider == "claude":
+                _accept_claude_permission_prompt(process)
         for path in _state_candidates(spec, home):
             try:
                 state = _normalize_state(spec, _read_json(path), path)
@@ -812,6 +834,14 @@ def _wait_assistant_marker(api_url: str, token: str, session_id: str, marker: st
     while time.monotonic() < deadline:
         try:
             last = _api_json(api_url, token, f"sessions/{session_id}/tail?limit=100&roles=user,assistant")
+        except _RuntimeHostHTTPError as exc:
+            if exc.status in {401, 403}:
+                raise
+            # Session projection can lag the local managed state by a short
+            # interval immediately after launch or resume.  Keep polling for
+            # transient application errors while preserving auth failures.
+            time.sleep(0.5)
+            continue
         except (OSError, urllib.error.URLError):
             time.sleep(0.5)
             continue
