@@ -229,7 +229,8 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
         "source": [{"path": str(matrix), "sha256": MODULE._sha256(matrix)}],
     }
     assert report["measures"]["hidden_failure_rate"]["numerator"] == 1
-    assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "all_health_fault_cases"
+    assert report["measures"]["hidden_failure_rate"]["denominator"] == 2
+    assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "expected_broken_or_degraded_cases"
     assert report["measures"]["action_coverage"]["numerator"] == 1
     assert report["measures"]["action_coverage"]["denominator"] == 2
     assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_expected_action"

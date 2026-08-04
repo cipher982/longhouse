@@ -196,6 +196,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
     total = 0
     broken_cases = 0
     false_red_cases = 0
+    eligible_failure_cases = 0
     hidden_failure_cases = 0
     action_total = 0
     action_pass = 0
@@ -223,8 +224,10 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
                 broken_cases += 1
                 if expected_state != "broken":
                     false_red_cases += 1
-            if expected_state in {"broken", "degraded"} and observed_state == "healthy":
-                hidden_failure_cases += 1
+            if expected_state in {"broken", "degraded"}:
+                eligible_failure_cases += 1
+                if observed_state == "healthy":
+                    hidden_failure_cases += 1
             expected_action = str(expected.get("action") or "none")
             if expected_action != "none":
                 action_total += 1
@@ -249,9 +252,9 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
             "status": "observed" if total else "not_observed",
             "scope": scope,
             "numerator": hidden_failure_cases,
-            "denominator": total,
-            "denominator_definition": "all_health_fault_cases",
-            "rate": (hidden_failure_cases / total) if total else None,
+            "denominator": eligible_failure_cases,
+            "denominator_definition": "expected_broken_or_degraded_cases",
+            "rate": (hidden_failure_cases / eligible_failure_cases) if eligible_failure_cases else None,
             "source": references,
         },
         "action_coverage": {
