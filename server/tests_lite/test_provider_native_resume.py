@@ -13,6 +13,7 @@ from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
+from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _state_candidates
@@ -55,6 +56,21 @@ def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
     write_codex_json(receipt, {"path": tmp_path / "provider"})
 
     assert json.loads(receipt.read_text()) == {"path": str(tmp_path / "provider")}
+
+
+def test_native_resume_rejects_normal_provider_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", "/root")
+
+    with pytest.raises(RuntimeError, match="isolated provider HOME"):
+        _isolated_provider_home()
+
+
+def test_native_resume_accepts_disposable_provider_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "provider-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    assert _isolated_provider_home() == home
 
 
 def test_codex_main_serializes_path_values_in_result_output(

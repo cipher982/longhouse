@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import pty
+import pwd
 import select
 import signal
 import socket
@@ -659,6 +660,22 @@ def _secret_scan(root: Path, secrets: list[str]) -> list[str]:
     return found
 
 
+def _isolated_provider_home() -> Path:
+    """Require the factory to provide a disposable provider profile."""
+
+    raw_home = os.environ.get("HOME", "").strip()
+    home = Path(raw_home)
+    try:
+        normal_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:
+        normal_home = None
+    if home in {Path("/root"), Path("/home")} or home == normal_home:
+        raise RuntimeError("native Resume producer requires an isolated provider HOME")
+    if not home.is_absolute() or not home.is_dir():
+        raise RuntimeError("native Resume producer HOME is missing or unavailable")
+    return home
+
+
 def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]:
     spec = SPECS[provider]
     registration = registration_for(provider)
@@ -672,7 +689,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         ).stdout.strip(),
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
-    home = Path(os.environ["HOME"])
+    home = _isolated_provider_home()
     environment = os.environ.copy()
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
     initial: PtyProcess | None = None
