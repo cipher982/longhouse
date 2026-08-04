@@ -30,7 +30,7 @@ if args == ["--help"]:
     print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
     raise SystemExit(0)
 
-if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
+if args == ["--channels", "server:longhouse-channel", "--version"]:
     print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
     raise SystemExit(0)
 

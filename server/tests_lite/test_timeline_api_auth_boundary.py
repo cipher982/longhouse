@@ -295,7 +295,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
         assert payload["control"]["source_runner_id"] == 9
         assert payload["control"]["source_runner_name"] == "work-laptop"
         assert payload["control"]["attach_command"]
-        assert "--dangerously-load-development-channels server:longhouse-channel" in payload["control"]["attach_command"]
+        assert "--channels server:longhouse-channel" in payload["control"]["attach_command"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

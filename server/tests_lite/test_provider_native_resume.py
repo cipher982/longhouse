@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,7 @@ from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
+from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import registration_for
 
@@ -205,13 +207,16 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
         home=home,
         environment={"HOME": str(home), "CLAUDE_CONFIG_DIR": str(tmp_path / "staged-claude")},
         evidence_root=evidence,
+        longhouse_home=tmp_path / "longhouse-home",
     )
 
     receipt = shipper.flush("initial")
     assert receipt["status"] == "pass"
     assert receipt["daemon_paused"] is True
     assert receipt["daemon_restarted"] is True
-    assert run_commands[0][run_commands[0].index("--db") + 1] == str(home / ".longhouse/agent/longhouse-shipper.db")
+    assert run_commands[0][run_commands[0].index("--db") + 1] == str(
+        tmp_path / "longhouse-home/agent/longhouse-shipper.db"
+    )
     assert len(commands) == 2
     assert shipper.stop()["process_dead"] is True
 
@@ -236,6 +241,37 @@ def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
 
     assert process.sent == ["a"]
     assert process.cursor_workspace_trust_sent is True
+
+
+def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> None:
+    recording = tmp_path / "cursor.tty"
+    recording.write_text("cursor-agent starting\n", encoding="utf-8")
+
+    class FakeProcess:
+        cursor_workspace_trust_sent = False
+
+        def __init__(self) -> None:
+            self.recording = recording
+            self.process = SimpleNamespace(poll=lambda: None)
+            self.sent: list[str] = []
+            self.drains = 0
+
+        def drain(self) -> bytes:
+            self.drains += 1
+            if self.drains == 2:
+                recording.write_text(
+                    "Workspace Trust Required\n[a] Trust this workspace\n",
+                    encoding="utf-8",
+                )
+            return b""
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProcess()
+    _wait_cursor_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
+
+    assert process.sent == ["a"]
 
 
 def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:

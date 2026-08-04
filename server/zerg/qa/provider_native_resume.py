@@ -536,13 +536,14 @@ def _start_transcript_shipper(
     home: Path,
     environment: dict[str, str],
     evidence_root: Path,
+    longhouse_home: Path | None = None,
 ) -> TranscriptShipper:
     """Start the same file-watching Machine Agent used outside the factory."""
 
     _provision_transcript_roots(home, environment)
-    longhouse_home = home / ".longhouse"
-    machine_dir = longhouse_home / "machine"
-    agent_dir = longhouse_home / "agent"
+    engine_longhouse_home = longhouse_home or (home / ".longhouse")
+    machine_dir = engine_longhouse_home / "machine"
+    agent_dir = engine_longhouse_home / "agent"
     machine_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     agent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     capabilities = _api_json(args.api_url, args.agents_token, "storage/v2/capabilities")
@@ -562,9 +563,9 @@ def _start_transcript_shipper(
     log_stream = log_path.open("w", encoding="utf-8")
     engine_environment = dict(environment)
     engine_environment["HOME"] = str(home)
-    engine_environment["LONGHOUSE_HOME"] = str(longhouse_home)
+    engine_environment["LONGHOUSE_HOME"] = str(engine_longhouse_home)
     engine_environment.setdefault("RUST_LOG", "longhouse_engine=info")
-    environment["LONGHOUSE_HOME"] = str(longhouse_home)
+    environment["LONGHOUSE_HOME"] = str(engine_longhouse_home)
     if provider != "claude":
         # A Codex/OpenCode/Cursor qualification may inherit the factory's
         # staged Claude profile. Do not let the shipper use that profile as a
@@ -840,6 +841,35 @@ def _accept_cursor_workspace_trust(process: PtyProcess) -> None:
     if "workspacetrustrequired" in compact and "[a]trustthisworkspace" in compact:
         process.send("a")
         process.cursor_workspace_trust_sent = True
+
+
+def _wait_cursor_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 30.0) -> None:
+    """Give Cursor time to render and accept its native workspace gate.
+
+    Cursor writes its managed lease before the interactive trust screen is
+    necessarily rendered. Waiting only for the lease, or doing one immediate
+    prompt check after a short PTY settle, can send the first qualification
+    message into a still-blocked TUI. Keep draining the real PTY until the
+    prompt is handled or the bounded startup window expires.
+    """
+
+    del recording  # The process owns the append-only PTY recording.
+    deadline = time.monotonic() + timeout
+    accepted_at: float | None = None
+    while time.monotonic() < deadline:
+        process.drain()
+        if process.process.poll() is not None:
+            raise RuntimeError("cursor Helm process exited before its TUI became ready")
+        _accept_cursor_workspace_trust(process)
+        if getattr(process, "cursor_workspace_trust_sent", False):
+            accepted_at = accepted_at or time.monotonic()
+            if time.monotonic() - accepted_at >= 0.75:
+                return
+        time.sleep(0.1)
+
+    # Some provider builds do not render a trust gate for an already-known
+    # workspace. The bounded wait still gave late gates a chance to appear;
+    # the subsequent native marker is the readiness assertion.
 
 
 def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[str, Any]]:
@@ -1404,9 +1434,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             recording=root / "initial.tty",
         )
         initial_state = _wait_state(spec, home, process=initial)
-        initial.settle()
         if spec.provider == "cursor":
-            _accept_cursor_workspace_trust(initial)
+            _wait_cursor_tui_ready(initial, root / "initial.tty")
+        else:
             initial.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(initial, root / "initial.tty")
@@ -1454,9 +1484,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             prior_run_id=str(initial_state["run_id"]),
             process=resumed,
         )
-        resumed.settle()
         if spec.provider == "cursor":
-            _accept_cursor_workspace_trust(resumed)
+            _wait_cursor_tui_ready(resumed, root / "native-resume.tty")
+        else:
             resumed.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")

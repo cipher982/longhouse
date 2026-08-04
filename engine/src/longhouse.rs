@@ -973,7 +973,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     }
     command
         .args([
-            "--dangerously-load-development-channels",
+            "--channels",
             "server:longhouse-channel",
             "--mcp-config",
         ])
