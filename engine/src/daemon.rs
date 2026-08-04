@@ -724,11 +724,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     std::fs::create_dir_all(crate::config::get_agent_dir()?.join("cursor-acp-source"))?;
     let providers = discovery::get_providers();
     if providers.is_empty() {
-        tracing::warn!("No provider directories found — nothing to watch");
-        return Ok(());
-    }
-    for p in &providers {
-        tracing::info!("Provider {}: {}", p.name, p.root.display());
+        // Durable managed-launch recovery and local health must keep running
+        // even when no provider has created its session directory yet. A
+        // provider directory can appear after startup, and an initially
+        // unreachable Runtime Host must not strand its retry intent behind an
+        // early daemon exit.
+        tracing::warn!(
+            "No provider directories found — watching managed state and recovery intents"
+        );
+    } else {
+        for p in &providers {
+            tracing::info!("Provider {}: {}", p.name, p.root.display());
+        }
     }
 
     // 5. Create error tracker (shared across all ship operations)
