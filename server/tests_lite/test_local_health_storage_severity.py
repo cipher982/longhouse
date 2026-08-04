@@ -186,6 +186,33 @@ def test_legacy_safe_storage_payload_is_attention_not_false_green():
     assert _health_flags_for(unresolved=0) == (False, True)
 
 
+def test_malformed_storage_proof_is_attention_not_classifier_failure():
+    context = _health_classification_context(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "payload": {
+                "storage_v2_outbox": {
+                    "blocked_source_count": 1,
+                    "unresolved_blocked_source_count": "not-a-number",
+                    "latest_block_source_epoch": "01234567-89ab-cdef-0123-456789abcdef",
+                }
+            },
+        },
+        transport_sample=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    reasons, actions = _collect_health_reasons(context, transport_assessment=None)
+    assert reasons == ["storage_v2_sources_blocked", "storage_v2_sources_proof_unknown"]
+    assert actions == ["Update Longhouse and inspect the retained source evidence."]
+
+
 def test_storage_reasons_use_a_stable_source_inspection_action_id():
     assert _suggested_action_ids(["storage_v2_sources_blocked", "storage_v2_sources_proof_unknown"]) == ["inspect_storage_source"]
 

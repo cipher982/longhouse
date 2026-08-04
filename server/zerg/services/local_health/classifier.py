@@ -96,6 +96,22 @@ def _suggested_action_ids(reasons: list[str]) -> list[str]:
     return action_ids
 
 
+def _nonnegative_int(value: Any) -> int:
+    """Coerce a numeric health counter without letting malformed JSON raise."""
+    if value is None or isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    """Keep missing or malformed aggregate proof distinguishable from zero."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 @dataclass
 class _HealthClassificationContext:
     service_status: str
@@ -694,8 +710,8 @@ def _health_classification_context(
     storage_v2_outbox = payload.get("storage_v2_outbox") or {}
     if not isinstance(storage_v2_outbox, dict):
         storage_v2_outbox = {}
-    blocked_source_count = int(storage_v2_outbox.get("blocked_source_count") or 0)
-    unresolved_blocked_source_count = storage_v2_outbox.get("unresolved_blocked_source_count")
+    blocked_source_count = _nonnegative_int(storage_v2_outbox.get("blocked_source_count"))
+    unresolved_blocked_source_count = _optional_nonnegative_int(storage_v2_outbox.get("unresolved_blocked_source_count"))
     storage_block_proof_unknown = unresolved_blocked_source_count is None and blocked_source_count > 0
     latest_block_source_epoch = str(storage_v2_outbox.get("latest_block_source_epoch") or "").strip() or None
     latest_unresolved_block_source_epoch = str(storage_v2_outbox.get("latest_unresolved_block_source_epoch") or "").strip() or None
@@ -727,7 +743,7 @@ def _health_classification_context(
         archive_dead_ranges=archive_dead_ranges,
         archive_dead_bytes=archive_dead_bytes,
         storage_blocked_sources=blocked_source_count,
-        storage_reconciling_blocked_sources=int(storage_v2_outbox.get("reconciling_blocked_source_count") or 0),
+        storage_reconciling_blocked_sources=_nonnegative_int(storage_v2_outbox.get("reconciling_blocked_source_count")),
         storage_unresolved_blocked_sources=int(unresolved_blocked_source_count or 0),
         storage_block_proof_unknown=storage_block_proof_unknown,
         storage_latest_block_source_epoch=latest_block_source_epoch,

@@ -1044,6 +1044,7 @@ fn native_desktop_suggested_actions(
     engine_payload: Option<&Value>,
     reasons: &[String],
 ) -> Vec<String> {
+    let mut actions = Vec::new();
     if reasons.iter().any(|reason| {
         matches!(
             reason.as_str(),
@@ -1056,9 +1057,6 @@ fn native_desktop_suggested_actions(
         let unresolved_count = outbox
             .and_then(|value| value.get("unresolved_blocked_source_count"))
             .and_then(Value::as_u64);
-        let block_kind = outbox
-            .and_then(|value| value.get("latest_block_kind"))
-            .and_then(Value::as_str);
         let source_epoch = outbox
             .and_then(|value| {
                 if unresolved_count.unwrap_or(0) > 0 {
@@ -1072,44 +1070,35 @@ fn native_desktop_suggested_actions(
             .filter(|value| !value.trim().is_empty())
             .map(|value| format!("longhouse shipping inspect --source-epoch {value} --json"))
             .unwrap_or_else(|| "longhouse shipping inspect --json".to_string());
-        return match (unresolved_count, block_kind) {
-            (Some(unresolved), _) if unresolved > 0 => vec![
+        actions.extend(match unresolved_count {
+            Some(unresolved) if unresolved > 0 => vec![
                 format!("Inspect retained source evidence with {inspect_command} before retrying or discarding it."),
             ],
-            (Some(0), Some("source_epoch_conflict" | "render_generation_revision_conflict")) => vec![
-                "Source reconciliation is pending; inspect engine-status.json for progress."
-                    .to_string(),
+            Some(_) => vec![
+                format!("Inspect retained source evidence: {inspect_command}."),
             ],
-            (Some(0), _) => vec![
-                format!(
-                    "Inspect retained source evidence with {inspect_command} to understand the reconciliation state."
-                ),
-            ],
-            (None, _) => vec![
+            None => vec![
                 "Update Longhouse and inspect the retained source evidence."
                     .to_string(),
             ],
-            _ => vec![
-                format!("Inspect retained source evidence with {inspect_command} before retrying or discarding it."),
-            ],
-        };
+        });
     }
     if reasons
         .iter()
         .any(|reason| reason == "storage_v2_outbox_unreadable")
     {
-        return vec![
+        actions.extend([
             "Run: longhouse local-health --fast --json".to_string(),
             "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
-        ];
+        ]);
     }
     if reasons
         .iter()
         .any(|reason| reason == "managed_launch_recovery_exhausted")
     {
-        return vec![
+        actions.push(
             "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.".to_string(),
-        ];
+        );
     }
     if reasons.iter().any(|reason| {
         matches!(
@@ -1117,10 +1106,13 @@ fn native_desktop_suggested_actions(
             "managed_launch_recovery_active" | "managed_launch_recovery_unreadable"
         )
     }) {
-        return vec![
+        actions.push(
             "Inspect the affected managed session and local recovery files while registration recovers."
                 .to_string(),
-        ];
+        );
+    }
+    if !actions.is_empty() {
+        return actions;
     }
     native_desktop_suggested_action_ids(reasons)
         .into_iter()
@@ -3495,7 +3487,9 @@ mod tests {
 
         assert_eq!(
             reconciling_actions,
-            vec!["Source reconciliation is pending; inspect engine-status.json for progress."]
+            vec![
+                "Inspect retained source evidence: longhouse shipping inspect --source-epoch 01234567-89ab-cdef-0123-456789abcdef --json."
+            ]
         );
         assert_eq!(
             unresolved_actions,
@@ -3510,6 +3504,30 @@ mod tests {
                 "storage_v2_sources_proof_unknown".to_string(),
             ]),
             vec!["inspect_storage_source"]
+        );
+    }
+
+    #[test]
+    fn native_desktop_health_keeps_storage_and_recovery_actions() {
+        let unresolved = serde_json::json!({
+            "storage_v2_outbox": {
+                "unresolved_blocked_source_count": 1,
+                "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab"
+            }
+        });
+
+        assert_eq!(
+            native_desktop_suggested_actions(
+                Some(&unresolved),
+                &[
+                    "storage_v2_sources_unresolved".to_string(),
+                    "managed_launch_recovery_exhausted".to_string(),
+                ]
+            ),
+            vec![
+                "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it.",
+                "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.",
+            ]
         );
     }
 
