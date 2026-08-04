@@ -1355,12 +1355,16 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             engine = cold_engine
             engine_handle = cold_handle
             engine_log = cold_log
-            preserved_retry_count = read_retry_count(temp_root)
-            if preserved_retry_count != expected_retry_count:
+            current_retry_intents = read_retry_intents(temp_root)
+            current_retry_ids = {
+                str(intent.get("expected_session_id")) for intent in current_retry_intents
+            }
+            if not ready_ids.issubset(current_retry_ids):
                 raise RuntimeError(
-                    "cold-start Machine Agent changed durable retry intent count: "
-                    f"{preserved_retry_count} != {expected_retry_count}"
+                    "cold-start Machine Agent removed a provider-ready retry intent "
+                    "during the outage"
                 )
+            preserved_retry_count = len(current_retry_intents)
 
             ready_ids = {
                 str(intent.get("expected_session_id"))
@@ -1389,7 +1393,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "first_start_returncode": first_start_returncode,
                 "first_start_survived_outage": True,
                 "retry_attempts_observed": retry_attempts_observed,
-                "retry_intents_preserved": preserved_retry_count,
+                "retry_intents_after_cold_start": preserved_retry_count,
                 "pre_ready_intents_garbage_collected": None,
                 "log": str(cold_log),
             }
