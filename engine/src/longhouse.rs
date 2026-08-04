@@ -986,18 +986,21 @@ fn spawn_claude_registration_retry(
                     return;
                 }
                 Err(error) if attempt < 4 => {
-                    for _ in 0..2_u64.pow(attempt) {
-                        if cancel_for_thread.load(Ordering::Acquire) {
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
+                    // Surface the outage before sleeping so the transient notice
+                    // reads in order. The final attempt's error is the most
+                    // recent and is reported by the failure arm below.
                     if attempt == 0 {
                         eprintln!(
                             "Longhouse warning: Runtime Host is still unavailable; Claude is running locally and registration will retry"
                         );
                     }
                     let _ = error;
+                    for _ in 0..2_u64.pow(attempt) {
+                        if cancel_for_thread.load(Ordering::Acquire) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_secs(1));
+                    }
                 }
                 Err(error) => {
                     eprintln!(
@@ -1107,7 +1110,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             expected_session_id,
             // A healthy host normally answers within this window. A slower or
             // unavailable host must not hold the user's provider TUI hostage.
-            Duration::from_millis(750),
+            Duration::from_millis(2000),
         )
     };
     let response: Option<ManagedLaunchResponse> = match registration {
