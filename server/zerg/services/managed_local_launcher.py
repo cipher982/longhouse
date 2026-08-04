@@ -104,6 +104,10 @@ class ManagedLocalLaunchParams:
     # Optional client-minted identity for Degraded Helm: retries/convergence
     # must reuse this UUID instead of minting a replacement session.
     session_id: UUID | None = None
+    # Claude also mints its provider-native UUID locally when starting in
+    # degraded mode. Registration must preserve that identity so transcript
+    # and resume convergence do not fork a second provider thread.
+    provider_session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -253,7 +257,7 @@ def build_managed_local_launch_plan(
 
     source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
     plan_session_id = session_id or params.session_id or uuid4()
-    provider_session_id = _initial_provider_session_id_for_spawn(provider)
+    provider_session_id = params.provider_session_id or _initial_provider_session_id_for_spawn(provider)
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     contract = require_contract_for_provider(provider)

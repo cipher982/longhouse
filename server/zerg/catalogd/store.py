@@ -3122,7 +3122,6 @@ class CatalogStore:
 
         from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
         from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
-        from zerg.services.live_archive_outbox import managed_local_launch_idempotency_key
         from zerg.services.live_catalog_launch import attach_live_catalog_control
         from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
         from zerg.services.live_catalog_launch import live_launch_result
@@ -3138,19 +3137,37 @@ class CatalogStore:
         observed_at = launch["started_at"]
         thread_id = primary_thread_id_for_session(session_id)
         run_id = managed_local_run_id_for_session(session_id)
+        replay_contract = {
+            "owner_id": launch["owner_id"],
+            "git_repo": launch.get("git_repo"),
+            "git_branch": launch.get("git_branch"),
+            "plan": {**plan_payload, "session_id": str(session_id)},
+        }
+        launch_fingerprint = hashlib.sha256(json.dumps(replay_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
                 existing = orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
                 if existing is not None:
+                    # The durable outbox is consumable transport state, not an
+                    # idempotency requirement. Once archive drains it, comparing
+                    # its vanished payload turns a genuine retry into a false
+                    # 409. Keep the established persisted launch-attribute
+                    # checks, but do not require the outbox row to survive.
                     catalog = orm.get(LiveSessionCatalog, str(session_id))
-                    outbox = (
-                        orm.query(LiveArchiveOutbox)
-                        .filter(LiveArchiveOutbox.idempotency_key == managed_local_launch_idempotency_key(session_id=session_id))
-                        .one_or_none()
-                    )
-                    stored_launch = json.loads(outbox.payload_json or "{}").get("launch", {}) if outbox is not None else {}
-                    expected_plan = {**plan_payload, "session_id": str(session_id)}
+                    provider_session_id = str(plan.provider_session_id or "").strip()
+                    provider_alias = None
+                    if provider_session_id:
+                        provider_alias = (
+                            orm.query(LiveSessionThreadAlias)
+                            .filter(
+                                LiveSessionThreadAlias.thread_id == str(existing.thread_id or ""),
+                                LiveSessionThreadAlias.provider == plan.provider,
+                                LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                                LiveSessionThreadAlias.alias_value == provider_session_id,
+                            )
+                            .one_or_none()
+                        )
                     exact_replay = (
                         str(existing.session_id) == str(session_id)
                         and str(existing.thread_id or "") == str(thread_id)
@@ -3164,10 +3181,12 @@ class CatalogStore:
                         and str(catalog.git_branch or "") == str(launch.get("git_branch") or "")
                         and str(catalog.loop_mode or "") == plan.loop_mode
                         and str(catalog.permission_mode or "") == plan.permission_mode
-                        and stored_launch.get("owner_id") == launch["owner_id"]
-                        and stored_launch.get("git_repo") == launch.get("git_repo")
-                        and stored_launch.get("git_branch") == launch.get("git_branch")
-                        and stored_launch.get("plan") == expected_plan
+                        and (not provider_session_id or provider_alias is not None)
+                        # Rows created before launch_fingerprint existed retain
+                        # the persisted-field fallback above. New rows compare
+                        # the complete request contract without depending on a
+                        # consumable archive outbox record.
+                        and (existing.launch_fingerprint is None or hmac.compare_digest(existing.launch_fingerprint, launch_fingerprint))
                     )
                     result = live_launch_result(existing) if exact_replay else None
                     orm.rollback()
@@ -3197,6 +3216,7 @@ class CatalogStore:
                     execution_lifetime="live_control",
                     client_request_id=None,
                     command_id=command_id,
+                    launch_fingerprint=launch_fingerprint,
                     started_at=observed_at,
                     expires_at=launch["expires_at"],
                     launch_actor=plan.launch_actor,

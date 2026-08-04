@@ -662,6 +662,12 @@ fn native_fast_health_from_parts(
         .and_then(|value| value.get("spool_dead_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let blocked_source_count = object
+        .and_then(|value| value.get("storage_v2_outbox"))
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("blocked_source_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
@@ -706,6 +712,9 @@ fn native_fast_health_from_parts(
     }
     if dead_count > 0 {
         reasons.push("spool_dead_letters".to_string());
+    }
+    if blocked_source_count > 0 {
+        reasons.push("storage_v2_sources_blocked".to_string());
     }
     if !matches!(
         transport.status_reason.as_str(),
@@ -3306,6 +3315,28 @@ mod tests {
                 .and_then(Value::as_str),
             Some("connected")
         );
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_blocked_storage_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "last_updated": "2026-06-29T00:00:00Z",
+                "daemon_pid": 1234,
+                "storage_v2_outbox": {"blocked_source_count": 2}
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_blocked".to_string()));
     }
 
     #[test]

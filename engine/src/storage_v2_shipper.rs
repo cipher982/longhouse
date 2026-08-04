@@ -145,17 +145,19 @@ fn prepare_next_envelope_with_limit(
     if let Some(pending) =
         pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
     {
-        let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
-            && pending.attempt_count == 0
-            && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
-        if !oversized_unattempted
-            || !pending_source_envelope::discard_unattempted(
-                conn,
-                pending.source_epoch,
-                &pending.envelope_id,
-            )?
-        {
-            return pending_to_prepared(pending).map(Some);
+        if !retire_empty_blocked_source_if_safe(conn, provider, &pending)? {
+            let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
+                && pending.attempt_count == 0
+                && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
+            if !oversized_unattempted
+                || !pending_source_envelope::discard_unattempted(
+                    conn,
+                    pending.source_epoch,
+                    &pending.envelope_id,
+                )?
+            {
+                return pending_to_prepared(pending).map(Some);
+            }
         }
     }
     if provider.eq_ignore_ascii_case("antigravity")
@@ -318,6 +320,38 @@ fn prepare_next_envelope_with_limit(
         })
         .cloned()
         .collect::<Vec<_>>();
+    if render_records.is_empty()
+        && media_objects.is_empty()
+        && provider.eq_ignore_ascii_case("claude")
+        && raw_batch_is_claude_startup_metadata(&raw_batch)
+    {
+        source_epoch::acknowledge_position(
+            conn,
+            resolution.source_epoch,
+            SourceLane::Durable,
+            position,
+            raw_batch.range_end,
+        )?;
+        if raw_batch.range_end < source_len {
+            return prepare_next_envelope_with_limit(
+                conn,
+                capabilities,
+                path,
+                provider,
+                session_id_override,
+                maximum_batch_bytes,
+            );
+        }
+        return Ok(None);
+    }
+    let batch_event_count = parse_result
+        .events
+        .iter()
+        .filter(|event| {
+            event.source_offset >= raw_batch.range_start
+                && event.source_offset < raw_batch.range_end
+        })
+        .count();
     let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
@@ -353,14 +387,7 @@ fn prepare_next_envelope_with_limit(
         source_epoch: resolution.source_epoch,
         range_start: raw_batch.range_start,
         range_end: raw_batch.range_end,
-        event_count: parse_result
-            .events
-            .iter()
-            .filter(|event| {
-                event.source_offset >= raw_batch.range_start
-                    && event.source_offset < raw_batch.range_end
-            })
-            .count(),
+        event_count: batch_event_count,
         has_reply_evidence: parse_result.events.iter().any(|event| {
             event.source_offset >= raw_batch.range_start
                 && matches!(event.role, Role::Assistant | Role::Tool)
@@ -370,6 +397,103 @@ fn prepare_next_envelope_with_limit(
         media_objects,
     };
     persist_prepared(conn, &path_text, prepared).map(Some)
+}
+
+fn retire_empty_blocked_source_if_safe(
+    conn: &mut Connection,
+    provider: &str,
+    pending: &PendingSourceEnvelope,
+) -> Result<bool> {
+    if !provider.eq_ignore_ascii_case("claude")
+        || pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved")
+        || !pending
+            .block_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("source_epoch_not_found"))
+        || pending.range_end <= pending.range_start
+    {
+        return Ok(false);
+    }
+    let path = Path::new(&pending.source_path);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let prepared = pending_to_prepared(pending.clone())?;
+    let render_is_metadata_only = prepared.envelope.render.as_ref().is_some_and(|render| {
+        render
+            .records
+            .iter()
+            .all(|record| record.branch_kind.as_deref() == Some("conversation_reset"))
+    });
+    if !render_is_metadata_only
+        || !prepared.media_objects.is_empty()
+        || !raw_records_are_claude_startup_metadata(&prepared.envelope.records)
+    {
+        return Ok(false);
+    }
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "provider": provider,
+        "source_path": pending.source_path,
+        "range_start": pending.range_start.to_string(),
+        "range_end": pending.range_end.to_string(),
+        "event_count": 0,
+        "media_count": 0,
+        "host_manifest_absent": true,
+    })
+    .to_string();
+    pending_source_envelope::retire_empty_source(
+        conn,
+        pending.source_epoch,
+        &pending.envelope_id,
+        pending.range_start,
+        pending.range_end,
+        &pending.request_body_zstd,
+        "Retired host-absent source epoch after proving its range contained no canonical events or media",
+        &proof_json,
+    )?;
+    tracing::info!(
+        source_epoch = %pending.source_epoch,
+        range_start = pending.range_start,
+        range_end = pending.range_end,
+        "Retired blocked empty source range"
+    );
+    Ok(true)
+}
+
+fn raw_batch_is_claude_startup_metadata(batch: &RawRecordBatch) -> bool {
+    !batch.records.is_empty()
+        && batch
+            .records
+            .iter()
+            .all(|record| is_claude_startup_metadata_bytes(&record.bytes))
+}
+
+fn raw_records_are_claude_startup_metadata(records: &[StorageV2Record]) -> bool {
+    !records.is_empty()
+        && records.iter().all(|record| {
+            BASE64_STANDARD
+                .decode(&record.data_b64)
+                .ok()
+                .is_some_and(|bytes| is_claude_startup_metadata_bytes(&bytes))
+        })
+}
+
+fn is_claude_startup_metadata_bytes(bytes: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    matches!(
+        value.get("type").and_then(serde_json::Value::as_str),
+        Some(
+            "last-prompt"
+                | "mode"
+                | "permission-mode"
+                | "bridge-session"
+                | "attachment"
+                | "file-history-snapshot"
+        )
+    )
 }
 
 /// Prepare one durable storage-v2 envelope for a lane and return the exact
@@ -4359,6 +4483,37 @@ mod tests {
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn skips_provider_startup_metadata_without_freezing_a_durable_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let metadata_line =
+            r#"{"type":"mode","mode":"normal","sessionId":"018f0c3a-7b2d-7f10-8a11-123456789abc"}"#;
+        let metadata = (0..8)
+            .map(|_| format!("{metadata_line}\n"))
+            .collect::<String>();
+        let user = r#"{"type":"user","uuid":"u1","timestamp":"2026-07-12T12:00:00Z","message":{"content":"hello"}}"#;
+        fs::write(&path, format!("{metadata}{user}\n")).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_envelope_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            metadata.len(),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(prepared.range_start, metadata.len() as u64);
+        assert_eq!(prepared.event_count, 1);
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
     }
 
     #[test]

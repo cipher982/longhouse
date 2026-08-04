@@ -93,6 +93,36 @@ def test_healthy_run_passes_and_reports_one_embedding_space():
         "dims": 256,
         "revision": "a" * 40,
     }
+    assert report.corpus_coverage_metadata()["resident_defects"] == {
+        "invalid_vectors": {"min": 0, "max": 0},
+        "unnormalized_vectors": {"min": 0, "max": 0},
+        "unlocatable_episodes": {"min": 0, "max": 0},
+        "episode_count_mismatches": {"min": 0, "max": 0},
+        "missing_sessions": {"min": 0, "max": 0},
+    }
+
+
+def test_excluded_session_prefixes_remove_full_session_ids():
+    evaluator = _module()
+
+    assert evaluator._without_excluded_sessions(
+        ["5595c356-f89d-48c1-bba5-9052eaf04d17", "kept-session"],
+        {"5595c356"},
+    ) == ["kept-session"]
+
+
+def test_coverage_metadata_reports_observed_defects_instead_of_inventing_zeroes():
+    evaluator = _module()
+    coverage = _coverage()
+    coverage["invalid_vectors"] = 2
+    report = evaluator.Report(
+        strategy="semantic",
+        results=[evaluator.Result(evaluator.Query("q", "exact", "q", ["gold"]), [], 0.1, coverage=coverage)],
+    )
+
+    metadata = report.corpus_coverage_metadata()
+    assert metadata["status"] == "incomplete"
+    assert metadata["resident_defects"]["invalid_vectors"] == {"min": 2, "max": 2}
 
 
 def test_category_regression_fails_the_release_gate_at_25():

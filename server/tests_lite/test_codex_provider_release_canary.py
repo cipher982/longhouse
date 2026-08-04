@@ -203,7 +203,7 @@ print(json.dumps({{
 def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(tmp_path: Path, monkeypatch) -> None:
     args = _args(tmp_path)
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     socket_file = state_file.with_suffix(".sock")
@@ -289,7 +289,7 @@ def test_managed_cold_resume_keeps_thread_and_replaces_run_and_connection(tmp_pa
     args = _args(tmp_path)
     args.tui_record_secs = 1
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     thread_path = isolation_root / "rollout.jsonl"
@@ -370,7 +370,7 @@ def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_p
     args = _args(tmp_path)
     evidence_root = tmp_path / "evidence"
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     state = {"active_turn_id": None, "last_turn_status": "completed"}
@@ -433,7 +433,7 @@ def test_live_interrupt_rejects_state_for_a_different_turn(tmp_path: Path, monke
     args = _args(tmp_path)
     evidence_root = tmp_path / "evidence"
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     state_file.write_text(
