@@ -40,6 +40,7 @@ QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
 QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
 _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
+_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
 
 @dataclass(frozen=True)
@@ -305,6 +306,38 @@ def _signal_pid_if_alive(pid: int, sig: int) -> bool:
     return True
 
 
+def _opencode_attach_pids(states: list[dict[str, Any]]) -> list[int]:
+    """Find only attach processes belonging to these recorded sessions.
+
+    The stock OpenCode TUI can outlive the Longhouse facade that launched it
+    when its localhost server disappears.  The bridge state records the
+    provider session, so a failed qualification can clean those exact attach
+    processes without scanning or signaling unrelated provider work.
+    """
+
+    identities = {(str(state.get("session_id") or ""), str(state.get("provider_session_id") or "")) for state in states}
+    identities.discard(("", ""))
+    if not identities:
+        return []
+    pids: set[int] = set()
+    proc_root = Path("/proc")
+    proc_entries = proc_root.iterdir() if proc_root.is_dir() else ()
+    for proc in proc_entries:
+        if not proc.name.isdigit():
+            continue
+        try:
+            command = proc.joinpath("cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        if "opencode-bridge attach" in command:
+            if any(session_id in command for session_id, _provider_session_id in identities):
+                pids.add(int(proc.name))
+        elif " attach http://127.0.0.1:" in command:
+            if any(provider_session_id in command for _session_id, provider_session_id in identities):
+                pids.add(int(proc.name))
+    return sorted(pids)
+
+
 def _provider_process_pid(spec: ProviderSpec, state: dict[str, Any]) -> int:
     field = {"claude": "claude_pid", "cursor": "cursor_pid", "opencode": "pid"}[spec.provider]
     pid = state.get(field)
@@ -365,6 +398,11 @@ def _cleanup_processes(
                 }
             )
     provider_pids = sorted(set(provider_pids))
+    attach_pids = _opencode_attach_pids(states) if spec.provider == "opencode" else []
+    forced_attach_pids: list[int] = []
+    for pid in attach_pids:
+        if _signal_pid_if_alive(pid, signal.SIGKILL):
+            forced_attach_pids.append(pid)
     forced_provider_pids: list[int] = []
     for pid in provider_pids:
         if _signal_pid_if_alive(pid, signal.SIGKILL):
@@ -379,9 +417,11 @@ def _cleanup_processes(
         if process is not None
     ]
     provider_process_receipts = [{"pid": pid, "process_dead": _wait_pid_dead(pid)} for pid in provider_pids]
+    attach_process_receipts = [{"pid": pid, "process_dead": _wait_pid_dead(pid)} for pid in attach_pids]
     endpoint_receipts = [_endpoint_absence(state) for state in states]
     orphan_count = sum(not receipt["process_exited"] or not receipt["process_group_dead"] for receipt in process_receipts)
     orphan_count += sum(not receipt["process_dead"] for receipt in provider_process_receipts)
+    orphan_count += sum(not receipt["process_dead"] for receipt in attach_process_receipts)
     orphan_count += len(provider_pid_errors)
     endpoints_absent = all(receipt["absent"] for receipt in endpoint_receipts)
     verified = orphan_count == 0 and endpoints_absent
@@ -391,9 +431,11 @@ def _cleanup_processes(
         "orphan_count": orphan_count,
         "processes": process_receipts,
         "provider_processes": provider_process_receipts,
+        "attach_processes": attach_process_receipts,
         "provider_pid_errors": provider_pid_errors,
         "forced_cleanup_pids": forced_pids,
         "forced_provider_cleanup_pids": forced_provider_pids,
+        "forced_attach_cleanup_pids": forced_attach_pids,
         "control_endpoints": endpoint_receipts,
         "final_socket_absent": endpoints_absent,
     }
@@ -520,7 +562,7 @@ def _prepare_claude_profile(
                 confirmed_trust = True
             else:
                 try:
-                    profile = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+                    profile = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     profile = {}
                 approved = profile.get("customApiKeyResponses") if isinstance(profile, dict) else None
@@ -599,7 +641,7 @@ def _wait_state(
             if process.process.poll() is not None:
                 diagnostics = _state_candidate_diagnostics(spec, home)
                 raise RuntimeError(
-                    f"{spec.provider} Helm process exited before publishing state; " f"candidates={json.dumps(diagnostics, sort_keys=True)}"
+                    f"{spec.provider} Helm process exited before publishing state; candidates={json.dumps(diagnostics, sort_keys=True)}"
                 )
         for path in _state_candidates(spec, home):
             try:
@@ -621,8 +663,7 @@ def _wait_state(
         time.sleep(0.2)
     diagnostics = _state_candidate_diagnostics(spec, home)
     raise RuntimeError(
-        f"{spec.provider} Helm state did not expose the registered run and connection; "
-        f"candidates={json.dumps(diagnostics, sort_keys=True)}"
+        f"{spec.provider} Helm state did not expose the registered run and connection; candidates={json.dumps(diagnostics, sort_keys=True)}"
     )
 
 
@@ -636,7 +677,11 @@ class _RuntimeHostHTTPError(RuntimeError):
 def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers={"X-Agents-Token": token, "Accept": "application/json"},
+        headers={
+            "X-Agents-Token": token,
+            "Accept": "application/json",
+            "User-Agent": _RUNTIME_HOST_USER_AGENT,
+        },
         data=b"" if method == "POST" else None,
         method=method,
     )
@@ -914,7 +959,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         ).stdout.strip(),
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
-    home = _isolated_provider_home()
+    home: Path | None = None
     environment = os.environ.copy()
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
     if spec.provider == "opencode":
@@ -929,6 +974,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
     try:
+        home = _isolated_provider_home()
         if spec.provider == "claude":
             onboarding = _prepare_claude_profile(
                 binary=args.provider_bin,
@@ -1093,7 +1139,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         return result
     except Exception as exc:  # noqa: BLE001 - retain the exact causal failure
         try:
-            _write_json(root / "state-candidates.json", _state_candidate_diagnostics(spec, home))
+            if home is not None:
+                _write_json(root / "state-candidates.json", _state_candidate_diagnostics(spec, home))
         except (OSError, TypeError):
             pass
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)

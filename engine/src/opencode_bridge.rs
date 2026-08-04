@@ -287,7 +287,8 @@ pub fn attach(
     let binary = resolve_binary(opencode_bin)?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(assert_health(&state.server_url, &state.password))?;
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args([
             "attach",
             &state.server_url,
@@ -296,9 +297,18 @@ pub fn attach(
         ])
         .current_dir(&state.cwd)
         .env("OPENCODE_SERVER_USERNAME", &state.username)
-        .env("OPENCODE_SERVER_PASSWORD", &state.password)
-        .spawn()
-        .context("attach stock OpenCode TUI")?;
+        .env("OPENCODE_SERVER_PASSWORD", &state.password);
+    if let Some(model) = std::env::var("LONGHOUSE_OPENCODE_MODEL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    {
+        command.env(
+            "OPENCODE_CONFIG_CONTENT",
+            serde_json::to_string(&json!({"model": model}))?,
+        );
+    }
+    let mut child = command.spawn().context("attach stock OpenCode TUI")?;
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let monitor_server_url = state.server_url.clone();
     let monitor_username = state.username.clone();
