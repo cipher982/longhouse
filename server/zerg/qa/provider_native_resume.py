@@ -510,11 +510,13 @@ def _command_from_resume_intent(
     if spec.provider == "cursor":
         overrides.extend(("--permission-mode", "auto_approve"))
     command = [str(args.longhouse_cli), *expected_argv[1:selector_index], *overrides, *expected_argv[selector_index:]]
+    retained_command = ["<redacted>" if value == args.agents_token else value for value in command]
     receipt = {
         "requested_at": _now(),
         "intent": intent,
         "identity_valid": identity_valid,
-        "executed_argv": command,
+        "executed_argv": retained_command,
+        "executed_argv_sha256": f"sha256:{hashlib.sha256(json.dumps(command, separators=(',', ':')).encode()).hexdigest()}",
         "factory_overrides": [
             "runtime_host",
             "agents_token",

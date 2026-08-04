@@ -81,6 +81,9 @@ def test_resume_command_is_derived_from_exact_provider_neutral_intent(
     assert command[:2] == [str(args.longhouse_cli), provider]
     assert command[command.index(selector) + 1] == session_id
     assert command[command.index(SPECS[provider].binary_flag) + 1] == str(args.provider_bin)
+    assert args.agents_token in command
+    assert args.agents_token not in json.dumps(receipt)
+    assert "<redacted>" in receipt["executed_argv"]
 
 
 def test_resume_command_rejects_nearby_session_intent(tmp_path: Path) -> None:
