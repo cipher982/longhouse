@@ -761,11 +761,25 @@ async def search_storage_v2_semantic_sessions(
         timeout_seconds=RECALL_ROUTE_TIMEOUT_SECONDS,
         owner_id=owner_id,
     )
+    # One unreadable session must not fail the whole listing. These projections
+    # each hit catalogd, and catalogd is a single writer that a corpus
+    # re-projection can saturate; without this a transient RPC timeout on any one
+    # candidate turned the entire route into a bare 500 with no indication of
+    # which part failed. Candidates are over-fetched anyway, so a dropped one
+    # costs at most a result.
     projected = await asyncio.gather(
-        *(asyncio.to_thread(read_live_catalog_session, UUID(match.session_id), owner_id=owner_id) for match in matches)
+        *(asyncio.to_thread(read_live_catalog_session, UUID(match.session_id), owner_id=owner_id) for match in matches),
+        return_exceptions=True,
     )
     sessions: list[SessionResponse] = []
-    for (session, _provider_alias, _commit_seq), match in zip(projected, matches, strict=True):
+    unreadable = 0
+    for projection, match in zip(projected, matches, strict=True):
+        if isinstance(projection, BaseException):
+            if not isinstance(projection, (CatalogRemoteError, CatalogUnavailable)):
+                raise projection
+            unreadable += 1
+            continue
+        session, _provider_alias, _commit_seq = projection
         if session is None or session.user_hidden_from_timeline or session.user_messages <= 0 or session.is_sidechain:
             continue
         if environment is not None and session.environment != environment:
@@ -777,6 +791,23 @@ async def search_storage_v2_semantic_sessions(
         sessions.append(session.model_copy(update={"match_score": match.score}))
         if len(sessions) >= limit:
             break
+    if unreadable:
+        logger.warning(
+            "Semantic session listing dropped %d of %d candidates whose catalog projection was unavailable",
+            unreadable,
+            len(matches),
+        )
+    if not sessions and unreadable:
+        # Everything the dense lane found was unreadable, so an empty list would
+        # claim the corpus holds nothing relevant. Fail loudly instead.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "session_projection_unavailable",
+                "message": "The catalog could not project any matching session.",
+                "unreadable_candidates": unreadable,
+            },
+        )
     return sessions
 
 

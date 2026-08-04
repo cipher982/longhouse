@@ -509,3 +509,88 @@ async def test_missing_store_binding_still_closes_the_gate(monkeypatch):
         await agents_search._require_projection_coverage(timeout_seconds=1.0)
     assert unproven.value.status_code == 503
     assert unproven.value.detail["reason"] == "store_binding_missing"
+
+
+@pytest.mark.asyncio
+async def test_semantic_session_listing_survives_one_unreadable_candidate(monkeypatch):
+    """A catalog projection failure on one candidate must not fail the listing.
+
+    Each candidate projection hits catalogd, which is a single writer that a
+    corpus re-projection can saturate. Without this, a transient RPC timeout on
+    any one session turned the whole route into a bare 500 that told the caller
+    nothing about which part failed.
+    """
+
+    from dataclasses import dataclass
+    from dataclasses import replace as dataclass_replace
+
+    from zerg.catalogd.client import CatalogUnavailable
+
+    @dataclass(frozen=True)
+    class _Session:
+        """Only the fields the projection filter reads."""
+
+        id: str
+        environment: str = "local"
+        user_messages: int = 3
+        user_hidden_from_timeline: bool = False
+        is_sidechain: bool = False
+
+        def model_copy(self, *, update):
+            return dataclass_replace(self, **{k: v for k, v in update.items() if k != "match_score"})
+
+    good_id, bad_id = str(uuid4()), str(uuid4())
+
+    async def matches(**_kwargs):
+        return [_match(bad_id, 0.9), _match(good_id, 0.8)]
+
+    def read(session_id, *, owner_id):
+        if str(session_id) == bad_id:
+            raise CatalogUnavailable("catalogd unavailable for session.shadow_state.read.v2")
+        return (_Session(id=good_id), None, "1")
+
+    monkeypatch.setattr(agents_search, "_semantic_recall_matches", matches)
+    monkeypatch.setattr(agents_search, "read_live_catalog_session", read)
+
+    sessions = await agents_search.search_storage_v2_semantic_sessions(
+        owner_id=42,
+        query="anything",
+        project=None,
+        provider=None,
+        environment=None,
+        days_back=90,
+        limit=5,
+        include_test=False,
+    )
+
+    assert [session.id for session in sessions] == [good_id]
+
+
+@pytest.mark.asyncio
+async def test_semantic_session_listing_fails_when_every_candidate_is_unreadable(monkeypatch):
+    """An empty list would claim the corpus holds nothing relevant. It doesn't."""
+
+    from zerg.catalogd.client import CatalogUnavailable
+
+    async def matches(**_kwargs):
+        return [_match(str(uuid4()), 0.9)]
+
+    def read(_session_id, *, owner_id):
+        raise CatalogUnavailable("catalogd unavailable for session.shadow_state.read.v2")
+
+    monkeypatch.setattr(agents_search, "_semantic_recall_matches", matches)
+    monkeypatch.setattr(agents_search, "read_live_catalog_session", read)
+
+    with pytest.raises(agents_search.HTTPException) as unavailable:
+        await agents_search.search_storage_v2_semantic_sessions(
+            owner_id=42,
+            query="anything",
+            project=None,
+            provider=None,
+            environment=None,
+            days_back=90,
+            limit=5,
+            include_test=False,
+        )
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail["code"] == "session_projection_unavailable"
