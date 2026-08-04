@@ -40,7 +40,13 @@ def test_command_evidence_normalizes_pathlike_argv_values() -> None:
 
 def test_provider_runtime_environment_isolated_from_worker_profile(tmp_path: Path) -> None:
     environment = canary._provider_runtime_environment(
-        {"HOME": "/root", "CODEX_HOME": "/root/.codex", "PROBE_VALUE": "preserved"},
+        {
+            "HOME": "/root",
+            "CODEX_HOME": "/root/.codex",
+            "CODEX_API_KEY": "factory-key",
+            "OPENAI_API_KEY": "ambient-key",
+            "PROBE_VALUE": "preserved",
+        },
         tmp_path / "isolation",
     )
 
@@ -51,6 +57,8 @@ def test_provider_runtime_environment_isolated_from_worker_profile(tmp_path: Pat
     assert environment["XDG_DATA_HOME"] == str(provider_home / ".local" / "share")
     assert environment["XDG_CACHE_HOME"] == str(provider_home / ".cache")
     assert environment["PROBE_VALUE"] == "preserved"
+    assert "CODEX_API_KEY" not in environment
+    assert "OPENAI_API_KEY" not in environment
     assert (provider_home / ".codex").is_dir()
 
 

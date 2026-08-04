@@ -202,6 +202,28 @@ class PtyProcess:
         self.drain()
         return self.process.poll()
 
+    def settle(self, *, minimum: float = 0.75, quiet: float = 0.35, timeout: float = 5.0) -> bytes:
+        """Drain the PTY until the upstream TUI has had time to attach."""
+
+        deadline = time.monotonic() + timeout
+        minimum_deadline = time.monotonic() + minimum
+        quiet_deadline: float | None = None
+        captured = bytearray()
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                captured.extend(self.drain())
+                return bytes(captured)
+            chunk = self.drain()
+            if chunk:
+                captured.extend(chunk)
+                quiet_deadline = time.monotonic() + quiet
+            now = time.monotonic()
+            if now >= minimum_deadline and (quiet_deadline is None or now >= quiet_deadline):
+                return bytes(captured)
+            time.sleep(0.05)
+        captured.extend(self.drain())
+        return bytes(captured)
+
     def kill_group(self, sig: int) -> None:
         if self.process.poll() is None:
             os.killpg(self.process.pid, sig)
@@ -287,6 +309,10 @@ def _provider_process_pid(spec: ProviderSpec, state: dict[str, Any]) -> int:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise RuntimeError(f"{spec.provider} Helm state did not expose positive {field}")
     return pid
+
+
+def _provider_process_field(spec: ProviderSpec) -> str:
+    return {"claude": "claude_pid", "cursor": "cursor_pid", "opencode": "pid"}[spec.provider]
 
 
 def _endpoint_absence(state: dict[str, Any]) -> dict[str, Any]:
@@ -419,9 +445,14 @@ def _wait_state(
     session_id: str | None = None,
     prior_run_id: str | None = None,
     timeout: float = 45,
+    process: PtyProcess | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if process is not None:
+            process.drain()
+            if process.process.poll() is not None:
+                raise RuntimeError(f"{spec.provider} Helm process exited before publishing state")
         for path in _state_candidates(spec, home):
             try:
                 state = _normalize_state(spec, _read_json(path), path)
@@ -431,7 +462,13 @@ def _wait_state(
                 continue
             if prior_run_id is not None and state.get("run_id") == prior_run_id:
                 continue
-            if all(state.get(field) for field in ("run_id", "connection_id")):
+            provider_pid = state.get(_provider_process_field(spec))
+            if (
+                all(state.get(field) for field in ("run_id", "connection_id"))
+                and isinstance(provider_pid, int)
+                and not isinstance(provider_pid, bool)
+                and provider_pid > 0
+            ):
                 return state
         time.sleep(0.2)
     raise RuntimeError(f"{spec.provider} Helm state did not expose the registered run and connection")
@@ -712,10 +749,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             env=environment,
             recording=root / "initial.tty",
         )
-        initial_state = _wait_state(spec, home)
-        initial_provider_pid = _provider_process_pid(spec, initial_state)
+        initial_state = _wait_state(spec, home, process=initial)
+        initial.settle()
         states.append(initial_state)
         _write_json(root / "initial-bridge-state.json", initial_state)
+        initial_provider_pid = _provider_process_pid(spec, initial_state)
         seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
         _control_send(spec, args, initial_state, initial, f"Reply exactly {seed_marker} and nothing else.")
         initial_tail = _wait_assistant_marker(
@@ -753,10 +791,12 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             home,
             session_id=initial_state["session_id"],
             prior_run_id=str(initial_state["run_id"]),
+            process=resumed,
         )
-        resumed_provider_pid = _provider_process_pid(spec, resumed_state)
+        resumed.settle()
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", resumed_state)
+        resumed_provider_pid = _provider_process_pid(spec, resumed_state)
         post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
         post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")
         _write_json(root / "post-resume-send.json", post_send)

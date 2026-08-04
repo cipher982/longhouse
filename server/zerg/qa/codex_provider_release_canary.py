@@ -30,6 +30,7 @@ from typing import Any
 from typing import Callable
 from typing import Mapping
 
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.repo_root import default_repo_root
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
@@ -849,6 +850,12 @@ def _provider_runtime_environment(
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     environment = dict(base_environment)
+    # CODEX_API_KEY is the factory's named binding, not a stock Codex
+    # environment variable. Authenticate through codex_auth into this
+    # disposable CODEX_HOME before starting the provider, and remove both
+    # possible ambient inputs from every provider child.
+    environment.pop("CODEX_API_KEY", None)
+    environment.pop("OPENAI_API_KEY", None)
     environment.update(
         {
             "HOME": str(provider_home),
@@ -920,6 +927,15 @@ def _start_bridge(
         command.extend(["--model", args.model])
 
     env = _provider_runtime_environment(os.environ, isolation_root)
+    provider_key = os.environ.get("CODEX_API_KEY", "").strip()
+    if provider_key and Path(codex_bin).is_file() and os.access(codex_bin, os.X_OK):
+        auth_receipt = login_with_api_key(
+            Path(codex_bin),
+            api_key=provider_key,
+            environment=env,
+            cwd=workspace,
+        )
+        _write_json(evidence_root / "codex-auth-receipt.json", auth_receipt)
     env["LONGHOUSE_CODEX_BRIDGE_TOKEN"] = args.agents_token
     result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
     if result.returncode != 0:

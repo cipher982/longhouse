@@ -17,6 +17,7 @@ from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _state_candidates
+from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -221,6 +222,42 @@ def test_provider_process_identity_comes_from_exact_provider_state() -> None:
 def test_provider_process_identity_rejects_missing_or_invalid_pid(invalid: object) -> None:
     with pytest.raises(RuntimeError, match="positive claude_pid"):
         _provider_process_pid(SPECS["claude"], {"claude_pid": invalid})
+
+
+def test_wait_state_ignores_claude_contract_without_provider_pid(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    native = home / ".claude/channels/longhouse/sessions/session.json"
+    native.parent.mkdir(parents=True)
+    native.write_text(
+        json.dumps(
+            {
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "provider_session_id": "provider-1",
+                "provider": "claude",
+                "run_id": "run-1",
+                "connection_id": "connection-1",
+                "claude_pid": 123,
+            }
+        )
+    )
+    contract = home / ".longhouse/managed-local/contracts/claude/session.json"
+    contract.parent.mkdir(parents=True)
+    contract.write_text(
+        json.dumps(
+            {
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "provider_session_id": "provider-1",
+                "provider": "claude",
+                "run_id": "run-1",
+                "connection_id": "connection-1",
+            }
+        )
+    )
+
+    state = _wait_state(SPECS["claude"], home, timeout=0.1)
+
+    assert state["state_path"] == str(native)
+    assert state["claude_pid"] == 123
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
