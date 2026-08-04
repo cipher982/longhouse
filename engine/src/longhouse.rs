@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Duration;
 use uuid::Uuid;
@@ -902,6 +902,29 @@ fn write_claude_degraded_mcp_config(session_id: &str) -> anyhow::Result<PrivateT
     Ok(PrivateTempFile { path })
 }
 
+/// Buffered user-facing notices produced by a background thread while a
+/// managed provider TUI owns the shared terminal. Drained and printed only
+/// after the child exits and the terminal is restored, so raw text never lands
+/// inside the provider's alternate screen.
+#[derive(Clone, Default)]
+struct DeferredNotices(Arc<Mutex<Vec<String>>>);
+
+impl DeferredNotices {
+    fn push(&self, message: String) {
+        if let Ok(mut guard) = self.0.lock() {
+            guard.push(message);
+        }
+    }
+
+    fn drain(&self) -> Vec<String> {
+        if let Ok(mut guard) = self.0.lock() {
+            std::mem::take(&mut *guard)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 struct ClaudeRegistrationRetry {
     provider_alive: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
@@ -918,6 +941,7 @@ fn spawn_claude_registration_retry(
     token: &str,
     payload: serde_json::Value,
     session_id: &str,
+    notices: DeferredNotices,
 ) -> ClaudeRegistrationRetry {
     let url = url.to_string();
     let token = token.to_string();
@@ -947,8 +971,9 @@ fn spawn_claude_registration_retry(
                     if response.provider_session_id.as_deref()
                         != payload.get("provider_session_id").and_then(|value| value.as_str())
                     {
-                        eprintln!(
+                        notices.push(
                             "Longhouse warning: degraded Claude registration returned a different provider identity"
+                                .to_string(),
                         );
                         let _transaction = ManagedLaunchTransaction::new(
                             &runtime,
@@ -971,16 +996,17 @@ fn spawn_claude_registration_retry(
                             }
                             if provider_alive_for_thread.load(Ordering::Acquire) {
                                 if let Err(error) = transaction.confirm() {
-                                    eprintln!(
+                                    notices.push(format!(
                                         "Longhouse warning: recovered Claude registration could not be confirmed: {error:#}"
-                                    );
+                                    ));
                                 }
                                 return;
                             }
                             std::thread::sleep(Duration::from_millis(100));
                         }
-                        eprintln!(
+                        notices.push(
                             "Longhouse warning: Claude exited before recovered registration became ready"
+                                .to_string(),
                         );
                     }
                     return;
@@ -990,8 +1016,9 @@ fn spawn_claude_registration_retry(
                     // reads in order. The final attempt's error is the most
                     // recent and is reported by the failure arm below.
                     if attempt == 0 {
-                        eprintln!(
+                        notices.push(
                             "Longhouse warning: Runtime Host is still unavailable; Claude is running locally and registration will retry"
+                                .to_string(),
                         );
                     }
                     let _ = error;
@@ -1003,9 +1030,9 @@ fn spawn_claude_registration_retry(
                     }
                 }
                 Err(error) => {
-                    eprintln!(
+                    notices.push(format!(
                         "Longhouse warning: could not recover Claude Helm registration: {error:#}"
-                    );
+                    ));
                 }
             }
         }
@@ -1086,6 +1113,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         payload["provider_session_id"] = json!(Uuid::new_v4().to_string());
     }
     let mut degraded_registration: Option<ClaudeRegistrationRetry> = None;
+    // Deferred degradation/recovery notices: the retry thread must not write
+    // directly to the caller's terminal while the provider TUI owns the
+    // alternate screen, so route them through a buffer drained only after the
+    // child exits and the terminal is restored.
+    let deferred_notices = DeferredNotices::default();
     let expected_session_id = if resume_target.is_some() {
         resume_target.as_ref().map(|target| target.session_id.as_str())
     } else {
@@ -1129,6 +1161,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 &token,
                 payload.clone(),
                 session_id,
+                deferred_notices.clone(),
             ));
             eprintln!(
                 "Longhouse warning: starting Claude in degraded Helm mode; durable upload will catch up if the Runtime Host recovers, while remote control is unavailable until registration recovers ({error:#})"
@@ -1264,6 +1297,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         registration.provider_alive.store(false, Ordering::Release);
     }
     drop(degraded_registration);
+    // The child has exited and the terminal is restored; surface any deferred
+    // degradation/recovery notices now, in normal scrollback.
+    for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
     if let Err(error) = record_claude_terminal_event(
         &session_id,
         &run_id,
@@ -1274,6 +1312,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         eprintln!("Longhouse warning: could not queue Claude terminal lifecycle event: {error}");
     }
     if exit != 0 {
+        // Drain once more before the immediate exit: the cancel flag from
+        // `drop` may race a notice still in flight from a blocked HTTP call.
+        for message in deferred_notices.drain() {
+            eprintln!("{message}");
+        }
         std::process::exit(exit);
     }
     Ok(())
@@ -3471,6 +3514,18 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_notices_pushes_and_drains_in_order() {
+        let notices = DeferredNotices::default();
+        assert!(notices.drain().is_empty());
+        notices.push("first".to_string());
+        notices.push("second".to_string());
+        let drained = notices.drain();
+        assert_eq!(drained, vec!["first".to_string(), "second".to_string()]);
+        // A second drain is empty; the buffer is consumed.
+        assert!(notices.drain().is_empty());
+    }
 
     #[test]
     fn codex_parser_keeps_python_no_attach_spelling() {
