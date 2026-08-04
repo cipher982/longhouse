@@ -9879,8 +9879,8 @@ def _row_dto(
 def _machine_health_heartbeat_dto(row) -> dict[str, Any]:
     result = _row_dto(row, fields=_MACHINE_HEALTH_HEARTBEAT_FIELDS)
     assert result is not None
-    raw = _decode_json_object(row.get("raw_json"))
-    projected_raw = {key: raw[key] for key in _MACHINE_HEALTH_RAW_FIELDS if key in raw}
+    raw = _decode_machine_health_raw_json(row.get("raw_json"))
+    projected_raw = {key: _sanitize_machine_health_value(raw[key]) for key in _MACHINE_HEALTH_RAW_FIELDS if key in raw}
     encoded_raw = json.dumps(projected_raw, separators=(",", ":"), sort_keys=True)
     if len(encoded_raw.encode("utf-8")) > _MACHINE_HEALTH_RAW_MAX_BYTES:
         projected_raw.pop("archive_backlog", None)
@@ -9894,6 +9894,36 @@ def _machine_health_heartbeat_dto(row) -> dict[str, Any]:
     assert len(encoded_raw.encode("utf-8")) <= _MACHINE_HEALTH_RAW_MAX_BYTES
     result["raw_json"] = encoded_raw
     return result
+
+
+def _decode_machine_health_raw_json(value: object) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        decoded = json.loads(str(value or "{}"), parse_int=_parse_machine_health_int)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("machine health heartbeat JSON is invalid") from exc
+    if not isinstance(decoded, dict):
+        raise RuntimeError("machine health heartbeat JSON is not an object")
+    return decoded
+
+
+def _parse_machine_health_int(value: str) -> int | None:
+    digits = value[1:] if value.startswith("-") else value
+    if len(digits) > 20:
+        return None
+    parsed = int(value)
+    return parsed if 0 <= parsed <= _MACHINE_HEALTH_MAX_U64 else None
+
+
+def _sanitize_machine_health_value(value: Any) -> Any:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if 0 <= value <= _MACHINE_HEALTH_MAX_U64 else None
+    if isinstance(value, dict):
+        return {str(key): _sanitize_machine_health_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_machine_health_value(item) for item in value]
+    return value
 
 
 def _bounded_machine_health_critical_raw(raw: dict[str, Any]) -> dict[str, Any]:

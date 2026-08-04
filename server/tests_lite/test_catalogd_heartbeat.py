@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -338,28 +337,23 @@ def test_machine_health_projection_preserves_critical_evidence_after_size_fallba
         received_at=datetime.now(UTC),
         digest="digest",
     )
-    previous_max_digits = sys.get_int_max_str_digits()
-    sys.set_int_max_str_digits(10_000)
-    try:
-        row["raw_json"] = json.dumps(
-            {
-                "archive_backlog": {"padding": "x" * (200 * 1024)},
-                "storage_v2_outbox": {
-                    "pending_count": 10**5000,
-                    "blocked_source_count": 2,
-                    "unresolved_blocked_source_count": 1,
-                    "error": "source conflict" * 10_000,
-                },
-                "managed_launch_recovery": {
-                    "active_count": 1,
-                    "exhausted_count": 2,
-                    "scan_error": False,
-                },
-            }
-        )
-        projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
-    finally:
-        sys.set_int_max_str_digits(previous_max_digits)
+    row["raw_json"] = json.dumps(
+        {
+            "archive_backlog": {"padding": "x" * (200 * 1024)},
+            "storage_v2_outbox": {
+                "pending_count": "giant-integer-placeholder",
+                "blocked_source_count": 2,
+                "unresolved_blocked_source_count": 1,
+                "error": "source conflict" * 10_000,
+            },
+            "managed_launch_recovery": {
+                "active_count": 1,
+                "exhausted_count": 2,
+                "scan_error": False,
+            },
+        }
+    ).replace('"giant-integer-placeholder"', "1" + "0" * 5000)
+    projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
 
     assert projected["storage_v2_outbox"]["blocked_source_count"] == 2
     assert projected["storage_v2_outbox"]["unresolved_blocked_source_count"] == 1
