@@ -292,6 +292,8 @@ class CatalogDaemon:
             return await self._end_apns_live_activity(request)
         if request.method == "notification.apns.attention.pending.list.v2":
             return await self._list_pending_apns_attention(request)
+        if request.method == "notification.apns.attention.validate.v2":
+            return await self._validate_apns_attention(request)
         if request.method == "notification.apns.attention.rollback.v2":
             return await self._rollback_apns_attention(request)
         if request.method == "notification.apns.attention.commit.v2":
@@ -1103,6 +1105,35 @@ class CatalogDaemon:
             self._store.list_pending_apns_attention_actions,
             observed_at=observed_at,
             limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _validate_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "action", "state", "notification_event_id", "attention_push_at"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "notification.apns.attention.validate.v2 has invalid parameters",
+            )
+        try:
+            session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
+            action = _bounded_text(request.params["action"], "action", 32)
+            state = _bounded_text(request.params["state"], "state", 32)
+            notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
+            attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if action not in {"attention", "resolution"} or state != "stalled":
+            return self._error(request, "invalid_request", "attention validation action or state is invalid")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.validate_apns_attention,
+            session_id=session_id,
+            action=action,
+            state=state,
+            notification_event_id=notification_event_id,
+            attention_push_at=attention_push_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

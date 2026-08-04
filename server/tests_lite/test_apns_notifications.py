@@ -91,7 +91,7 @@ def test_catalog_attention_dispatch_rolls_back_rejected_send():
         "notification_event_id": str(uuid4()),
         "targets": [{"device_token": "c" * 64, "push_environment": "sandbox"}],
     }
-    catalogd = SimpleNamespace(call=AsyncMock())
+    catalogd = SimpleNamespace(call=AsyncMock(return_value={"valid": True}))
     notification = _catalog_attention_notification(action)
     assert isinstance(notification, SessionAttentionPush)
     assert notification.alert_title == "May be stalled"
@@ -100,18 +100,34 @@ def test_catalog_attention_dispatch_rolls_back_rejected_send():
     with patch("zerg.routers.runtime.send_session_attention_push", new=AsyncMock(return_value=False)):
         asyncio.run(_dispatch_catalog_attention_actions([action], catalogd))
 
-    catalogd.call.assert_awaited_once_with(
-        "notification.apns.attention.rollback.v2",
-        {
-            "session_id": session_id,
-            "action": "attention",
-            "state": "stalled",
-            "previous_state": "",
-            "notification_event_id": action["notification_event_id"],
-            "occurred_at": occurred_at.isoformat(),
-            "attention_push_at": occurred_at.isoformat(),
-        },
-    )
+    assert catalogd.call.await_args_list == [
+        (
+            (
+                "notification.apns.attention.validate.v2",
+                {
+                    "session_id": session_id,
+                    "action": "attention",
+                    "state": "stalled",
+                    "notification_event_id": action["notification_event_id"],
+                    "attention_push_at": occurred_at.isoformat(),
+                },
+            ),
+        ),
+        (
+            (
+                "notification.apns.attention.rollback.v2",
+                {
+                    "session_id": session_id,
+                    "action": "attention",
+                    "state": "stalled",
+                    "previous_state": "",
+                    "notification_event_id": action["notification_event_id"],
+                    "occurred_at": occurred_at.isoformat(),
+                    "attention_push_at": occurred_at.isoformat(),
+                },
+            ),
+        ),
+    ]
 
 
 def test_catalog_attention_dispatch_commits_accepted_send_and_rejects_unknown_kind():
@@ -129,26 +145,75 @@ def test_catalog_attention_dispatch_commits_accepted_send_and_rejects_unknown_ki
         "summary": "No provider progress",
         "targets": [{"device_token": "d" * 64, "push_environment": "sandbox"}],
     }
-    catalogd = SimpleNamespace(call=AsyncMock(return_value={"committed": True}))
+    catalogd = SimpleNamespace(call=AsyncMock(side_effect=[{"valid": True}, {"committed": True}]))
 
     with patch("zerg.routers.runtime.send_session_attention_push", new=AsyncMock(return_value=True)):
         asyncio.run(_dispatch_catalog_attention_actions([action], catalogd))
 
+    assert catalogd.call.await_args_list == [
+        (
+            (
+                "notification.apns.attention.validate.v2",
+                {
+                    "session_id": session_id,
+                    "action": "attention",
+                    "state": "stalled",
+                    "notification_event_id": event_id,
+                    "attention_push_at": occurred_at.isoformat(),
+                },
+            ),
+        ),
+        (
+            (
+                "notification.apns.attention.commit.v2",
+                {
+                    "session_id": session_id,
+                    "action": "attention",
+                    "state": "stalled",
+                    "previous_state": "",
+                    "notification_event_id": event_id,
+                    "occurred_at": occurred_at.isoformat(),
+                    "attention_push_at": occurred_at.isoformat(),
+                },
+            ),
+        ),
+    ]
+    assert session_id not in _catalog_attention_locks
+    with pytest.raises(ValueError):
+        _catalog_attention_notification({**action, "kind": "unexpected"})
+
+
+def test_catalog_attention_dispatch_retains_pending_on_transient_send_failure():
+    session_id = str(uuid4())
+    event_id = str(uuid4())
+    occurred_at = datetime.now(timezone.utc).replace(microsecond=0)
+    action = {
+        "kind": "attention",
+        "session_id": session_id,
+        "state": "stalled",
+        "previous_state": "",
+        "notification_event_id": event_id,
+        "occurred_at": occurred_at.isoformat(),
+        "targets": [{"device_token": "e" * 64, "push_environment": "sandbox"}],
+    }
+    catalogd = SimpleNamespace(call=AsyncMock(return_value={"valid": True}))
+
+    with patch(
+        "zerg.routers.runtime.send_session_attention_push",
+        new=AsyncMock(side_effect=RuntimeError("network unavailable")),
+    ):
+        asyncio.run(_dispatch_catalog_attention_actions([action], catalogd))
+
     catalogd.call.assert_awaited_once_with(
-        "notification.apns.attention.commit.v2",
+        "notification.apns.attention.validate.v2",
         {
             "session_id": session_id,
             "action": "attention",
             "state": "stalled",
-            "previous_state": "",
             "notification_event_id": event_id,
-            "occurred_at": occurred_at.isoformat(),
             "attention_push_at": occurred_at.isoformat(),
         },
     )
-    assert session_id not in _catalog_attention_locks
-    with pytest.raises(ValueError):
-        _catalog_attention_notification({**action, "kind": "unexpected"})
 
 
 def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):

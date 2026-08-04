@@ -61,6 +61,10 @@ _cached_provider_token_expires_at: datetime | None = None
 _TARGETS_SENTINEL: object = object()
 
 
+class APNSTransientError(RuntimeError):
+    """APNs could not be reached and the durable action should be retried."""
+
+
 @dataclass(frozen=True)
 class APNSDeviceTarget:
     device_token: str
@@ -1115,7 +1119,7 @@ async def send_presence_pushes(
             await execute_post_write(ws, _clear_live, db, label=f"{dispatch_label_prefix}-live-clear")
 
 
-async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
+async def send_session_attention_push(notification: SessionAttentionPush, *, raise_on_transient: bool = False) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
         return False
@@ -1125,6 +1129,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
     payload = build_session_attention_payload(notification)
     expiration = str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()))
     accepted = False
+    transport_failed = False
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -1143,6 +1148,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
             try:
                 response = await client.post(url, headers=headers, json=payload)
             except Exception as exc:  # noqa: BLE001
+                transport_failed = True
                 logger.warning("APNs send failed for session %s: %s", notification.session_id, exc)
                 continue
             if response.status_code >= 300:
@@ -1155,10 +1161,16 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
                 )
             else:
                 accepted = True
+    if raise_on_transient and not accepted and transport_failed:
+        raise APNSTransientError(f"APNs attention send failed for session {notification.session_id}")
     return accepted
 
 
-async def send_session_attention_resolution_push(notification: SessionAttentionResolutionPush) -> bool:
+async def send_session_attention_resolution_push(
+    notification: SessionAttentionResolutionPush,
+    *,
+    raise_on_transient: bool = False,
+) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
         return False
@@ -1168,6 +1180,7 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
     payload = build_session_attention_resolution_payload(notification)
     expiration = str(int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp()))
     accepted = False
+    transport_failed = False
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -1184,6 +1197,7 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
             try:
                 response = await client.post(url, headers=headers, json=payload)
             except Exception as exc:  # noqa: BLE001
+                transport_failed = True
                 logger.warning("APNs resolution push failed for session %s: %s", notification.session_id, exc)
                 continue
             if response.status_code >= 300:
@@ -1196,6 +1210,8 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
                 )
             else:
                 accepted = True
+    if raise_on_transient and not accepted and transport_failed:
+        raise APNSTransientError(f"APNs resolution send failed for session {notification.session_id}")
     return accepted
 
 

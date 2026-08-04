@@ -319,6 +319,14 @@ def _live_pending_attention_action(
     attention_push_at = _as_aware_utc(catalog.last_attention_push_at)
     if attention_push_at is None:
         attention_push_at = _as_aware_utc(event.event_started_at) or observed_at
+    event_results = dict(event.channel_results or {})
+    queued_until = _as_aware_utc(event.eligible_at) if event_results.get("queued") else None
+    if queued_until is not None:
+        if observed_at < queued_until:
+            return None
+        policy_occurred_at = observed_at
+    else:
+        policy_occurred_at = attention_push_at
 
     if raw_stamp == _CATALOG_STALL_PENDING:
         if phase != "stalled":
@@ -356,9 +364,9 @@ def _live_pending_attention_action(
             visible_web_client=_live_recent_visible_web_client(
                 orm,
                 owner_id=owner_id,
-                occurred_at=attention_push_at,
+                occurred_at=policy_occurred_at,
             ),
-            occurred_at=attention_push_at,
+            occurred_at=policy_occurred_at,
             event_type="session_stalled",
         )
         if policy.action == AttentionDeliveryAction.QUEUE:
@@ -2505,6 +2513,58 @@ class CatalogStore:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
             return {"actions": actions, "commit_seq": str(commit_seq)}
+
+    def validate_apns_attention(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        state: str,
+        notification_event_id: str,
+        attention_push_at: datetime,
+    ) -> dict[str, Any]:
+        """Revalidate one APNs action immediately before network delivery."""
+
+        expected_stamp = _CATALOG_STALL_PENDING if action == "attention" else _CATALOG_STALL_RESOLUTION_PENDING
+        expected_at = _as_aware_utc(attention_push_at)
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                catalog = orm.get(LiveSessionCatalog, session_id)
+                event = orm.get(LiveNotificationEvent, notification_event_id)
+                runtime = (
+                    orm.query(LiveRuntimeState)
+                    .filter(LiveRuntimeState.session_id == session_id)
+                    .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+                    .first()
+                )
+                valid = False
+                reason = "missing_catalog_facts"
+                if catalog is not None and event is not None and runtime is not None:
+                    current_at = _as_aware_utc(catalog.last_attention_push_at)
+                    same_at = expected_at is not None and current_at is not None and abs((current_at - expected_at).total_seconds()) < 0.001
+                    same_event = str(catalog.last_attention_notification_id or "") == notification_event_id
+                    phase = str(runtime.phase or "").strip()
+                    phase_matches = phase == "stalled" if action == "attention" else phase != "stalled"
+                    valid = (
+                        state == "stalled"
+                        and str(catalog.last_attention_push_state or "").strip() == expected_stamp
+                        and same_at
+                        and same_event
+                        and event.resolved_at is None
+                        and phase_matches
+                    )
+                    if not valid:
+                        reason = "attention_state_changed"
+                    else:
+                        reason = "current"
+                return {
+                    "valid": valid,
+                    "reason": reason,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            finally:
+                orm.close()
 
     def rollback_apns_attention(
         self,

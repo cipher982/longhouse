@@ -31,6 +31,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
 from zerg.services.apns_sender import APNSDeviceTarget
+from zerg.services.apns_sender import APNSTransientError
 from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import SessionAttentionResolutionPush
 from zerg.services.apns_sender import active_ios_targets_for_owner
@@ -159,13 +160,44 @@ async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> 
             attention_push_at = (
                 notification.attention_push_at if isinstance(notification, SessionAttentionResolutionPush) else notification.occurred_at
             )
+            validation_params = {
+                "session_id": notification.session_id,
+                "action": action_name,
+                "state": "stalled",
+                "notification_event_id": notification_event_id,
+                "attention_push_at": attention_push_at.isoformat(),
+            }
+            try:
+                validation = await catalogd.call("notification.apns.attention.validate.v2", validation_params)
+            except Exception:
+                # Do not send from a snapshot that could not be revalidated.
+                logging.getLogger(__name__).exception(
+                    "Catalog APNs attention validation failed for session %s",
+                    notification.session_id,
+                )
+                continue
+            if not bool(validation.get("valid")):
+                logging.getLogger(__name__).info(
+                    "Skipping stale catalog APNs attention action for session %s: %s",
+                    notification.session_id,
+                    validation.get("reason"),
+                )
+                continue
             accepted = False
+            transient_failure = False
             try:
                 if isinstance(notification, SessionAttentionResolutionPush):
-                    accepted = await send_session_attention_resolution_push(notification)
+                    accepted = await send_session_attention_resolution_push(notification, raise_on_transient=True)
                 else:
-                    accepted = await send_session_attention_push(notification)
+                    accepted = await send_session_attention_push(notification, raise_on_transient=True)
+            except APNSTransientError:
+                transient_failure = True
+                logging.getLogger(__name__).warning(
+                    "Catalog APNs attention delivery was transiently unavailable for session %s; retaining pending action",
+                    notification.session_id,
+                )
             except Exception:
+                transient_failure = True
                 logging.getLogger(__name__).exception(
                     "Catalog APNs attention dispatch failed for session %s",
                     notification.session_id,
@@ -188,13 +220,15 @@ async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> 
                             notification.session_id,
                         )
                 except Exception:
-                    # Keep the pending stamp. The next provider keepalive will
-                    # retry the delivery/commit with the same event and APNs
-                    # collapse key until the durable commit succeeds.
+                    # Keep the pending stamp. The replay loop and the next
+                    # provider keepalive retry the same event and APNs collapse
+                    # key until the durable commit succeeds.
                     logging.getLogger(__name__).exception(
                         "Catalog APNs attention commit failed for session %s",
                         notification.session_id,
                     )
+                continue
+            if transient_failure:
                 continue
             try:
                 await catalogd.call("notification.apns.attention.rollback.v2", rpc_params)

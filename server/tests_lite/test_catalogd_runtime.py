@@ -608,6 +608,17 @@ async def test_pending_catalog_stall_attention_replays_after_restart_and_commits
         assert action["session_id"] == session_id
         assert action["notification_event_id"] == attention_event_id
         assert action["previous_state"] == "stalled:pending"
+        validated = await replay_client.call(
+            "notification.apns.attention.validate.v2",
+            {
+                "session_id": session_id,
+                "action": "attention",
+                "state": "stalled",
+                "notification_event_id": attention_event_id,
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert validated["valid"] is True
         committed = await replay_client.call(
             "notification.apns.attention.commit.v2",
             {
