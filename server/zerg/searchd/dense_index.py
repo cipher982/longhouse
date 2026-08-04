@@ -85,13 +85,8 @@ class EmbeddingCoverage:
             "unlocatable_episodes": self.unlocatable_episodes,
             "episode_count_mismatches": self.episode_count_mismatches,
             "missing_session_ids": list(self.missing_session_ids),
+            "stale": self.stale,
         }
-        # Successful dense responses keep their exact strict contract. This
-        # marker appears only while a committed mutation has invalidated the
-        # last fully validated snapshot, so progress counters cannot be
-        # mistaken for current database truth during a deferred backfill.
-        if self.stale:
-            payload["stale"] = True
         return payload
 
 
@@ -181,17 +176,22 @@ class ResidentEpisodeIndex:
     def dims(self) -> int:
         return self._dims
 
-    def invalidate(self) -> None:
-        """Close the coverage gate while a committed mutation awaits refresh.
+    def invalidate(self, *, allow_stale_reads: bool = True) -> None:
+        """Mark the last validated snapshot stale while a refresh is pending.
 
-        Keep the prior immutable matrix alive for readers that already hold a
-        reference, but do not let a new semantic query serve it as current.
-        The next successful ``load`` atomically replaces both the matrix and
-        its coverage proof.
+        A never-complete or defective snapshot remains unavailable. Once a
+        snapshot has passed every resident invariant, keep it readable while
+        catalogd's separately bounded live-head contract decides whether the
+        old snapshot is still safe to serve. The next successful ``load``
+        atomically replaces both the matrix and its coverage proof.
         """
 
         with self._write_lock:
-            self._coverage = replace(self._coverage, ready=False, stale=True)
+            self._coverage = replace(
+                self._coverage,
+                ready=self._coverage.ready if allow_stale_reads else False,
+                stale=True,
+            )
 
     def load(self, connection) -> None:
         """Build the snapshot from SQLite. Called on the writer thread."""

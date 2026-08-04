@@ -440,7 +440,7 @@ class SearchDaemon:
         if store is None or executor is None:
             return result
         dense_index = self._dense_index
-        dense_index.invalidate()
+        dense_index.invalidate(allow_stale_reads=not self._dense_known_incomplete)
         refresh_active = self._dense_refresh_task is not None and not self._dense_refresh_task.done()
         if self._dense_known_incomplete and not refresh_active:
             # A globally incomplete corpus cannot serve dense recall. Rebuilding

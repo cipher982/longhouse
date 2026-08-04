@@ -47,6 +47,7 @@ from zerg.catalogd.models import FactReceipt
 from zerg.catalogd.models import LegacyMigrationRun
 from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
+from zerg.catalogd.models import ProjectorCutoverCertificate
 from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import ProjectorStoreBinding
 from zerg.catalogd.models import RawObject as LiveRawObject
@@ -514,6 +515,7 @@ class CatalogStore:
                             "projector": projector,
                             "session_id": session_id,
                             "desired_revision": revision,
+                            "desired_at": now,
                             "completed_revision": 0,
                             "status": "idle",
                             "failure_count": 0,
@@ -545,6 +547,7 @@ class CatalogStore:
                     .where(*alignment_filter)
                     .values(
                         desired_revision=search_revision,
+                        desired_at=now,
                         claimed_revision=None,
                         claim_token=None,
                         worker_id=None,
@@ -573,6 +576,7 @@ class CatalogStore:
                         .where(states.c.projector == projector, states.c.session_id == session_key)
                         .values(
                             desired_revision=int(revision),
+                            desired_at=now,
                             claimed_revision=None,
                             claim_token=None,
                             worker_id=None,
@@ -5730,6 +5734,7 @@ class CatalogStore:
                                     )
                                     .values(
                                         desired_revision=commit_seq,
+                                        desired_at=commit_time,
                                         claimed_revision=None,
                                         claim_token=None,
                                         worker_id=None,
@@ -6151,6 +6156,7 @@ class CatalogStore:
                             projector=projector,
                             session_id=session_key,
                             desired_revision=commit_seq,
+                            desired_at=commit_time,
                             completed_revision=0,
                             status="idle",
                             failure_count=0,
@@ -6168,6 +6174,7 @@ class CatalogStore:
                         )
                         .values(
                             desired_revision=commit_seq,
+                            desired_at=commit_time,
                             commit_seq=commit_seq,
                             updated_at=commit_time,
                         )
@@ -6341,6 +6348,7 @@ class CatalogStore:
                             projector=projector_name,
                             session_id=session_key,
                             desired_revision=commit_seq,
+                            desired_at=deleted_at,
                             completed_revision=0,
                             status="idle",
                             failure_count=0,
@@ -6358,6 +6366,7 @@ class CatalogStore:
                         )
                         .values(
                             desired_revision=commit_seq,
+                            desired_at=deleted_at,
                             claimed_revision=None,
                             claim_token=None,
                             worker_id=None,
@@ -6522,6 +6531,7 @@ class CatalogStore:
                 )
                 values = {
                     "desired_revision": commit_seq,
+                    "desired_at": observed_at,
                     "claimed_revision": None,
                     "claim_token": None,
                     "worker_id": None,
@@ -6693,6 +6703,7 @@ class CatalogStore:
                 )
                 values = {
                     "desired_revision": commit_seq,
+                    "desired_at": observed_at,
                     "claimed_revision": None,
                     "claim_token": None,
                     "worker_id": None,
@@ -7452,6 +7463,7 @@ class CatalogStore:
                         )
                         .values(
                             desired_revision=func.max(projectors.c.desired_revision, commit_seq),
+                            desired_at=commit_time,
                             status="idle",
                             failure_count=0,
                             last_error_code=None,
@@ -7750,6 +7762,7 @@ class CatalogStore:
                         projector=projector,
                         session_id=session_key,
                         desired_revision=desired_revision,
+                        desired_at=commit_time,
                         completed_revision=0,
                         status="idle",
                         failure_count=0,
@@ -7762,6 +7775,7 @@ class CatalogStore:
                 reset_quarantine = row["status"] == "quarantined"
                 values = {
                     "desired_revision": desired_revision,
+                    "desired_at": commit_time,
                     "commit_seq": commit_seq,
                     "updated_at": commit_time,
                 }
@@ -8093,6 +8107,99 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def read_projector_coverage(self, *, projector: str) -> dict[str, Any]:
+        """Read cutover proof and the mutable head in one catalog snapshot."""
+
+        states = ProjectorState.__table__
+        certificates = ProjectorCutoverCertificate.__table__
+        tombstones = LiveSessionTombstone.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            lag_predicate = [
+                states.c.projector == projector,
+                states.c.desired_revision > states.c.completed_revision,
+            ]
+            if projector != "search-v2":
+                lag_predicate.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == states.c.session_id).exists())
+            lag_count, first_lag_revision, oldest_lag_at = connection.execute(
+                select(
+                    func.count(),
+                    func.min(states.c.desired_revision),
+                    func.min(func.coalesce(states.c.desired_at, states.c.created_at)),
+                ).where(*lag_predicate)
+            ).one()
+            certificate = connection.execute(select(certificates).where(certificates.c.projector == projector)).mappings().first()
+            commit_seq = _current_commit_seq(connection)
+            oldest = _as_aware_utc(oldest_lag_at)
+            return {
+                "projector": projector,
+                "certificate": (
+                    {
+                        "certified_commit_seq": str(certificate["certified_commit_seq"]),
+                        "certified_at": _encode_datetime(certificate["certified_at"]),
+                    }
+                    if certificate is not None
+                    else None
+                ),
+                "lag_count": int(lag_count),
+                "indexed_through": (str(int(first_lag_revision) - 1) if first_lag_revision is not None else str(commit_seq)),
+                "oldest_lag_at": _encode_datetime(oldest),
+                "oldest_lag_seconds": (max(0.0, (observed_at - oldest).total_seconds()) if oldest is not None else None),
+                "commit_seq": str(commit_seq),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def certify_projector_cutover(
+        self,
+        *,
+        projector: str,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Publish a cutover certificate iff this transaction sees no lag."""
+
+        states = ProjectorState.__table__
+        certificates = ProjectorCutoverCertificate.__table__
+        tombstones = LiveSessionTombstone.__table__
+        with _write_transaction(self.engine) as connection:
+            existing = connection.execute(select(certificates).where(certificates.c.projector == projector)).mappings().first()
+            if existing is not None:
+                return {
+                    "certified": True,
+                    "created": False,
+                    "certified_commit_seq": str(existing["certified_commit_seq"]),
+                    "certified_at": _encode_datetime(existing["certified_at"]),
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            lag_predicate = [
+                states.c.projector == projector,
+                states.c.desired_revision > states.c.completed_revision,
+            ]
+            if projector != "search-v2":
+                lag_predicate.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == states.c.session_id).exists())
+            lag_count = int(connection.execute(select(func.count()).where(*lag_predicate)).scalar_one())
+            if lag_count:
+                return {
+                    "certified": False,
+                    "created": False,
+                    "lag_count": lag_count,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            connection.execute(
+                insert(certificates).values(
+                    projector=projector,
+                    certified_commit_seq=commit_seq,
+                    certified_at=observed_at,
+                )
+            )
+            return {
+                "certified": True,
+                "created": True,
+                "certified_commit_seq": str(commit_seq),
+                "certified_at": observed_at.isoformat(),
+                "commit_seq": str(commit_seq),
+            }
+
     def requeue_projector_states(
         self,
         *,
@@ -8103,6 +8210,7 @@ class CatalogStore:
         """Reset only explicitly named completed states for coverage repair."""
 
         table = ProjectorState.__table__
+        certificates = ProjectorCutoverCertificate.__table__
         session_keys = sorted(str(session_id) for session_id in session_ids)
         with _write_transaction(self.engine) as connection:
             rows = (
@@ -8131,8 +8239,22 @@ class CatalogStore:
                 or by_session[session_id]["retry_at"] is not None
             ]
             if not changed:
+                certificate_exists = connection.execute(
+                    select(certificates.c.projector).where(certificates.c.projector == projector)
+                ).first()
+                if certificate_exists is not None:
+                    commit_seq = _advance_commit_seq(connection, observed_at)
+                    connection.execute(delete(certificates).where(certificates.c.projector == projector))
+                    return {
+                        "changed": False,
+                        "certificate_revoked": True,
+                        "requeued_session_ids": [],
+                        "missing_session_ids": [],
+                        "commit_seq": str(commit_seq),
+                    }
                 return {
                     "changed": False,
+                    "certificate_revoked": False,
                     "requeued_session_ids": [],
                     "missing_session_ids": [],
                     "commit_seq": str(_current_commit_seq(connection)),
@@ -8158,8 +8280,10 @@ class CatalogStore:
                     updated_at=observed_at,
                 )
             )
+            connection.execute(delete(certificates).where(certificates.c.projector == projector))
             return {
                 "changed": True,
+                "certificate_revoked": True,
                 "requeued_session_ids": changed,
                 "missing_session_ids": [],
                 "commit_seq": str(commit_seq),
@@ -8177,6 +8301,7 @@ class CatalogStore:
 
         bindings = ProjectorStoreBinding.__table__
         states = ProjectorState.__table__
+        certificates = ProjectorCutoverCertificate.__table__
         store_key = str(store_id)
         with _write_transaction(self.engine) as connection:
             existing = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
@@ -8209,6 +8334,7 @@ class CatalogStore:
                     updated_at=observed_at,
                 )
             ).rowcount
+            connection.execute(delete(certificates).where(certificates.c.projector == projector))
             if existing is None:
                 connection.execute(
                     insert(bindings).values(
@@ -8606,6 +8732,7 @@ class CatalogStore:
                                 projector=projector_name,
                                 session_id=session_key,
                                 desired_revision=commit_seq,
+                                desired_at=completed_at,
                                 completed_revision=0,
                                 status="idle",
                                 failure_count=0,
@@ -8617,6 +8744,7 @@ class CatalogStore:
                     else:
                         values = {
                             "desired_revision": commit_seq,
+                            "desired_at": completed_at,
                             "commit_seq": commit_seq,
                             "updated_at": completed_at,
                         }
@@ -8849,6 +8977,7 @@ class CatalogStore:
                                 projector=projector_name,
                                 session_id=session_key,
                                 desired_revision=commit_seq,
+                                desired_at=observed_at,
                                 completed_revision=0,
                                 status="idle",
                                 failure_count=0,
@@ -8861,7 +8990,12 @@ class CatalogStore:
                         connection.execute(
                             update(projectors)
                             .where(projectors.c.projector == projector_name, projectors.c.session_id == session_key)
-                            .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=observed_at)
+                            .values(
+                                desired_revision=commit_seq,
+                                desired_at=observed_at,
+                                commit_seq=commit_seq,
+                                updated_at=observed_at,
+                            )
                         )
             _refresh_legacy_migration_run(connection, run_key, commit_seq, observed_at)
             return {

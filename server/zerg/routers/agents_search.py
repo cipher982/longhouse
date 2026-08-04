@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 # the explicit hydration reserve and stays within searchd's hard RPC ceiling;
 # timing telemetry and release gates enforce ordinary latency separately.
 RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
+RECALL_LIVE_HEAD_MAX_SESSIONS = 100
+RECALL_LIVE_HEAD_MAX_AGE_SECONDS = 300.0
 
 _catalog_db_dependency = catalog_db_dependency()
 
@@ -97,6 +99,7 @@ class _EmbeddingCoveragePayload(BaseModel):
     unlocatable_episodes: Literal[0]
     episode_count_mismatches: Literal[0]
     missing_session_ids: list[str] = Field(default_factory=list, max_length=0)
+    stale: bool
 
     @model_validator(mode="after")
     def validate_complete_coverage(self) -> "_EmbeddingCoveragePayload":
@@ -139,26 +142,48 @@ class _RecallContextPayload(BaseModel):
     timing: _SearchReadTiming
 
 
-class _ProjectorLagPayload(BaseModel):
+class _CutoverCertificatePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    states: list[dict[str, object]]
+    certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
+    certified_at: str = Field(min_length=1)
+
+
+class _ProjectorCoveragePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    projector: str = Field(min_length=1)
+    certificate: _CutoverCertificatePayload | None
     lag_count: int = Field(ge=0)
     indexed_through: str = Field(pattern=r"^[0-9]+$")
+    oldest_lag_at: str | None
+    oldest_lag_seconds: float | None = Field(ge=0, allow_inf_nan=False)
     commit_seq: str = Field(pattern=r"^[0-9]+$")
     observed_at: str = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_head_shape(self) -> "_ProjectorCoveragePayload":
+        if self.lag_count == 0 and (self.oldest_lag_at is not None or self.oldest_lag_seconds is not None):
+            raise ValueError("zero projector lag cannot have an oldest lag")
+        if self.lag_count > 0 and (self.oldest_lag_at is None or self.oldest_lag_seconds is None):
+            raise ValueError("nonzero projector lag requires its oldest age")
+        if self.certificate is not None and int(self.certificate.certified_commit_seq) > int(self.commit_seq):
+            raise ValueError("cutover certificate cannot exceed the catalog watermark")
+        return self
 
-async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _ProjectorLagPayload:
-    """Reject a corpus behind catalog truth for the active embedding space.
+
+async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _ProjectorCoveragePayload:
+    """Require a certified corpus with a bounded, explicitly reported head.
 
     searchd's resident gate validates every row it knows about. Catalogd owns
     the authoritative eligible-session set, so a fresh or partially rebuilt
     searchd could otherwise prove an empty/partial local set complete. Projector
-    completion is published only after each searchd mutation commits. Requiring
-    the active projector watermark to be current closes that outer gap. Searchd
-    then proves the current generation/revision/dimension/normalization/locator
-    invariants for its published rows.
+    completion is published only after each searchd mutation commits. A durable
+    certificate proves this projector identity once reached zero backlog; a
+    small, young post-cutover head can then serve the previous validated
+    immutable resident snapshot without turning ordinary active-session writes
+    into global 503s. Searchd separately proves the current generation,
+    revision, dimension, normalization, and locator invariants for that snapshot.
     """
 
     from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
@@ -171,11 +196,11 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _P
             detail={"code": "coverage_status_unavailable", "message": "Embedding coverage status is unavailable."},
         )
 
-    async def lag(projector: str) -> _ProjectorLagPayload:
+    async def coverage(projector: str) -> _ProjectorCoveragePayload:
         try:
             result = await catalog.call(
-                "projector.state.list_lag.v2",
-                {"projector": projector, "after_session_id": None, "limit": 1},
+                "projector.coverage.read.v2",
+                {"projector": projector},
                 timeout_seconds=timeout_seconds,
             )
         except (CatalogRemoteError, CatalogUnavailable) as exc:
@@ -189,7 +214,7 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _P
                 },
             ) from exc
         try:
-            return _ProjectorLagPayload.model_validate(result)
+            return _ProjectorCoveragePayload.model_validate(result)
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -200,19 +225,26 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _P
                 },
             ) from exc
 
-    embedding_lag = await lag(EMBEDDING_PROJECTOR_ID)
-    if embedding_lag.lag_count:
+    embedding_coverage = await coverage(EMBEDDING_PROJECTOR_ID)
+    certificate_missing = embedding_coverage.certificate is None
+    head_too_large = embedding_coverage.lag_count > RECALL_LIVE_HEAD_MAX_SESSIONS
+    head_too_old = (
+        embedding_coverage.oldest_lag_seconds is not None and embedding_coverage.oldest_lag_seconds > RECALL_LIVE_HEAD_MAX_AGE_SECONDS
+    )
+    if certificate_missing or head_too_large or head_too_old:
+        reason = "cutover_not_certified" if certificate_missing else "live_head_exceeds_bounds"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "embedding_coverage_incomplete",
                 "message": "The active embedding corpus is incomplete.",
+                "reason": reason,
                 "catalog_coverage": {
-                    EMBEDDING_PROJECTOR_ID: embedding_lag.model_dump(exclude={"states"}),
+                    EMBEDDING_PROJECTOR_ID: embedding_coverage.model_dump(),
                 },
             },
         )
-    return embedding_lag
+    return embedding_coverage
 
 
 @dataclass(frozen=True)
@@ -532,6 +564,14 @@ async def _semantic_recall(
             exclude_environments=exclude_environments or None,
             since_iso=since_iso,
         )
+        if dense_payload.coverage.stale:
+            # Catalog advancement precedes the searchd mutation, so a second
+            # read after observing a stale resident snapshot captures the head
+            # responsible for that staleness instead of relying on the earlier
+            # concurrent observation.
+            catalog_coverage = await _require_complete_projection_coverage(
+                timeout_seconds=timeout_seconds,
+            )
         matches: list[RecallMatch] = []
         seen: set[str] = set()
         for raw_row in dense_payload.results:
@@ -560,10 +600,15 @@ async def _semantic_recall(
         coverage = RecallCoverage(
             ready=True,
             projector=EMBEDDING_PROJECTOR_ID,
-            catalog_lag_count=0,
+            cutover_certified_commit_seq=catalog_coverage.certificate.certified_commit_seq,
+            cutover_certified_at=catalog_coverage.certificate.certified_at,
+            catalog_lag_count=catalog_coverage.lag_count,
             catalog_indexed_through=catalog_coverage.indexed_through,
+            catalog_oldest_lag_at=catalog_coverage.oldest_lag_at,
+            catalog_oldest_lag_seconds=catalog_coverage.oldest_lag_seconds,
             catalog_commit_seq=catalog_coverage.commit_seq,
             catalog_observed_at=catalog_coverage.observed_at,
+            resident_stale=resident.stale,
             expected_sessions=resident.expected_sessions,
             published_sessions=resident.published_sessions,
             expected_episodes=resident.expected_episodes,

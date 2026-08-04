@@ -1019,6 +1019,7 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
             "unlocatable_episodes": 0,
             "episode_count_mismatches": 0,
             "missing_session_ids": [],
+            "stale": False,
         }
 
         await client.call("search.session.delete.v2", {"session_id": session_id})
@@ -1074,7 +1075,7 @@ async def test_dense_refresh_defers_full_rebuild_while_publications_are_known_in
         original_load(connection)
 
     daemon._dense_index.load = counted_load
-    daemon._dense_index.invalidate()
+    daemon._dense_index.invalidate(allow_stale_reads=False)
     daemon._dense_known_incomplete = True
     daemon._store.embedding_snapshot_candidate_complete = lambda **_kwargs: False
     try:
@@ -1163,7 +1164,7 @@ async def test_dense_refresh_deferral_uses_real_incomplete_then_complete_publica
         )
         assert loads == 1
         assert daemon._dense_index.coverage.ready is True
-        assert "stale" not in daemon._dense_index.coverage.as_dict()
+        assert daemon._dense_index.coverage.as_dict()["stale"] is False
     finally:
         await daemon.close()
         socket_parent.rmdir()
@@ -1331,7 +1332,7 @@ async def test_searchd_close_acknowledges_commit_during_incomplete_precheck(tmp_
 
 
 @pytest.mark.asyncio
-async def test_dense_gate_closes_until_coalesced_refresh_is_published(tmp_path):
+async def test_dense_serves_last_validated_snapshot_until_coalesced_refresh_is_published(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)
     socket_path = socket_parent / "s"
@@ -1366,13 +1367,15 @@ async def test_dense_gate_closes_until_coalesced_refresh_is_published(tmp_path):
     }
     try:
         assert await asyncio.to_thread(entered.wait, 1)
-        assert daemon._dense_index.coverage.ready is False
-        with pytest.raises(CatalogRemoteError) as incomplete:
-            await client.call("search.embedding.query.v2", query)
-        assert incomplete.value.code == "embedding_coverage_incomplete"
+        assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.stale is True
+        stale = await client.call("search.embedding.query.v2", query)
+        assert stale["coverage"]["ready"] is True
+        assert stale["coverage"]["stale"] is True
         release.set()
         assert await mutation == {"committed": True}
         assert daemon._dense_index.coverage.ready is True
+        assert daemon._dense_index.coverage.stale is False
     finally:
         release.set()
         await asyncio.gather(mutation, return_exceptions=True)
