@@ -1562,7 +1562,16 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
     use std::os::fd::FromRawFd;
+
+    fn read_response_line(stream: UnixStream) -> String {
+        let mut response = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut response)
+            .unwrap();
+        response
+    }
 
     fn serve_request(
         dir: &Path,
@@ -1588,8 +1597,7 @@ mod tests {
             None,
             None,
         );
-        let mut response = String::new();
-        client.read_to_string(&mut response).unwrap();
+        let response = read_response_line(client);
         (
             serde_json::from_str(response.trim()).unwrap(),
             stop,
@@ -1907,8 +1915,7 @@ mod tests {
             None,
             None,
         );
-        let mut malformed = String::new();
-        client.read_to_string(&mut malformed).unwrap();
+        let malformed = read_response_line(client);
         assert_eq!(
             serde_json::from_str::<Value>(malformed.trim()).unwrap()["error"]["code"],
             "bad_request"
