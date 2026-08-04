@@ -5,7 +5,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -3311,6 +3311,7 @@ fn print_native_fast_local_health(health: &NativeFastLocalHealth) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use serde_json::json;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
