@@ -191,7 +191,82 @@ def _not_observed(reason: str) -> dict[str, str]:
     return {"status": "not_observed", "reason": reason}
 
 
-def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = ()) -> dict[str, Any]:
+def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    references: list[dict[str, str]] = []
+    total = 0
+    broken_cases = 0
+    false_red_cases = 0
+    hidden_failure_cases = 0
+    action_total = 0
+    action_pass = 0
+    for raw_path in paths:
+        path = raw_path.expanduser().resolve()
+        try:
+            artifact = _json(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            invalid.append({"path": str(path), "error": str(exc)})
+            continue
+        results = artifact.get("results")
+        if not isinstance(results, list):
+            invalid.append({"path": str(path), "error": "health artifact has no results list"})
+            continue
+        references.append(_input_reference(path))
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            expected = result.get("expected") or {}
+            observed = result.get("observed") or {}
+            expected_state = str(expected.get("state") or "unknown")
+            observed_state = str(observed.get("health_state") or "unknown")
+            total += 1
+            if observed_state == "broken":
+                broken_cases += 1
+                if expected_state != "broken":
+                    false_red_cases += 1
+            if expected_state in {"broken", "degraded"} and observed_state == "healthy":
+                hidden_failure_cases += 1
+            expected_action = str(expected.get("action") or "none")
+            if expected_action != "none":
+                action_total += 1
+                suggested = {str(value) for value in observed.get("suggested_action_ids") or []}
+                if expected_action in suggested:
+                    action_pass += 1
+
+    scope = "installed_health_fault_matrix"
+    measurements = {
+        "false_red_rate": {
+            "status": "observed" if total else "not_observed",
+            "scope": scope,
+            "numerator": false_red_cases,
+            "denominator": broken_cases,
+            "rate": (false_red_cases / broken_cases) if broken_cases else None,
+            "source": references,
+        },
+        "hidden_failure_rate": {
+            "status": "observed" if total else "not_observed",
+            "scope": scope,
+            "numerator": hidden_failure_cases,
+            "denominator": total,
+            "rate": (hidden_failure_cases / total) if total else None,
+            "source": references,
+        },
+        "action_coverage": {
+            "status": "observed" if action_total else "not_observed",
+            "scope": scope,
+            "numerator": action_pass,
+            "denominator": action_total,
+            "rate": (action_pass / action_total) if action_total else None,
+            "source": references,
+        },
+    }
+    return references, {"case_count": total, "measurements": measurements}
+
+
+def build_report(
+    matrix_paths: Iterable[Path],
+    harness_paths: Iterable[Path] = (),
+    health_paths: Iterable[Path] = (),
+) -> dict[str, Any]:
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
     for path in matrix_paths:
@@ -286,6 +361,8 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
                     level = str(evidence.get("level") or "unknown")
                     harness_levels[level] += 1
 
+    health_inputs, health_summary = _health_measurements(health_paths, invalid)
+
     report = {
         "schema_version": 1,
         "artifact_kind": "launch_reliability_measurements",
@@ -295,6 +372,7 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         "inputs": {
             "matrix_artifacts": [_input_reference(path) for path, _ in matrix_artifacts],
             "provider_harness_artifacts": [_input_reference(Path(path)) for path in harness_inputs],
+            "health_artifacts": health_inputs,
             "invalid_artifacts": invalid,
         },
         "matrix": {
@@ -337,16 +415,23 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
             "blocked_operations": blocked_operations,
             "evidence_level_counts": dict(sorted(harness_levels.items())),
         },
+        "health_fault_matrix": health_summary,
         "measures": {
             "automatic_recovery_time": (
                 {"status": "observed", "source": "successful matrix.measurements"}
                 if successful
                 else _not_observed("no measured matrix run with a positive retry queue converged to zero and complete cleanup")
             ),
-            "false_red_rate": _not_observed("retained matrix artifacts do not include a user-action/data-risk ground-truth label"),
-            "hidden_failure_rate": _not_observed("no longitudinal producer-freshness truth series was supplied"),
+            "false_red_rate": health_summary["measurements"]["false_red_rate"]
+            if health_summary["measurements"]["false_red_rate"]["status"] == "observed"
+            else _not_observed("retained artifacts do not include a user-action/data-risk ground-truth label"),
+            "hidden_failure_rate": health_summary["measurements"]["hidden_failure_rate"]
+            if health_summary["measurements"]["hidden_failure_rate"]["status"] == "observed"
+            else _not_observed("no longitudinal producer-freshness truth series was supplied"),
             "unresolved_event_bearing_issue_age": _not_observed("no event-bearing issue lifecycle series was supplied"),
-            "action_coverage": _not_observed("local action tests are separate evidence and were not passed as a coverage artifact"),
+            "action_coverage": health_summary["measurements"]["action_coverage"]
+            if health_summary["measurements"]["action_coverage"]["status"] == "observed"
+            else _not_observed("local action tests are separate evidence and were not passed as a coverage artifact"),
             "duplicate_replayed_discarded_evidence": _not_observed("matrix artifacts do not carry end-to-end evidence conservation counters"),
         },
     }
@@ -357,13 +442,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--matrix-root", action="append", type=Path, required=True, help="Matrix artifact file or directory; repeatable.")
     parser.add_argument("--provider-harness-artifact", action="append", type=Path, default=[], help="Universal provider harness JSON; repeatable.")
+    parser.add_argument("--health-artifact", action="append", type=Path, default=[], help="Installed native health fault matrix JSON; repeatable.")
     parser.add_argument("--output", type=Path, help="Write the report JSON to this path.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    report = build_report(discover_matrix_artifacts(args.matrix_root), args.provider_harness_artifact)
+    report = build_report(discover_matrix_artifacts(args.matrix_root), args.provider_harness_artifact, args.health_artifact)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

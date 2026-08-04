@@ -184,3 +184,42 @@ def test_full_run_requires_exact_two_launches_per_provider(tmp_path: Path):
 
     assert report["matrix"]["full_run_count"] == 0
     assert report["matrix"]["excluded_full_runs"] == []
+
+
+def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(tmp_path: Path):
+    matrix = tmp_path / "health.json"
+    matrix.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "observed": {"health_state": "broken", "suggested_action_ids": ["inspect_local_health"]},
+                    },
+                    {
+                        "expected": {"state": "degraded", "action": "inspect_storage_source"},
+                        "observed": {"health_state": "healthy", "suggested_action_ids": []},
+                    },
+                    {
+                        "expected": {"state": "healthy", "action": "none"},
+                        "observed": {"health_state": "broken", "suggested_action_ids": []},
+                    },
+                ]
+            }
+        )
+    )
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["health_fault_matrix"]["case_count"] == 3
+    assert report["measures"]["false_red_rate"] == {
+        "status": "observed",
+        "scope": "installed_health_fault_matrix",
+        "numerator": 1,
+        "denominator": 2,
+        "rate": 0.5,
+        "source": [{"path": str(matrix), "sha256": MODULE._sha256(matrix)}],
+    }
+    assert report["measures"]["hidden_failure_rate"]["numerator"] == 1
+    assert report["measures"]["action_coverage"]["numerator"] == 1
+    assert report["measures"]["action_coverage"]["denominator"] == 2
