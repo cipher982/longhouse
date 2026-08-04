@@ -275,6 +275,10 @@ async def _write_hot_managed_local_launch_readiness(
             run_id = str(result.get("run_id") or "").strip()
             if not run_id:
                 raise RuntimeError("catalogd local launch response is missing run_id")
+            catalog_provider_session_id = str(result.get("provider_session_id") or "").strip() or None
+            expected_provider_session_id = str(plan.provider_session_id or "").strip() or None
+            if catalog_provider_session_id != expected_provider_session_id:
+                raise RuntimeError("catalogd local launch response returned a different provider_session_id")
             return run_id
         except CatalogUnavailable as exc:
             raise ManagedLocalLaunchError(

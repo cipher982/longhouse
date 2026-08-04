@@ -398,11 +398,12 @@ def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path
     assert payload["managed_transport"] == "codex_app_server"
 
 
-def test_this_device_launch_returns_client_minted_session_id_unchanged(monkeypatch, tmp_path):
+def test_this_device_launch_returns_client_minted_identities_unchanged(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
     SessionLocal = _make_db(tmp_path)
     minted = uuid4()
+    provider_minted = uuid4()
 
     with SessionLocal() as db:
         user, _runner = _seed_user_and_runner(db)
@@ -419,9 +420,11 @@ def test_this_device_launch_returns_client_minted_session_id_unchanged(monkeypat
                 "/api/sessions/managed-local/this-device",
                 json={
                     "cwd": "/tmp/demo",
-                    "provider": "cursor",
+                    "provider": "claude",
                     "project": "demo",
                     "session_id": str(minted),
+                    "provider_session_id": str(provider_minted),
+                    "native_claude_channels_available": True,
                 },
             )
         finally:
@@ -431,6 +434,7 @@ def test_this_device_launch_returns_client_minted_session_id_unchanged(monkeypat
 
     assert response.status_code == 200, response.text
     assert payload["session_id"] == str(minted)
+    assert payload["provider_session_id"] == str(provider_minted)
 
 
 def test_this_device_launch_uses_live_store_not_archive_writer(monkeypatch, tmp_path, managed_launch_live_store):

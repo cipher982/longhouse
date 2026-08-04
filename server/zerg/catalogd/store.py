@@ -3195,6 +3195,7 @@ class CatalogStore:
                         "exact_replay": exact_replay,
                         "idempotency_conflict": not exact_replay,
                         "run_id": str(run_id),
+                        "provider_session_id": provider_session_id or None,
                         "launch": _json_launch_result(result) if result is not None else None,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
@@ -3272,6 +3273,7 @@ class CatalogStore:
                 "exact_replay": False,
                 "idempotency_conflict": False,
                 "run_id": str(run_id),
+                "provider_session_id": str(plan.provider_session_id or "").strip() or None,
                 "launch": _json_launch_result(result),
                 "commit_seq": str(commit_seq),
             }
