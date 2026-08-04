@@ -902,6 +902,31 @@ def _wait_cursor_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
     # the subsequent native marker is the readiness assertion.
 
 
+def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 30.0) -> None:
+    """Wait for Claude's actual input prompt after its native state appears.
+
+    Claude can publish the Longhouse channel state while its TUI is still
+    finishing the bypass-permissions acknowledgement and drawing the first
+    input prompt. Sending the seed as soon as the state file exists can then
+    be consumed by that startup control surface instead of becoming a real
+    provider turn. The visible ``❯ Try ...`` prompt is the provider-owned
+    readiness boundary for terminal input.
+    """
+
+    del recording  # The process owns the append-only PTY recording.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        process.drain()
+        if process.process.poll() is not None:
+            raise RuntimeError("Claude Helm process exited before its TUI became ready")
+        terminal = _terminal_text(process.recording)
+        if re.search(r"(?im)(?:^|\n)\s*[❯>]\s*Try\b", terminal):
+            process.settle()
+            return
+        time.sleep(0.1)
+    raise RuntimeError("Claude TUI did not publish its input prompt")
+
+
 def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[str, Any]]:
     """Retain provider-state identity without copying private state fields."""
 
@@ -1685,6 +1710,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         initial_state = _wait_state(spec, home, process=initial)
         if spec.provider == "cursor":
             _wait_cursor_tui_ready(initial, root / "initial.tty")
+        elif spec.provider == "claude":
+            _wait_claude_tui_ready(initial, root / "initial.tty")
         else:
             initial.settle()
         if spec.provider == "opencode":
@@ -1739,6 +1766,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         if spec.provider == "cursor":
             _wait_cursor_tui_ready(resumed, root / "native-resume.tty")
+        elif spec.provider == "claude":
+            _wait_claude_tui_ready(resumed, root / "native-resume.tty")
         else:
             resumed.settle()
         if spec.provider == "opencode":
