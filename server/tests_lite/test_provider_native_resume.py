@@ -29,6 +29,7 @@ from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
+from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_state
@@ -278,6 +279,33 @@ def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> N
     _wait_cursor_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
 
     assert process.sent == ["a"]
+
+
+def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path) -> None:
+    recording = tmp_path / "claude.tty"
+    recording.write_text("Loading development channel\n", encoding="utf-8")
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.recording = recording
+            self.process = SimpleNamespace(poll=lambda: None)
+            self.drains = 0
+            self.settled = False
+
+        def drain(self) -> bytes:
+            self.drains += 1
+            if self.drains == 2:
+                recording.write_text('❯ Try "refactor <filepath>"\n', encoding="utf-8")
+            return b""
+
+        def settle(self) -> bytes:
+            self.settled = True
+            return b""
+
+    process = FakeProcess()
+    _wait_claude_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
+
+    assert process.settled is True
 
 
 def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> None:
