@@ -2689,6 +2689,7 @@ fn wait_for_child_or_signal(
     child: &mut std::process::Child,
     signal: &Arc<AtomicUsize>,
     process_group: Option<libc::pid_t>,
+    notices: &DeferredNotices,
 ) -> anyhow::Result<i32> {
     #[cfg(unix)]
     {
@@ -2721,9 +2722,9 @@ fn wait_for_child_or_signal(
                     unsafe {
                         libc::kill(-process_group.unwrap_or(pid), libc::SIGCONT);
                     }
-                    eprintln!(
+                    notices.push(format!(
                         "Longhouse warning: provider stopped by signal {stop_signal}; resuming it"
-                    );
+                    ));
                 }
             } else if waited < 0 {
                 let error = std::io::Error::last_os_error();
@@ -2737,6 +2738,7 @@ fn wait_for_child_or_signal(
 
     #[cfg(not(unix))]
     loop {
+        let _ = notices;
         if let Some(status) = child.try_wait()? {
             return Ok(status.code().unwrap_or(1));
         }
@@ -3010,12 +3012,21 @@ fn run_foreground_command_after_spawn(
         terminate_and_reap_child(&mut child, Some(child_pgrp));
         return Err(error);
     }
+    // Buffer notices raised while the provider child owns the terminal (e.g.
+    // "provider stopped by signal") and surface them only after the terminal
+    // is restored, so raw text never lands inside the provider's alternate
+    // screen. Shared by every provider launch through this helper.
+    let notices = DeferredNotices::default();
     if !interactive_stdio() {
         unsafe {
             libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
             libc::close(release_fds[1]);
         }
-        return wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
+        let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp), &notices);
+        for message in notices.drain() {
+            eprintln!("{message}");
+        }
+        return status;
     }
     let stdin_fd = std::io::stdin().as_raw_fd();
     let saved_termios = {
@@ -3045,7 +3056,7 @@ fn run_foreground_command_after_spawn(
         libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
         libc::close(release_fds[1]);
     }
-    let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
+    let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp), &notices);
     if handed_off {
         if unsafe { libc::tcsetpgrp(stdin_fd, parent_pgrp) } != 0 {
             eprintln!(
@@ -3064,6 +3075,9 @@ fn run_foreground_command_after_spawn(
                 std::io::Error::last_os_error()
             );
         }
+    }
+    for message in notices.drain() {
+        eprintln!("{message}");
     }
     status
 }
@@ -3085,7 +3099,12 @@ fn run_foreground_command_after_spawn(
         return Err(error);
     }
     let signal = install_tui_signal_flag()?;
-    wait_for_child_or_signal(&mut child, &signal, None)
+    let notices = DeferredNotices::default();
+    let status = wait_for_child_or_signal(&mut child, &signal, None, &notices);
+    for message in notices.drain() {
+        eprintln!("{message}");
+    }
+    status
 }
 
 /// Outcome of managed teardown, discriminated by the durable committed fact
@@ -3515,15 +3534,17 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    // Regression guard for the degraded-mode PTY corruption: the thread-spawn
+    // notice sink must drain its buffered messages exactly once, in order.
+    // Raw eprintln! inside thread bodies is prevented structurally by routing
+    // thread notices through DeferredNotices (see spawn_claude_registration_retry).
     #[test]
-    fn deferred_notices_pushes_and_drains_in_order() {
+    fn deferred_notices_drain_is_lifo_consuming() {
         let notices = DeferredNotices::default();
         assert!(notices.drain().is_empty());
         notices.push("first".to_string());
         notices.push("second".to_string());
-        let drained = notices.drain();
-        assert_eq!(drained, vec!["first".to_string(), "second".to_string()]);
-        // A second drain is empty; the buffer is consumed.
+        assert_eq!(notices.drain(), vec!["first".to_string(), "second".to_string()]);
         assert!(notices.drain().is_empty());
     }
 
