@@ -1173,6 +1173,14 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
     if not engine:
         return {"attempted": False, "error": "engine_not_found"}
     state_file = _bridge_state_root(isolation_root) / f"{session_id}.json"
+    # The stop RPC is a separate Longhouse process from the bridge that owns
+    # the session.  It commits the terminal state and enqueues the durable
+    # terminal event, so it must resolve the same runtime-event outbox as the
+    # bridge and transcript shipper.  In the factory the provider parent has
+    # no stable LONGHOUSE_HOME of its own; bind this control call explicitly
+    # to the disposable isolation root.
+    stop_environment = dict(os.environ)
+    stop_environment["LONGHOUSE_HOME"] = str(isolation_root / "longhouse")
     result = _run(
         [
             engine,
@@ -1187,6 +1195,7 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
             "--force",
         ],
         cwd=args.repo_root,
+        env=stop_environment,
         timeout=30,
     )
     verification = _verify_bridge_stopped(state_file) if result.returncode == 0 else None

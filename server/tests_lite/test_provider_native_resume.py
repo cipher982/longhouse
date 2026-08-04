@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +33,7 @@ from zerg.qa.provider_native_resume import registration_for
 
 def _args(tmp_path: Path) -> argparse.Namespace:
     return argparse.Namespace(
+        engine=tmp_path / "engine",
         longhouse_cli=tmp_path / "longhouse",
         repo_root=tmp_path / "repo",
         api_url="https://runtime.example",
@@ -597,6 +599,7 @@ def test_claude_development_channel_prompt_selects_local_development_once(tmp_pa
 
     class FakeProcess:
         claude_development_channel_acceptance_sent = False
+        claude_development_channel_prompt_seen_at = 0.0
 
         def __init__(self) -> None:
             self.recording = recording
@@ -610,7 +613,7 @@ def test_claude_development_channel_prompt_selects_local_development_once(tmp_pa
     _accept_claude_development_channel_prompt(process)  # type: ignore[arg-type]
     _accept_claude_development_channel_prompt(process)  # type: ignore[arg-type]
 
-    assert process.sent == ["\x1b[A\r"]
+    assert process.sent == ["\r"]
     assert process.claude_development_channel_acceptance_sent is True
 
 
@@ -632,7 +635,7 @@ def test_provider_state_evidence_redacts_nested_secrets() -> None:
     }
 
 
-def test_cursor_initial_seed_uses_provider_terminal_before_idle_control(tmp_path: Path) -> None:
+def test_cursor_initial_seed_uses_managed_control_after_tui_ready(tmp_path: Path, monkeypatch) -> None:
     args = _args(tmp_path)
 
     class FakeProviderProcess:
@@ -648,6 +651,13 @@ def test_cursor_initial_seed_uses_provider_terminal_before_idle_control(tmp_path
             self.sent.append(value)
 
     process = FakeProviderProcess()
+    commands: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
     result = _control_send(
         SPECS["cursor"],
         args,
@@ -657,8 +667,10 @@ def test_cursor_initial_seed_uses_provider_terminal_before_idle_control(tmp_path
         initial=True,
     )
 
-    assert result == {"method": "provider_tty_bootstrap", "returncode": 0}
-    assert process.sent == ["seed\r"]
+    assert result["method"] == "longhouse_control"
+    assert result["returncode"] == 0
+    assert commands == [[str(args.engine), "cursor-helm", "send", "--session-id", "session-1", "--text", "seed"]]
+    assert process.sent == []
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
