@@ -162,3 +162,12 @@ def test_dirty_harness_is_not_a_measured_clean_run(tmp_path: Path):
 
     assert report["matrix"]["measured_clean_run_count"] == 0
     assert report["measures"]["automatic_recovery_time"]["status"] == "not_observed"
+
+
+def test_report_has_self_provenance():
+    provenance = MODULE.build_report([])["provenance"]
+
+    assert provenance["git_sha"]
+    assert provenance["sha256"]
+    assert provenance["path"].endswith("scripts/qa/launch-reliability-measurements.py")
+    assert isinstance(provenance["argv"], list)

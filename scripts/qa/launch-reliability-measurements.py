@@ -11,8 +11,11 @@ registry.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
+import subprocess
+import sys
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +31,44 @@ def _json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"expected JSON object: {path}")
     return value
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def report_provenance() -> dict[str, Any]:
+    """Bind the report to the exact reporter and repository state that made it."""
+
+    path = Path(__file__).resolve()
+    repository = path.parents[2]
+    relative_path = path.relative_to(repository)
+    status_lines = _git(repository, "status", "--porcelain", "--untracked-files=all").splitlines()
+    file_marker = f" {relative_path}"
+    return {
+        "argv": list(sys.argv),
+        "cwd": str(Path.cwd()),
+        "git_sha": _git(repository, "rev-parse", "HEAD"),
+        "harness_file_dirty": any(line.endswith(file_marker) or line.endswith(f"{relative_path}") for line in status_lines),
+        "path": str(path),
+        "repository": str(repository),
+        "repository_dirty": bool(status_lines),
+        "sha256": _sha256(path),
+    }
 
 
 def discover_matrix_artifacts(inputs: Iterable[Path]) -> list[Path]:
@@ -225,6 +266,7 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         "artifact_kind": "launch_reliability_measurements",
         "report_status": "invalid" if invalid else "ok",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "provenance": report_provenance(),
         "inputs": {
             "matrix_artifacts": [str(path) for path, _ in matrix_artifacts],
             "provider_harness_artifacts": harness_inputs,
