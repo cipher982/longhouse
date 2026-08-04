@@ -244,6 +244,25 @@ def _live_record_attention_policy_decision(
     )
 
 
+def _live_resolve_suppressed_attention_events(orm: Session, *, session_id: str, occurred_at: datetime) -> None:
+    events = (
+        orm.query(LiveNotificationEvent)
+        .filter(
+            LiveNotificationEvent.session_id == session_id,
+            LiveNotificationEvent.event_type == "session_stalled",
+            LiveNotificationEvent.resolved_at.is_(None),
+        )
+        .all()
+    )
+    for event in events:
+        channel_results = dict(event.channel_results or {})
+        if "suppressed" not in channel_results:
+            continue
+        channel_results["recovered_at"] = occurred_at.isoformat()
+        event.channel_results = channel_results
+        event.resolved_at = occurred_at
+
+
 def _live_runtime_attention_actions(
     orm: Session,
     *,
@@ -285,6 +304,9 @@ def _live_runtime_attention_actions(
             hidden_from_timeline = True
         else:
             hidden_from_timeline = False
+
+        if phase != "stalled":
+            _live_resolve_suppressed_attention_events(orm, session_id=session_id, occurred_at=runtime.last_runtime_signal_at or observed_at)
 
         if phase == "stalled" and session_id in stall_sessions and raw_stamp in {"", "stalled:resolved", _CATALOG_STALL_PENDING}:
             if hidden_from_timeline:

@@ -363,6 +363,18 @@ async def test_runtime_apply_audits_catalog_attention_suppression_without_target
         }
         result = await client.call("session.runtime.apply.v2", {"events": [event]})
         assert "attention_actions" not in result
+        recovered = {
+            **_event(
+                session_id=session_id,
+                runtime_key=f"codex:{session_id}",
+                dedupe_key="catalog-stalled-no-targets-recovered-1",
+                occurred_at=now + timedelta(seconds=60),
+            ),
+            "phase": "idle",
+            "tool_name": None,
+        }
+        recovered_result = await client.call("session.runtime.apply.v2", {"events": [recovered]})
+        assert "attention_actions" not in recovered_result
     finally:
         await client.close()
         await daemon.close()
@@ -370,5 +382,7 @@ async def test_runtime_apply_audits_catalog_attention_suppression_without_target
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
         audit = connection.execute(LiveNotificationEvent.__table__.select()).mappings().one()
-        assert audit["channel_results"] == {"suppressed": "no_ios_targets"}
+        assert audit["channel_results"]["suppressed"] == "no_ios_targets"
+        assert "recovered_at" in audit["channel_results"]
+        assert audit["resolved_at"] is not None
     engine.dispose()
