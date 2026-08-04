@@ -35,6 +35,7 @@ from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
+from zerg.qa.provider_native_resume import _wait_session_tail
 from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import registration_for
 
@@ -67,6 +68,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
             "initial_transcript_ship_receipt",
             "post_resume_response_correlation",
             "post_resume_transcript_ship_receipt",
+            "post_stop_transcript_ship_receipt",
         } <= set(registration.required_artifacts)
 
 
@@ -252,6 +254,37 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
     assert run_commands[0][run_commands[0].index("--db") + 1] == str(tmp_path / "longhouse-home/agent/longhouse-shipper.db")
     assert len(commands) == 2
     assert shipper.stop()["process_dead"] is True
+
+
+def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter([{"session_id": "session-1", "messages": []}])
+    calls = 0
+
+    def projected_tail(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise provider_native_resume._RuntimeHostHTTPError(404, "session not found")
+        return next(responses)
+
+    monkeypatch.setattr(provider_native_resume, "_api_json", projected_tail)
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+
+    assert _wait_session_tail("https://runtime.example", "device-token", "session-1") == {
+        "session_id": "session-1",
+        "messages": [],
+    }
+    assert calls == 2
+
+    auth_error = provider_native_resume._RuntimeHostHTTPError(401, "unauthorized")
+    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(auth_error))
+    with pytest.raises(provider_native_resume._RuntimeHostHTTPError):
+        _wait_session_tail("https://runtime.example", "device-token", "session-1")
+
+    with pytest.raises(RuntimeError, match="did not project session"):
+        _wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
 
 
 def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
@@ -502,6 +535,51 @@ def test_codex_native_resume_tui_uses_the_bridge_provider_home(
     assert environment["HOME"] == str(isolation_root / "provider-home")
     assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
     assert environment["LONGHOUSE_MANAGED_SESSION_ID"] == "session-1"
+
+
+def test_codex_initial_bridge_reuses_the_shipper_isolation_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    evidence_root = tmp_path / "evidence"
+    isolation_root = tmp_path / "isolation"
+    seen: dict[str, object] = {}
+
+    def fake_start(*_args: object, **kwargs: object) -> tuple[dict[str, object], subprocess.CompletedProcess[str], Path]:
+        seen.update(kwargs)
+        root = kwargs["isolation_root"]
+        assert isinstance(root, Path)
+        return {}, subprocess.CompletedProcess([], 0), root
+
+    monkeypatch.setattr(codex_native_resume.bridge_canary, "_start_bridge", fake_start)
+
+    codex_native_resume._start_initial_bridge(
+        args,
+        evidence_root=evidence_root,
+        codex_bin=str(args.provider_bin),
+        isolation_root=isolation_root,
+    )
+
+    assert seen["isolation_root"] == isolation_root
+
+
+def test_codex_post_stop_ship_receipt_is_retained_separately_from_transition(tmp_path: Path) -> None:
+    class FakeShipper:
+        def flush(self, label: str) -> dict[str, object]:
+            assert label == "post-stop"
+            return {"status": "pass", "files_shipped": 1}
+
+    transition: dict[str, object] = {}
+    receipt = codex_native_resume._record_post_stop_ship_receipt(
+        tmp_path,
+        transition,
+        FakeShipper(),  # type: ignore[arg-type]
+    )
+
+    assert receipt == {"status": "pass", "files_shipped": 1}
+    assert transition["post_stop_transcript_ship"] == receipt
+    assert json.loads((tmp_path / "post-stop-transcript-ship-receipt.json").read_text()) == receipt
 
 
 def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:

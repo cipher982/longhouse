@@ -10,7 +10,9 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -67,6 +69,7 @@ REGISTRATION = ProducerRegistration(
         "resumed_bridge_state",
         "resumed_transcript",
         "post_resume_transcript_ship_receipt",
+        "post_stop_transcript_ship_receipt",
         "process_transition_receipt",
         "stale_input_receipt",
         "concurrent_resume_receipt",
@@ -527,6 +530,36 @@ def _native_resume_tui_environment(isolation_root: Path, session_id: str) -> dic
     return environment
 
 
+def _start_initial_bridge(
+    args: argparse.Namespace,
+    *,
+    evidence_root: Path,
+    codex_bin: str,
+    isolation_root: Path,
+) -> tuple[dict[str, Any], subprocess.CompletedProcess[str], Path]:
+    """Start the initial bridge in the shipper's already-enrolled root."""
+
+    return bridge_canary._start_bridge(
+        args,
+        evidence_root=evidence_root,
+        codex_bin=codex_bin,
+        launch_mode="detached_ui",
+        isolation_root=isolation_root,
+        register_managed=True,
+    )
+
+
+def _record_post_stop_ship_receipt(
+    root: Path,
+    transition: dict[str, Any],
+    shipper: TranscriptShipper,
+) -> dict[str, Any]:
+    receipt = shipper.flush("post-stop")
+    transition["post_stop_transcript_ship"] = receipt
+    _write_json(root / "post-stop-transcript-ship-receipt.json", receipt)
+    return receipt
+
+
 def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -544,19 +577,14 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     resume_contract_paths: tuple[Path, Path] | None = None
     shipper: TranscriptShipper | None = None
     try:
-        initial_summary, _, isolation_root = bridge_canary._start_bridge(
-            args,
-            evidence_root=root,
-            codex_bin=str(args.codex_bin),
-            launch_mode="detached_ui",
-            register_managed=True,
-        )
-        session_id = str(initial_summary.get("session_id") or "")
-        initial_state_file = Path(str(initial_summary.get("state_file") or ""))
-        initial_state = bridge_canary._read_json(initial_state_file)
-        thread_id = str(initial_state.get("thread_id") or "")
-        if not session_id or not thread_id:
-            raise RuntimeError("initial bridge did not create a resumable provider thread")
+        # Start the real Machine Agent before the detached bridge.  Engine
+        # startup performs its own provider-state reconciliation; if it comes
+        # up after a bridge has already published a fresh state file, that
+        # startup race can tear down the just-created bridge before the first
+        # native control send.  All other provider producers use this order.
+        # The bridge must share the same disposable roots as the shipper.  Keep
+        # the root allocation explicit and reuse it for both processes.
+        isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-", dir="/tmp"))
         shipper_environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
         shipper = _start_transcript_shipper(
             "codex",
@@ -564,14 +592,21 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             home=Path(shipper_environment["HOME"]),
             environment=shipper_environment,
             evidence_root=root,
-            # codex-bridge --isolation-root writes managed state under the
-            # same <isolation-root>/longhouse tree that the shipper watches.
-            # Keep the real transcript provider HOME separate, but point the
-            # shipper at that Longhouse home so it observes and publishes the
-            # bridge lease and retained terminal state.
             longhouse_home=isolation_root / "longhouse",
         )
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        initial_summary, _, isolation_root = _start_initial_bridge(
+            args,
+            evidence_root=root,
+            codex_bin=str(args.codex_bin),
+            isolation_root=isolation_root,
+        )
+        session_id = str(initial_summary.get("session_id") or "")
+        initial_state_file = Path(str(initial_summary.get("state_file") or ""))
+        initial_state = bridge_canary._read_json(initial_state_file)
+        thread_id = str(initial_state.get("thread_id") or "")
+        if not session_id or not thread_id:
+            raise RuntimeError("initial bridge did not create a resumable provider thread")
         seed_marker = f"LONGHOUSE_CODEX_RESUME_SEED_{uuid.uuid4().hex}"
         _send_marker(args, isolation_root, session_id, seed_marker)
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
@@ -597,7 +632,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             # The direct bridge does not write the normal retained contract.
             # Publish the equivalent snapshot before flushing so the real
             # Machine Agent scanner can observe it in this cold-resume window.
-            process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
+            _record_post_stop_ship_receipt(root, process_transition, shipper)
         _write_json(root / "process-transition-receipt.json", process_transition)
         _write_json(
             root / "resume-contract-receipt.json",
