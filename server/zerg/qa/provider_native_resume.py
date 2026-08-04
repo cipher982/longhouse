@@ -1696,6 +1696,30 @@ def _isolated_provider_home() -> Path:
     return home
 
 
+def _initialize_cursor_workspace(path: Path) -> None:
+    """Give Cursor the project identity it requires before loading hooks.
+
+    Cursor Agent's project-level hook loader does not activate for an arbitrary
+    empty directory.  The qualification workspace is intentionally disposable,
+    but it still needs to look like the kind of project a real Cursor session
+    opens.  Initializing only the local Git metadata keeps the provider profile
+    and the checked-out Longhouse source isolated while making that prerequisite
+    explicit in the harness.
+    """
+
+    completed = subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"Cursor qualification workspace could not initialize Git: {detail}")
+
+
 def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]:
     spec = SPECS[provider]
     registration = registration_for(provider)
@@ -1738,6 +1762,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             # checked-out source tree or relies on a global provider profile.
             provider_cwd = root / "cursor-workspace"
             provider_cwd.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _initialize_cursor_workspace(provider_cwd)
         if spec.provider == "claude":
             onboarding = _prepare_claude_profile(
                 binary=args.provider_bin,
@@ -1772,6 +1797,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     "stdout": cursor_hooks.stdout[-2000:],
                     "stderr": cursor_hooks.stderr[-2000:],
                     "cursor_dir": str(provider_cwd / ".cursor"),
+                    "workspace_is_git_project": (provider_cwd / ".git").is_dir(),
                 },
             )
             if cursor_hooks.returncode != 0:
