@@ -887,6 +887,31 @@ def public_process_records(records: dict[int, dict[str, Any]]) -> list[dict[str,
     ]
 
 
+def verified_cleanup_groups(
+    records: dict[int, dict[str, Any]], scope: dict[str, Any]
+) -> set[int]:
+    """Return only groups whose recorded owner identity is still present."""
+
+    candidate_groups = {
+        int(record["pgid"])
+        for record in records.values()
+        if int(record["pgid"]) > 0 and int(record["pgid"]) != os.getpgrp()
+    }
+    verified: set[int] = set()
+    for pid_key, start_key, group_key in (
+        ("launcher_pid", "launcher_start_identity", "launcher_pgid"),
+        ("provider_pid", "provider_process_start_time", "provider_pgid"),
+    ):
+        pid = scope.get(pid_key)
+        start_identity = scope.get(start_key)
+        pgid = scope.get(group_key)
+        if not pid or not start_identity or not pgid or int(pgid) not in candidate_groups:
+            continue
+        if process_start_identity(int(pid)) == start_identity:
+            verified.add(int(pgid))
+    return verified
+
+
 def finish_live_command(
     command: LiveCommand,
     *,
@@ -912,6 +937,8 @@ def finish_live_command(
         provider_kill_status = "attempted"
     elif provider_pid is not None:
         provider_kill_status = "identity_mismatch"
+    elif cleanup_scope is not None and cleanup_scope.get("provider_process_observed") is False:
+        provider_kill_status = "not_started"
 
     if command.is_tty:
         try:
@@ -950,45 +977,16 @@ def finish_live_command(
         # allowed to outlive the facade, so terminate only the attributable
         # scoped records and verify the boundary again.
         remaining = scoped_process_table(cleanup_scope)
-        groups = sorted(
-            {
-                int(record["pgid"])
-                for record in remaining.values()
-                if int(record["pgid"]) != os.getpgrp()
-            }
-        )
-        for pgid in groups:
+        for pgid in sorted(verified_cleanup_groups(remaining, cleanup_scope)):
             try:
                 os.killpg(pgid, signal.SIGTERM)
             except (OSError, PermissionError):
                 pass
-        for pid, record in remaining.items():
-            if int(record["pgid"]) in groups:
-                continue
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except (OSError, PermissionError):
-                pass
-        time.sleep(0.1)
         time.sleep(0.5)
         remaining = scoped_process_table(cleanup_scope)
-        remaining_groups = sorted(
-            {
-                int(record["pgid"])
-                for record in remaining.values()
-                if int(record["pgid"]) != os.getpgrp()
-            }
-        )
-        for pgid in remaining_groups:
+        for pgid in sorted(verified_cleanup_groups(remaining, cleanup_scope)):
             try:
                 os.killpg(pgid, signal.SIGKILL)
-            except (OSError, PermissionError):
-                pass
-        for pid, record in remaining.items():
-            if int(record["pgid"]) in remaining_groups:
-                continue
-            try:
-                os.kill(pid, signal.SIGKILL)
             except (OSError, PermissionError):
                 pass
         cleanup_timeout = float(
@@ -1031,8 +1029,21 @@ def finish_live_command(
         {
             int(record["pgid"])
             for record in remaining.values()
-            if int(record["pgid"]) != os.getpgrp()
+            if int(record["pgid"]) > 0
+            and int(record["pgid"]) != os.getpgrp()
         }
+    )
+    cleanup_status = (
+        "pass"
+        if launcher_absent_after_cleanup and not remaining and provider_pid is not None
+        else "not_started"
+        if (
+            launcher_absent_after_cleanup
+            and not remaining
+            and cleanup_scope is not None
+            and cleanup_scope.get("provider_process_observed") is False
+        )
+        else "fail"
     )
     return {
         "returncode": command.process.returncode,
@@ -1044,9 +1055,7 @@ def finish_live_command(
         "forced_launcher_cleanup": not launcher_reaped_initial,
         "remaining_processes": public_process_records(remaining),
         "remaining_process_groups": remaining_process_groups,
-        "status": "pass"
-        if launcher_absent_after_cleanup and not remaining
-        else "fail",
+        "status": cleanup_status,
     }
 
 
@@ -1131,6 +1140,25 @@ def provider_cleanup_scope(
     }
 
 
+def observed_provider_record(
+    scope: dict[str, Any], provider_bin: Path
+) -> dict[str, Any] | None:
+    """Find a provider child in the launcher's exact process group, if any."""
+
+    records = scoped_process_table(scope)
+    tokens = {str(provider_bin), provider_bin.name}
+    candidates = [
+        record
+        for record in records.values()
+        if int(record.get("pid", 0)) > 0
+        and int(record.get("pid", 0)) != int(scope.get("launcher_pid") or -1)
+        and any(token and token in str(record.get("command", "")) for token in tokens)
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda record: int(record["pid"]))[-1]
+
+
 def same_path(left: str | Path | None, right: str | Path | None) -> bool:
     if not left or not right:
         return False
@@ -1188,6 +1216,20 @@ def provider_failure_qualification(provider: str, output: str) -> str:
     ):
         return "harness_precondition_unmet"
     return "provider_owned_start_failure"
+
+
+def provider_native_output_observed(provider: str, output: str) -> bool:
+    if provider != "cursor":
+        return bool(output.strip())
+    harness_prefixes = (
+        "Longhouse ",
+        "Managed Cursor ",
+        "Timeline: ",
+    )
+    return any(
+        line.strip() and not line.startswith(harness_prefixes)
+        for line in output.splitlines()
+    )
 
 
 def bootstrap_provider_auth(
@@ -1456,6 +1498,29 @@ def run_provider_live(
                 else session_match.group(0) if session_match else None
             ),
         )
+        observed = None
+        if provider_pid is None:
+            observed = observed_provider_record(cleanup_scope, provider_bin)
+            if observed is not None:
+                provider_pid = int(observed["pid"])
+                provider_start = process_start_identity(provider_pid)
+                cleanup_scope = provider_cleanup_scope(
+                    profile_root=provider_config_root,
+                    provider_home=provider_home,
+                    cwd=cwd,
+                    launcher_pid=launcher_pid,
+                    launcher_start_identity=launcher_start,
+                    provider_pid=provider_pid,
+                    provider_process_start_time=provider_start,
+                    session_id=(
+                        str(owner.get("expected_session_id"))
+                        if owner and owner.get("expected_session_id")
+                        else session_match.group(0) if session_match else None
+                    ),
+                )
+        cleanup_scope["provider_process_observed"] = (
+            provider_pid is not None or observed is not None
+        )
         return (
             {
                 "provider": provider,
@@ -1481,7 +1546,11 @@ def run_provider_live(
                 "launch_intent_created": launch_intent_created,
                 "startup_failure": str(error),
                 "qualification": provider_failure_qualification(provider, output),
+                "provider_output_observed": provider_native_output_observed(
+                    provider, output
+                ),
                 "cleanup_scope": cleanup_scope,
+                "provider_process_observed": cleanup_scope["provider_process_observed"],
                 "launch_log": str(launch_log),
                 "retry_intents_after_launch": read_retry_count(root),
             },
@@ -1556,6 +1625,33 @@ def run_provider_live(
             else session_match.group(0) if session_match else None
         ),
     )
+    if result.get("provider_pid") is None:
+        observed = observed_provider_record(result["cleanup_scope"], provider_bin)
+        if observed is not None:
+            result["provider_pid"] = int(observed["pid"])
+            result["provider_process_start_time"] = process_start_identity(
+                result["provider_pid"]
+            )
+            result["cleanup_scope"] = provider_cleanup_scope(
+                profile_root=provider_config_root,
+                provider_home=provider_home,
+                cwd=cwd,
+                launcher_pid=live.process.pid,
+                launcher_start_identity=result.get("launcher_start_identity"),
+                provider_pid=result["provider_pid"],
+                provider_process_start_time=result.get(
+                    "provider_process_start_time"
+                ),
+                session_id=(
+                    str(owner.get("expected_session_id"))
+                    if owner and owner.get("expected_session_id")
+                    else session_match.group(0) if session_match else None
+                ),
+            )
+    result["provider_process_observed"] = result.get("provider_pid") is not None
+    result["cleanup_scope"]["provider_process_observed"] = result[
+        "provider_process_observed"
+    ]
     return result, live
 
 
@@ -1801,6 +1897,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                         result.get("timed_out") is True
                         and result.get("degraded_marker_seen") is True
                         and result.get("launch_intent_created") is True
+                        and result.get("provider_output_observed") is False
                     )
                     result["qualification"] = (
                         "harness_precondition_unmet"
@@ -1812,6 +1909,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                         if attributable_timeout
                         else "cursor_startup_failure_not_attributable_to_missing_account_session"
                     )
+                    if attributable_timeout:
+                        result["qualification_basis"] = (
+                            "cursor_status_probe_missing_and_no_provider_output"
+                        )
         provider_failures = [
             result
             for result in results
@@ -1900,14 +2001,28 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
 
         if any(not intent.get("launcher_pid") for intent in retry_intents):
             raise RuntimeError("installed retry intents contained no launcher ownership identity")
-        intent_readiness_by_launcher = {
-            intent.get("launcher_pid"): intent.get("provider_ready") is True
-            for intent in retry_intents
-        }
         for result in results:
-            launcher_pid = result.get("launcher_pid")
-            if launcher_pid in intent_readiness_by_launcher:
-                result["provider_ready_durable"] = intent_readiness_by_launcher[launcher_pid]
+            matches = [
+                intent
+                for intent in retry_intents
+                if retry_intent_matches_launch(
+                    intent,
+                    provider=str(result.get("provider", "")),
+                    launcher_pid=result.get("launcher_pid"),
+                    provider_cwd=Path(str(result.get("provider_cwd", ""))),
+                    session_id=result.get("session_id_observed"),
+                )
+            ]
+            if result.get("launch_intent_created") and len(matches) != 1:
+                raise RuntimeError(
+                    "installed launch did not have exactly one durable intent match: "
+                    f"provider={result.get('provider')} "
+                    f"launcher={result.get('launcher_pid')} matches={len(matches)}"
+                )
+            result["durable_intent_matched"] = len(matches) == 1
+            result["provider_ready_durable"] = bool(
+                matches and matches[0].get("provider_ready") is True
+            )
         unready_intents = [
             intent
             for intent in retry_intents
@@ -1950,7 +2065,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     cleanup_scope=result.get("cleanup_scope"),
                 )
-                if cleanup["status"] != "pass":
+                if cleanup["status"] not in {"pass", "not_started"}:
                     raise RuntimeError(
                         f"{result['provider']} pre-ready provider cleanup failed: {cleanup}"
                     )
@@ -1989,28 +2104,32 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             cold_handle = cold_log.open("wb")
             cold_env = runtime_env(temp_root, engine_bin)
             cold_env["CODEX_HOME"] = str(temp_root / "provider-config" / "codex")
-            cold_engine = subprocess.Popen(
-                [
-                    str(engine_bin),
-                    "connect",
-                    "--url",
-                    base_url,
-                    "--token",
-                    token,
-                    "--db",
-                    str(temp_root / "agent.db"),
-                    "--machine-name",
-                    DEVICE_ID,
-                    "--fallback-scan-secs",
-                    "1",
-                    "--spool-replay-secs",
-                    "1",
-                ],
-                env=cold_env,
-                stdout=cold_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+
+            def spawn_cold_agent(log_handle: Any) -> subprocess.Popen[bytes]:
+                return subprocess.Popen(
+                    [
+                        str(engine_bin),
+                        "connect",
+                        "--url",
+                        base_url,
+                        "--token",
+                        token,
+                        "--db",
+                        str(temp_root / "agent.db"),
+                        "--machine-name",
+                        DEVICE_ID,
+                        "--fallback-scan-secs",
+                        "1",
+                        "--spool-replay-secs",
+                        "1",
+                    ],
+                    env=cold_env,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+
+            cold_engine = spawn_cold_agent(cold_handle)
             time.sleep(2)
             first_start_returncode = cold_engine.poll()
             if first_start_returncode is not None:
@@ -2046,15 +2165,71 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 15,
                 "cold-start Machine Agent retry progress while Runtime Host is unavailable",
             )
-            retry_attempts_observed = max(
-                int(intent.get("attempts") or 0)
+            attempts_before_agent_restart = {
+                str(intent.get("expected_session_id")): int(intent.get("attempts") or 0)
                 for intent in read_retry_intents(temp_root)
                 if str(intent.get("expected_session_id")) in ready_ids
+            }
+            kill_group(cold_engine)
+            try:
+                cold_engine.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                kill_group(cold_engine, grace=0.1)
+            cold_handle.close()
+            engine = None
+            engine_handle = None
+
+            restart_handle = cold_log.open("ab")
+            restarted_engine = spawn_cold_agent(restart_handle)
+            time.sleep(2)
+            second_start_returncode = restarted_engine.poll()
+            if second_start_returncode is not None:
+                restart_handle.close()
+                raise RuntimeError(
+                    "Machine Agent did not survive its cold restart during outage: "
+                    f"{second_start_returncode}"
+                )
+            engine = restarted_engine
+            engine_handle = restart_handle
+            current_retry_intents = read_retry_intents(temp_root)
+            current_retry_ids = {
+                str(intent.get("expected_session_id")) for intent in current_retry_intents
+            }
+            if not ready_ids.issubset(current_retry_ids):
+                raise RuntimeError(
+                    "Machine Agent restart removed a provider-ready retry intent "
+                    "during the outage"
+                )
+            preserved_retry_count = len(current_retry_intents)
+
+            def cold_retry_progress_after_restart() -> bool:
+                return all(
+                    int(intent.get("attempts") or 0)
+                    >= attempts_before_agent_restart.get(
+                        str(intent.get("expected_session_id")), 0
+                    )
+                    for intent in read_retry_intents(temp_root)
+                    if str(intent.get("expected_session_id")) in ready_ids
+                )
+
+            wait_for(
+                cold_retry_progress_after_restart,
+                15,
+                "restarted Machine Agent to preserve durable retry progress while Runtime Host is unavailable",
             )
+            retry_attempts_after_restart = {
+                str(intent.get("expected_session_id")): int(intent.get("attempts") or 0)
+                for intent in read_retry_intents(temp_root)
+                if str(intent.get("expected_session_id")) in ready_ids
+            }
             cold_restart_evidence = {
                 "first_start_returncode": first_start_returncode,
                 "first_start_survived_outage": True,
-                "retry_attempts_observed": retry_attempts_observed,
+                "agent_restarted_during_outage": True,
+                "second_start_returncode": second_start_returncode,
+                "retry_attempts_before_agent_restart": attempts_before_agent_restart,
+                "retry_attempts_after_agent_restart": retry_attempts_after_restart,
+                "retry_attempts_observed": max(retry_attempts_after_restart.values()),
                 "retry_intents_after_cold_start": preserved_retry_count,
                 "pre_ready_intents_garbage_collected": None,
                 "log": str(cold_log),
