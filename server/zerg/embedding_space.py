@@ -144,10 +144,20 @@ EMBEDDING_ARTIFACT_FILES: Final = tuple(_parsed_files)
 # The projector identity is a projection-schema version, not only a model-space
 # name. Bump it when provenance semantics change so catalogd reclaims every
 # session instead of treating rows written under the old contract as complete.
-# The trailing generation marker is bumped whenever the *text* fed to the model
-# changes, even though the model and dimensions do not. Episode hashes are
-# computed over the chunker's output, so a chunker change only re-embeds
-# sessions the projector re-claims; a new projector identity is what makes it
-# re-claim all of them. p3: model-tokenizer budgeting at 2048 replaced a
-# tiktoken sandwich that the encoder then re-truncated to 1024.
-EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p3"
+# The trailing generation marker identifies one projected corpus. Bumping it
+# re-seeds every session and forces a full re-projection, which is how a chunker
+# change reaches episodes that are already complete (their hashes only get
+# re-compared when the projector re-claims them).
+#
+# Do NOT bump it casually. `certify_projector_cutover` issues a new generation's
+# certificate only from a transaction that observes zero lag, and a live instance
+# with active sessions may never reach zero lag -- so a bumped generation can sit
+# uncertified indefinitely while `_require_complete_projection_coverage` refuses
+# every dense query for want of proof. Verified on hosted david010: bumping to p3
+# put dense recall into `cutover_not_certified` immediately.
+#
+# The 2048-token model-tokenizer budgeting therefore applies to episodes as the
+# projector re-claims them, rather than through a forced sweep. Re-embedding the
+# historical corpus needs certification to accept a watermark instead of demanding
+# a single zero-lag moment; that is separate work.
+EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p2"
