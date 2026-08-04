@@ -244,7 +244,7 @@ def _wait_dead(pid: int, *, timeout: float = 10.0) -> bool:
     return not _pid_alive(pid)
 
 
-def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any]:
+def _force_process_loss(state: dict[str, Any], codex_bin: Path, state_file: Path) -> dict[str, Any]:
     bridge_pid = int(state.get("pid") or 0)
     app_server_pid = int(state.get("app_server_pid") or 0)
     bridge_command = _proc_command(bridge_pid)
@@ -261,12 +261,24 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
         raise RuntimeError("recorded bridge process start identity no longer matches")
     if state["app_server_process_start_time"] != app_server_start_time:
         raise RuntimeError("recorded Codex app-server process start identity no longer matches")
-    os.kill(bridge_pid, signal.SIGKILL)
     if _pid_alive(app_server_pid):
         os.kill(app_server_pid, signal.SIGKILL)
-    bridge_dead = _wait_dead(bridge_pid)
     app_server_dead = _wait_dead(app_server_pid)
-    if not app_server_dead or not bridge_dead:
+    terminal_commit_observed = False
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            current = bridge_canary._read_json(state_file)
+        except (OSError, json.JSONDecodeError):
+            current = {}
+        if current.get("terminal_state") and current.get("terminal_published") is True:
+            terminal_commit_observed = True
+            break
+        time.sleep(0.1)
+    if _pid_alive(bridge_pid):
+        os.kill(bridge_pid, signal.SIGKILL)
+    bridge_dead = _wait_dead(bridge_pid)
+    if not app_server_dead or not bridge_dead or not terminal_commit_observed:
         raise RuntimeError("process-loss injection did not terminate the exact recorded owners")
     return {
         "method": "sigkill_exact_recorded_processes",
@@ -276,6 +288,7 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
             "observed_start_time": bridge_start_time,
             "command": bridge_command,
             "dead": bridge_dead,
+            "terminal_commit_observed": terminal_commit_observed,
         },
         "app_server": {
             "pid": app_server_pid,
@@ -475,7 +488,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             if not (process_transition.get("verification") or {}).get("verified"):
                 raise RuntimeError("clean-exit transition did not stop the initial bridge")
         else:
-            process_transition = _force_process_loss(initial_state, args.codex_bin)
+            process_transition = _force_process_loss(initial_state, args.codex_bin, initial_state_file)
+        if shipper is not None:
+            process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
         _write_json(root / "process-transition-receipt.json", process_transition)
         stale_input_receipt = _attempt_stale_input(args, isolation_root, session_id)
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)

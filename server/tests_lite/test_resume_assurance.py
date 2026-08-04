@@ -329,6 +329,11 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
         "_process_start_time",
         lambda pid: "bridge-start" if pid == 101 else "provider-start",
     )
+    monkeypatch.setattr(
+        codex_native_resume.bridge_canary,
+        "_read_json",
+        lambda _path: {"terminal_state": "session_ended", "terminal_published": True},
+    )
     monkeypatch.setattr(codex_native_resume.os, "kill", lambda pid, sig: killed.append((pid, sig)))
 
     receipt = codex_native_resume._force_process_loss(
@@ -339,11 +344,13 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
             "app_server_process_start_time": "provider-start",
         },
         Path("/build/provider"),
+        Path("/tmp/provider-factory-test-state.json"),
     )
 
-    assert [pid for pid, _ in killed] == [101, 202]
+    assert [pid for pid, _ in killed] == [202, 101]
     assert receipt["bridge"]["dead"] is True
     assert receipt["app_server"]["dead"] is True
+    assert receipt["bridge"]["terminal_commit_observed"] is True
 
 
 def test_process_loss_refuses_reused_pid(monkeypatch) -> None:
@@ -364,6 +371,7 @@ def test_process_loss_refuses_reused_pid(monkeypatch) -> None:
                 "app_server_process_start_time": "provider-start",
             },
             Path("/build/provider"),
+            Path("/tmp/provider-factory-test-state.json"),
         )
 
 
