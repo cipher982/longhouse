@@ -825,6 +825,42 @@ def _bridge_state_root(isolation_root: Path) -> Path:
     return isolation_root / "codex-bridge"
 
 
+def _provider_runtime_environment(
+    base_environment: Mapping[str, str],
+    isolation_root: Path,
+) -> dict[str, str]:
+    """Give every Codex child the same disposable profile and XDG roots.
+
+    The Resume producer itself runs inside the qualification bubble, but the
+    Rust engine starts Codex as a second process. Passing the bubble's
+    environment through that boundary is part of the provider contract: a
+    child that falls back to the worker's HOME can read or mutate a normal
+    profile, and recent Codex versions fail outright when that profile is
+    inaccessible. Keep the profile beside the bridge state so both the
+    engine and the stock TUI use exactly the same provider home.
+    """
+
+    provider_home = isolation_root / "provider-home"
+    codex_home = provider_home / ".codex"
+    xdg_config_home = provider_home / ".config"
+    xdg_data_home = provider_home / ".local" / "share"
+    xdg_cache_home = provider_home / ".cache"
+    for path in (provider_home, codex_home, xdg_config_home, xdg_data_home, xdg_cache_home):
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    environment = dict(base_environment)
+    environment.update(
+        {
+            "HOME": str(provider_home),
+            "CODEX_HOME": str(codex_home),
+            "XDG_CONFIG_HOME": str(xdg_config_home),
+            "XDG_DATA_HOME": str(xdg_data_home),
+            "XDG_CACHE_HOME": str(xdg_cache_home),
+        }
+    )
+    return environment
+
+
 def _start_bridge(
     args: argparse.Namespace,
     *,
@@ -883,7 +919,7 @@ def _start_bridge(
     if args.model:
         command.extend(["--model", args.model])
 
-    env = os.environ.copy()
+    env = _provider_runtime_environment(os.environ, isolation_root)
     env["LONGHOUSE_CODEX_BRIDGE_TOKEN"] = args.agents_token
     result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
     if result.returncode != 0:
@@ -983,6 +1019,8 @@ def _record_terminal_session(
     args: argparse.Namespace,
     command: list[str],
     recording_path: Path,
+    *,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     script_bin = _resolve_executable(args.script_bin, "script")
     timeout_bin = _resolve_executable(args.timeout_bin, "timeout") or shutil.which("gtimeout")
@@ -999,7 +1037,7 @@ def _record_terminal_session(
         str(recording_path),
         *command,
     ]
-    return _run(wrapped, cwd=args.repo_root, timeout=args.tui_record_secs + 10)
+    return _run(wrapped, cwd=args.repo_root, env=env, timeout=args.tui_record_secs + 10)
 
 
 def _record_pty_session(
@@ -1194,7 +1232,7 @@ def run_managed_cold_resume(args: argparse.Namespace, evidence_root: Path, codex
             ws_url,
             "--no-alt-screen",
         ]
-        tui_env = os.environ.copy()
+        tui_env = _provider_runtime_environment(os.environ, isolation_root)
         tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
         subscribed_state: dict[str, Any] | None = None
 
@@ -1323,7 +1361,9 @@ def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_
             ws_url,
             "--no-alt-screen",
         ]
-        tui_result = _record_terminal_session(args, terminal_command, recording)
+        tui_env = _provider_runtime_environment(os.environ, isolation_root)
+        tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+        tui_result = _record_terminal_session(args, terminal_command, recording, env=tui_env)
         recording_text = recording.read_text(encoding="utf-8", errors="replace") if recording.exists() else ""
         if tui_result.returncode not in (0, 124):
             return _fail(

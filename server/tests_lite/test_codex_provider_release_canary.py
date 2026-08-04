@@ -38,6 +38,50 @@ def test_command_evidence_normalizes_pathlike_argv_values() -> None:
     assert evidence["argv"] == ["/tmp/longhouse-engine", "codex-bridge", "--agents-token", "<redacted>"]
 
 
+def test_provider_runtime_environment_isolated_from_worker_profile(tmp_path: Path) -> None:
+    environment = canary._provider_runtime_environment(
+        {"HOME": "/root", "CODEX_HOME": "/root/.codex", "PROBE_VALUE": "preserved"},
+        tmp_path / "isolation",
+    )
+
+    provider_home = tmp_path / "isolation" / "provider-home"
+    assert environment["HOME"] == str(provider_home)
+    assert environment["CODEX_HOME"] == str(provider_home / ".codex")
+    assert environment["XDG_CONFIG_HOME"] == str(provider_home / ".config")
+    assert environment["XDG_DATA_HOME"] == str(provider_home / ".local" / "share")
+    assert environment["XDG_CACHE_HOME"] == str(provider_home / ".cache")
+    assert environment["PROBE_VALUE"] == "preserved"
+    assert (provider_home / ".codex").is_dir()
+
+
+def test_start_bridge_passes_isolated_environment_to_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    seen: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, '{"state_file":"state.json"}\n', "")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+    isolation_root = tmp_path / "isolation"
+    canary._start_bridge(
+        args,
+        evidence_root=tmp_path / "evidence",
+        codex_bin="/bin/codex",
+        launch_mode="tui",
+        isolation_root=isolation_root,
+    )
+
+    environment = seen["env"]
+    assert isinstance(environment, dict)
+    assert environment["HOME"] == str(isolation_root / "provider-home")
+    assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
+    assert environment["LONGHOUSE_CODEX_BRIDGE_TOKEN"] == "test-agents-token"
+
+
 def test_fake_app_server_binary_proves_installed_engine_permission_protocol(tmp_path: Path) -> None:
     engine = tmp_path / "longhouse-engine"
     engine.write_text(
