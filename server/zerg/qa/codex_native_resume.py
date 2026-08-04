@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -115,7 +116,7 @@ def _write_resume_contract_snapshot(
     cwd = Path(str(state.get("cwd") or "")).resolve()
     provider_binary = codex_bin.resolve()
     longhouse_home = isolation_root / "longhouse"
-    state_path = longhouse_home / "managed-local/codex-bridge" / f"{session_id}.json"
+    state_path = longhouse_home / "managed-local/codex-bridge/sessions" / f"{session_id}.json"
     contract_path = longhouse_home / "managed-local/contracts/codex" / f"{session_id}.json"
     if not session_id or not cwd.is_dir() or not provider_binary.is_file():
         raise RuntimeError("Codex resume contract snapshot inputs are incomplete")
@@ -160,6 +161,16 @@ def _remove_resume_contract_snapshot(paths: tuple[Path, Path] | None) -> None:
             path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _redact_process_command(command: str) -> str:
+    """Keep generated process evidence from retaining bridge credentials."""
+
+    return re.sub(
+        r'(LONGHOUSE_COORDINATION_TOKEN=)("(?:[^"\\]|\\.)*"|\S+)',
+        r"\1<redacted>",
+        command,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -354,7 +365,7 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path, state_file: Path
             "pid": bridge_pid,
             "recorded_start_time": state.get("bridge_process_start_time"),
             "observed_start_time": bridge_start_time,
-            "command": bridge_command,
+            "command": _redact_process_command(bridge_command),
             "dead": bridge_dead,
             "terminal_commit_observed": terminal_commit_observed,
         },
@@ -362,7 +373,7 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path, state_file: Path
             "pid": app_server_pid,
             "recorded_start_time": state.get("app_server_process_start_time"),
             "observed_start_time": app_server_start_time,
-            "command": app_server_command,
+            "command": _redact_process_command(app_server_command),
             "dead": app_server_dead,
         },
     }
@@ -558,9 +569,6 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 raise RuntimeError("clean-exit transition did not stop the initial bridge")
         else:
             process_transition = _force_process_loss(initial_state, args.codex_bin, initial_state_file)
-        if shipper is not None:
-            process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
-        _write_json(root / "process-transition-receipt.json", process_transition)
         contract_state = bridge_canary._read_json(initial_state_file)
         resume_contract_paths = _write_resume_contract_snapshot(
             isolation_root=isolation_root,
@@ -568,6 +576,12 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             codex_bin=args.codex_bin,
             provider_version=str(provider_receipt["version"]),
         )
+        if shipper is not None:
+            # The direct bridge does not write the normal retained contract.
+            # Publish the equivalent snapshot before flushing so the real
+            # Machine Agent scanner can observe it in this cold-resume window.
+            process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
+        _write_json(root / "process-transition-receipt.json", process_transition)
         _write_json(
             root / "resume-contract-receipt.json",
             {

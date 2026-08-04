@@ -13,6 +13,8 @@ from zerg.qa import antigravity_resume_policy
 from zerg.qa import codex_native_resume
 from zerg.qa import provider_native_resume
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
+from zerg.qa.codex_native_resume import _redact_process_command
+from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
@@ -382,6 +384,39 @@ def test_codex_native_resume_tui_uses_the_bridge_provider_home(
     assert environment["HOME"] == str(isolation_root / "provider-home")
     assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
     assert environment["LONGHOUSE_MANAGED_SESSION_ID"] == "session-1"
+
+
+def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:
+    isolation_root = tmp_path / "isolation"
+    workspace = isolation_root / "workspace"
+    provider = isolation_root / "provider"
+    workspace.mkdir(parents=True)
+    provider.write_text("provider")
+
+    state = {
+        "session_id": "11111111-1111-4111-8111-111111111111",
+        "cwd": str(workspace),
+        "thread_id": "thread-1",
+        "thread_path": str(isolation_root / "thread.jsonl"),
+    }
+    (isolation_root / "thread.jsonl").write_text("{}\n")
+
+    state_path, contract_path = _write_resume_contract_snapshot(
+        isolation_root=isolation_root,
+        state=state,
+        codex_bin=provider,
+        provider_version="0.147.0-test",
+    )
+
+    assert state_path.parent.name == "sessions"
+    assert state_path.is_file()
+    assert json.loads(contract_path.read_text())["control"]["state_path"] == str(state_path.resolve())
+
+
+def test_codex_process_evidence_redacts_bridge_tokens() -> None:
+    command = 'env LONGHOUSE_COORDINATION_TOKEN="zst_secret" codex app-server'
+
+    assert _redact_process_command(command) == 'env LONGHOUSE_COORDINATION_TOKEN=<redacted> codex app-server'
 
 
 def test_codex_main_serializes_path_values_in_result_output(
