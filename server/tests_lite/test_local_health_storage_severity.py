@@ -328,6 +328,32 @@ def test_null_storage_outbox_is_broken_and_actionable():
     ]
 
 
+def test_non_string_storage_outbox_error_is_broken_and_actionable():
+    state, severity, headline, reasons, actions = _classify_health(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "payload": {"storage_v2_outbox": {"error": False}},
+        },
+        transport_sample=None,
+        transport_assessment=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    assert (state, severity) == ("broken", "red")
+    assert headline == "Source upload state unavailable"
+    assert reasons == ["storage_v2_outbox_unreadable"]
+    assert actions == [
+        "Run: longhouse local-health --fast --json",
+        "Inspect the storage-v2 outbox error in engine-status.json.",
+    ]
+
+
 def test_storage_reasons_use_a_stable_source_inspection_action_id():
     assert _suggested_action_ids(["storage_v2_sources_blocked", "storage_v2_sources_proof_unknown"]) == ["inspect_storage_source"]
 
@@ -412,7 +438,7 @@ def test_outcome_receipts_only_surface_after_exhaustion(tmp_path):
     assert recovery == {"exhausted_count": 1, "active_count": 1, "scan_error": False}
 
 
-def test_exhausted_managed_launch_recovery_is_broken_and_actionable(tmp_path):
+def test_exhausted_managed_launch_recovery_is_amber_and_actionable(tmp_path):
     context = _health_classification_context(
         service={"status": "running"},
         engine_status={
@@ -460,7 +486,27 @@ def test_exhausted_managed_launch_recovery_is_broken_and_actionable(tmp_path):
         canonical_sessions_invalid=False,
         managed_recovery_exhausted_count=context.managed_recovery_exhausted_count,
         managed_recovery_scan_error=context.managed_recovery_scan_error,
-    ) == (True, False)
+    ) == (False, True)
+
+    classification = _classify_health(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "path": str(tmp_path / ".longhouse" / "agent" / "engine-status.json"),
+            "payload": {},
+        },
+        transport_sample=None,
+        transport_assessment=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+        managed_launch_recovery={"exhausted_count": 1, "scan_error": False},
+    )
+    assert classification[:2] == ("degraded", "yellow")
+    assert classification[2] == "Managed session recovery needs attention"
 
 
 def test_active_managed_launch_recovery_is_amber_and_actionable():

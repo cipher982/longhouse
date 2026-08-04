@@ -11,6 +11,12 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 HEALTH_CASES = tuple(MODULE.HEALTH_EXPECTATIONS)
 
+MATRIX_SCRIPT = Path(__file__).resolve().parents[2] / "scripts/qa/installed-health-fault-matrix.py"
+MATRIX_SPEC = importlib.util.spec_from_file_location("installed_health_fault_matrix", MATRIX_SCRIPT)
+assert MATRIX_SPEC is not None and MATRIX_SPEC.loader is not None
+MATRIX_MODULE = importlib.util.module_from_spec(MATRIX_SPEC)
+MATRIX_SPEC.loader.exec_module(MATRIX_MODULE)
+
 
 def _matrix(
     *,
@@ -139,6 +145,10 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
         "scenarios": list(HEALTH_CASES),
         "results": normalized_results,
     }
+
+
+def test_measurement_contract_matches_installed_health_matrix() -> None:
+    assert tuple(MATRIX_MODULE.CASES) == HEALTH_CASES
 
 
 def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Path):
@@ -332,24 +342,24 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
 
     report = MODULE.build_report([], health_paths=[matrix])
 
-    assert report["health_fault_matrix"]["case_count"] == 10
+    assert report["health_fault_matrix"]["case_count"] == 17
     assert report["measures"]["false_red_rate"] == {
         "status": "observed",
         "scope": "installed_health_fault_matrix",
         "basis": "fault_matrix_expected_state",
         "numerator": 1,
-        "denominator": 7,
+        "denominator": 9,
         "numerator_definition": "observed_broken_cases_expected_not_broken",
         "denominator_definition": "observed_broken_cases",
-        "rate": 1 / 7,
+        "rate": 1 / 9,
         "source": [{"path": str(matrix), "sha256": MODULE._sha256(matrix)}],
     }
     assert report["measures"]["hidden_failure_rate"]["numerator"] == 1
-    assert report["measures"]["hidden_failure_rate"]["denominator"] == 9
+    assert report["measures"]["hidden_failure_rate"]["denominator"] == 16
     assert report["measures"]["hidden_failure_rate"]["numerator_definition"] == "observed_healthy_expected_broken_or_degraded"
     assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "expected_broken_or_degraded_cases"
-    assert report["measures"]["action_coverage"]["numerator"] == 9
-    assert report["measures"]["action_coverage"]["denominator"] == 9
+    assert report["measures"]["action_coverage"]["numerator"] == 16
+    assert report["measures"]["action_coverage"]["denominator"] == 16
     assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_a_non_none_expected_action"
 
 
@@ -374,11 +384,11 @@ def test_health_fault_matrix_marks_zero_observed_broken_cases_not_observed(tmp_p
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
     assert report["measures"]["false_red_rate"]["reason"] == "no observed broken cases in supplied health fault matrix"
     assert report["measures"]["hidden_failure_rate"]["status"] == "observed"
-    assert report["measures"]["hidden_failure_rate"]["numerator"] == 9
-    assert report["measures"]["hidden_failure_rate"]["denominator"] == 9
+    assert report["measures"]["hidden_failure_rate"]["numerator"] == 16
+    assert report["measures"]["hidden_failure_rate"]["denominator"] == 16
     assert report["measures"]["action_coverage"]["status"] == "observed"
     assert report["measures"]["action_coverage"]["numerator"] == 0
-    assert report["measures"]["action_coverage"]["denominator"] == 9
+    assert report["measures"]["action_coverage"]["denominator"] == 16
 
 
 def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
@@ -403,8 +413,8 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
 
     report = MODULE.build_report([], health_paths=[matrix, matrix_copy, matrix])
 
-    assert report["health_fault_matrix"]["case_count"] == 10
-    assert report["measures"]["false_red_rate"]["denominator"] == 6
+    assert report["health_fault_matrix"]["case_count"] == 17
+    assert report["measures"]["false_red_rate"]["denominator"] == 8
 
 
 def test_reserialized_health_artifact_is_counted_once(tmp_path: Path):
@@ -433,8 +443,8 @@ def test_reserialized_health_artifact_is_counted_once(tmp_path: Path):
 
     report = MODULE.build_report([], health_paths=[matrix, matrix_copy])
 
-    assert report["health_fault_matrix"]["case_count"] == 10
-    assert report["measures"]["false_red_rate"]["denominator"] == 6
+    assert report["health_fault_matrix"]["case_count"] == 17
+    assert report["measures"]["false_red_rate"]["denominator"] == 8
 
 
 def test_health_artifact_requires_every_declared_scenario(tmp_path: Path):

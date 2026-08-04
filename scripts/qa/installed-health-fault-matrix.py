@@ -410,7 +410,7 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
             write_status(root, current_status())
             retry_fixture(root, exhausted=case.endswith("exhausted"))
             expected = {
-                "state": "broken" if case.endswith("exhausted") else "degraded",
+                "state": "degraded",
                 "reason": "managed_launch_recovery_exhausted"
                 if case.endswith("exhausted")
                 else "managed_launch_recovery_active",

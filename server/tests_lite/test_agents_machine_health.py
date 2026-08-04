@@ -158,6 +158,18 @@ def test_hosted_machine_health_surfaces_null_storage_outbox():
     assert facts["degraded_reasons"] == ()
 
 
+def test_hosted_machine_health_surfaces_non_string_storage_outbox_error():
+    facts = machine_health_service._local_health_facts_from_heartbeat(
+        SimpleNamespace(
+            raw_json=json.dumps({"storage_v2_outbox": {"error": False}})
+        )
+    )
+
+    assert facts["reasons"] == ("storage_v2_outbox_unreadable",)
+    assert facts["broken_reasons"] == ("storage_v2_outbox_unreadable",)
+    assert facts["degraded_reasons"] == ()
+
+
 def test_machine_health_surfaces_explicit_archive_pause_without_backlog():
     pinned_now = datetime(2026, 8, 4, 4, 30, 0, tzinfo=timezone.utc)
     row = SimpleNamespace(

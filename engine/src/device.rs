@@ -910,7 +910,6 @@ fn native_fast_health_from_parts(
                 | "payload_too_large"
                 | "storage_v2_outbox_unreadable"
         ) || storage_block_requires_repair
-            || managed_launch_recovery.exhausted_count > 0
             || managed_launch_recovery.scan_error
     }) {
         "broken"
@@ -930,7 +929,7 @@ fn native_fast_health_from_parts(
         .iter()
         .any(|reason| reason == "managed_launch_recovery_exhausted")
     {
-        "Longhouse could not recover a managed session"
+        "Managed session recovery needs attention"
     } else if reasons
         .iter()
         .any(|reason| reason == "managed_launch_recovery_unreadable")

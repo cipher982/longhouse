@@ -75,6 +75,41 @@ HEALTH_EXPECTATIONS = {
         "reason": "storage_v2_sources_unresolved",
         "action": "inspect_storage_source",
     },
+    "legacy_source_payload": {
+        "state": "degraded",
+        "reason": "storage_v2_sources_proof_unknown",
+        "action": "inspect_storage_source",
+    },
+    "malformed_source_count": {
+        "state": "degraded",
+        "reason": "storage_v2_sources_proof_unknown",
+        "action": "inspect_storage_source",
+    },
+    "negative_source_count": {
+        "state": "degraded",
+        "reason": "storage_v2_sources_proof_unknown",
+        "action": "inspect_storage_source",
+    },
+    "null_source_count": {
+        "state": "degraded",
+        "reason": "storage_v2_sources_proof_unknown",
+        "action": "inspect_storage_source",
+    },
+    "malformed_storage_payload": {
+        "state": "broken",
+        "reason": "storage_v2_outbox_unreadable",
+        "action": "inspect_storage_outbox",
+    },
+    "null_storage_payload": {
+        "state": "broken",
+        "reason": "storage_v2_outbox_unreadable",
+        "action": "inspect_storage_outbox",
+    },
+    "unreadable_storage_outbox": {
+        "state": "broken",
+        "reason": "storage_v2_outbox_unreadable",
+        "action": "inspect_storage_outbox",
+    },
     "payload_rejected": {
         "state": "broken",
         "reason": "payload_rejected",
@@ -86,7 +121,7 @@ HEALTH_EXPECTATIONS = {
         "action": "inspect_managed_session",
     },
     "managed_launch_recovery_exhausted": {
-        "state": "broken",
+        "state": "degraded",
         "reason": "managed_launch_recovery_exhausted",
         "action": "inspect_managed_session",
     },

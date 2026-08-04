@@ -857,18 +857,18 @@ public struct MenuBarPanelView: View {
                         Label("Inspect managed session", systemImage: "arrow.up.forward.square")
                             .frame(maxWidth: .infinity)
                     }
-                } else if snapshot.suggestedActionIds?.contains("inspect_local_health") == true {
-                    Button {
-                        perform(.runDoctor)
-                    } label: {
-                        Label("Inspect local health", systemImage: "stethoscope")
-                            .frame(maxWidth: .infinity)
-                    }
                 } else if snapshot.suggestedActionIds?.contains("inspect_storage_outbox") == true {
                     Button {
                         perform(.runDoctor)
                     } label: {
                         Label("Inspect storage outbox", systemImage: "externaldrive.badge.questionmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_local_health") == true {
+                    Button {
+                        perform(.runDoctor)
+                    } label: {
+                        Label("Inspect local health", systemImage: "stethoscope")
                             .frame(maxWidth: .infinity)
                     }
                 } else if snapshot.suggestedActionIds?.contains("free_disk_space") == true {

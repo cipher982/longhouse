@@ -117,6 +117,15 @@ def _counter_is_malformed(value: Any, *, present: bool) -> bool:
     return present and _optional_nonnegative_int(value) is None
 
 
+def _storage_outbox_error(value: Any, *, present: bool) -> str | None:
+    """Treat non-string producer errors as unreadable evidence, not as clear."""
+    if not present or value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    return "storage_v2_outbox error is not a string"
+
+
 @dataclass
 class _HealthClassificationContext:
     service_status: str
@@ -422,9 +431,9 @@ def _managed_health_flags(
     managed_recovery_active_count: int,
     managed_recovery_scan_error: bool,
 ) -> tuple[bool, bool]:
-    if orphan_bridge_count > 0 or managed_recovery_exhausted_count > 0 or managed_recovery_scan_error:
+    if orphan_bridge_count > 0 or managed_recovery_scan_error:
         return True, False
-    if managed_degraded > 0 or managed_detached > 0 or managed_recovery_active_count > 0:
+    if managed_degraded > 0 or managed_detached > 0 or managed_recovery_exhausted_count > 0 or managed_recovery_active_count > 0:
         return False, True
     return False, False
 
@@ -605,8 +614,6 @@ def _broken_health_headline(reasons: list[str]) -> str:
         headline = "Longhouse has unresolved durable source evidence"
     elif "storage_v2_outbox_unreadable" in reasons:
         headline = "Source upload state unavailable"
-    elif "managed_launch_recovery_exhausted" in reasons:
-        headline = "Longhouse could not recover a managed session"
     elif "managed_launch_recovery_unreadable" in reasons:
         headline = "Managed session recovery state is unreadable"
     elif "spool_dead" in reasons:
@@ -680,6 +687,8 @@ def _degraded_health_headline(
         headline = "Source upload conflict"
     elif "storage_v2_outbox_unreadable" in reasons:
         headline = "Source upload state unavailable"
+    elif "managed_launch_recovery_exhausted" in reasons:
+        headline = "Managed session recovery needs attention"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1:
             headline = "1 session lost remote control"
@@ -777,7 +786,10 @@ def _health_classification_context(
         storage_outbox_error=(
             "storage_v2_outbox payload is not an object"
             if storage_outbox_payload_invalid
-            else str(storage_v2_outbox.get("error") or "").strip() or None
+            else _storage_outbox_error(
+                storage_v2_outbox.get("error"),
+                present="error" in storage_v2_outbox,
+            )
         ),
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),

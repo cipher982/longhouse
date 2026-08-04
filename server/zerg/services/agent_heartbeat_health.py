@@ -430,6 +430,15 @@ def _counter_is_malformed(value: Any, *, present: bool) -> bool:
     return present and _optional_nonnegative_int(value) is None
 
 
+def _storage_outbox_error(value: Any, *, present: bool) -> str | None:
+    """Treat non-string producer errors as unreadable evidence, not as clear."""
+    if not present or value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    return "storage_v2_outbox error is not a string"
+
+
 def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
     """Reduce local health facts shipped in a heartbeat for hosted readers.
 
@@ -480,14 +489,14 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
         if proof_unknown:
             reasons.append("storage_v2_sources_proof_unknown")
             degraded_reasons.append("storage_v2_sources_proof_unknown")
-        if str(storage.get("error") or "").strip():
+        if _storage_outbox_error(storage.get("error"), present="error" in storage):
             reasons.append("storage_v2_outbox_unreadable")
             broken_reasons.append("storage_v2_outbox_unreadable")
 
     if recovery is not None:
         if _nonnegative_int(recovery.get("exhausted_count")) > 0:
             reasons.append("managed_launch_recovery_exhausted")
-            broken_reasons.append("managed_launch_recovery_exhausted")
+            degraded_reasons.append("managed_launch_recovery_exhausted")
         if _nonnegative_int(recovery.get("active_count")) > 0:
             reasons.append("managed_launch_recovery_active")
             degraded_reasons.append("managed_launch_recovery_active")
