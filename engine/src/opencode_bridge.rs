@@ -42,6 +42,8 @@ pub struct StartResult {
     pub session_id: String,
     pub provider_session_id: String,
     pub server_url: String,
+    pub pid: u32,
+    pub process_start_time: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -50,6 +52,8 @@ struct ExistingState {
     pid: u32,
     provider_session_id: String,
     server_url: String,
+    #[serde(default)]
+    process_start_time: Option<String>,
 }
 
 pub fn start(config: StartConfig) -> Result<StartResult> {
@@ -90,6 +94,8 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
                     session_id,
                     provider_session_id: existing.provider_session_id,
                     server_url: existing.server_url,
+                    pid: existing.pid,
+                    process_start_time: existing.process_start_time,
                 });
             }
             bail!(
@@ -190,6 +196,8 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             session_id,
             provider_session_id,
             server_url,
+            pid,
+            process_start_time: process_identity(pid).map(|(start, _)| start),
         })
     })();
     if result.is_err() {

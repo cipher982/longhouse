@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::build_identity::BuildIdentity;
 use crate::control_channel::granted_control_operations;
+use crate::device::NativeManagedLaunchRecoveryStatus;
 use crate::managed_antigravity_scan::AntigravityHookObservation;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
@@ -79,6 +80,8 @@ pub struct HeartbeatPayload {
     pub archive_backlog: ArchiveBacklogSnapshot,
     #[serde(default)]
     pub storage_v2_outbox: StorageV2OutboxSnapshot,
+    #[serde(default)]
+    pub managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
     pub parse_error_count_1h: u32,
     pub consecutive_ship_failures: u32,
     pub ship_attempts_1h: u32,
@@ -684,6 +687,7 @@ impl HeartbeatPayload {
             spool_dead_count,
             archive_backlog,
             storage_v2_outbox,
+            managed_launch_recovery: crate::device::managed_launch_recovery_status(),
             parse_error_count_1h,
             consecutive_ship_failures,
             ship_attempts_1h: ship_stats.ship_attempts_1h,
@@ -3179,6 +3183,11 @@ mod tests {
             spool_dead_count: 1,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 2,
             ship_attempts_1h: 7,
@@ -3250,6 +3259,11 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -4400,6 +4414,11 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -4464,6 +4483,11 @@ mod tests {
             spool_dead_count: 3,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -4637,6 +4661,11 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -4726,6 +4755,11 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -5560,6 +5594,11 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,

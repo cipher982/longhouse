@@ -129,6 +129,7 @@ class LiveRunnerHealthIncident(LiveBase):
     last_observed_at = Column(DateTime, server_default=func.now(), nullable=False)
     resolved_at = Column(DateTime, nullable=True)
     alert_sent_at = Column(DateTime, nullable=True)
+    alert_claimed_at = Column(DateTime, nullable=True)
     alert_channel = Column(String, nullable=True)
     alert_count = Column(Integer, nullable=False)
     wakeup_sent_at = Column(DateTime, nullable=True)

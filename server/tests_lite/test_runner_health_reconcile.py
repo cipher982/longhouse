@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from unittest.mock import patch
-from uuid import UUID
 
 import pytest
 
@@ -17,6 +16,7 @@ from zerg.models.models import RunnerHealthIncident
 from zerg.models.user import User
 from zerg.services.runner_health_reconciler import OPEN_INCIDENT_STATUS
 from zerg.services.runner_health_reconciler import RESOLVED_INCIDENT_STATUS
+from zerg.services.runner_health_reconciler import _claim_external_alert
 from zerg.services.runner_health_reconciler import reconcile_runner_health
 from zerg.utils.time import utc_now_naive
 
@@ -130,6 +130,67 @@ async def test_reconcile_sends_one_email_alert_per_incident(tmp_path: Path):
         db.close()
 
 
+async def test_reconcile_realerts_once_when_offline_reason_changes(tmp_path: Path):
+    db = _make_db(tmp_path)
+    try:
+        now = utc_now_naive()
+        user = User(email="owner@test.local", role="ADMIN")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        runner = Runner(
+            owner_id=user.id,
+            name="zerg",
+            auth_secret_hash="hash",
+            capabilities=["exec.full"],
+            status="offline",
+            last_seen_at=now - timedelta(minutes=1),
+            runner_metadata={"install_mode": "server", "capabilities": ["exec.full"], "heartbeat_interval_ms": 60000},
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+
+        incident = RunnerHealthIncident(
+            owner_id=user.id,
+            runner_id=runner.id,
+            incident_type="offline",
+            status=OPEN_INCIDENT_STATUS,
+            reason_code="stale_heartbeat",
+            summary="Offline. Last heartbeat 720s ago.",
+            opened_at=now - timedelta(minutes=6),
+            last_observed_at=now - timedelta(minutes=1),
+            alert_sent_at=now - timedelta(minutes=16),
+            alert_channel="email",
+            alert_count=1,
+            context={"alert_reason_code": "stale_heartbeat"},
+        )
+        db.add(incident)
+        db.commit()
+
+        send_email = MagicMock(return_value=True)
+        with (
+            patch(
+                "zerg.services.runner_health_reconciler.get_runner_connection_manager",
+                return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
+            ),
+            patch("zerg.services.runner_health_reconciler._send_email_alert", send_email),
+        ):
+            result = await reconcile_runner_health(db, now=now)
+            unchanged = await reconcile_runner_health(db, now=now + timedelta(minutes=1))
+
+        db.refresh(incident)
+
+        assert result["alerts_sent"] == 1
+        assert unchanged["alerts_sent"] == 0
+        assert incident.alert_count == 2
+        assert incident.context["alert_reason_code"] == "disconnected_recently"
+        send_email.assert_called_once()
+    finally:
+        db.close()
+
+
 async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path: Path):
     db = _make_db(tmp_path)
     try:
@@ -180,6 +241,7 @@ async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path
                 observed["runner_status"] = stored_runner.status
                 observed["incident_summary"] = stored_incident.summary
                 observed["incident_last_observed_at"] = stored_incident.last_observed_at
+                observed["alert_claimed_at"] = stored_incident.alert_claimed_at
             return True
 
         with (
@@ -195,6 +257,77 @@ async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path
         assert observed["runner_status"] == "offline"
         assert observed["incident_summary"] == "Offline. Last heartbeat 720s ago."
         assert observed["incident_last_observed_at"] == now
+        assert observed["alert_claimed_at"] is not None
+    finally:
+        db.close()
+
+
+async def test_alert_claim_is_compare_and_set_across_sessions(tmp_path: Path):
+    db = _make_db(tmp_path)
+    SessionLocal = make_sessionmaker(db.get_bind())
+    try:
+        now = utc_now_naive()
+        user = User(email="owner@test.local", role="ADMIN")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        runner = Runner(
+            owner_id=user.id,
+            name="zerg",
+            auth_secret_hash="hash",
+            capabilities=["exec.full"],
+            status="offline",
+            last_seen_at=now - timedelta(minutes=12),
+            runner_metadata={"install_mode": "server", "capabilities": ["exec.full"]},
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+        incident = RunnerHealthIncident(
+            owner_id=user.id,
+            runner_id=runner.id,
+            incident_type="offline",
+            status=OPEN_INCIDENT_STATUS,
+            reason_code="stale_heartbeat",
+            summary="Offline",
+            opened_at=now - timedelta(minutes=6),
+            last_observed_at=now,
+            context={},
+        )
+        db.add(incident)
+        db.commit()
+
+        first_db = SessionLocal()
+        second_db = SessionLocal()
+        try:
+            first = first_db.get(RunnerHealthIncident, incident.id)
+            second = second_db.get(RunnerHealthIncident, incident.id)
+            assert first is not None and second is not None
+            assert _claim_external_alert(
+                first_db,
+                incident=first,
+                reason_code="stale_heartbeat",
+                now=now,
+            )
+            first_db.commit()
+            assert not _claim_external_alert(
+                second_db,
+                incident=second,
+                reason_code="stale_heartbeat",
+                now=now,
+            )
+            second.status = RESOLVED_INCIDENT_STATUS
+            second.resolved_at = now
+            second_db.commit()
+            assert not _claim_external_alert(
+                first_db,
+                incident=first,
+                reason_code="material_reason_change",
+                now=now + timedelta(minutes=1),
+            )
+        finally:
+            first_db.close()
+            second_db.close()
     finally:
         db.close()
 

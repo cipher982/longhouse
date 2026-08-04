@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from datetime import datetime
+from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
@@ -14,6 +17,8 @@ from zerg.crud import runner_crud
 from zerg.models.models import Runner
 from zerg.models.models import RunnerHealthIncident
 from zerg.models.user import User
+
+RUNNER_ALERT_REASON_CHANGE_COOLDOWN = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_REASON_CHANGE_COOLDOWN_MINUTES", "15")))
 
 
 def _row(value) -> dict[str, Any] | None:
@@ -213,17 +218,67 @@ def execute_runner_operation(engine: Engine, operation: str, params: dict[str, A
             return {"runner": _row(runner), "incident": _row(incident), "owner": _row(owner)}
         if operation == "health_alert_sent":
             incident = db.get(RunnerHealthIncident, int(params["incident_id"]))
-            if incident is not None and incident.alert_sent_at is None:
+            if incident is not None:
                 observed_at = datetime.fromisoformat(str(params["observed_at"]))
+                reason_code = str(params.get("reason_code") or incident.reason_code)
+                context = dict(incident.context or {})
+                if incident.alert_sent_at is not None and context.get("alert_reason_code") == reason_code:
+                    return {"incident": _row(incident)}
                 incident.alert_sent_at = observed_at
+                incident.alert_claimed_at = None
                 incident.alert_channel = "email"
                 incident.alert_count = int(incident.alert_count or 0) + 1
                 incident.context = {
-                    **dict(incident.context or {}),
+                    **context,
                     "alert_sent_at": observed_at.isoformat(),
                     "alert_channel": "email",
+                    "alert_reason_code": reason_code,
                 }
                 db.commit()
                 db.refresh(incident)
             return {"incident": _row(incident)}
+        if operation == "health_alert_claim":
+            incident = db.get(RunnerHealthIncident, int(params["incident_id"]))
+            if incident is None or incident.status != "open":
+                return {"claimed": False, "incident": _row(incident)}
+            observed_at = datetime.fromisoformat(str(params["observed_at"]))
+            reason_code = str(params.get("reason_code") or incident.reason_code)
+            context = dict(incident.context or {})
+            reason_changed = incident.alert_sent_at is not None and context.get("alert_reason_code") not in {None, reason_code}
+            if (
+                reason_changed
+                and incident.alert_sent_at is not None
+                and observed_at - incident.alert_sent_at < RUNNER_ALERT_REASON_CHANGE_COOLDOWN
+            ):
+                return {"claimed": False, "incident": _row(incident)}
+            if incident.alert_sent_at is not None and context.get("alert_reason_code") == reason_code:
+                return {"claimed": False, "incident": _row(incident)}
+            claim_ttl_seconds = int(params.get("claim_ttl_seconds") or 600)
+            claim_cutoff = observed_at - timedelta(seconds=claim_ttl_seconds)
+            claimed = (
+                db.query(RunnerHealthIncident)
+                .filter(
+                    RunnerHealthIncident.id == incident.id,
+                    RunnerHealthIncident.status == "open",
+                    or_(
+                        RunnerHealthIncident.alert_claimed_at.is_(None),
+                        RunnerHealthIncident.alert_claimed_at < claim_cutoff,
+                    ),
+                )
+                .update(
+                    {RunnerHealthIncident.alert_claimed_at: observed_at},
+                    synchronize_session=False,
+                )
+            )
+            if claimed != 1:
+                return {"claimed": False, "incident": _row(incident)}
+            incident.alert_claimed_at = observed_at
+            incident.context = {
+                **context,
+                "alert_claimed_at": observed_at.isoformat(),
+                "alert_claimed_reason_code": reason_code,
+            }
+            db.commit()
+            db.refresh(incident)
+            return {"claimed": True, "incident": _row(incident)}
         raise ValueError(f"unknown runner operation: {operation}")

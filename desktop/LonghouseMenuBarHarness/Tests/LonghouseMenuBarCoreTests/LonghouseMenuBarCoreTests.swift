@@ -206,7 +206,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .repair)
-        #expect(presentation.headline == "Durable upload needs inspection for 2 sources")
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
     }
 
     @Test
@@ -250,8 +250,8 @@ struct LonghouseMenuBarCoreTests {
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
-        #expect(presentation.promotion == .repair)
-        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Durable upload proof unavailable for 1 source")
     }
 
     @Test
@@ -477,6 +477,27 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.control?.connection == "connected")
         #expect(session.canStopFromMenuBar)
         #expect(session.menuBarAttentionKind == .working)
+    }
+
+    @Test
+    func runtimeProjectionRefreshPreservesMachineActionIdentifiers() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-07-22T20:30:32Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Orphaned managed process",
+            reasons: ["orphaned_managed_bridge"],
+            suggestedActions: ["Stop the exact managed process"],
+            suggestedActionIds: ["stop_managed_bridge"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.markingRuntimeHostProjectionUnavailable().suggestedActionIds == ["stop_managed_bridge"])
     }
 
     @Test
@@ -931,6 +952,63 @@ struct LonghouseMenuBarCoreTests {
         #expect(feedback?.style == .warning)
         #expect(feedback?.title == "Repair dry run recorded")
         #expect(feedback?.detail.contains("longhouse machine repair") == true)
+    }
+
+    @Test
+    func sourceInspectionDryRunUsesScopedShippingCommand() throws {
+        let sourceEpoch = "01234567-89ab-cdef-0123-456789abcdef"
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Durable upload needs inspection",
+            reasons: ["storage_v2_sources_unresolved"],
+            suggestedActions: ["Inspect retained source evidence"],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: nil,
+                exists: true,
+                fresh: true,
+                ageSeconds: 1,
+                payload: EngineStatusPayload(
+                    version: "test",
+                    daemonPid: 1,
+                    lastShipAt: nil,
+                    spoolPendingCount: 0,
+                    spoolDeadCount: 0,
+                    storageV2Outbox: StorageV2OutboxStatus(
+                        pendingCount: 0,
+                        pendingBytes: 0,
+                        blockedSourceCount: 1,
+                        blockedBytes: 0,
+                        latestBlockSourceEpoch: sourceEpoch,
+                        latestUnresolvedBlockSourceEpoch: sourceEpoch,
+                        latestBlockKind: "source_epoch_conflict_unresolved",
+                        latestBlockDetail: nil,
+                        byteLimit: 1_073_741_824,
+                        error: nil
+                    ),
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 0,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: [],
+                    lastUpdated: "2026-04-08T01:52:00Z"
+                ),
+                error: nil
+            ),
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.inspectStorageSource, snapshot: snapshot)
+
+        #expect(feedback?.style == .info)
+        #expect(feedback?.title == "Source inspection dry run recorded")
+        #expect(feedback?.detail.contains("longhouse shipping inspect --source-epoch \(sourceEpoch) --json") == true)
     }
 
     @Test
@@ -2477,6 +2555,29 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
     }
 
+    @Test
+    func nativeRedWithoutRowLevelExceptionPromotesRepair() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-22T03:00:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse reported a new machine failure",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            managedSummary: nil,
+            managedSessions: [],
+            orphanBridges: [],
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .repair)
+    }
+
     private func makeFakeHomeDirectory() throws -> URL {
         let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2989,7 +3090,7 @@ private func makeHealthySnapshot(
     headline: String = "Longhouse shipping healthy",
     sessions: [ManagedSessionSnapshot]? = nil
 ) -> HealthSnapshot {
-    HealthSnapshot(
+    return HealthSnapshot(
         schemaVersion: 1,
         collectedAt: "2026-05-05T12:00:00Z",
         healthState: "healthy",
@@ -3028,7 +3129,13 @@ private func presentationSnapshot(
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
 ) -> HealthSnapshot {
-    HealthSnapshot(
+    let resolvedStorageUnresolved = storageUnresolved ?? (
+        storageBlockKind == "source_epoch_conflict" || storageBlockKind == "render_generation_revision_conflict"
+            ? 0
+            : storageBlockKind == "source_epoch_conflict_unresolved" ? 1 : nil
+    )
+
+    return HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
         healthState: "healthy", severity: "green", headline: "Healthy",
         reasons: reasons, suggestedActions: [],
@@ -3043,7 +3150,7 @@ private func presentationSnapshot(
                 spoolPendingCount: 0, spoolDeadCount: 0, archiveBacklog: archive,
                 storageV2Outbox: StorageV2OutboxStatus(
                     pendingCount: storagePending, pendingBytes: 0, blockedSourceCount: storageBlocked,
-                    unresolvedBlockedSourceCount: storageUnresolved,
+                    unresolvedBlockedSourceCount: resolvedStorageUnresolved,
                     blockedBytes: 0, latestBlockKind: storageBlockKind, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),

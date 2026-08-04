@@ -437,30 +437,54 @@ fn coordination_token(
     if config.resume_session.is_none() {
         return Ok(None);
     }
-    let machine = home(config.config_dir.as_deref())?.join("machine");
-    let state: Value = serde_json::from_slice(&fs::read(machine.join("state.json"))?)?;
-    let url = config
+    let machine = match home(config.config_dir.as_deref()) {
+        Ok(root) => root.join("machine"),
+        Err(error) => {
+            eprintln!(
+                "Longhouse warning: Cursor resume started without coordination authority; could not locate machine state: {error:#}"
+            );
+            return Ok(None);
+        }
+    };
+    let state: Option<Value> = match fs::read(machine.join("state.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+    {
+        Some(state) => Some(state),
+        None => None,
+    };
+    let Some(url) = config
         .url
         .as_deref()
-        .or_else(|| state.get("runtime_url").and_then(Value::as_str))
-        .filter(|value| !value.trim().is_empty())
-        .context("No Longhouse URL configured. Run `longhouse auth` first.")?;
-    let device_token = config
-        .token
-        .as_deref()
-        .map(str::to_owned)
         .or_else(|| {
-            fs::read_to_string(machine.join("device-token"))
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
+            state
+                .as_ref()
+                .and_then(|value| value.get("runtime_url"))
+                .and_then(Value::as_str)
         })
-        .context("No device token found. Run `longhouse auth` first.")?;
+        .filter(|value| !value.trim().is_empty())
+    else {
+        eprintln!(
+            "Longhouse warning: Cursor resume started without coordination authority; no Longhouse URL is configured"
+        );
+        return Ok(None);
+    };
+    let Some(device_token) = config.token.as_deref().map(str::to_owned).or_else(|| {
+        fs::read_to_string(machine.join("device-token"))
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }) else {
+        eprintln!(
+            "Longhouse warning: Cursor resume started without coordination authority; no device token is configured"
+        );
+        return Ok(None);
+    };
     let endpoint = format!(
         "{}/api/agents/sessions/{session_id}/coordination-token",
         url.trim_end_matches('/')
     );
-    tokio::runtime::Runtime::new()?.block_on(async {
+    let result = tokio::runtime::Runtime::new()?.block_on(async {
         let response = reqwest::Client::new()
             .post(endpoint)
             .header("X-Agents-Token", device_token)
@@ -481,7 +505,16 @@ fn coordination_token(
             .map(str::to_owned)
             .map(Some)
             .context("Longhouse returned empty coordination authority")
-    })
+    });
+    match result {
+        Ok(token) => Ok(token),
+        Err(error) => {
+            eprintln!(
+                "Longhouse warning: Cursor resume started without coordination authority; remote coordination is unavailable: {error:#}"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn write_cursor_mcp_config(
@@ -642,7 +675,7 @@ fn registration_payload(
 ) -> anyhow::Result<Value> {
     let machine_name = registration_credentials(config)
         .map(|(_, _, machine_name)| machine_name)
-        .unwrap_or_else(|_| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
+        .unwrap_or_else(|_| default_machine_name());
     let mut payload = crate::managed_launch_payload::ManagedLaunchRegistration {
         provider: "cursor",
         cwd,
@@ -676,6 +709,22 @@ fn registration_payload(
         payload["launch_surface"] = json!(surface);
     }
     Ok(payload)
+}
+
+fn default_machine_name() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("HOSTNAME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "unknown".into())
 }
 
 fn register(
@@ -736,7 +785,7 @@ fn registration_credentials(config: &LaunchConfig) -> anyhow::Result<(String, St
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
+        .unwrap_or_else(default_machine_name);
     Ok((url, token, machine_name))
 }
 fn enqueue_terminal_event(
@@ -1269,12 +1318,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let stop = Arc::new(AtomicBool::new(false));
     let requested_session_end = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
+    let cursor_start =
+        process_start_time(pid).context("could not capture cursor-agent process identity")?;
     let setup = (|| -> anyhow::Result<Terminal> {
         let launcher_pid = std::process::id();
         let launcher_start = process_start_time(launcher_pid as libc::pid_t)
             .context("could not capture Cursor Helm launcher process identity")?;
-        let cursor_start =
-            process_start_time(pid).context("could not capture cursor-agent process identity")?;
         let now = Utc::now().to_rfc3339();
         write_json(
             &dir.join(format!("{session_id}.json")),
@@ -1305,6 +1354,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         }
     };
     if let Some(registration) = &degraded_registration {
+        registration.record_provider_owner(pid as u32, Some(cursor_start.clone()));
         registration.mark_provider_ready();
     }
     if let Some(transaction) = launch_transaction.as_mut() {
@@ -1444,7 +1494,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         libc::close(master);
     }
     if let Some(registration) = &degraded_registration {
-        registration.mark_provider_failed();
+        registration.mark_provider_exited();
     }
     if config.open {
         if let Some(url) = hook_url.as_deref() {
@@ -1664,6 +1714,66 @@ mod tests {
             Some("resumed-secret".to_string())
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn resumed_session_starts_degraded_when_coordination_authority_is_unavailable() {
+        let root = tempfile::tempdir().unwrap();
+        let config = LaunchConfig {
+            cwd: PathBuf::new(),
+            project: None,
+            name: None,
+            loop_mode: "interactive".into(),
+            url: Some("http://127.0.0.1:1".into()),
+            token: Some("device-token".into()),
+            resume_session: Some("11111111-1111-4111-8111-111111111111".into()),
+            cursor_bin: None,
+            config_dir: Some(root.path().to_path_buf()),
+            permission_mode: None,
+            verbose: false,
+            open: false,
+            cursor_args: vec![],
+        };
+
+        assert_eq!(
+            coordination_token(&config, None, "11111111-1111-4111-8111-111111111111").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn coordination_mcp_fails_closed_without_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let stop = AtomicBool::new(false);
+        let requested_session_end = AtomicBool::new(false);
+        let pty_lock = Mutex::new(());
+        let dir = root.path().to_path_buf();
+        let worker = thread::spawn(move || {
+            serve(
+                server,
+                -1,
+                0,
+                &stop,
+                &requested_session_end,
+                &pty_lock,
+                &dir,
+                "11111111-1111-4111-8111-111111111111",
+                "conversation",
+                "launch",
+                None,
+            );
+        });
+
+        client
+            .write_all(b"{\"kind\":\"coordination-token\"}\n")
+            .unwrap();
+        let mut response_body = String::new();
+        client.read_to_string(&mut response_body).unwrap();
+        worker.join().unwrap();
+
+        assert!(response_body.contains("session_not_attached"));
+        assert!(response_body.contains("coordination authority is unavailable"));
     }
 
     #[test]

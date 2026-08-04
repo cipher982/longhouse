@@ -102,6 +102,8 @@ enum Commands {
 struct ManagedProviderTrampolineArgs {
     #[arg(long)]
     release_fd: i32,
+    #[arg(long)]
+    exec_status_fd: i32,
     #[arg(value_name = "PROGRAM")]
     program: OsString,
     #[arg(trailing_var_arg = true)]
@@ -357,6 +359,10 @@ struct MachineState {
 struct BridgeStartResponse {
     ws_url: String,
     thread_id: Option<String>,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    process_start_time: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1154,8 +1160,12 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
     let degraded_provider_registration_for_spawn = degraded_registration.as_ref().cloned();
-    let run_result = run_foreground_command_after_spawn(&mut command, || {
+    let run_result = run_foreground_command_after_spawn(&mut command, |provider_pid| {
         if let Some(registration) = degraded_provider_registration_for_spawn {
+            registration.record_provider_owner(
+                provider_pid,
+                crate::managed_launch_lifecycle::process_start_identity(provider_pid),
+            );
             registration.mark_provider_ready();
         }
         match launch_transaction.as_mut() {
@@ -1179,7 +1189,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         }
     };
     if let Some(registration) = &degraded_registration {
-        registration.mark_provider_failed();
+        registration.mark_provider_exited();
     }
     drop(degraded_registration);
     if let Err(error) = record_claude_terminal_event(
@@ -1371,9 +1381,6 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             return Err(error);
         }
     };
-    if let Some(registration) = &degraded_registration {
-        registration.mark_provider_ready();
-    }
     if resume_target
         .as_ref()
         .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
@@ -1381,18 +1388,30 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
+    if let Some(registration) = &degraded_registration {
+        if let Some(pid) = bridge_response.pid {
+            registration.record_provider_owner(pid, bridge_response.process_start_time.clone());
+        }
+        registration.mark_provider_ready();
+    }
     if let Some(transaction) = launch_transaction.as_mut() {
         transaction.confirm_in_background();
     }
-    println!(
-        "Managed OpenCode ready\n→ {}/s/{}",
-        url.trim_end_matches('/'),
-        response
-            .session_id
-            .split('-')
-            .next()
-            .unwrap_or(&response.session_id)
-    );
+    if degraded_registration.is_some() {
+        println!(
+            "Managed OpenCode started in degraded Helm mode\n→ local provider ownership is active; Runtime Host registration is pending"
+        );
+    } else {
+        println!(
+            "Managed OpenCode ready\n→ {}/s/{}",
+            url.trim_end_matches('/'),
+            response
+                .session_id
+                .split('-')
+                .next()
+                .unwrap_or(&response.session_id)
+        );
+    }
     let attached = args.attach
         && !args.no_attach
         && std::io::stdin().is_terminal()
@@ -1402,9 +1421,6 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             "Attach: longhouse opencode attach --session-id {}",
             response.session_id
         );
-        if let Some(registration) = &degraded_registration {
-            registration.mark_provider_ready();
-        }
         return Ok(());
     }
     let mut attach = Command::new(&bridge);
@@ -1418,8 +1434,11 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     ]);
     let run_result = run_foreground_command(&mut attach);
     let stop_result = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
-    let exit = run_result?;
-    stop_result?;
+    let exit = finish_managed_opencode_attach(run_result, stop_result, || {
+        if let Some(registration) = &degraded_registration {
+            registration.mark_provider_exited();
+        }
+    })?;
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -1427,9 +1446,27 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn finish_managed_opencode_attach(
+    run_result: anyhow::Result<i32>,
+    stop_result: anyhow::Result<()>,
+    mark_provider_exited: impl FnOnce(),
+) -> anyhow::Result<i32> {
+    // Teardown errors must not strand a ready provider as a live retry owner.
+    // Record the provider exit before propagating either foreground or cleanup
+    // error so restart reconciliation sees the true post-hoc lifecycle.
+    mark_provider_exited();
+    let exit = run_result?;
+    stop_result?;
+    Ok(exit)
+}
+
 #[derive(Deserialize)]
 struct OpencodeBridgeStartResponse {
     provider_session_id: String,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    process_start_time: Option<String>,
 }
 
 struct OpencodeResumeTarget {
@@ -1950,9 +1987,6 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     }
     let bridge: BridgeStartResponse =
         serde_json::from_slice(&output.stdout).context("parse native Codex bridge response")?;
-    if let Some(registration) = &degraded_registration {
-        registration.mark_provider_ready();
-    }
     if !attach
         && bridge
             .thread_id
@@ -1966,18 +2000,30 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
+    if let Some(registration) = &degraded_registration {
+        if let Some(pid) = bridge.pid {
+            registration.record_provider_owner(pid, bridge.process_start_time.clone());
+        }
+        registration.mark_provider_ready();
+    }
     if let Some(transaction) = launch_transaction.as_mut() {
         transaction.confirm_in_background();
     }
-    println!(
-        "Managed Codex ready\n→ {}/s/{}",
-        url.trim_end_matches('/'),
-        response
-            .session_id
-            .split('-')
-            .next()
-            .unwrap_or(&response.session_id)
-    );
+    if degraded_registration.is_some() {
+        println!(
+            "Managed Codex started in degraded Helm mode\n→ local provider ownership is active; Runtime Host registration is pending"
+        );
+    } else {
+        println!(
+            "Managed Codex ready\n→ {}/s/{}",
+            url.trim_end_matches('/'),
+            response
+                .session_id
+                .split('-')
+                .next()
+                .unwrap_or(&response.session_id)
+        );
+    }
     if !attach {
         if args.attach && !args.no_attach {
             eprintln!("Skipping auto-attach because stdin/stdout are not TTYs.");
@@ -1989,9 +2035,6 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         // The bridge owns the provider after this process exits. The Machine
         // Agent owns the durable registration intent and will retry it after
         // this wrapper returns.
-        if let Some(registration) = &degraded_registration {
-            registration.mark_provider_ready();
-        }
         return Ok(());
     }
     if let Err(error) = record_codex_contract(
@@ -2015,12 +2058,16 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    finish_codex_tui_session(
+    let result = finish_codex_tui_session(
         tui_result,
         &response.session_id,
         Some(response.run_id.as_str()),
         Some(&machine_name),
-    )
+    );
+    if let Some(registration) = &degraded_registration {
+        registration.mark_provider_exited();
+    }
+    result
 }
 
 fn launch_managed_codex_resume(
@@ -2664,6 +2711,20 @@ fn interactive_stdio() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
+#[cfg(unix)]
+fn terminal_foreground_available(stdin_fd: libc::c_int, parent_pgrp: libc::pid_t) -> bool {
+    // Probe the operation that the normal handoff needs while the wrapper
+    // still owns the terminal. If it cannot make its own process group
+    // foreground, start the provider in the wrapper's existing group instead
+    // of creating a background group that would receive SIGTTIN.
+    let previous_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
+    let available = unsafe { libc::tcsetpgrp(stdin_fd, parent_pgrp) == 0 };
+    unsafe {
+        libc::signal(libc::SIGTTOU, previous_sigttou);
+    }
+    available
+}
+
 fn wait_for_child_or_signal(
     child: &mut std::process::Child,
     signal: &Arc<AtomicUsize>,
@@ -2697,7 +2758,11 @@ fn wait_for_child_or_signal(
                     // outcome. This also makes a Ctrl-C recover a provider
                     // that was stopped by SIGTTOU/SIGTTIN during startup.
                     unsafe {
-                        libc::kill(-process_group.unwrap_or(pid), libc::SIGCONT);
+                        if let Some(group) = process_group {
+                            libc::kill(-group, libc::SIGCONT);
+                        } else {
+                            libc::kill(pid, libc::SIGCONT);
+                        }
                     }
                     eprintln!(
                         "Longhouse warning: provider stopped by signal {stop_signal}; resuming it"
@@ -2812,6 +2877,11 @@ fn run_managed_provider_trampoline(args: ManagedProviderTrampolineArgs) -> anyho
     if release_fd < 0 {
         anyhow::bail!("managed provider release fd is invalid");
     }
+    let exec_status_fd = RawFd::try_from(args.exec_status_fd)
+        .map_err(|_| anyhow::anyhow!("managed provider exec status fd is invalid"))?;
+    if exec_status_fd < 0 {
+        anyhow::bail!("managed provider exec status fd is invalid");
+    }
     let mut byte = [0_u8; 1];
     loop {
         let result = unsafe {
@@ -2827,21 +2897,66 @@ fn run_managed_provider_trampoline(args: ManagedProviderTrampolineArgs) -> anyho
         if result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
             continue;
         }
+        let read_error = std::io::Error::last_os_error();
         unsafe {
             libc::close(release_fd);
+            // The parent is waiting for a byte-or-EOF result. Every
+            // trampoline failure before provider exec must send a byte;
+            // EOF is reserved for a successful exec image replacement.
+            let code = [1_u8; 1];
+            libc::write(
+                exec_status_fd,
+                code.as_ptr().cast::<libc::c_void>(),
+                code.len(),
+            );
+            libc::close(exec_status_fd);
         }
         if result == 0 {
             anyhow::bail!("managed provider release barrier closed before handoff");
         }
-        return Err(std::io::Error::last_os_error().into());
+        return Err(read_error.into());
     }
     unsafe {
         libc::close(release_fd);
     }
 
+    // The trampoline must keep this descriptor open for its own exec, then
+    // close it automatically when the provider image replaces the trampoline.
+    // The status pipe remains open through provider exec. A failure byte is
+    // written for every pre-exec failure; successful exec closes it via
+    // FD_CLOEXEC, so the parent sees EOF only after the provider is installed.
+    let flags = unsafe { libc::fcntl(exec_status_fd, libc::F_GETFD) };
+    if flags < 0
+        || unsafe { libc::fcntl(exec_status_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            let code = [1_u8; 1];
+            libc::write(
+                exec_status_fd,
+                code.as_ptr().cast::<libc::c_void>(),
+                code.len(),
+            );
+            libc::close(exec_status_fd);
+        }
+        return Err(error.into());
+    }
     let mut command = Command::new(args.program);
     command.args(args.args);
-    Err(command.exec().into())
+    let error = command.exec();
+    unsafe {
+        // The status pipe write end is close-on-exec. A byte therefore means
+        // the provider failed before exec; EOF means the provider image was
+        // successfully installed in this PID.
+        let code = [1_u8; 1];
+        libc::write(
+            exec_status_fd,
+            code.as_ptr().cast::<libc::c_void>(),
+            code.len(),
+        );
+        libc::close(exec_status_fd);
+    }
+    Err(error.into())
 }
 
 #[cfg(not(unix))]
@@ -2851,13 +2966,65 @@ fn run_managed_provider_trampoline(_args: ManagedProviderTrampolineArgs) -> anyh
 
 #[cfg(unix)]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
-    run_foreground_command_after_spawn(command, || Ok(()))
+    run_foreground_command_after_spawn(command, |_| Ok(()))
+}
+
+#[cfg(unix)]
+fn wait_for_provider_exec(fd: std::os::unix::io::RawFd) -> anyhow::Result<()> {
+    wait_for_provider_exec_with_timeout(fd, Duration::from_secs(10))
+}
+
+#[cfg(unix)]
+fn wait_for_provider_exec_with_timeout(
+    fd: std::os::unix::io::RawFd,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let mut byte = [0_u8; 1];
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("managed provider did not complete exec within {timeout:?}");
+        }
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as libc::c_int;
+        let mut poll_fd = libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
+        if poll_result == 0 {
+            anyhow::bail!("managed provider did not complete exec within {timeout:?}");
+        }
+        if poll_result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if poll_fd.revents & libc::POLLNVAL != 0 {
+            anyhow::bail!("managed provider exec status pipe is invalid");
+        }
+        let result =
+            unsafe { libc::read(fd, byte.as_mut_ptr().cast::<libc::c_void>(), byte.len()) };
+        if result == 0 {
+            return Ok(());
+        }
+        if result == 1 {
+            anyhow::bail!("managed provider failed before exec");
+        }
+        if result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        return Err(std::io::Error::last_os_error().into());
+    }
 }
 
 #[cfg(unix)]
 fn run_foreground_command_after_spawn(
     command: &mut Command,
-    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+    after_spawn: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
@@ -2889,6 +3056,46 @@ fn run_foreground_command_after_spawn(
         return Err(error.into());
     }
     let child_release_write = release_fds[1];
+    let mut exec_status_fds = [-1; 2];
+    if unsafe { libc::pipe(exec_status_fds.as_mut_ptr()) } != 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(release_fds[0]);
+            libc::close(release_fds[1]);
+        }
+        return Err(error.into());
+    }
+    let exec_status_flags = unsafe { libc::fcntl(exec_status_fds[1], libc::F_GETFD) };
+    if exec_status_flags < 0
+        || unsafe {
+            libc::fcntl(
+                exec_status_fds[1],
+                libc::F_SETFD,
+                exec_status_flags | libc::FD_CLOEXEC,
+            )
+        } < 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(release_fds[0]);
+            libc::close(release_fds[1]);
+            libc::close(exec_status_fds[0]);
+            libc::close(exec_status_fds[1]);
+        }
+        return Err(error.into());
+    }
+    let child_exec_status_read = exec_status_fds[0];
+    let child_exec_status_write = exec_status_fds[1];
+    let interactive = interactive_stdio();
+    let stdin_fd = if interactive {
+        Some(std::io::stdin().as_raw_fd())
+    } else {
+        None
+    };
+    let parent_pgrp = unsafe { libc::getpgrp() };
+    let create_child_process_group = stdin_fd
+        .map(|fd| terminal_foreground_available(fd, parent_pgrp))
+        .unwrap_or(true);
 
     let program = command.get_program().to_os_string();
     let provider_args = command.get_args().map(OsString::from).collect::<Vec<_>>();
@@ -2912,6 +3119,8 @@ fn run_foreground_command_after_spawn(
         .arg("__managed-provider-trampoline")
         .arg("--release-fd")
         .arg(release_fds[0].to_string())
+        .arg("--exec-status-fd")
+        .arg(child_exec_status_write.to_string())
         .arg("--")
         .arg(program)
         .args(provider_args);
@@ -2938,7 +3147,18 @@ fn run_foreground_command_after_spawn(
                 libc::signal(signal, libc::SIG_DFL);
             }
             libc::close(child_release_write);
-            if libc::setpgid(0, 0) != 0 {
+            libc::close(child_exec_status_read);
+            let flags = libc::fcntl(child_exec_status_write, libc::F_GETFD);
+            if flags < 0
+                || libc::fcntl(
+                    child_exec_status_write,
+                    libc::F_SETFD,
+                    flags & !libc::FD_CLOEXEC,
+                ) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            if create_child_process_group && libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -2950,12 +3170,15 @@ fn run_foreground_command_after_spawn(
             unsafe {
                 libc::close(release_fds[0]);
                 libc::close(release_fds[1]);
+                libc::close(exec_status_fds[0]);
+                libc::close(exec_status_fds[1]);
             }
             return Err(error.into());
         }
     };
     unsafe {
         libc::close(release_fds[0]);
+        libc::close(exec_status_fds[1]);
     }
     release_fds[0] = -1;
     let signal = match install_tui_signal_flag() {
@@ -2963,31 +3186,42 @@ fn run_foreground_command_after_spawn(
         Err(error) => {
             unsafe {
                 libc::close(release_fds[1]);
+                libc::close(child_exec_status_read);
             }
             let child_pgrp = child.id() as libc::pid_t;
-            terminate_and_reap_child(&mut child, Some(child_pgrp));
+            terminate_and_reap_child(&mut child, create_child_process_group.then_some(child_pgrp));
             return Err(error);
         }
     };
     let child_pgrp = child.id() as libc::pid_t;
-    unsafe {
-        libc::setpgid(child_pgrp, child_pgrp);
-    }
-    if let Err(error) = after_spawn() {
+    let child_process_group = if create_child_process_group {
+        // The trampoline normally establishes this group before exec. Keep
+        // the parent-side call as a race-tolerant reinforcement, but never
+        // create a new group after the terminal preflight selected the
+        // wrapper's existing group as the degraded fallback.
         unsafe {
-            libc::close(release_fds[1]);
+            libc::setpgid(child_pgrp, child_pgrp);
         }
-        terminate_and_reap_child(&mut child, Some(child_pgrp));
-        return Err(error);
-    }
-    if !interactive_stdio() {
+        Some(child_pgrp)
+    } else {
+        None
+    };
+    if !interactive {
         unsafe {
             libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
             libc::close(release_fds[1]);
         }
-        return wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
+        let exec_result = wait_for_provider_exec(child_exec_status_read);
+        unsafe {
+            libc::close(child_exec_status_read);
+        }
+        if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+            terminate_and_reap_child(&mut child, child_process_group);
+            return Err(error);
+        }
+        return wait_for_child_or_signal(&mut child, &signal, child_process_group);
     }
-    let stdin_fd = std::io::stdin().as_raw_fd();
+    let stdin_fd = stdin_fd.expect("interactive managed provider requires stdin");
     let saved_termios = {
         let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
         if unsafe { libc::tcgetattr(stdin_fd, &mut termios) } == 0 {
@@ -3000,22 +3234,63 @@ fn run_foreground_command_after_spawn(
             None
         }
     };
-    let parent_pgrp = unsafe { libc::getpgrp() };
     let old_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
-    let handed_off = unsafe { libc::tcsetpgrp(stdin_fd, child_pgrp) == 0 };
+    let handed_off = child_process_group
+        .map(|group| unsafe { libc::tcsetpgrp(stdin_fd, group) == 0 })
+        .unwrap_or(false);
     if !handed_off {
+        eprintln!(
+            "Longhouse warning: could not hand the terminal to the managed provider; continuing in degraded terminal-ownership mode"
+        );
+        // The pre-spawn terminal probe controls whether the trampoline created
+        // a child process group. If foreground handoff unexpectedly races and
+        // still fails, keep cleanup PID-scoped; a process-group leader cannot
+        // be safely reparented into the wrapper's group.
+        let degraded_process_group = None;
         unsafe {
+            libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
             libc::close(release_fds[1]);
             libc::signal(libc::SIGTTOU, old_sigttou);
         }
-        terminate_and_reap_child(&mut child, Some(child_pgrp));
-        anyhow::bail!("could not hand the terminal to the managed provider");
+        let exec_result = wait_for_provider_exec(child_exec_status_read);
+        unsafe {
+            libc::close(child_exec_status_read);
+        }
+        if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+            terminate_and_reap_child(&mut child, degraded_process_group);
+            if let Some(termios) = saved_termios {
+                unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) };
+            }
+            return Err(error);
+        }
+        let status = wait_for_child_or_signal(&mut child, &signal, degraded_process_group);
+        if let Some(termios) = saved_termios {
+            unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) };
+        }
+        return status;
     }
     unsafe {
         libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
         libc::close(release_fds[1]);
     }
-    let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
+    let exec_result = wait_for_provider_exec(child_exec_status_read);
+    unsafe {
+        libc::close(child_exec_status_read);
+    }
+    if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+        unsafe {
+            libc::tcsetpgrp(stdin_fd, parent_pgrp);
+            libc::signal(libc::SIGTTOU, old_sigttou);
+        }
+        if let Some(termios) = saved_termios {
+            unsafe {
+                libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios);
+            }
+        }
+        terminate_and_reap_child(&mut child, child_process_group);
+        return Err(error);
+    }
+    let status = wait_for_child_or_signal(&mut child, &signal, child_process_group);
     if handed_off {
         if unsafe { libc::tcsetpgrp(stdin_fd, parent_pgrp) } != 0 {
             eprintln!(
@@ -3040,16 +3315,16 @@ fn run_foreground_command_after_spawn(
 
 #[cfg(not(unix))]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
-    run_foreground_command_after_spawn(command, || Ok(()))
+    run_foreground_command_after_spawn(command, |_| Ok(()))
 }
 
 #[cfg(not(unix))]
 fn run_foreground_command_after_spawn(
     command: &mut Command,
-    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+    after_spawn: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     let mut child = command.spawn()?;
-    if let Err(error) = after_spawn() {
+    if let Err(error) = after_spawn(child.id()) {
         terminate_child(&mut child, None);
         let _ = child.wait();
         return Err(error);
@@ -3494,6 +3769,43 @@ mod tests {
         assert!(command.is_none());
         assert!(launch.no_attach);
         assert!(launch.attach);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_exec_barrier_times_out_when_trampoline_stalls() {
+        let mut fds = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let error = wait_for_provider_exec_with_timeout(fds[0], Duration::from_millis(25))
+            .expect_err("an open but silent exec barrier must time out");
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        assert!(error.to_string().contains("did not complete exec"));
+    }
+
+    #[test]
+    fn opencode_teardown_marks_provider_exited_before_propagating_errors() {
+        let mut marked = false;
+        let error = finish_managed_opencode_attach(
+            Ok(0),
+            Err(anyhow::anyhow!("bridge stop failed")),
+            || marked = true,
+        )
+        .expect_err("cleanup failure should still be returned");
+        assert!(marked);
+        assert_eq!(error.to_string(), "bridge stop failed");
+
+        marked = false;
+        let error = finish_managed_opencode_attach(
+            Err(anyhow::anyhow!("provider attach failed")),
+            Ok(()),
+            || marked = true,
+        )
+        .expect_err("attach failure should still be returned");
+        assert!(marked);
+        assert_eq!(error.to_string(), "provider attach failed");
     }
 
     #[test]

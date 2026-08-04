@@ -10,6 +10,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use std::time::SystemTime;
 
 const NATIVE_DEVICE_ENTRYPOINTS_JSON: &str =
@@ -22,6 +23,7 @@ const TRANSPORT_ERROR_DEGRADED_MIN_RATE: f64 = 0.25;
 const CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT: u64 = 2;
 const DEFAULT_FALLBACK_SCAN_SECS: u64 = 300;
 const DEFAULT_SPOOL_REPLAY_SECS: u64 = 30;
+const OUTCOME_RECOVERY_ACTIVE_GRACE: Duration = Duration::from_secs(10);
 const DEFAULT_COMPRESSION: &str = "zstd";
 const LAUNCHD_LABEL: &str = "com.longhouse.shipper";
 const SYSTEMD_UNIT: &str = "longhouse-shipper";
@@ -93,6 +95,7 @@ struct NativeFastLocalHealth {
     transport: NativeTransportStatus,
     spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
+    managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     control_channel: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,6 +142,13 @@ struct NativeManagedSessionsStatus {
     count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeManagedLaunchRecoveryStatus {
+    pub exhausted_count: usize,
+    pub active_count: usize,
+    pub scan_error: bool,
+}
+
 /// The envelope `longhouse local-health --fast --json` emits for Longhouse.app.
 ///
 /// The Desktop app decodes this into `HealthSnapshot`, whose `severity` and
@@ -169,6 +179,7 @@ struct NativeDesktopHealth {
     #[serde(skip_serializing_if = "Option::is_none")]
     managed_sessions: Option<Vec<NativeDesktopSession>>,
     managed_summary: NativeDesktopManagedSummary,
+    managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
     /// Required before the app will open the Runtime Host projection stream.
     /// Without it `presentation` and `activity` stay null forever and every
     /// session renders activity-unknown.
@@ -632,6 +643,94 @@ fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth
     }
 }
 
+pub fn managed_launch_recovery_status() -> NativeManagedLaunchRecoveryStatus {
+    match config::get_agent_status_path() {
+        Ok(status_path) => collect_managed_launch_recovery(&status_path),
+        Err(_) => NativeManagedLaunchRecoveryStatus {
+            exhausted_count: 0,
+            active_count: 0,
+            scan_error: true,
+        },
+    }
+}
+
+fn collect_managed_launch_recovery(status_path: &Path) -> NativeManagedLaunchRecoveryStatus {
+    let Some(agent_dir) = status_path.parent() else {
+        return NativeManagedLaunchRecoveryStatus {
+            exhausted_count: 0,
+            active_count: 0,
+            scan_error: false,
+        };
+    };
+    let mut exhausted_count = 0usize;
+    let mut active_count = 0usize;
+    let mut scan_error = false;
+    for directory_name in ["registration-retries", "outcome-retries"] {
+        let directory = agent_dir.join("managed-local").join(directory_name);
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                scan_error = true;
+                continue;
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    scan_error = true;
+                    continue;
+                }
+            };
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let payload = match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                Some(Value::Object(payload)) => payload,
+                _ => {
+                    scan_error = true;
+                    continue;
+                }
+            };
+            let exhausted =
+                payload.get("recovery_exhausted").and_then(Value::as_bool) == Some(true);
+            if exhausted {
+                exhausted_count = exhausted_count.saturating_add(1);
+            } else if directory_name == "registration-retries"
+                || payload
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .and_then(|created_at| {
+                        chrono::DateTime::parse_from_rfc3339(created_at)
+                            .ok()
+                            .map(|created| {
+                                chrono::Utc::now()
+                                    .signed_duration_since(created.with_timezone(&chrono::Utc))
+                                    .to_std()
+                                    .map(|age| age >= OUTCOME_RECOVERY_ACTIVE_GRACE)
+                                    .unwrap_or(true)
+                            })
+                    })
+                    .unwrap_or(true)
+            {
+                // A successful launch leaves an outcome receipt briefly while
+                // the detached confirmer runs. Only surface an outcome retry
+                // as active recovery after that normal convergence grace.
+                active_count = active_count.saturating_add(1);
+            }
+        }
+    }
+    NativeManagedLaunchRecoveryStatus {
+        exhausted_count,
+        active_count,
+        scan_error,
+    }
+}
+
 fn native_fast_health_from_parts(
     status_path: &Path,
     exists: bool,
@@ -674,27 +773,21 @@ fn native_fast_health_from_parts(
         .and_then(Value::as_object)
         .and_then(|value| value.get("unresolved_blocked_source_count"))
         .and_then(Value::as_u64);
-    let latest_block_kind = object
-        .and_then(|value| value.get("storage_v2_outbox"))
-        .and_then(Value::as_object)
-        .and_then(|value| value.get("latest_block_kind"))
-        .and_then(Value::as_str);
     let storage_block_requires_repair = match unresolved_blocked_source_count {
         Some(unresolved) => unresolved > 0,
-        None => {
-            blocked_source_count > 0
-                && !matches!(
-                    latest_block_kind,
-                    Some("source_epoch_conflict" | "render_generation_revision_conflict")
-                )
-        }
+        // A legacy payload has no aggregate proof. The latest block kind
+        // cannot classify older retained sources without risking false green.
+        None => false,
     };
+    let storage_block_proof_unknown =
+        unresolved_blocked_source_count.is_none() && blocked_source_count > 0;
     let transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let managed_launch_recovery = collect_managed_launch_recovery(status_path);
 
     let mut reasons = Vec::new();
     if error.is_some() {
@@ -734,11 +827,23 @@ fn native_fast_health_from_parts(
     if dead_count > 0 {
         reasons.push("spool_dead_letters".to_string());
     }
-    if blocked_source_count > 0 {
+    if blocked_source_count > 0 && !storage_block_requires_repair {
         reasons.push("storage_v2_sources_blocked".to_string());
+    }
+    if storage_block_proof_unknown {
+        reasons.push("storage_v2_sources_proof_unknown".to_string());
     }
     if storage_block_requires_repair {
         reasons.push("storage_v2_sources_unresolved".to_string());
+    }
+    if managed_launch_recovery.exhausted_count > 0 {
+        reasons.push("managed_launch_recovery_exhausted".to_string());
+    }
+    if managed_launch_recovery.active_count > 0 {
+        reasons.push("managed_launch_recovery_active".to_string());
+    }
+    if managed_launch_recovery.scan_error {
+        reasons.push("managed_launch_recovery_unreadable".to_string());
     }
     if !matches!(
         transport.status_reason.as_str(),
@@ -756,8 +861,9 @@ fn native_fast_health_from_parts(
                 | "engine_status_stale"
                 | "payload_rejected"
                 | "payload_too_large"
-        )
-        || storage_block_requires_repair
+        ) || storage_block_requires_repair
+            || managed_launch_recovery.exhausted_count > 0
+            || managed_launch_recovery.scan_error
     }) {
         "broken"
     } else if reasons.is_empty() {
@@ -810,6 +916,7 @@ fn native_fast_health_from_parts(
         managed_sessions: NativeManagedSessionsStatus {
             count: managed_session_count,
         },
+        managed_launch_recovery,
         control_channel: object
             .and_then(|value| value.get("control_channel"))
             .cloned(),
@@ -864,10 +971,8 @@ fn native_desktop_health_from_parts(
         })
     });
 
-    let suggested_actions = native_desktop_suggested_actions(
-        engine_payload.as_ref(),
-        &fast.reasons,
-    );
+    let suggested_actions =
+        native_desktop_suggested_actions(engine_payload.as_ref(), &fast.reasons);
     let suggested_action_ids = native_desktop_suggested_action_ids(&fast.reasons);
 
     NativeDesktopHealth {
@@ -896,6 +1001,7 @@ fn native_desktop_health_from_parts(
             degraded_count,
             latest_activity_at: None,
         },
+        managed_launch_recovery: fast.managed_launch_recovery,
         managed_sessions: session_rows,
         realtime,
         control_channel: fast.control_channel,
@@ -907,7 +1013,10 @@ fn native_desktop_suggested_actions(
     engine_payload: Option<&Value>,
     reasons: &[String],
 ) -> Vec<String> {
-    if reasons.iter().any(|reason| reason == "storage_v2_sources_blocked") {
+    if reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_sources_blocked")
+    {
         let outbox = engine_payload
             .and_then(|value| value.get("storage_v2_outbox"))
             .and_then(Value::as_object);
@@ -917,18 +1026,33 @@ fn native_desktop_suggested_actions(
         let block_kind = outbox
             .and_then(|value| value.get("latest_block_kind"))
             .and_then(Value::as_str);
+        let source_epoch = outbox
+            .and_then(|value| {
+                if unresolved_count.unwrap_or(0) > 0 {
+                    value.get("latest_unresolved_block_source_epoch")
+                } else {
+                    value.get("latest_block_source_epoch")
+                }
+            })
+            .and_then(Value::as_str);
+        let inspect_command = source_epoch
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!("longhouse shipping inspect --source-epoch {value} --json"))
+            .unwrap_or_else(|| "longhouse shipping inspect --json".to_string());
         return match (unresolved_count, block_kind) {
             (Some(unresolved), _) if unresolved > 0 => vec![
-                "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
-                    .to_string(),
+                format!("Inspect retained source evidence with {inspect_command} before retrying or discarding it."),
             ],
-            (_, Some("source_epoch_conflict" | "render_generation_revision_conflict")) => vec![
+            (Some(0), Some("source_epoch_conflict" | "render_generation_revision_conflict")) => vec![
                 "Source reconciliation is pending; inspect engine-status.json for progress."
                     .to_string(),
             ],
-            _ => vec![
-                "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
+            (None, _) => vec![
+                "Update Longhouse and inspect retained source evidence before retrying or discarding it."
                     .to_string(),
+            ],
+            _ => vec![
+                format!("Inspect retained source evidence with {inspect_command} before retrying or discarding it."),
             ],
         };
     }
@@ -939,6 +1063,19 @@ fn native_desktop_suggested_actions(
         return vec![
             "Run: longhouse doctor".to_string(),
             "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
+        ];
+    }
+    if reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "managed_launch_recovery_exhausted"
+                | "managed_launch_recovery_active"
+                | "managed_launch_recovery_unreadable"
+        )
+    }) {
+        return vec![
+            "Inspect the affected managed session and local recovery files while registration recovers."
+                .to_string(),
         ];
     }
     Vec::new()
@@ -952,24 +1089,49 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             "engine_status_missing"
             | "engine_status_unreadable"
             | "engine_status_stale"
+            | "engine_status_age_unknown"
+            | "engine_status_aging"
+            | "engine_status_sessions_invalid"
+            | "engine_status_sessions_missing"
             | "engine_evidence_stale"
             | "engine_reconciliation_failed" => "inspect_local_health",
-            "storage_v2_sources_blocked" | "storage_v2_sources_unresolved" => {
-                "inspect_storage_source"
-            }
+            "storage_v2_sources_blocked"
+            | "storage_v2_sources_unresolved"
+            | "storage_v2_sources_proof_unknown" => "inspect_storage_source",
             "storage_v2_outbox_unreadable" => "inspect_storage_outbox",
             "reported_offline"
+            | "heartbeat_stale"
+            | "engine_offline"
             | "transport_unavailable"
             | "server_errors"
             | "connect_errors"
+            | "rate_limited"
             | "retryable_client_errors" => "inspect_transport",
-            "spool_dead_letters" | "outbox_stuck" => "inspect_shipping",
+            "payload_rejected"
+            | "payload_too_large"
+            | "parse_errors"
+            | "consecutive_failures"
+            | "spool_dead"
+            | "spool_dead_letters"
+            | "outbox_stuck" => "inspect_shipping",
             "archive_dead_lettered" => "inspect_archive",
-            "disk_critically_low" => "free_disk_space",
+            "disk_critically_low" | "disk_low" => "free_disk_space",
             "managed_session_control_degraded"
             | "managed_session_detached"
-            | "orphaned_managed_bridge" => "inspect_managed_session",
-            "provider_release_blocked" | "provider_support_needs_attention" => "inspect_provider",
+            | "managed_unknown_phase"
+            | "managed_launch_recovery_exhausted"
+            | "managed_launch_recovery_active"
+            | "managed_launch_recovery_unreadable" => "inspect_managed_session",
+            "orphaned_managed_bridge" => "stop_managed_bridge",
+            "provider_cli_version_unknown"
+            | "provider_live_route_e2e_warning"
+            | "provider_release_blocked"
+            | "provider_support_needs_attention" => "inspect_provider",
+            "service_generation_mismatch"
+            | "service_machine_name_mismatch"
+            | "service_not_installed"
+            | "service_runner_name_mismatch"
+            | "service_state_hash_mismatch" => "repair_machine",
             _ => continue,
         };
         if !action_ids.iter().any(|existing| existing == &action_id) {
@@ -1012,13 +1174,16 @@ fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
             .and_then(|value| value.get("heartbeat_at"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        reason_codes: row.get("reason_codes").and_then(Value::as_array).map(|codes| {
-            codes
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        }),
+        reason_codes: row
+            .get("reason_codes")
+            .and_then(Value::as_array)
+            .map(|codes| {
+                codes
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            }),
     }
 }
 
@@ -3214,26 +3379,32 @@ mod tests {
         assert_eq!(value["realtime"]["machine_name"], "cinder");
         assert_eq!(value["managed_summary"]["attached_count"], 1);
         // Never claimed, because this producer does not look for orphan bridges.
-        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+        assert!(value["managed_summary"]
+            .get("orphan_bridge_count")
+            .is_none());
     }
 
     #[test]
     fn native_desktop_health_scopes_storage_actions_by_block_kind() {
         let reconciling = serde_json::json!({
             "storage_v2_outbox": {
+                "blocked_source_count": 1,
+                "unresolved_blocked_source_count": 0,
+                "latest_block_source_epoch": "01234567-89ab-cdef-0123-456789abcdef",
                 "latest_block_kind": "source_epoch_conflict"
             }
         });
         let unresolved = serde_json::json!({
             "storage_v2_outbox": {
                 "unresolved_blocked_source_count": 1,
+                "latest_block_source_epoch": "fedcba98-7654-3210-fedc-ba9876543210",
+                "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
                 "latest_block_kind": "source_epoch_conflict_unresolved"
             }
         });
         let reasons = vec!["storage_v2_sources_blocked".to_string()];
 
-        let reconciling_actions =
-            native_desktop_suggested_actions(Some(&reconciling), &reasons);
+        let reconciling_actions = native_desktop_suggested_actions(Some(&reconciling), &reasons);
         let unresolved_actions = native_desktop_suggested_actions(Some(&unresolved), &reasons);
 
         assert_eq!(
@@ -3243,16 +3414,31 @@ mod tests {
         assert_eq!(
             unresolved_actions,
             vec![
-                "Inspect the blocked source proof in engine-status.json before retrying or discarding it."
+                "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it."
             ]
         );
         assert_eq!(
             native_desktop_suggested_action_ids(&[
                 "storage_v2_sources_blocked".to_string(),
                 "storage_v2_sources_unresolved".to_string(),
+                "storage_v2_sources_proof_unknown".to_string(),
             ]),
             vec!["inspect_storage_source"]
         );
+    }
+
+    #[test]
+    fn native_action_ids_match_canonical_health_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../schemas/health_action_ids.json")).unwrap();
+        let mapping = contract["reason_to_action"].as_object().unwrap();
+        for (reason, action) in mapping {
+            assert_eq!(
+                native_desktop_suggested_action_ids(&[reason.clone()]),
+                vec![action.as_str().unwrap().to_string()],
+                "native action mapping drifted for {reason}"
+            );
+        }
     }
 
     /// The canonical envelope both the Rust golden test and the Swift consumer
@@ -3342,7 +3528,10 @@ mod tests {
                 // Compare the element shape, not the element count, so a fixture
                 // with one session still pins the row structure.
                 Value::Array(items) => Value::Array(
-                    items.first().map(|item| vec![shape(item)]).unwrap_or_default(),
+                    items
+                        .first()
+                        .map(|item| vec![shape(item)])
+                        .unwrap_or_default(),
                 ),
                 Value::String(_) => Value::String("string".into()),
                 Value::Number(number) => {
@@ -3362,7 +3551,9 @@ mod tests {
             fixture_path.display()
         );
         // The false-negative the Desktop contract forbids must stay absent.
-        assert!(fixture["managed_summary"].get("orphan_bridge_count").is_none());
+        assert!(fixture["managed_summary"]
+            .get("orphan_bridge_count")
+            .is_none());
     }
 
     #[test]
@@ -3371,8 +3562,13 @@ mod tests {
             "runtime_url": "https://example.longhouse.ai",
             "machine_name": "cinder",
         });
-        let fast =
-            native_fast_health_from_parts(Path::new("/tmp/engine-status.json"), false, None, None, None);
+        let fast = native_fast_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            false,
+            None,
+            None,
+            None,
+        );
 
         let envelope = native_desktop_health_from_parts(
             fast,
@@ -3393,7 +3589,9 @@ mod tests {
         assert!(value["managed_summary"].get("attached_count").is_none());
         // And never a zero orphan-bridge count from a producer that does not
         // scan for orphaned bridges.
-        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+        assert!(value["managed_summary"]
+            .get("orphan_bridge_count")
+            .is_none());
     }
 
     #[test]
@@ -3510,10 +3708,36 @@ mod tests {
         );
 
         assert_eq!(health.health_state, "broken");
-        assert!(health
+        assert!(!health
             .reasons
             .contains(&"storage_v2_sources_blocked".to_string()));
         assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_unresolved".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_does_not_infer_legacy_source_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2,
+                    "latest_block_kind": "source_epoch_conflict"
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_proof_unknown".to_string()));
+        assert!(!health
             .reasons
             .contains(&"storage_v2_sources_unresolved".to_string()));
     }
@@ -3826,6 +4050,43 @@ mod tests {
         assert_eq!(health.health_state, "broken");
         assert_eq!(health.transport.status_reason, "payload_rejected");
         assert!(health.reasons.contains(&"payload_rejected".to_string()));
+    }
+
+    #[test]
+    fn managed_launch_recovery_uses_persisted_creation_time_for_outcome_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let retry_dir = status_path
+            .parent()
+            .unwrap()
+            .join("managed-local")
+            .join("outcome-retries");
+        std::fs::create_dir_all(&retry_dir).unwrap();
+        let path = retry_dir.join("pending.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "recovery_exhausted": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let fresh = collect_managed_launch_recovery(&status_path);
+        assert_eq!(fresh.active_count, 0);
+
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "created_at": (chrono::Utc::now() - chrono::Duration::seconds(20)).to_rfc3339(),
+                "recovery_exhausted": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let aged = collect_managed_launch_recovery(&status_path);
+        assert_eq!(aged.active_count, 1);
     }
 
     #[test]

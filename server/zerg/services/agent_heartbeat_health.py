@@ -34,6 +34,7 @@ _STATE_SORT_ORDER = {
 
 _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
     "heartbeat_stale": "inspect_transport",
+    "engine_offline": "inspect_transport",
     "reported_offline": "inspect_transport",
     "connect_errors": "inspect_transport",
     "server_errors": "inspect_transport",
@@ -44,7 +45,40 @@ _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
     "parse_errors": "inspect_shipping",
     "consecutive_failures": "inspect_shipping",
     "spool_dead": "inspect_shipping",
+    "spool_dead_letters": "inspect_shipping",
+    "outbox_stuck": "inspect_shipping",
     "archive_dead_lettered": "inspect_archive",
+    "disk_critically_low": "free_disk_space",
+    "disk_low": "free_disk_space",
+    "engine_status_missing": "inspect_local_health",
+    "engine_status_unreadable": "inspect_local_health",
+    "engine_status_stale": "inspect_local_health",
+    "engine_status_age_unknown": "inspect_local_health",
+    "engine_status_aging": "inspect_local_health",
+    "engine_status_sessions_invalid": "inspect_local_health",
+    "engine_status_sessions_missing": "inspect_local_health",
+    "engine_evidence_stale": "inspect_local_health",
+    "engine_reconciliation_failed": "inspect_local_health",
+    "storage_v2_sources_blocked": "inspect_storage_source",
+    "storage_v2_sources_unresolved": "inspect_storage_source",
+    "storage_v2_sources_proof_unknown": "inspect_storage_source",
+    "storage_v2_outbox_unreadable": "inspect_storage_outbox",
+    "managed_session_control_degraded": "inspect_managed_session",
+    "managed_session_detached": "inspect_managed_session",
+    "managed_unknown_phase": "inspect_managed_session",
+    "orphaned_managed_bridge": "stop_managed_bridge",
+    "provider_cli_version_unknown": "inspect_provider",
+    "provider_live_route_e2e_warning": "inspect_provider",
+    "provider_release_blocked": "inspect_provider",
+    "provider_support_needs_attention": "inspect_provider",
+    "service_generation_mismatch": "repair_machine",
+    "service_machine_name_mismatch": "repair_machine",
+    "service_not_installed": "repair_machine",
+    "service_runner_name_mismatch": "repair_machine",
+    "service_state_hash_mismatch": "repair_machine",
+    "managed_launch_recovery_exhausted": "inspect_managed_session",
+    "managed_launch_recovery_active": "inspect_managed_session",
+    "managed_launch_recovery_unreadable": "inspect_managed_session",
 }
 
 
@@ -262,6 +296,7 @@ def build_machine_transport_health_summary(
     spool_pending = sample.spool_pending
     spool_dead = sample.spool_dead
     archive_repair = _archive_repair_from_heartbeat(row, spool_pending=spool_pending)
+    local_facts = _local_health_facts_from_heartbeat(row)
     history_import = _history_import_from_heartbeat(row)
     parse_errors_1h = sample.parse_errors_1h
     consecutive_failures = sample.consecutive_failures
@@ -287,6 +322,7 @@ def build_machine_transport_health_summary(
         ),
         archive_repair=archive_repair,
     )
+    reasons = _overlay_local_health_reasons(reasons, local_facts)
     heartbeat_status, heartbeat_status_reason, heartbeat_status_summary = _overlay_heartbeat_status(
         transport=transport,
         is_stale=is_stale,
@@ -297,6 +333,12 @@ def build_machine_transport_health_summary(
         heartbeat_status_reason,
         heartbeat_status_summary,
         archive_repair=archive_repair,
+    )
+    status, status_reason, status_summary = _overlay_local_health_status(
+        status,
+        status_reason,
+        status_summary,
+        local_facts=local_facts,
     )
     suggested_action_ids = suggested_action_ids_for_machine_reasons(reasons)
 
@@ -348,15 +390,7 @@ def build_machine_transport_health_summary(
 
 
 def _archive_repair_from_heartbeat(row: AgentHeartbeat, *, spool_pending: int) -> dict[str, Any]:
-    raw_json = getattr(row, "raw_json", None)
-    raw: dict[str, Any] = {}
-    if raw_json:
-        try:
-            parsed = json.loads(raw_json)
-            if isinstance(parsed, dict):
-                raw = parsed
-        except (TypeError, ValueError):
-            raw = {}
+    raw = _heartbeat_payload(row)
     archive_backlog = raw.get("archive_backlog")
     if isinstance(archive_backlog, dict):
         return normalize_archive_backlog(archive_backlog, source="heartbeat")
@@ -364,6 +398,109 @@ def _archive_repair_from_heartbeat(row: AgentHeartbeat, *, spool_pending: int) -
     if spool_pending > 0:
         fallback.update({"state": "pending", "mode": "trickle", "pending_ranges": int(spool_pending)})
     return fallback
+
+
+def _heartbeat_payload(row: Any) -> dict[str, Any]:
+    raw_json = getattr(row, "raw_json", None)
+    if not raw_json:
+        return {}
+    try:
+        parsed = json.loads(raw_json)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _nonnegative_int(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
+    """Reduce local health facts shipped in a heartbeat for hosted readers.
+
+    The machine API is a second consumer of the same engine evidence as the
+    local CLI/Desktop. It must not report healthy while durable source work or
+    managed-launch recovery is already known to be broken on the owner host.
+    """
+    raw = _heartbeat_payload(row)
+    storage = raw.get("storage_v2_outbox")
+    storage = storage if isinstance(storage, dict) else None
+    recovery = raw.get("managed_launch_recovery")
+    recovery = recovery if isinstance(recovery, dict) else None
+    reasons: list[str] = []
+    broken_reasons: list[str] = []
+    degraded_reasons: list[str] = []
+
+    if storage is not None:
+        blocked = _nonnegative_int(storage.get("blocked_source_count"))
+        unresolved_value = storage.get("unresolved_blocked_source_count")
+        unresolved = _nonnegative_int(unresolved_value) if unresolved_value is not None else None
+        if blocked > 0 and (unresolved is None or unresolved == 0):
+            reasons.append("storage_v2_sources_blocked")
+            degraded_reasons.append("storage_v2_sources_blocked")
+        if unresolved is not None and unresolved > 0:
+            reasons.append("storage_v2_sources_unresolved")
+            broken_reasons.append("storage_v2_sources_unresolved")
+        elif blocked > 0 and unresolved is None:
+            reasons.append("storage_v2_sources_proof_unknown")
+            degraded_reasons.append("storage_v2_sources_proof_unknown")
+        if str(storage.get("error") or "").strip():
+            reasons.append("storage_v2_outbox_unreadable")
+            degraded_reasons.append("storage_v2_outbox_unreadable")
+
+    if recovery is not None:
+        if _nonnegative_int(recovery.get("exhausted_count")) > 0:
+            reasons.append("managed_launch_recovery_exhausted")
+            broken_reasons.append("managed_launch_recovery_exhausted")
+        if _nonnegative_int(recovery.get("active_count")) > 0:
+            reasons.append("managed_launch_recovery_active")
+            degraded_reasons.append("managed_launch_recovery_active")
+        if bool(recovery.get("scan_error")):
+            reasons.append("managed_launch_recovery_unreadable")
+            broken_reasons.append("managed_launch_recovery_unreadable")
+
+    return {
+        "reasons": tuple(reasons),
+        "broken_reasons": tuple(broken_reasons),
+        "degraded_reasons": tuple(degraded_reasons),
+    }
+
+
+def _overlay_local_health_reasons(
+    reasons: tuple[str, ...],
+    local_facts: dict[str, Any],
+) -> tuple[str, ...]:
+    result = list(reasons)
+    for reason in local_facts.get("reasons", ()):
+        if reason not in result:
+            result.append(reason)
+    return tuple(result)
+
+
+def _overlay_local_health_status(
+    status: str,
+    status_reason: str,
+    status_summary: str,
+    *,
+    local_facts: dict[str, Any],
+) -> tuple[str, str, str]:
+    # A stale heartbeat is already explicitly offline; do not turn old local
+    # facts into a stronger current claim. For a live/degraded heartbeat,
+    # durable local failures must dominate a false healthy result.
+    broken_reasons = tuple(local_facts.get("broken_reasons", ()))
+    degraded_reasons = tuple(local_facts.get("degraded_reasons", ()))
+    if status != "offline" and broken_reasons and status != "broken":
+        reason = broken_reasons[0]
+        return "broken", reason, f"Local machine recovery requires attention: {reason}."
+    if status == "healthy" and degraded_reasons:
+        reason = degraded_reasons[0]
+        return "degraded", reason, f"Local machine health is degraded: {reason}."
+    return status, status_reason, status_summary
 
 
 def _history_import_from_heartbeat(row: AgentHeartbeat) -> HistoryImportSnapshot:

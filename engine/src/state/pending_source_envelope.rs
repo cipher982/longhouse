@@ -25,6 +25,8 @@ pub struct StorageV2OutboxSnapshot {
     pub unresolved_blocked_source_count: u64,
     pub blocked_bytes: u64,
     pub oldest_blocked_at: Option<String>,
+    pub latest_block_source_epoch: Option<String>,
+    pub latest_unresolved_block_source_epoch: Option<String>,
     pub latest_block_kind: Option<String>,
     pub latest_block_detail: Option<String>,
     pub byte_limit: u64,
@@ -368,7 +370,7 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
     )?;
     let latest_block = conn
         .query_row(
-            "SELECT block_kind, block_detail
+            "SELECT source_epoch, block_kind, block_detail
              FROM pending_source_envelope
              WHERE blocked_at IS NOT NULL
              ORDER BY blocked_at DESC, source_epoch
@@ -378,8 +380,23 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
                 ))
             },
+        )
+        .optional()?;
+    let latest_unresolved_block_source_epoch = conn
+        .query_row(
+            "SELECT source_epoch
+             FROM pending_source_envelope
+             WHERE blocked_at IS NOT NULL
+               AND (block_kind IS NULL OR block_kind NOT IN (
+                   'source_epoch_conflict', 'render_generation_revision_conflict'
+               ))
+             ORDER BY blocked_at DESC, source_epoch
+             LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
         )
         .optional()?;
     Ok(StorageV2OutboxSnapshot {
@@ -394,8 +411,10 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
             .context("unresolved blocked source count is negative")?,
         blocked_bytes: u64::try_from(blocked_bytes).context("blocked source bytes are negative")?,
         oldest_blocked_at,
-        latest_block_kind: latest_block.as_ref().and_then(|value| value.0.clone()),
-        latest_block_detail: latest_block.and_then(|value| value.1),
+        latest_block_source_epoch: latest_block.as_ref().and_then(|value| value.0.clone()),
+        latest_unresolved_block_source_epoch,
+        latest_block_kind: latest_block.as_ref().and_then(|value| value.1.clone()),
+        latest_block_detail: latest_block.and_then(|value| value.2),
         byte_limit: MAX_PENDING_OUTBOX_BYTES,
         error: None,
     })

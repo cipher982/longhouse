@@ -36,6 +36,85 @@ def test_archive_control_requires_lease_aware_engine_to_start_work():
     assert archive_backlog_control_command_type(request.mode) == "archive.backlog_control.v2"
 
 
+def test_machine_action_ids_cover_local_health_reason_aliases():
+    reasons = [
+        "spool_dead_letters",
+        "storage_v2_sources_unresolved",
+        "disk_critically_low",
+        "managed_launch_recovery_exhausted",
+    ]
+
+    assert machine_health_service.suggested_action_ids_for_machine_reasons(reasons) == (
+        "inspect_shipping",
+        "inspect_storage_source",
+        "free_disk_space",
+        "inspect_managed_session",
+    )
+
+
+def test_machine_action_ids_match_local_orphan_bridge_action():
+    assert machine_health_service.suggested_action_ids_for_machine_reasons(
+        ["orphaned_managed_bridge"]
+    ) == ("stop_managed_bridge",)
+
+
+def test_hosted_machine_health_projects_storage_and_managed_recovery_facts():
+    pinned_now = datetime(2026, 8, 4, 4, 30, 0, tzinfo=timezone.utc)
+    row = SimpleNamespace(
+        device_id="cinder",
+        received_at=pinned_now,
+        version="0.1.33-dev",
+        last_ship_at=None,
+        last_ship_attempt_at=None,
+        last_ship_result=None,
+        last_ship_latency_ms=None,
+        last_ship_http_status=None,
+        spool_pending=0,
+        spool_dead=0,
+        parse_errors_1h=0,
+        consecutive_failures=0,
+        ship_attempts_1h=1,
+        ship_successes_1h=1,
+        ship_rate_limited_1h=0,
+        ship_server_errors_1h=0,
+        ship_payload_rejections_1h=0,
+        ship_payload_too_large_1h=0,
+        ship_retryable_client_errors_1h=0,
+        ship_connect_errors_1h=0,
+        ship_latency_p50_ms_1h=None,
+        ship_latency_p95_ms_1h=None,
+        disk_free_bytes=100,
+        is_offline=False,
+        raw_json=json.dumps(
+            {
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2,
+                    "unresolved_blocked_source_count": 1,
+                },
+                "managed_launch_recovery": {
+                    "exhausted_count": 1,
+                    "active_count": 0,
+                    "scan_error": False,
+                },
+            }
+        ),
+    )
+
+    summary = machine_health_service.build_machine_transport_health_summary(
+        row,
+        stale_after_seconds=3600,
+        now=pinned_now,
+    )
+
+    assert summary.status == "broken"
+    assert "storage_v2_sources_unresolved" in summary.reasons
+    assert "managed_launch_recovery_exhausted" in summary.reasons
+    assert summary.suggested_action_ids == (
+        "inspect_storage_source",
+        "inspect_managed_session",
+    )
+
+
 def _make_db(tmp_path):
     db_path = tmp_path / "test_agents_machine_health.db"
     engine = make_engine(f"sqlite:///{db_path}")

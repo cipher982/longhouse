@@ -4,6 +4,7 @@ import Foundation
 public enum HarnessAction: String, Codable {
     case refresh
     case runDoctor
+    case inspectStorageSource
     case repairInstall
     case stopManagedBridge
     case openLogs
@@ -148,6 +149,31 @@ public struct SpyHealthActionSink: HealthActionSink {
                 style: .failure,
                 title: "Doctor could not open",
                 detail: "Longhouse could not open Terminal to run native local health."
+            )
+        case .inspectStorageSource:
+            let sourceEpoch = snapshot.storageInspectionSourceEpoch
+                .flatMap { value in
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.range(of: #"^[0-9A-Fa-f-]+$"#, options: .regularExpression) != nil ? trimmed : nil
+                }
+            let command = sourceEpoch.map {
+                "longhouse shipping inspect --source-epoch \"\($0)\" --json"
+            } ?? "longhouse shipping inspect --json"
+            if openTerminal(command: command) {
+                return feedback(
+                    for: action,
+                    style: .success,
+                    title: "Source evidence opened in Terminal",
+                    detail: sourceEpoch.map {
+                        "Review retained durable source evidence for \($0) before retrying or discarding it."
+                    } ?? "Review retained durable source evidence before retrying or discarding it."
+                )
+            }
+            return feedback(
+                for: action,
+                style: .failure,
+                title: "Source evidence could not open",
+                detail: "Longhouse could not open Terminal to inspect retained durable source evidence."
             )
         case .repairInstall:
             return startRepair(snapshot: snapshot)
@@ -754,6 +780,15 @@ public struct SpyHealthActionSink: HealthActionSink {
                 style: .info,
                 title: "Doctor dry run recorded",
                 detail: "The harness logged native local health without opening Terminal."
+            )
+        case .inspectStorageSource:
+            return feedback(
+                for: action,
+                style: .info,
+                title: "Source inspection dry run recorded",
+                detail: snapshot.storageInspectionSourceEpoch.map {
+                    "The harness logged `longhouse shipping inspect --source-epoch \($0) --json` without opening Terminal."
+                } ?? "The harness logged `longhouse shipping inspect --json` without opening Terminal."
             )
         case .repairInstall:
             if snapshot.isInstallLocationBlocked {

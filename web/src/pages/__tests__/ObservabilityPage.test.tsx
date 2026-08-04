@@ -67,6 +67,7 @@ function buildOverview(hoursBack: number) {
         status_reason: "spool_dead",
         status_summary: "1 dead-letter range(s) need repair.",
         reasons: ["spool_dead", "consecutive_failures"],
+        suggested_action_ids: ["inspect_shipping"],
         last_ship_at: null,
         last_ship_attempt_at: "2026-04-23T20:58:00Z",
         last_ship_result: "connect_error",
@@ -382,6 +383,8 @@ describe("ObservabilityPage", () => {
     expect(screen.getAllByText("Claude").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
     expect(screen.getByText("1 dead-letter range(s) need repair.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Suggested actions")).toBeInTheDocument();
+    expect(screen.getByText("Inspect shipping")).toBeInTheDocument();
     expect(screen.getByText("1,250 sources · 1.5 GB on disk")).toBeInTheDocument();
     expect(screen.getByText("File logs: 1.2 GB acknowledged · 344 MB remaining")).toBeInTheDocument();
     expect(screen.getByText("1 durable upload receipt pending")).toBeInTheDocument();

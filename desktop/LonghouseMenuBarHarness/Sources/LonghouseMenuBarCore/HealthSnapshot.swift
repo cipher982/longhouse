@@ -243,6 +243,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         HealthSnapshot(
             schemaVersion: schemaVersion, collectedAt: replacementCollectedAt ?? collectedAt, healthState: healthState,
             severity: severity, headline: headline, reasons: reasons, suggestedActions: suggestedActions,
+            suggestedActionIds: suggestedActionIds,
             attention: attention, service: service, engineStatus: replacementEngineStatus ?? engineStatus, outbox: outbox,
             activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,
             realtime: realtime, unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
@@ -497,21 +498,31 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount ?? 0
     }
 
+    public var storageInspectionSourceEpoch: String? {
+        if storageUnresolvedBlockCount > 0 {
+            return engineStatus?.payload?.storageV2Outbox?.latestUnresolvedBlockSourceEpoch
+        }
+        return engineStatus?.payload?.storageV2Outbox?.latestBlockSourceEpoch
+    }
+
+    /// Older engine payloads did not include the aggregate unresolved count.
+    /// The latest block kind cannot classify every retained source, so expose
+    /// that version skew as inspectable uncertainty instead of health.
+    public var storageBlockProofUnknown: Bool {
+        storageBlockedCount > 0
+            && engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount == nil
+    }
+
     public var storageBlockRequiresRepair: Bool {
         guard storageBlockedCount > 0 else { return false }
         if engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount != nil {
             return storageUnresolvedBlockCount > 0
         }
-        switch storageBlockKind {
-        case "source_epoch_conflict", "render_generation_revision_conflict":
-            return false
-        default:
-            return true
-        }
+        return false
     }
 
     public var storageBlockIsRecovering: Bool {
-        storageBlockedCount > 0 && !storageBlockRequiresRepair
+        storageBlockedCount > 0 && !storageBlockRequiresRepair && !storageBlockProofUnknown
     }
 
     public var pipelineValueLabel: String {
@@ -1484,6 +1495,8 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
     public let reconcilingBlockedSourceCount: Int?
     public let unresolvedBlockedSourceCount: Int?
     public let blockedBytes: UInt64?
+    public let latestBlockSourceEpoch: String?
+    public let latestUnresolvedBlockSourceEpoch: String?
     public let latestBlockKind: String?
     public let latestBlockDetail: String?
     public let byteLimit: UInt64?
@@ -1493,7 +1506,9 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
         pendingCount: Int?, pendingBytes: UInt64?, blockedSourceCount: Int?,
         reconcilingBlockedSourceCount: Int? = nil,
         unresolvedBlockedSourceCount: Int? = nil,
-        blockedBytes: UInt64?, latestBlockKind: String?, latestBlockDetail: String?,
+        blockedBytes: UInt64?, latestBlockSourceEpoch: String? = nil,
+        latestUnresolvedBlockSourceEpoch: String? = nil,
+        latestBlockKind: String?, latestBlockDetail: String?,
         byteLimit: UInt64?, error: String?
     ) {
         self.pendingCount = pendingCount
@@ -1502,6 +1517,8 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
         self.reconcilingBlockedSourceCount = reconcilingBlockedSourceCount
         self.unresolvedBlockedSourceCount = unresolvedBlockedSourceCount
         self.blockedBytes = blockedBytes
+        self.latestBlockSourceEpoch = latestBlockSourceEpoch
+        self.latestUnresolvedBlockSourceEpoch = latestUnresolvedBlockSourceEpoch
         self.latestBlockKind = latestBlockKind
         self.latestBlockDetail = latestBlockDetail
         self.byteLimit = byteLimit

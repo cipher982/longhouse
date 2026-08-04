@@ -25,6 +25,8 @@ async def _reconcile_runner_health_once() -> None:
         from zerg.services.runner_health import assess_runner_health
         from zerg.services.runner_health import runner_requires_proactive_attention
         from zerg.services.runner_health_reconciler import ALERT_AFTER
+        from zerg.services.runner_health_reconciler import ALERT_CLAIM_TTL
+        from zerg.services.runner_health_reconciler import ALERT_REASON_CHANGE_COOLDOWN
         from zerg.services.runner_health_reconciler import _build_external_alert_copy
         from zerg.services.runner_health_reconciler import _open_incident_context
         from zerg.services.runner_health_reconciler import _send_email_alert
@@ -50,18 +52,38 @@ async def _reconcile_runner_health_once() -> None:
             )
             incident = runner_catalog.incident(applied.get("incident"))
             owner = runner_catalog.user(applied.get("owner"))
+            incident_context = dict(incident.context or {}) if incident is not None else {}
+            alert_reason_changed = (
+                incident is not None
+                and incident.alert_sent_at is not None
+                and incident_context.get("alert_reason_code") not in {None, health.status_reason}
+            )
+            alert_reason_change_cooled_down = (
+                not alert_reason_changed
+                or incident is None
+                or incident.alert_sent_at is None
+                or now - incident.alert_sent_at >= ALERT_REASON_CHANGE_COOLDOWN
+            )
             if (
                 incident is not None
                 and incident.status == "open"
-                and incident.alert_sent_at is None
+                and (incident.alert_sent_at is None or (alert_reason_changed and alert_reason_change_cooled_down))
                 and owner is not None
                 and now - incident.opened_at >= ALERT_AFTER
             ):
                 subject, body = _build_external_alert_copy(runner, health, incident, now)
-                if _send_email_alert(owner, subject, body):
+                claim = runner_catalog.operation(
+                    "health_alert_claim",
+                    incident_id=incident.id,
+                    reason_code=health.status_reason,
+                    observed_at=now.isoformat(),
+                    claim_ttl_seconds=int(ALERT_CLAIM_TTL.total_seconds()),
+                )
+                if claim.get("claimed") is True and _send_email_alert(owner, subject, body):
                     runner_catalog.operation(
                         "health_alert_sent",
                         incident_id=incident.id,
+                        reason_code=health.status_reason,
                         observed_at=now.isoformat(),
                     )
         return

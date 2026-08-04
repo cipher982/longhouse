@@ -831,12 +831,51 @@ public struct MenuBarPanelView: View {
         VStack(spacing: 8) {
             Group {
                 if snapshot.storageBlockRequiresRepair
+                    || snapshot.storageBlockProofUnknown
                     || snapshot.suggestedActionIds?.contains("inspect_storage_source") == true
                 {
                     Button {
-                        perform(.runDoctor)
+                        perform(.inspectStorageSource)
                     } label: {
                         Label("Inspect source evidence", systemImage: "doc.text.magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("stop_managed_bridge") == true,
+                          !backgroundBridgeBulkStopTargets.isEmpty {
+                    Button {
+                        if let action = backgroundBridgeStopAllAction() {
+                            action()
+                        }
+                    } label: {
+                        Label("Stop orphaned processes", systemImage: "stop.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_managed_session") == true {
+                    Button {
+                        perform(.openLonghouse)
+                    } label: {
+                        Label("Inspect managed session", systemImage: "arrow.up.forward.square")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_local_health") == true {
+                    Button {
+                        perform(.runDoctor)
+                    } label: {
+                        Label("Inspect local health", systemImage: "stethoscope")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("repair_machine") == true {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Repair machine", systemImage: "wrench.and.screwdriver")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if !(snapshot.suggestedActionIds ?? []).isEmpty {
+                    Button {
+                        perform(.openLogs)
+                    } label: {
+                        Label("Inspect logs", systemImage: "doc.text.magnifyingglass")
                             .frame(maxWidth: .infinity)
                     }
                 } else {

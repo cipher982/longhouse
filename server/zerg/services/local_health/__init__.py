@@ -119,6 +119,7 @@ from .classifier import _broken_health_headline
 from .classifier import _broken_shipping_flag
 from .classifier import _classify_health
 from .classifier import _collect_health_reasons
+from .classifier import _collect_managed_launch_recovery
 from .classifier import _degraded_health_headline
 from .classifier import _degraded_shipping_flag
 from .classifier import _degraded_state_is_watching
@@ -522,6 +523,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     phase_overlay = None
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
+    managed_launch_recovery = _collect_managed_launch_recovery(engine_status)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
@@ -616,6 +618,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
+        managed_launch_recovery=managed_launch_recovery,
     )
     latest_contract_issue = _apply_managed_session_contract_diagnostics(
         diagnostics=managed_session_contracts,
@@ -707,6 +710,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
+        managed_launch_recovery=managed_launch_recovery,
     )
     attention = _derive_attention(
         health_state=health_state,
@@ -739,6 +743,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         ),
         "archive_repair": archive_repair,
         "storage_v2_outbox": storage_v2_outbox,
+        "managed_launch_recovery": managed_launch_recovery,
         "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,

@@ -376,6 +376,7 @@ pub struct BridgeStartSummary {
     pub state_file: String,
     pub log_file: String,
     pub pid: u32,
+    pub process_start_time: Option<String>,
     pub ws_url: String,
     /// None until a thread exists, either from TUI attach or detached-UI `thread/start`.
     pub thread_id: Option<String>,
@@ -661,8 +662,7 @@ const TERMINAL_REASON_BRIDGE_STOP: &str = "bridge_stop";
 const TERMINAL_REASON_USER_CLOSED: &str = "user_closed";
 const TERMINAL_REASON_PROVIDER_EXIT: &str = "provider_exit";
 const TERMINAL_REASON_PROCESS_GONE: &str = "process_gone";
-const TERMINAL_REASON_OWNER_GONE: &str =
-    crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE;
+const TERMINAL_REASON_OWNER_GONE: &str = crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE;
 const TERMINAL_REASON_PROVIDER_SIGNAL: &str = "provider_signal";
 const TERMINAL_REASON_UNKNOWN: &str = "unknown";
 const FAILURE_PROVIDER_TRANSPORT_LOST: &str = "provider_transport_lost";
@@ -1085,6 +1085,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
                 state_file: paths.state_file.display().to_string(),
                 log_file: paths.log_file.display().to_string(),
                 pid: state.pid,
+                process_start_time: state.bridge_process_start_time.clone(),
                 ws_url,
                 thread_id: state.thread_id.clone(),
                 thread_path: state.thread_path,
@@ -1109,8 +1110,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // Capture the wrapper's start time now, while it is certainly alive. Pids
     // are recycled; without this a later check could mistake an unrelated
     // process for a live owner and keep debris running forever.
-    let owner_process_start_time =
-        crate::turn_claims::process_start_time_for_pid(config.owner_pid);
+    let owner_process_start_time = crate::turn_claims::process_start_time_for_pid(config.owner_pid);
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
@@ -2304,12 +2304,8 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
                 "bridge state file is missing for session {}; attempting IPC stop via existing socket",
                 config.session_id
             );
-            return stop_via_ipc(
-                &sock_path,
-                &terminal_reason,
-                terminal_reason_raw.as_deref(),
-            )
-            .await;
+            return stop_via_ipc(&sock_path, &terminal_reason, terminal_reason_raw.as_deref())
+                .await;
         }
         bail!(
             "managed Codex session {} has no bridge state or live IPC socket; stop was not acknowledged",
@@ -2317,11 +2313,7 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
         );
     }
     if sock_path.exists() {
-        return stop_via_ipc(
-            &sock_path,
-            &terminal_reason,
-            terminal_reason_raw.as_deref(),
-        )
+        return stop_via_ipc(&sock_path, &terminal_reason, terminal_reason_raw.as_deref())
             .await
             .with_context(|| {
                 format!(
@@ -2524,8 +2516,26 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
 }
 
 pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
+    let mut command = codex_bridge_attach_command(&config)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let codex_bin = config.codex_bin.as_deref().unwrap_or("codex");
+        let err = command.exec();
+        return Err(anyhow!("failed to exec {codex_bin}: {err}"));
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = command.status().context("running codex --remote")?;
+        Ok(status.code().unwrap_or(1))
+    }
+}
+
+fn codex_bridge_attach_command(config: &BridgeAttachConfig) -> Result<std::process::Command> {
     let state = load_ready_state(&config.session_id, config.state_root.as_deref())?;
-    let _thread_id = state
+    state
         .thread_id
         .clone()
         .context("bridge state is missing thread_id")?;
@@ -2548,21 +2558,16 @@ pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
         .arg(&ws_url)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .current_dir(PathBuf::from(state.cwd));
+    Ok(command)
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = command.exec();
-        return Err(anyhow!("failed to exec {codex_bin}: {err}"));
-    }
-
-    #[cfg(not(unix))]
-    {
-        let status = command
-            .status()
-            .with_context(|| format!("running {codex_bin} --remote"))?;
-        Ok(status.code().unwrap_or(1))
-    }
+#[cfg(test)]
+fn run_codex_bridge_attach_for_test(config: BridgeAttachConfig) -> Result<i32> {
+    let mut command = codex_bridge_attach_command(&config)?;
+    let status = command
+        .status()
+        .context("running fake codex bridge attach")?;
+    Ok(status.code().unwrap_or(1))
 }
 
 fn resolve_bridge_paths(
@@ -3038,8 +3043,7 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
     tokio::spawn(async move {
         let detail = loop {
             let Some(message) = ws_read.next().await else {
-                break "remote app-server websocket stream ended without a close frame"
-                    .to_string();
+                break "remote app-server websocket stream ended without a close frame".to_string();
             };
             match message {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
@@ -4144,10 +4148,7 @@ fn update_thread_subscription_tracking(
     write_state_file(&context.state_file, &context.state)
 }
 
-fn tui_owns_startup_resume(
-    launch_mode: BridgeLaunchMode,
-    resume_thread_id: Option<&str>,
-) -> bool {
+fn tui_owns_startup_resume(launch_mode: BridgeLaunchMode, resume_thread_id: Option<&str>) -> bool {
     launch_mode == BridgeLaunchMode::Tui && resume_thread_id.is_some()
 }
 
@@ -4294,9 +4295,7 @@ fn subscribe_current_thread_without_path(
     }))
 }
 
-fn subscribe_current_thread(
-    context: &mut BridgeContext,
-) -> Result<Option<BridgeFollowup>> {
+fn subscribe_current_thread(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
     let Some(thread_id) = context.state.thread_id.clone() else {
         return Ok(None);
     };
@@ -4311,7 +4310,11 @@ fn loaded_thread_list_contains(response: &Value, thread_id: &str) -> bool {
     response
         .get("data")
         .and_then(Value::as_array)
-        .is_some_and(|threads| threads.iter().any(|value| value.as_str() == Some(thread_id)))
+        .is_some_and(|threads| {
+            threads
+                .iter()
+                .any(|value| value.as_str() == Some(thread_id))
+        })
 }
 
 fn complete_tui_owned_resume_if_loaded(
@@ -4327,10 +4330,7 @@ fn complete_tui_owned_resume_if_loaded(
     subscribe_current_thread(context)
 }
 
-fn expire_tui_owned_resume_if_needed(
-    context: &mut BridgeContext,
-    now: Instant,
-) -> Result<bool> {
+fn expire_tui_owned_resume_if_needed(context: &mut BridgeContext, now: Instant) -> Result<bool> {
     if !context.tui_owned_resume_pending
         || !context
             .tui_owned_resume_deadline
@@ -4909,9 +4909,9 @@ impl CodexRuntimeTracker {
         // A late tick means the machine slept or the runtime was starved. Rebase
         // the silence clock and skip this evaluation; a stall must accumulate a
         // fresh continuous window after wake.
-        if previous_tick
-            .is_some_and(|prev| now.duration_since(prev) > Duration::from_millis(KEEPALIVE_LATE_TICK_MS))
-        {
+        if previous_tick.is_some_and(|prev| {
+            now.duration_since(prev) > Duration::from_millis(KEEPALIVE_LATE_TICK_MS)
+        }) {
             self.last_provider_progress_at = Some(now);
             self.stall_episode = None;
             return false;
@@ -5245,17 +5245,21 @@ fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcess
         }
     }
     let entries = crate::process_identity::try_collect_process_lineage()?;
-    crate::process_identity::owned_processes(&entries, app_server_pid, context.state.app_server_pgid)
-        .into_iter()
-        .find(|(entry, _)| entry.is_stopped_or_zombie())
-        .map(|(entry, matched_by)| StoppedProcessFact {
-            pid: entry.pid,
-            ppid: entry.ppid,
-            pgid: entry.pgid,
-            stat: entry.stat.clone(),
-            command: entry.command.clone(),
-            matched_by,
-        })
+    crate::process_identity::owned_processes(
+        &entries,
+        app_server_pid,
+        context.state.app_server_pgid,
+    )
+    .into_iter()
+    .find(|(entry, _)| entry.is_stopped_or_zombie())
+    .map(|(entry, matched_by)| StoppedProcessFact {
+        pid: entry.pid,
+        ppid: entry.ppid,
+        pgid: entry.pgid,
+        stat: entry.stat.clone(),
+        command: entry.command.clone(),
+        matched_by,
+    })
 }
 
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
@@ -5869,11 +5873,7 @@ fn record_first_failure(state: &mut BridgeStateFile, kind: &str, detail: &str) {
 }
 
 fn mark_provider_transport_lost(context: &mut BridgeContext, detail: &str) -> Result<()> {
-    record_first_failure(
-        &mut context.state,
-        FAILURE_PROVIDER_TRANSPORT_LOST,
-        detail,
-    );
+    record_first_failure(&mut context.state, FAILURE_PROVIDER_TRANSPORT_LOST, detail);
     context.state.status = "degraded".to_string();
     context.state.last_error = Some(detail.to_string());
     write_state_file(&context.state_file, &context.state)
@@ -5922,7 +5922,9 @@ fn commit_bridge_terminal(
     exit_code: Option<i32>,
     exit_signal: Option<i32>,
 ) -> Result<()> {
-    context.runtime.persist_local_phase("finished", None, Utc::now());
+    context
+        .runtime
+        .persist_local_phase("finished", None, Utc::now());
     crate::codex_teardown::stamp_terminal_commit(
         &mut context.state,
         config.machine_name.as_deref(),
@@ -5972,11 +5974,7 @@ async fn commit_owned_child_exit(
     status: ExitStatus,
 ) -> Result<()> {
     let detail = format!("Codex app-server exited with status {status}");
-    record_first_failure(
-        &mut context.state,
-        TERMINAL_REASON_PROVIDER_EXIT,
-        &detail,
-    );
+    record_first_failure(&mut context.state, TERMINAL_REASON_PROVIDER_EXIT, &detail);
     let (exit_code, exit_signal) = exit_status_metadata(&status);
     fail_pending_pause_requests(
         context,
@@ -6548,7 +6546,7 @@ mod tests {
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
-        let exit_code = cmd_codex_bridge_attach(BridgeAttachConfig {
+        let exit_code = run_codex_bridge_attach_for_test(BridgeAttachConfig {
             session_id: session_id.to_string(),
             state_root: Some(temp.path().to_path_buf()),
             codex_bin: None,
@@ -7175,10 +7173,7 @@ mod tests {
         );
 
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
-        assert_eq!(
-            event["payload"]["terminal_reason"],
-            TERMINAL_REASON_UNKNOWN
-        );
+        assert_eq!(event["payload"]["terminal_reason"], TERMINAL_REASON_UNKNOWN);
         assert_eq!(
             event["payload"]["terminal_reason_raw"],
             "terminal_disconnected"
@@ -7904,14 +7899,20 @@ mod tests {
             state.first_failure_kind.as_deref(),
             Some(FAILURE_PROVIDER_TRANSPORT_LOST)
         );
-        assert_eq!(state.terminal_reason.as_deref(), Some(TERMINAL_REASON_PROVIDER_EXIT));
+        assert_eq!(
+            state.terminal_reason.as_deref(),
+            Some(TERMINAL_REASON_PROVIDER_EXIT)
+        );
         assert_eq!(state.app_server_exit_code, Some(17));
         let event = state.terminal_event.unwrap();
         assert_eq!(
             event["payload"]["first_failure_kind"],
             FAILURE_PROVIDER_TRANSPORT_LOST
         );
-        assert_eq!(event["payload"]["terminal_reason"], TERMINAL_REASON_PROVIDER_EXIT);
+        assert_eq!(
+            event["payload"]["terminal_reason"],
+            TERMINAL_REASON_PROVIDER_EXIT
+        );
         assert_eq!(event["payload"]["exit_code"], 17);
         assert_eq!(event["payload"]["app_server_pid"], 4242);
     }
@@ -7919,10 +7920,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn owned_child_exit_is_observed_while_the_transport_channel_remains_open() {
-        let child = Command::new("sh")
-            .args(["-c", "exit 17"])
-            .spawn()
-            .unwrap();
+        let child = Command::new("sh").args(["-c", "exit 17"]).spawn().unwrap();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
         let mut client = RpcClient {
@@ -7948,10 +7946,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn closed_transport_with_a_live_child_is_not_a_terminal_event() {
-        let child = Command::new("sh")
-            .args(["-c", "sleep 30"])
-            .spawn()
-            .unwrap();
+        let child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         drop(events_tx);
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
@@ -7976,10 +7971,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn detach_reconciliation_does_not_invent_exit_for_a_live_child() {
-        let child = Command::new("sh")
-            .args(["-c", "sleep 30"])
-            .spawn()
-            .unwrap();
+        let child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
         let (_events_tx, events_rx) = mpsc::unbounded_channel();
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
         let mut client = RpcClient {
@@ -8456,7 +8448,9 @@ mod tests {
             }),
         );
         assert_phase_update(
-            tracker.keepalive_update(None, None).expect("thinking keepalive"),
+            tracker
+                .keepalive_update(None, None)
+                .expect("thinking keepalive"),
             "thinking",
             None,
         );
@@ -8473,7 +8467,9 @@ mod tests {
             }),
         );
         assert_phase_update(
-            tracker.keepalive_update(None, None).expect("running keepalive"),
+            tracker
+                .keepalive_update(None, None)
+                .expect("running keepalive"),
             "running",
             Some("shell"),
         );
@@ -8540,10 +8536,7 @@ mod tests {
         // `turn/started` assigns id and status independently, so a partial
         // notification leaves no provider turn id while a turn is genuinely live.
         let mut tracker = CodexRuntimeTracker::default();
-        tracker.handle_notification(
-            "turn/started",
-            &json!({"turn": {"status": "inProgress"}}),
-        );
+        tracker.handle_notification("turn/started", &json!({"turn": {"status": "inProgress"}}));
         assert!(tracker.active_turn_id.is_none());
         assert!(tracker.turn_epoch.is_some(), "local epoch must still start");
 
@@ -8599,7 +8592,10 @@ mod tests {
         let evidence = tracker.stall_evidence(Some("turn-1")).expect("evidence");
         assert_eq!(evidence["trigger"], json!("stopped_process"));
         assert_eq!(evidence["stopped_process"]["pid"], json!(17210));
-        assert_eq!(evidence["stopped_process"]["matched_by"], json!("process_group"));
+        assert_eq!(
+            evidence["stopped_process"]["matched_by"],
+            json!("process_group")
+        );
     }
 
     #[test]
@@ -8629,7 +8625,10 @@ mod tests {
         start_turn_with_command(&mut tracker);
         age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
         tracker.keepalive_update(Some(1_000), None);
-        assert!(tracker.stall_episode.is_some(), "first tick establishes baseline and stalls");
+        assert!(
+            tracker.stall_episode.is_some(),
+            "first tick establishes baseline and stalls"
+        );
 
         assert_phase_update(
             tracker
@@ -8674,7 +8673,9 @@ mod tests {
         age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
 
         assert!(
-            tracker.keepalive_update(None, Some(stopped_fact())).is_none(),
+            tracker
+                .keepalive_update(None, Some(stopped_fact()))
+                .is_none(),
             "waiting on the user is quiescent, not stalled"
         );
         assert!(tracker.stall_episode.is_none());
@@ -8729,7 +8730,10 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "a later silence is a new episode"
         );
-        assert_eq!(tracker.stall_episode.as_ref().unwrap().turn_epoch, first_epoch);
+        assert_eq!(
+            tracker.stall_episode.as_ref().unwrap().turn_epoch,
+            first_epoch
+        );
     }
 
     #[test]

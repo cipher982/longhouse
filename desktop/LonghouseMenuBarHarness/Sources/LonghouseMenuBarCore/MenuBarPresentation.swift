@@ -80,6 +80,8 @@ extension HealthSnapshot {
         let repairReasons: Set<String> = [
             "storage_v2_outbox_unreadable",
             "storage_v2_sources_unresolved",
+            "engine_status_unreadable", "orphaned_managed_bridge",
+            "managed_launch_recovery_exhausted", "managed_launch_recovery_unreadable",
             "service_stopped", "spool_dead", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
@@ -89,21 +91,35 @@ extension HealthSnapshot {
         let inspectReasons: Set<String> = [
             "archive_dead_lettered", "orphaned_managed_bridge",
             "managed_session_control_degraded", "provider_release_blocked",
+            "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
             "consecutive_failures", "connect_errors", "server_errors",
             "rate_limited", "retryable_client_errors",
         ]
+        // This producer red state is deliberately row-level: the engine has
+        // preserved the session, but the phase contract is newer than this
+        // client. Keep it visible in the session row without turning an
+        // otherwise healthy local machine into a repair alarm. Every other
+        // native red state remains machine-wide repair unless a concrete
+        // repair reason already says so.
+        let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
         let shippingFailures = engineStatus?.fresh == false
             ? 0
             : engineStatus?.payload?.consecutiveShipFailures ?? 0
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
+        let nativeRedRequiresRepair = parsedSeverity == .red
+            && rowLevelRedReasons.isDisjoint(with: reasons)
 
         let promotion: MenuBarPromotion
-        if storageBlockRequiresRepair || !repairReasons.isDisjoint(with: reasons) || isSetupRequired || isInstallLocationBlocked {
+        if nativeRedRequiresRepair
+            || storageBlockRequiresRepair
+            || !repairReasons.isDisjoint(with: reasons)
+            || isSetupRequired
+            || isInstallLocationBlocked {
             promotion = .repair
         } else if needsUser > 0 {
             promotion = .needsUser
-        } else if storageBlockIsRecovering || degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
+        } else if storageBlockIsRecovering || storageBlockProofUnknown || degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
         } else if !unavailableReasons.isDisjoint(with: reasons)
             || engineStatus?.error != nil
@@ -128,6 +144,8 @@ extension HealthSnapshot {
             headline = "\(needsUser) session\(needsUser == 1 ? "" : "s") need\(needsUser == 1 ? "s" : "") you"
         case .inspect where storageBlockIsRecovering:
             headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+        case .inspect where storageBlockProofUnknown:
+            headline = "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where degraded > 0:
             headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
         case .inspect where shippingFailures > 0:

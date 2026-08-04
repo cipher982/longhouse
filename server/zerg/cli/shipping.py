@@ -42,7 +42,11 @@ def _source_rows(state_root: Path | None, source_epoch: str | None, limit: int) 
         ORDER BY pending.blocked_at IS NOT NULL DESC, pending.created_at, pending.source_epoch
         LIMIT ?2
     """
-    with sqlite3.connect(database) as connection:
+    # Inspection must not acquire a writer connection or commit against the
+    # daemon's live SQLite database. Use SQLite's structural read-only mode so
+    # the action contract cannot drift into mutation by accident.
+    database_uri = database.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(database_uri, uri=True) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(query, (source_epoch, limit)).fetchall()
     return database, [dict(row) for row in rows]
@@ -92,9 +96,7 @@ def inspect_command(
             }
             else "metadata/reconciliation work"
         )
-        typer.echo(
-            f"  {provider} {source} epoch={row['source_epoch']} " f"range={row['range_start']}..{row['range_end']} kind={block_kind}"
-        )
+        typer.echo(f"  {provider} {source} epoch={row['source_epoch']} range={row['range_start']}..{row['range_end']} kind={block_kind}")
         typer.echo(f"    risk: {risk}; attempts={row['attempt_count']}; detail={row.get('block_detail') or '-'}")
     typer.echo("  action: inspect this evidence before retrying or discarding it")
 

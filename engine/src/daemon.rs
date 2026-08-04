@@ -951,6 +951,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
     let mut managed_launch_retry_tasks: JoinSet<Result<usize>> = JoinSet::new();
+    let mut managed_launch_outcome_retry_tasks: JoinSet<Result<usize>> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
@@ -969,7 +970,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     tokio::spawn(crate::codex_exec::prewarm_codex_console_workers());
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
-    managed_launch_retry_tasks.spawn(crate::managed_launch_lifecycle::reconcile_managed_launch_retries());
+    managed_launch_retry_tasks
+        .spawn(crate::managed_launch_lifecycle::reconcile_managed_launch_retries());
+    managed_launch_outcome_retry_tasks
+        .spawn(crate::managed_launch_lifecycle::reconcile_managed_launch_outcome_retries());
     loop {
         if !startup_archive_replay_pending {
             match queue_failed_shipment_retries_if_idle(
@@ -2081,9 +2085,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            _ = managed_launch_retry_timer.tick(), if managed_launch_retry_tasks.is_empty() => {
+            _ = managed_launch_retry_timer.tick(), if managed_launch_retry_tasks.is_empty() && managed_launch_outcome_retry_tasks.is_empty() => {
                 managed_launch_retry_tasks.spawn(
                     crate::managed_launch_lifecycle::reconcile_managed_launch_retries()
+                );
+                managed_launch_outcome_retry_tasks.spawn(
+                    crate::managed_launch_lifecycle::reconcile_managed_launch_outcome_retries()
                 );
             }
 
@@ -2098,6 +2105,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(error)) => {
                         tracing::warn!(error = %error, "Managed launch registration recovery task failed");
+                    }
+                    None => {}
+                }
+            }
+
+            managed_launch_outcome_retry_result = managed_launch_outcome_retry_tasks.join_next(), if !managed_launch_outcome_retry_tasks.is_empty() => {
+                match managed_launch_outcome_retry_result {
+                    Some(Ok(Ok(resolved))) if resolved > 0 => {
+                        tracing::info!(resolved, "Recovered durable managed launch outcomes");
+                    }
+                    Some(Ok(Ok(_))) => {}
+                    Some(Ok(Err(error))) => {
+                        tracing::warn!(error = %error, "Managed launch outcome recovery pass failed");
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(error = %error, "Managed launch outcome recovery task failed");
                     }
                     None => {}
                 }
@@ -5201,6 +5224,11 @@ mod tests {
             archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
             storage_v2_outbox:
                 crate::state::pending_source_envelope::StorageV2OutboxSnapshot::default(),
+            managed_launch_recovery: crate::device::NativeManagedLaunchRecoveryStatus {
+                exhausted_count: 0,
+                active_count: 0,
+                scan_error: false,
+            },
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,

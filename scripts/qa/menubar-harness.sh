@@ -259,7 +259,7 @@ xcode_ui_exec() {
     test | tee "$log_path"
 }
 
-SMOKE_ACTIONS="refresh,runDoctor,repairInstall,openLogs,openLonghouse,copyDiagnostics"
+SMOKE_ACTIONS="refresh,runDoctor,repairInstall,inspectStorageSource,openLogs,openLonghouse,copyDiagnostics"
 
 verify_action_log() {
   local log_path="$1"
@@ -275,6 +275,7 @@ expected = {
     "refresh",
     "runDoctor",
     "repairInstall",
+    "inspectStorageSource",
     "openLogs",
     "openLonghouse",
     "copyDiagnostics",

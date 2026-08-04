@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from pathlib import Path
 from typing import Any
 
 from zerg.services.longhouse_paths import get_agent_log_dir
@@ -33,23 +38,48 @@ _ACTION_IDS_BY_REASON: dict[str, str] = {
     "engine_status_stale": "inspect_local_health",
     "engine_evidence_stale": "inspect_local_health",
     "engine_reconciliation_failed": "inspect_local_health",
+    "engine_status_age_unknown": "inspect_local_health",
+    "engine_status_aging": "inspect_local_health",
+    "engine_status_sessions_invalid": "inspect_local_health",
+    "engine_status_sessions_missing": "inspect_local_health",
+    "engine_offline": "inspect_transport",
+    "heartbeat_stale": "inspect_transport",
     "storage_v2_sources_blocked": "inspect_storage_source",
     "storage_v2_sources_unresolved": "inspect_storage_source",
+    "storage_v2_sources_proof_unknown": "inspect_storage_source",
     "storage_v2_outbox_unreadable": "inspect_storage_outbox",
     "reported_offline": "inspect_transport",
     "transport_unavailable": "inspect_transport",
     "server_errors": "inspect_transport",
     "connect_errors": "inspect_transport",
+    "rate_limited": "inspect_transport",
     "retryable_client_errors": "inspect_transport",
+    "payload_rejected": "inspect_shipping",
+    "payload_too_large": "inspect_shipping",
+    "parse_errors": "inspect_shipping",
+    "consecutive_failures": "inspect_shipping",
+    "spool_dead": "inspect_shipping",
     "spool_dead_letters": "inspect_shipping",
     "outbox_stuck": "inspect_shipping",
     "archive_dead_lettered": "inspect_archive",
     "disk_critically_low": "free_disk_space",
+    "disk_low": "free_disk_space",
     "managed_session_control_degraded": "inspect_managed_session",
     "managed_session_detached": "inspect_managed_session",
-    "orphaned_managed_bridge": "inspect_managed_session",
+    "managed_unknown_phase": "inspect_managed_session",
+    "orphaned_managed_bridge": "stop_managed_bridge",
     "provider_release_blocked": "inspect_provider",
     "provider_support_needs_attention": "inspect_provider",
+    "provider_cli_version_unknown": "inspect_provider",
+    "provider_live_route_e2e_warning": "inspect_provider",
+    "service_generation_mismatch": "repair_machine",
+    "service_machine_name_mismatch": "repair_machine",
+    "service_not_installed": "repair_machine",
+    "service_runner_name_mismatch": "repair_machine",
+    "service_state_hash_mismatch": "repair_machine",
+    "managed_launch_recovery_exhausted": "inspect_managed_session",
+    "managed_launch_recovery_active": "inspect_managed_session",
+    "managed_launch_recovery_unreadable": "inspect_managed_session",
 }
 
 
@@ -85,6 +115,9 @@ class _HealthClassificationContext:
     storage_blocked_sources: int
     storage_reconciling_blocked_sources: int
     storage_unresolved_blocked_sources: int
+    storage_block_proof_unknown: bool
+    storage_latest_block_source_epoch: str | None
+    storage_latest_unresolved_block_source_epoch: str | None
     storage_outbox_error: str | None
     disk_free_bytes: Any
     outbox_count: int
@@ -98,6 +131,9 @@ class _HealthClassificationContext:
     managed_degraded: int
     orphan_bridge_count: int
     unknown_managed_phase_count: int
+    managed_recovery_exhausted_count: int
+    managed_recovery_active_count: int
+    managed_recovery_scan_error: bool
     canonical_sessions_missing: bool
     canonical_sessions_invalid: bool
     repair_action: str
@@ -218,6 +254,9 @@ def _add_managed_session_reasons(
     managed_degraded: int,
     managed_detached: int,
     unknown_managed_phase_count: int,
+    managed_recovery_exhausted_count: int = 0,
+    managed_recovery_active_count: int = 0,
+    managed_recovery_scan_error: bool = False,
 ) -> None:
     if orphan_bridge_count > 0:
         reasons.append("orphaned_managed_bridge")
@@ -234,6 +273,68 @@ def _add_managed_session_reasons(
     if unknown_managed_phase_count > 0:
         reasons.append("managed_unknown_phase")
         _with_action(actions, "Update the managed phase contract before trusting this managed-session status")
+
+    if managed_recovery_exhausted_count > 0:
+        reasons.append("managed_launch_recovery_exhausted")
+        _with_action(actions, "Inspect the affected managed session and Runtime Host registration recovery")
+
+    if managed_recovery_active_count > 0:
+        reasons.append("managed_launch_recovery_active")
+        _with_action(actions, "Inspect the managed session while Runtime Host launch recovery continues")
+
+    if managed_recovery_scan_error:
+        reasons.append("managed_launch_recovery_unreadable")
+        _with_action(actions, "Inspect managed launch recovery files in the local Longhouse state directory")
+
+
+def _collect_managed_launch_recovery(engine_status: dict[str, Any]) -> dict[str, Any]:
+    try:
+        status_path = Path(str(engine_status.get("path") or get_agent_status_path()))
+    except (TypeError, ValueError, OSError):
+        return {"exhausted_count": 0, "active_count": 0, "scan_error": True}
+    if not status_path.name:
+        return {"exhausted_count": 0, "active_count": 0, "scan_error": True}
+    agent_dir = status_path.parent
+    exhausted_count = 0
+    active_count = 0
+    scan_error = False
+    for directory_name in ("registration-retries", "outcome-retries"):
+        directory = agent_dir / "managed-local" / directory_name
+        try:
+            entries = list(directory.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError:
+            scan_error = True
+            continue
+        for path in entries:
+            if path.suffix != ".json":
+                continue
+            try:
+                payload = json.loads(path.read_text())
+            except (OSError, ValueError):
+                scan_error = True
+                continue
+            if not isinstance(payload, dict):
+                scan_error = True
+            elif payload.get("recovery_exhausted") is True:
+                exhausted_count += 1
+            elif directory_name == "registration-retries" or _outcome_retry_is_aged(payload):
+                active_count += 1
+    return {"exhausted_count": exhausted_count, "active_count": active_count, "scan_error": scan_error}
+
+
+def _outcome_retry_is_aged(payload: dict[str, Any]) -> bool:
+    try:
+        created_at = str(payload["created_at"]).replace("Z", "+00:00")
+        created = datetime.fromisoformat(created_at)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - created >= timedelta(seconds=10)
+    except (KeyError, TypeError, ValueError):
+        # Missing or malformed creation evidence is not proof that recovery
+        # is settled.
+        return True
 
 
 def _add_spool_pending_reason(
@@ -292,10 +393,13 @@ def _managed_health_flags(
     managed_degraded: int,
     managed_detached: int,
     unknown_managed_phase_count: int,
+    managed_recovery_exhausted_count: int,
+    managed_recovery_active_count: int,
+    managed_recovery_scan_error: bool,
 ) -> tuple[bool, bool]:
-    if orphan_bridge_count > 0:
+    if orphan_bridge_count > 0 or managed_recovery_exhausted_count > 0 or managed_recovery_scan_error:
         return True, False
-    if managed_degraded > 0 or managed_detached > 0:
+    if managed_degraded > 0 or managed_detached > 0 or managed_recovery_active_count > 0:
         return False, True
     return False, False
 
@@ -384,6 +488,9 @@ def _health_flags(
     unknown_managed_phase_count: int,
     canonical_sessions_missing: bool,
     canonical_sessions_invalid: bool,
+    managed_recovery_exhausted_count: int = 0,
+    managed_recovery_active_count: int = 0,
+    managed_recovery_scan_error: bool = False,
 ) -> tuple[bool, bool]:
     broken, degraded = _launch_health_flags(launch_state)
     if canonical_sessions_missing or canonical_sessions_invalid:
@@ -404,6 +511,9 @@ def _health_flags(
         managed_degraded=managed_degraded,
         managed_detached=managed_detached,
         unknown_managed_phase_count=unknown_managed_phase_count,
+        managed_recovery_exhausted_count=managed_recovery_exhausted_count,
+        managed_recovery_active_count=managed_recovery_active_count,
+        managed_recovery_scan_error=managed_recovery_scan_error,
     )
     broken = broken or managed_broken
     degraded = degraded or managed_degraded_flag
@@ -462,6 +572,10 @@ def _broken_health_headline(reasons: list[str]) -> str:
         headline = "Longhouse engine service is stopped"
     elif "storage_v2_sources_unresolved" in reasons:
         headline = "Longhouse has unresolved durable source evidence"
+    elif "managed_launch_recovery_exhausted" in reasons:
+        headline = "Longhouse could not recover a managed session"
+    elif "managed_launch_recovery_unreadable" in reasons:
+        headline = "Managed session recovery state is unreadable"
     elif "spool_dead" in reasons:
         headline = "Longhouse has dead-lettered data to repair"
     elif "engine_status_stale" in reasons:
@@ -553,6 +667,7 @@ def _health_classification_context(
     archive_repair: dict[str, Any],
     managed_summary: dict[str, Any] | None,
     managed_sessions: list[dict[str, Any]],
+    managed_launch_recovery: dict[str, Any] | None = None,
 ) -> _HealthClassificationContext:
     service_status = str(service.get("status") or "not-installed")
     payload = engine_status.get("payload") or {}
@@ -572,11 +687,15 @@ def _health_classification_context(
         storage_v2_outbox = {}
     blocked_source_count = int(storage_v2_outbox.get("blocked_source_count") or 0)
     unresolved_blocked_source_count = storage_v2_outbox.get("unresolved_blocked_source_count")
+    storage_block_proof_unknown = unresolved_blocked_source_count is None and blocked_source_count > 0
+    latest_block_source_epoch = str(storage_v2_outbox.get("latest_block_source_epoch") or "").strip() or None
+    latest_unresolved_block_source_epoch = str(storage_v2_outbox.get("latest_unresolved_block_source_epoch") or "").strip() or None
     if unresolved_blocked_source_count is None:
-        latest_block_kind = str(storage_v2_outbox.get("latest_block_kind") or "").strip()
-        unresolved_blocked_source_count = int(
-            blocked_source_count > 0 and latest_block_kind not in {"source_epoch_conflict", "render_generation_revision_conflict"}
-        )
+        # Older engines did not publish the aggregate proof. The latest row is
+        # not enough to classify all blocked sources: a safe newer row can hide
+        # an unresolved older row. Preserve attention without inventing red or
+        # green severity until a current producer supplies the aggregate.
+        unresolved_blocked_source_count = 0
     unknown_managed_phase_count = 0
     for session in managed_sessions:
         if _managed_phase_is_unknown(session.get("raw_phase")):
@@ -601,6 +720,9 @@ def _health_classification_context(
         storage_blocked_sources=blocked_source_count,
         storage_reconciling_blocked_sources=int(storage_v2_outbox.get("reconciling_blocked_source_count") or 0),
         storage_unresolved_blocked_sources=int(unresolved_blocked_source_count or 0),
+        storage_block_proof_unknown=storage_block_proof_unknown,
+        storage_latest_block_source_epoch=latest_block_source_epoch,
+        storage_latest_unresolved_block_source_epoch=latest_unresolved_block_source_epoch,
         storage_outbox_error=str(storage_v2_outbox.get("error") or "").strip() or None,
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
@@ -614,6 +736,9 @@ def _health_classification_context(
         managed_degraded=int((managed_summary or {}).get("degraded_count") or 0),
         orphan_bridge_count=int((managed_summary or {}).get("orphan_bridge_count") or 0),
         unknown_managed_phase_count=unknown_managed_phase_count,
+        managed_recovery_exhausted_count=int((managed_launch_recovery or {}).get("exhausted_count") or 0),
+        managed_recovery_active_count=int((managed_launch_recovery or {}).get("active_count") or 0),
+        managed_recovery_scan_error=bool((managed_launch_recovery or {}).get("scan_error")),
         canonical_sessions_missing=bool((managed_summary or {}).get("canonical_sessions_missing")),
         canonical_sessions_invalid=bool((managed_summary or {}).get("canonical_sessions_invalid")),
         repair_action=_repair_action_for_launch_readiness(launch_readiness),
@@ -681,12 +806,26 @@ def _collect_health_reasons(
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
     )
-    if context.storage_blocked_sources > 0:
+    if context.storage_blocked_sources > 0 and context.storage_unresolved_blocked_sources == 0:
         reasons.append("storage_v2_sources_blocked")
-        _with_action(actions, "Inspect the blocked source proof in engine-status.json")
+        source_suffix = f" --source-epoch {context.storage_latest_block_source_epoch}" if context.storage_latest_block_source_epoch else ""
+        _with_action(actions, f"Inspect retained source evidence: longhouse shipping inspect{source_suffix} --json")
     if context.storage_unresolved_blocked_sources > 0:
         reasons.append("storage_v2_sources_unresolved")
-        _with_action(actions, "Inspect the blocked source proof in engine-status.json before retrying or discarding it")
+        unresolved_source_epoch = context.storage_latest_unresolved_block_source_epoch
+        _with_action(
+            actions,
+            "Inspect retained source evidence"
+            + (
+                f" with longhouse shipping inspect --source-epoch {unresolved_source_epoch} --json"
+                if unresolved_source_epoch
+                else " with longhouse shipping inspect --json"
+            )
+            + " before retrying or discarding it",
+        )
+    if context.storage_block_proof_unknown:
+        reasons.append("storage_v2_sources_proof_unknown")
+        _with_action(actions, "Update Longhouse and inspect the retained source evidence")
     if context.storage_outbox_error:
         reasons.append("storage_v2_outbox_unreadable")
         _with_action(actions, "Inspect the storage-v2 outbox database error in engine-status.json")
@@ -697,6 +836,9 @@ def _collect_health_reasons(
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,
         unknown_managed_phase_count=context.unknown_managed_phase_count,
+        managed_recovery_exhausted_count=context.managed_recovery_exhausted_count,
+        managed_recovery_active_count=context.managed_recovery_active_count,
+        managed_recovery_scan_error=context.managed_recovery_scan_error,
     )
     _add_outbox_reasons(
         reasons,
@@ -718,6 +860,9 @@ def _is_uninstalled_health(context: _HealthClassificationContext) -> bool:
         and context.spool_pending == 0
         and context.archive_pending_ranges == 0
         and context.archive_dead_ranges == 0
+        and context.managed_recovery_exhausted_count == 0
+        and context.managed_recovery_active_count == 0
+        and not context.managed_recovery_scan_error
         and context.launch_state != "broken"
     )
 
@@ -741,7 +886,14 @@ def _degraded_state_is_watching(
         return False
     if context.canonical_sessions_missing or context.canonical_sessions_invalid:
         return False
-    if context.orphan_bridge_count > 0 or context.managed_degraded > 0 or context.managed_detached > 0:
+    if (
+        context.orphan_bridge_count > 0
+        or context.managed_degraded > 0
+        or context.managed_detached > 0
+        or context.managed_recovery_exhausted_count > 0
+        or context.managed_recovery_active_count > 0
+        or context.managed_recovery_scan_error
+    ):
         return False
     if context.unknown_managed_phase_count > 0:
         return False
@@ -777,7 +929,14 @@ def _archive_draining_state_is_watching(
         return False
     if context.canonical_sessions_missing or context.canonical_sessions_invalid:
         return False
-    if context.orphan_bridge_count > 0 or context.managed_degraded > 0 or context.managed_detached > 0:
+    if (
+        context.orphan_bridge_count > 0
+        or context.managed_degraded > 0
+        or context.managed_detached > 0
+        or context.managed_recovery_exhausted_count > 0
+        or context.managed_recovery_active_count > 0
+        or context.managed_recovery_scan_error
+    ):
         return False
     if context.unknown_managed_phase_count > 0:
         return False
@@ -866,6 +1025,7 @@ def _classify_health(
     managed_summary: dict[str, Any] | None,
     managed_sessions: list[dict[str, Any]],
     archive_repair: dict[str, Any],
+    managed_launch_recovery: dict[str, Any] | None = None,
 ) -> tuple[str, str, str, list[str], list[str]]:
     context = _health_classification_context(
         service=service,
@@ -876,6 +1036,7 @@ def _classify_health(
         archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
+        managed_launch_recovery=managed_launch_recovery,
     )
     reasons, actions = _collect_health_reasons(
         context,
@@ -917,6 +1078,9 @@ def _classify_health(
         unknown_managed_phase_count=context.unknown_managed_phase_count,
         canonical_sessions_missing=context.canonical_sessions_missing,
         canonical_sessions_invalid=context.canonical_sessions_invalid,
+        managed_recovery_exhausted_count=context.managed_recovery_exhausted_count,
+        managed_recovery_active_count=context.managed_recovery_active_count,
+        managed_recovery_scan_error=context.managed_recovery_scan_error,
     )
     if "engine_evidence_stale" in reasons or "engine_reconciliation_failed" in reasons:
         degraded = True
