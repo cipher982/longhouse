@@ -5237,29 +5237,44 @@ fn observe_rollout_len(context: &BridgeContext) -> Option<u64> {
 /// app-server's recorded process group.
 fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcessFact> {
     let app_server_pid = context.state.app_server_pid?;
+    let recorded_start = context.state.app_server_process_start_time.as_deref()?;
     let fact = crate::process_identity::try_collect_process_fact(app_server_pid)?;
-    if let Some(recorded) = context.state.app_server_process_start_time.as_deref() {
-        if !crate::process_identity::lstart_matches_recorded(&fact, recorded) {
-            // PID was reused by an unrelated process; this inventory proves nothing.
-            return None;
-        }
-    }
     let entries = crate::process_identity::try_collect_process_lineage()?;
-    crate::process_identity::owned_processes(
-        &entries,
-        app_server_pid,
+    find_stopped_owned_process(
+        &fact,
+        recorded_start,
         context.state.app_server_pgid,
+        &entries,
     )
-    .into_iter()
-    .find(|(entry, _)| entry.is_stopped_or_zombie())
-    .map(|(entry, matched_by)| StoppedProcessFact {
-        pid: entry.pid,
-        ppid: entry.ppid,
-        pgid: entry.pgid,
-        stat: entry.stat.clone(),
-        command: entry.command.clone(),
-        matched_by,
-    })
+}
+
+/// Find a stopped command only when the app-server identity is fully proven.
+/// Missing start identity is unknown, not corroboration: a recycled app-server
+/// pid must never turn an unrelated stopped process into a stall signal.
+fn find_stopped_owned_process(
+    app_server: &crate::process_identity::ProcessFact,
+    recorded_start: &str,
+    app_server_pgid: Option<i32>,
+    entries: &[crate::process_identity::ProcessLineage],
+) -> Option<StoppedProcessFact> {
+    if recorded_start.trim().is_empty()
+        || !crate::process_identity::lstart_matches_recorded(app_server, recorded_start)
+    {
+        // PID was reused by an unrelated process, or the launch did not retain
+        // enough identity to prove that it did not get reused.
+        return None;
+    }
+    crate::process_identity::owned_processes(entries, app_server.pid, app_server_pgid)
+        .into_iter()
+        .find(|(entry, _)| entry.is_stopped_or_zombie())
+        .map(|(entry, matched_by)| StoppedProcessFact {
+            pid: entry.pid,
+            ppid: entry.ppid,
+            pgid: entry.pgid,
+            stat: entry.stat.clone(),
+            command: entry.command.clone(),
+            matched_by,
+        })
 }
 
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
@@ -8529,6 +8544,62 @@ mod tests {
             command: "/bin/zsh -lc for n in {1..10}; do ...".to_string(),
             matched_by: "process_group",
         }
+    }
+
+    fn app_server_fact(lstart: &str) -> crate::process_identity::ProcessFact {
+        crate::process_identity::ProcessFact {
+            pid: 16956,
+            tty: "??".to_string(),
+            stat: "Ss".to_string(),
+            lstart: lstart.to_string(),
+            command: "codex app-server".to_string(),
+            start_time: None,
+        }
+    }
+
+    fn stopped_process_lineage() -> Vec<crate::process_identity::ProcessLineage> {
+        vec![
+            crate::process_identity::ProcessLineage {
+                pid: 16956,
+                ppid: 900,
+                pgid: 16956,
+                stat: "Ss".to_string(),
+                command: "codex app-server".to_string(),
+            },
+            crate::process_identity::ProcessLineage {
+                pid: 17210,
+                ppid: 1,
+                pgid: 16956,
+                stat: "Ts".to_string(),
+                command: "/bin/zsh -lc sleep 300".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn stopped_process_requires_complete_app_server_identity() {
+        let entries = stopped_process_lineage();
+        let fact = app_server_fact("Tue Aug 4 20:00:00 2026");
+
+        assert!(find_stopped_owned_process(&fact, "", Some(16956), &entries).is_none());
+        assert!(
+            find_stopped_owned_process(&fact, "Tue Aug 4 20:01:00 2026", Some(16956), &entries)
+                .is_none(),
+            "a reused app-server pid must not corroborate a stall"
+        );
+    }
+
+    #[test]
+    fn stopped_process_accepts_reparented_member_of_verified_app_server_group() {
+        let entries = stopped_process_lineage();
+        let fact = app_server_fact("Tue Aug 4 20:00:00 2026");
+        let stopped =
+            find_stopped_owned_process(&fact, "Tue Aug 4 20:00:00 2026", Some(16956), &entries)
+                .expect("verified reparented process-group member");
+
+        assert_eq!(stopped.pid, 17210);
+        assert_eq!(stopped.ppid, 1);
+        assert_eq!(stopped.matched_by, "process_group");
     }
 
     #[test]
