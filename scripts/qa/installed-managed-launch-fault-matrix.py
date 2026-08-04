@@ -1263,6 +1263,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 f"{providers}; this run cannot qualify host recovery. "
                 "Use --allow-unqualified-recovery only to record a yellow degraded-start result."
             )
+        harness_precondition_failures = any(
+            result.get("qualification") == "harness_precondition_unmet"
+            for result in provider_failures
+        )
 
         # A pre-ready intent is intentionally not eligible for Runtime Host
         # registration. End those exact launchers and assert their process
@@ -1523,10 +1527,14 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             if unready_intents or provider_failures
             else "green",
             "recovery_qualification": (
-                "mixed_provider_degraded_start_with_provider_owned_failure"
+                "mixed_provider_degraded_start_with_harness_precondition_gap"
+                if unready_intents and harness_precondition_failures
+                else "mixed_provider_degraded_start_with_provider_owned_failure"
                 if unready_intents and provider_failures
                 else "degraded_start_only_provider_not_ready"
                 if unready_intents
+                else "harness_precondition_gap"
+                if harness_precondition_failures
                 else "provider_owned_start_failure"
                 if provider_failures
                 else "installed_provider_owner_and_host_adoption"
