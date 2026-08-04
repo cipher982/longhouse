@@ -60,8 +60,21 @@ def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
 
 def test_native_resume_rejects_normal_provider_home(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", "/root")
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_SANDBOX", "provider-qualification-bwrap-v3")
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_HOME", "/root")
 
     with pytest.raises(RuntimeError, match="isolated provider HOME"):
+        _isolated_provider_home()
+
+
+def test_native_resume_requires_the_factory_sandbox_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "provider-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("LONGHOUSE_QUALIFICATION_SANDBOX", raising=False)
+    monkeypatch.delenv("LONGHOUSE_QUALIFICATION_HOME", raising=False)
+
+    with pytest.raises(RuntimeError, match="qualification sandbox"):
         _isolated_provider_home()
 
 
@@ -69,6 +82,8 @@ def test_native_resume_accepts_disposable_provider_home(tmp_path: Path, monkeypa
     home = tmp_path / "provider-home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_SANDBOX", "provider-qualification-bwrap-v3")
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_HOME", str(home))
 
     assert _isolated_provider_home() == home
 

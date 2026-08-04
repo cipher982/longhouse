@@ -35,6 +35,10 @@ from typing import Any
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
 
+QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
+QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
+QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -665,6 +669,10 @@ def _isolated_provider_home() -> Path:
 
     raw_home = os.environ.get("HOME", "").strip()
     home = Path(raw_home)
+    if os.environ.get(QUALIFICATION_SANDBOX_ENV) != QUALIFICATION_SANDBOX_PROFILE:
+        raise RuntimeError("native Resume producer requires the qualification sandbox")
+    if os.environ.get(QUALIFICATION_HOME_ENV) != raw_home:
+        raise RuntimeError("native Resume producer HOME is not bound to the qualification sandbox")
     try:
         normal_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     except KeyError:
