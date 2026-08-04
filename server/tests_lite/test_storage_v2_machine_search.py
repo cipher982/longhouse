@@ -29,8 +29,6 @@ def _coverage() -> dict[str, object]:
         "complete_through_commit_seq": "10",
         "unpublished_sessions": 0,
         "projector": "embeddings-test-256d-p2",
-        "cutover_certified_commit_seq": "9",
-        "cutover_certified_at": "2026-08-02T00:00:00+00:00",
         "search_store_id": "00000000-0000-4000-8000-000000000001",
         "search_schema_generation": "searchd-test-v1",
         "catalog_lag_count": 0,

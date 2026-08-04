@@ -76,10 +76,6 @@ class EmbeddingsV2Projector:
         if not isinstance(states, list):
             raise ValueError("catalog returned invalid embedding claims")
         await asyncio.gather(*(self._run_claim(state, claim_token) for state in states))
-        await self.catalog.call(
-            "projector.coverage.certify.v2",
-            {"projector": PROJECTOR, "observed_at": datetime.now(UTC).isoformat()},
-        )
         return len(states)
 
     async def _ensure_store_binding(self, observed_at: datetime) -> None:

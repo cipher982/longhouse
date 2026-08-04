@@ -212,16 +212,41 @@ class SearchV2Projector:
             objects = page.get("objects")
             if not isinstance(objects, list):
                 raise SearchProjectionError("invalid_catalog_response", "catalog returned invalid render objects")
-            for manifest in objects:
-                event_count = await self._index_object(
-                    manifest=manifest,
-                    session_id=session_id,
-                    generation_id=generation_id,
-                    claimed_revision=claimed_revision,
-                    session=session,
-                    sequence_context_cache=self._sequence_context_cache,
-                )
-                object_id = _hash(manifest.get("object_id") if isinstance(manifest, dict) else None, "object_id")
+            # Admit everything this page already holds before decoding anything.
+            # Render objects are content-addressed, so an object searchd already
+            # has under this generation is byte-identical and re-deriving it is
+            # pure waste -- but the waste is paid in storage reads and raw
+            # interaction replay, before `index_object` ever gets to short-circuit.
+            # A session appended to over days re-indexed every object on every
+            # revision, which is why the largest sessions never finished inside
+            # their lease and were re-claimed indefinitely.
+            page_object_ids = [
+                _hash(manifest.get("object_id") if isinstance(manifest, dict) else None, "object_id") for manifest in objects
+            ]
+            reuse = await self.search.call(
+                "search.index.objects.reuse.v2",
+                {
+                    "session_id": session_id,
+                    "generation_id": generation_id,
+                    "desired_revision": str(claimed_revision),
+                    "object_ids": page_object_ids,
+                },
+            )
+            reused = reuse.get("reused")
+            if not isinstance(reused, dict):
+                raise SearchProjectionError("invalid_search_response", "searchd returned an invalid object reuse map")
+            for manifest, object_id in zip(objects, page_object_ids, strict=True):
+                if object_id in reused:
+                    event_count = int(reused[object_id])
+                else:
+                    event_count = await self._index_object(
+                        manifest=manifest,
+                        session_id=session_id,
+                        generation_id=generation_id,
+                        claimed_revision=claimed_revision,
+                        session=session,
+                        sequence_context_cache=self._sequence_context_cache,
+                    )
                 if object_ids and object_id <= object_ids[-1]:
                     raise SearchProjectionError("invalid_catalog_response", "render object page is not strictly ordered")
                 object_ids.append(object_id)

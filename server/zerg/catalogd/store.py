@@ -47,7 +47,6 @@ from zerg.catalogd.models import FactReceipt
 from zerg.catalogd.models import LegacyMigrationRun
 from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
-from zerg.catalogd.models import ProjectorCutoverCertificate
 from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import ProjectorStoreBinding
 from zerg.catalogd.models import RawObject as LiveRawObject
@@ -7987,20 +7986,33 @@ class CatalogStore:
                 # revisions are not guaranteed to advance in lockstep.
                 search_completed = row.get("search_completed_revision")
                 claimed_revision = min(int(search_completed), int(row["desired_revision"])) if search_completed else row["desired_revision"]
-                connection.execute(
-                    update(table)
-                    .where(table.c.projector == projector, table.c.session_id == session_key)
-                    .values(
-                        claimed_revision=claimed_revision,
-                        claim_token=claim_token,
-                        worker_id=worker_id,
-                        claim_expires_at=expires_at,
-                        status="claimed",
-                        retry_at=None,
-                        commit_seq=commit_seq,
-                        updated_at=commit_time,
+                values = {
+                    "claimed_revision": claimed_revision,
+                    "claim_token": claim_token,
+                    "worker_id": worker_id,
+                    "claim_expires_at": expires_at,
+                    "status": "claimed",
+                    "retry_at": None,
+                    "commit_seq": commit_seq,
+                    "updated_at": commit_time,
+                }
+                if row["status"] == "claimed":
+                    # Taking over a lease that ran out. The previous pass neither
+                    # completed nor failed, so nothing else records that it was
+                    # abandoned -- and a pass that is too slow to finish inside
+                    # its lease will be abandoned again on the next tick, forever,
+                    # while every observable field says "idle, zero failures".
+                    values["failure_count"] = int(row["failure_count"] or 0) + 1
+                    values["last_error_code"] = "claim_lease_expired"
+                    values["last_error_message"] = f"a pass held by {row['worker_id']} did not finish inside its lease"
+                    logging.getLogger(__name__).warning(
+                        "Reclaiming expired projector lease projector=%s session=%s previous_worker=%s failures=%d",
+                        projector,
+                        session_key,
+                        row["worker_id"],
+                        values["failure_count"],
                     )
-                )
+                connection.execute(update(table).where(table.c.projector == projector, table.c.session_id == session_key).values(**values))
             claimed_rows = (
                 connection.execute(select(table).where(table.c.projector == projector, table.c.claim_token == claim_token)).mappings().all()
             )
@@ -8038,10 +8050,19 @@ class CatalogStore:
                     worker_id=None,
                     claim_expires_at=None,
                     status="idle",
+                    # Say why. A released claim used to reset to a plain idle row
+                    # with failure_count=0 and no error code, which is
+                    # indistinguishable from a session that was never attempted.
+                    # A projector that had been abandoning the same session for
+                    # hours therefore left no trace anywhere, and finding it took
+                    # a live query against the projector table.
+                    last_error_code="claim_released_worker_gone",
+                    last_error_message="the claiming worker did not survive this daemon generation",
                     commit_seq=commit_seq,
                     updated_at=observed_at,
                 )
             )
+            logging.getLogger(__name__).warning("Released %d projector claim(s) whose worker did not survive restart", claimed_count)
             return {"released": claimed_count, "commit_seq": str(commit_seq)}
 
     def complete_projector_claim(
@@ -8206,7 +8227,6 @@ class CatalogStore:
         """Read cutover proof and the mutable head in one catalog snapshot."""
 
         states = ProjectorState.__table__
-        certificates = ProjectorCutoverCertificate.__table__
         bindings = ProjectorStoreBinding.__table__
         tombstones = LiveSessionTombstone.__table__
         observed_at = datetime.now(UTC)
@@ -8224,20 +8244,11 @@ class CatalogStore:
                     func.min(func.coalesce(states.c.desired_at, states.c.created_at)),
                 ).where(*lag_predicate)
             ).one()
-            certificate = connection.execute(select(certificates).where(certificates.c.projector == projector)).mappings().first()
             binding = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
             commit_seq = _current_commit_seq(connection)
             oldest = _as_aware_utc(oldest_lag_at)
             return {
                 "projector": projector,
-                "certificate": (
-                    {
-                        "certified_commit_seq": str(certificate["certified_commit_seq"]),
-                        "certified_at": _encode_datetime(certificate["certified_at"]),
-                    }
-                    if certificate is not None
-                    else None
-                ),
                 "store_binding": (
                     {
                         "store_id": str(binding["store_id"]),
@@ -8255,66 +8266,6 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
-    def certify_projector_cutover(
-        self,
-        *,
-        projector: str,
-        observed_at: datetime,
-    ) -> dict[str, Any]:
-        """Publish a cutover certificate iff this transaction sees no lag."""
-
-        states = ProjectorState.__table__
-        certificates = ProjectorCutoverCertificate.__table__
-        bindings = ProjectorStoreBinding.__table__
-        tombstones = LiveSessionTombstone.__table__
-        with _write_transaction(self.engine) as connection:
-            binding = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
-            if binding is None:
-                return {
-                    "certified": False,
-                    "created": False,
-                    "reason": "store_not_bound",
-                    "commit_seq": str(_current_commit_seq(connection)),
-                }
-            existing = connection.execute(select(certificates).where(certificates.c.projector == projector)).mappings().first()
-            if existing is not None:
-                return {
-                    "certified": True,
-                    "created": False,
-                    "certified_commit_seq": str(existing["certified_commit_seq"]),
-                    "certified_at": _encode_datetime(existing["certified_at"]),
-                    "commit_seq": str(_current_commit_seq(connection)),
-                }
-            lag_predicate = [
-                states.c.projector == projector,
-                states.c.desired_revision > states.c.completed_revision,
-            ]
-            if projector != "search-v2":
-                lag_predicate.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == states.c.session_id).exists())
-            lag_count = int(connection.execute(select(func.count()).where(*lag_predicate)).scalar_one())
-            if lag_count:
-                return {
-                    "certified": False,
-                    "created": False,
-                    "lag_count": lag_count,
-                    "commit_seq": str(_current_commit_seq(connection)),
-                }
-            commit_seq = _advance_commit_seq(connection, observed_at)
-            connection.execute(
-                insert(certificates).values(
-                    projector=projector,
-                    certified_commit_seq=commit_seq,
-                    certified_at=observed_at,
-                )
-            )
-            return {
-                "certified": True,
-                "created": True,
-                "certified_commit_seq": str(commit_seq),
-                "certified_at": observed_at.isoformat(),
-                "commit_seq": str(commit_seq),
-            }
-
     def requeue_projector_states(
         self,
         *,
@@ -8325,7 +8276,6 @@ class CatalogStore:
         """Reset only explicitly named completed states for coverage repair."""
 
         table = ProjectorState.__table__
-        certificates = ProjectorCutoverCertificate.__table__
         session_keys = sorted(str(session_id) for session_id in session_ids)
         with _write_transaction(self.engine) as connection:
             rows = (
@@ -8354,22 +8304,8 @@ class CatalogStore:
                 or by_session[session_id]["retry_at"] is not None
             ]
             if not changed:
-                certificate_exists = connection.execute(
-                    select(certificates.c.projector).where(certificates.c.projector == projector)
-                ).first()
-                if certificate_exists is not None:
-                    commit_seq = _advance_commit_seq(connection, observed_at)
-                    connection.execute(delete(certificates).where(certificates.c.projector == projector))
-                    return {
-                        "changed": False,
-                        "certificate_revoked": True,
-                        "requeued_session_ids": [],
-                        "missing_session_ids": [],
-                        "commit_seq": str(commit_seq),
-                    }
                 return {
                     "changed": False,
-                    "certificate_revoked": False,
                     "requeued_session_ids": [],
                     "missing_session_ids": [],
                     "commit_seq": str(_current_commit_seq(connection)),
@@ -8395,10 +8331,8 @@ class CatalogStore:
                     updated_at=observed_at,
                 )
             )
-            certificate_revoked = bool(connection.execute(delete(certificates).where(certificates.c.projector == projector)).rowcount)
             return {
                 "changed": True,
-                "certificate_revoked": certificate_revoked,
                 "requeued_session_ids": changed,
                 "missing_session_ids": [],
                 "commit_seq": str(commit_seq),
@@ -8416,7 +8350,6 @@ class CatalogStore:
 
         bindings = ProjectorStoreBinding.__table__
         states = ProjectorState.__table__
-        certificates = ProjectorCutoverCertificate.__table__
         store_key = str(store_id)
         with _write_transaction(self.engine) as connection:
             existing = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
@@ -8449,7 +8382,6 @@ class CatalogStore:
                     updated_at=observed_at,
                 )
             ).rowcount
-            connection.execute(delete(certificates).where(certificates.c.projector == projector))
             if existing is None:
                 connection.execute(
                     insert(bindings).values(

@@ -436,8 +436,6 @@ class CatalogDaemon:
             return await self._list_projector_lag(request)
         if request.method == "projector.coverage.read.v2":
             return await self._read_projector_coverage(request)
-        if request.method == "projector.coverage.certify.v2":
-            return await self._certify_projector_cutover(request)
         if request.method == "projector.state.requeue.v2":
             return await self._requeue_projector_states(request)
         if request.method == "projector.store.bind.v2":
@@ -2972,22 +2970,6 @@ class CatalogDaemon:
         result = await self._run_read_store(
             self._store.read_projector_coverage,
             projector=projector,
-        )
-        return CatalogRpcResponse(id=request.id, result=result)
-
-    async def _certify_projector_cutover(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"projector", "observed_at"}:
-            return self._error(request, "invalid_request", "projector.coverage.certify.v2 has invalid parameters")
-        try:
-            projector = _projector_name(request.params["projector"])
-            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
-        except ValueError as exc:
-            return self._error(request, "invalid_request", str(exc))
-        assert self._store is not None
-        result = await self._run_store(
-            self._store.certify_projector_cutover,
-            projector=projector,
-            observed_at=observed_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

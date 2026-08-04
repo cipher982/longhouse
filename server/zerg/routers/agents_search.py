@@ -168,13 +168,6 @@ class _RecallContextPayload(BaseModel):
     timing: _SearchReadTiming
 
 
-class _CutoverCertificatePayload(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
-    certified_at: str = Field(min_length=1)
-
-
 class _ProjectorStoreBindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -197,7 +190,6 @@ class _ProjectorCoveragePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     projector: str = Field(min_length=1)
-    certificate: _CutoverCertificatePayload | None
     store_binding: _ProjectorStoreBindingPayload | None
     lag_count: int = Field(ge=0)
     indexed_through: str = Field(pattern=r"^[0-9]+$")
@@ -214,29 +206,29 @@ class _ProjectorCoveragePayload(BaseModel):
             raise ValueError("zero projector lag requires the current catalog watermark")
         if self.lag_count > 0 and (self.oldest_lag_at is None or self.oldest_lag_seconds is None):
             raise ValueError("nonzero projector lag requires its oldest age")
-        if self.certificate is not None and int(self.certificate.certified_commit_seq) > int(self.commit_seq):
-            raise ValueError("cutover certificate cannot exceed the catalog watermark")
-        if (
-            self.certificate is not None
-            and self.store_binding is not None
-            and int(self.certificate.certified_commit_seq) < int(self.store_binding.commit_seq)
-        ):
-            raise ValueError("cutover certificate cannot predate the active store binding")
         return self
 
 
-async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _ProjectorCoveragePayload:
-    """Require a certified corpus with a bounded, explicitly reported head.
+async def _require_projection_coverage(*, timeout_seconds: float) -> _ProjectorCoveragePayload:
+    """Require a bound store, and report exactly how current it is.
 
-    searchd's resident gate validates every row it knows about. Catalogd owns
-    the authoritative eligible-session set, so a fresh or partially rebuilt
-    searchd could otherwise prove an empty/partial local set complete. Projector
-    completion is published only after each searchd mutation commits. A durable
-    certificate proves this projector identity once reached zero backlog; a
-    small, young post-cutover head can then serve the previous validated
-    immutable resident snapshot without turning ordinary active-session writes
-    into global 503s. Searchd separately proves the current generation,
-    revision, dimension, normalization, and locator invariants for that snapshot.
+    This used to also require a durable "cutover certificate": proof that the
+    projector identity had once reached zero backlog. That answered a historical
+    question -- was this generation ever completely caught up? -- which says
+    nothing about the correctness of the snapshot being searched now, and it was
+    unobtainable on a live instance, where lag is never zero. A new projector
+    identity could therefore never certify, which made re-projecting the corpus
+    impossible: bumping the identity to re-embed put every dense query into
+    `cutover_not_certified` within seconds.
+
+    What actually establishes the answer is already here. The store binding
+    identifies the derived store; searchd proves generation, revision, dimension,
+    normalization and locator invariants for the resident rows; projector
+    completion is recorded only after the searchd mutation commits; and
+    `indexed_through` is the catalog prefix that work represents. A store that
+    has projected almost nothing serves almost nothing and reports a low
+    watermark beside a large lag count -- degraded, but not silent, which is the
+    property the certificate was reaching for.
     """
 
     from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
@@ -279,20 +271,15 @@ async def _require_complete_projection_coverage(*, timeout_seconds: float) -> _P
             ) from exc
 
     embedding_coverage = await coverage(EMBEDDING_PROJECTOR_ID)
-    certificate_missing = embedding_coverage.certificate is None
-    store_binding_missing = embedding_coverage.store_binding is None
-    # Lag is no longer a refusal. "No proof exists" and "proof exists for a
-    # prefix" are different states, and only the first is a fault: without a
-    # cutover certificate or a store binding there is nothing to reason about,
-    # so serving would be a guess. With them, the corpus is provably current
-    # through a watermark that the caller receives on every response.
-    if certificate_missing or store_binding_missing:
+    # Without a store binding there is no derived store to attribute results to,
+    # so serving would be a guess. Lag is not a refusal: it is reported.
+    if embedding_coverage.store_binding is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "embedding_coverage_unproven",
-                "message": "The embedding corpus has no cutover proof to search against.",
-                "reason": ("cutover_not_certified" if certificate_missing else "store_binding_missing"),
+                "message": "No derived store is bound for the embedding corpus.",
+                "reason": "store_binding_missing",
                 "catalog_coverage": {
                     EMBEDDING_PROJECTOR_ID: embedding_coverage.model_dump(),
                 },
@@ -588,7 +575,7 @@ async def _semantic_recall(
     async def _run() -> _DenseRecallResult:
         query_vec, catalog_coverage = await asyncio.gather(
             embed_query(query),
-            _require_complete_projection_coverage(timeout_seconds=timeout_seconds),
+            _require_projection_coverage(timeout_seconds=timeout_seconds),
         )
 
         # Scoping is a SQL predicate against searchd's own session_index
@@ -623,7 +610,7 @@ async def _semantic_recall(
             # read after observing a stale resident snapshot captures the head
             # responsible for that staleness instead of relying on the earlier
             # concurrent observation.
-            catalog_coverage = await _require_complete_projection_coverage(
+            catalog_coverage = await _require_projection_coverage(
                 timeout_seconds=timeout_seconds,
             )
         binding = catalog_coverage.store_binding
@@ -674,8 +661,6 @@ async def _semantic_recall(
             complete=catalog_coverage.lag_count == 0,
             unpublished_sessions=resident.unpublished_sessions,
             projector=EMBEDDING_PROJECTOR_ID,
-            cutover_certified_commit_seq=catalog_coverage.certificate.certified_commit_seq,
-            cutover_certified_at=catalog_coverage.certificate.certified_at,
             search_store_id=dense_payload.store_id,
             search_schema_generation=dense_payload.schema_generation,
             catalog_lag_count=catalog_coverage.lag_count,

@@ -20,10 +20,10 @@ _SPEC.loader.exec_module(recall_eval)
 
 def _coverage(*, commit_seq: str = "10", sessions: int = 5_901, episodes: int = 82_958) -> dict[str, object]:
     return {
-        "ready": True,
-        "projector": "embeddings-5090578d9565-256d-p2",
-        "cutover_certified_commit_seq": "9",
-        "cutover_certified_at": "2026-08-02T00:00:00+00:00",
+        "projector": "embeddings-5090578d9565-256d-p3",
+        "complete": True,
+        "complete_through_commit_seq": commit_seq,
+        "unpublished_sessions": 0,
         "catalog_lag_count": 0,
         "catalog_indexed_through": commit_seq,
         "catalog_oldest_lag_at": None,
@@ -76,7 +76,7 @@ def test_live_eval_request_requires_complete_coverage_and_real_result_depth(monk
         expected_sha="c" * 40,
     )
 
-    assert payload["coverage"]["ready"] is True
+    assert payload["coverage"]["complete"] is True
     assert seen["params"]["max_results"] == ["25"]
     assert seen["params"]["mode"] == ["semantic"]
     assert seen["timeout"] == 30

@@ -284,6 +284,9 @@ class SearchDaemon:
             if request.method == "search.index.object.v2":
                 params = _index_object_params(request.params)
                 return self._result(request, await self._run(self._store.index_object, **params))
+            if request.method == "search.index.objects.reuse.v2":
+                params = _reuse_objects_params(request.params)
+                return self._result(request, await self._run(self._store.reuse_indexed_objects, **params))
             if request.method == "search.index.publish.v2":
                 params = _publish_params(request.params)
                 published = await self._run_with_dense_refresh(self._store.publish_generation, **params)
@@ -695,6 +698,22 @@ def _revision(value: object, field: str) -> int:
     if not isinstance(value, str) or not value.isdecimal() or int(value) >= 1 << 63:
         raise ValueError(f"{field} must be a decimal i63 string")
     return int(value)
+
+
+def _reuse_objects_params(value: dict) -> dict:
+    _exact_keys(value, {"session_id", "generation_id", "desired_revision", "object_ids"})
+    object_ids = value["object_ids"]
+    if not isinstance(object_ids, list) or len(object_ids) > 1_000:
+        raise ValueError("object_ids must be a bounded list")
+    for object_id in object_ids:
+        if not isinstance(object_id, str) or _HASH.fullmatch(object_id) is None:
+            raise ValueError("object_ids must be lowercase SHA-256 hashes")
+    return {
+        "session_id": _uuid(value["session_id"], "session_id"),
+        "generation_id": _uuid(value["generation_id"], "generation_id"),
+        "desired_revision": _revision(value["desired_revision"], "desired_revision"),
+        "object_ids": object_ids,
+    }
 
 
 def _index_object_params(value: dict) -> dict:

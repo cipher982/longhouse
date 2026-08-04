@@ -146,18 +146,13 @@ EMBEDDING_ARTIFACT_FILES: Final = tuple(_parsed_files)
 # session instead of treating rows written under the old contract as complete.
 # The trailing generation marker identifies one projected corpus. Bumping it
 # re-seeds every session and forces a full re-projection, which is how a chunker
-# change reaches episodes that are already complete (their hashes only get
-# re-compared when the projector re-claims them).
+# change reaches episodes that are already complete -- their hashes are only
+# re-compared when the projector re-claims them, and a settled session is never
+# re-claimed on its own.
 #
-# Do NOT bump it casually. `certify_projector_cutover` issues a new generation's
-# certificate only from a transaction that observes zero lag, and a live instance
-# with active sessions may never reach zero lag -- so a bumped generation can sit
-# uncertified indefinitely while `_require_complete_projection_coverage` refuses
-# every dense query for want of proof. Verified on hosted david010: bumping to p3
-# put dense recall into `cutover_not_certified` immediately.
-#
-# The 2048-token model-tokenizer budgeting therefore applies to episodes as the
-# projector re-claims them, rather than through a forced sweep. Re-embedding the
-# historical corpus needs certification to accept a watermark instead of demanding
-# a single zero-lag moment; that is separate work.
-EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p2"
+# p3: episode text is budgeted with the model's own tokenizer at its real 2048
+# ceiling. p2 budgeted with tiktoken at 1800 and the encoder then re-truncated to
+# 1024 keeping only the head, which discarded the tail of ~35% of episodes.
+# Unchanged episodes keep their vectors: the projector re-reads and re-hashes
+# them, and only re-embeds where the text actually differs.
+EMBEDDING_PROJECTOR_ID: Final = f"embeddings-{EMBEDDING_ARTIFACT_REVISION[:12]}-{ACTIVE_EMBEDDING_DIMS}d-p3"

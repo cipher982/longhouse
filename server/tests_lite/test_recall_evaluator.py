@@ -12,10 +12,10 @@ import pytest
 
 def _coverage() -> dict[str, object]:
     return {
-        "ready": True,
-        "projector": "embeddings-5090578d9565-256d-p2",
-        "cutover_certified_commit_seq": "9",
-        "cutover_certified_at": "2026-08-02T00:00:00+00:00",
+        "projector": "embeddings-5090578d9565-256d-p3",
+        "complete": True,
+        "complete_through_commit_seq": "10",
+        "unpublished_sessions": 0,
         "catalog_lag_count": 0,
         "catalog_indexed_through": "10",
         "catalog_oldest_lag_at": None,

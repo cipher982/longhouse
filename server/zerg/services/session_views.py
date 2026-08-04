@@ -1845,8 +1845,6 @@ class RecallCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     projector: str = Field(min_length=1)
-    cutover_certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
-    cutover_certified_at: str = Field(min_length=1)
     search_store_id: str
     search_schema_generation: str = Field(min_length=1)
     # The corpus is proven current through this catalog watermark. Everything
@@ -1888,8 +1886,6 @@ class RecallCoverage(BaseModel):
             raise ValueError("search_store_id must be a canonical UUID") from exc
         if str(parsed_store_id) != self.search_store_id:
             raise ValueError("search_store_id must be a canonical UUID")
-        if int(self.cutover_certified_commit_seq) > int(self.catalog_commit_seq):
-            raise ValueError("cutover certificate cannot exceed the observed catalog watermark")
         if int(self.complete_through_commit_seq) > int(self.catalog_commit_seq):
             raise ValueError("coverage cannot be proven past the observed catalog watermark")
         if self.complete != (self.catalog_lag_count == 0):

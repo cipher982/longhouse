@@ -431,3 +431,32 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
         assert_equivalent()
     finally:
         connection.close()
+
+
+def test_identical_episode_text_collapses_to_one_result(tmp_path):
+    """Boilerplate shared across sessions must not fill top-k with copies.
+
+    Agents repeat a lot of text verbatim -- injected instruction files, the same
+    preamble, generated scaffolding. Those episodes embed to the same vector and
+    score identically, so a query that grazes them used to return the same
+    passage from six unrelated sessions while the results that would actually
+    answer it sat just below the cut.
+    """
+
+    rows = [(f"s{i}", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01") for i in range(6)]
+    rows.append(("distinct", 0, [0, 1, 0, 0], "42", "zerg", "claude", "local", "2026-07-01"))
+    index, connection = _index(tmp_path, rows)
+    try:
+        # Give every boilerplate session byte-identical episode text.
+        connection.execute("UPDATE episode_embeddings SET content_hash = 'shared' WHERE session_id != 'distinct'")
+        connection.commit()
+        index.load(connection)
+
+        hits = index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=5)
+
+        assert len(hits) == 2
+        # The best-scoring copy survives; the rest give way to real signal.
+        assert hits[0]["session_id"].startswith("s")
+        assert hits[1]["session_id"] == "distinct"
+    finally:
+        connection.close()

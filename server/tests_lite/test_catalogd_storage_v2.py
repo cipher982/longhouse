@@ -1074,6 +1074,69 @@ async def test_storage_session_delete_fences_replay_retires_manifests_and_queues
 
 
 @pytest.mark.asyncio
+async def test_expired_projector_lease_is_reclaimed_with_a_recorded_reason(daemon_paths):
+    """A pass that runs past its lease must leave evidence when it is taken over.
+
+    Reclaiming an expired lease used to overwrite the row silently, so a
+    projector that could not finish a session inside its lease was re-claimed
+    and abandoned on every tick while every observable field still read
+    "idle, zero failures". The only way to notice was to query the projector
+    table on the live host, which is exactly how this was eventually found.
+    """
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        params = _raw_params(epoch=uuid4(), session_id=session_id, start=0, end=6, records=(b"work\n",), sealed_at=now)
+        params.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"lease"),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        await client.call("storage.raw_object.commit.v2", params)
+
+        first = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "worker-that-stalls",
+                "claim_token": str(uuid4()),
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert [row["session_id"] for row in first["claimed"]] == [str(session_id)]
+
+        # The pass never completes. A later tick finds the lease expired.
+        second = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "worker-taking-over",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=120)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        reclaimed = second["claimed"]
+        assert [row["session_id"] for row in reclaimed] == [str(session_id)]
+        # The takeover is on the record, and repeated abandonment now shows up
+        # as a rising failure count rather than a permanently pristine row.
+        assert reclaimed[0]["last_error_code"] == "claim_lease_expired"
+        assert reclaimed[0]["failure_count"] == 1
+        assert "worker-that-stalls" in reclaimed[0]["last_error_message"]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_recall_projectors_claim_oldest_lag_before_hotter_revision(daemon_paths):
     """Live ingest must not starve the stable corpus behind a coverage gate."""
 
