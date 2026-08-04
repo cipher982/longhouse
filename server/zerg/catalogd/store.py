@@ -198,6 +198,52 @@ def _live_attention_event(
     return event
 
 
+def _live_record_attention_policy_decision(
+    orm: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+    event_type: str,
+    state_key: str,
+    collapse_key: str,
+    occurred_at: datetime,
+    reason: str,
+    queue_until: datetime | None = None,
+) -> None:
+    existing = (
+        orm.query(LiveNotificationEvent.id)
+        .filter(
+            LiveNotificationEvent.owner_id == owner_id,
+            LiveNotificationEvent.session_id == session_id,
+            LiveNotificationEvent.event_type == event_type,
+            LiveNotificationEvent.collapse_key == collapse_key,
+            LiveNotificationEvent.delivered_at.is_(None),
+            LiveNotificationEvent.failed_at.is_(None),
+            LiveNotificationEvent.resolved_at.is_(None),
+        )
+        .first()
+    )
+    if existing is not None:
+        return
+    channel_results: dict[str, Any] = {"suppressed": reason}
+    eligible_at = occurred_at
+    if queue_until is not None:
+        channel_results["queued"] = True
+        eligible_at = queue_until
+    orm.add(
+        LiveNotificationEvent(
+            owner_id=owner_id,
+            session_id=session_id,
+            event_type=event_type,
+            state_key=state_key,
+            collapse_key=collapse_key,
+            event_started_at=occurred_at,
+            eligible_at=eligible_at,
+            channel_results=channel_results,
+        )
+    )
+
+
 def _live_runtime_attention_actions(
     orm: Session,
     *,
@@ -268,9 +314,31 @@ def _live_runtime_attention_actions(
                 event_type="session_stalled",
             )
             if policy.action != AttentionDeliveryAction.DELIVER:
+                if user is not None:
+                    _live_record_attention_policy_decision(
+                        orm,
+                        owner_id=owner_id,
+                        session_id=session_id,
+                        event_type="session_stalled",
+                        state_key=f"stalled:{occurred_at.isoformat()}",
+                        collapse_key=f"lh-attn-{session_id}",
+                        occurred_at=occurred_at,
+                        reason=str(policy.reason or policy.action.value),
+                        queue_until=policy.queue_until,
+                    )
                 continue
             targets = _live_attention_targets(orm, owner_id)
             if not targets:
+                _live_record_attention_policy_decision(
+                    orm,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    event_type="session_stalled",
+                    state_key=f"stalled:{occurred_at.isoformat()}",
+                    collapse_key=f"lh-attn-{session_id}",
+                    occurred_at=occurred_at,
+                    reason="no_ios_targets",
+                )
                 continue
             event = _live_attention_event(
                 orm,
@@ -2216,7 +2284,9 @@ class CatalogStore:
                         changed = True
                     elif action == "resolution" and current == _CATALOG_STALL_RESOLUTION_PENDING and same_at and same_event:
                         catalog.last_attention_push_state = (
-                            previous_state if previous_state in {"stalled", _CATALOG_STALL_PENDING} else state
+                            previous_state
+                            if previous_state in {"stalled", _CATALOG_STALL_PENDING, _CATALOG_STALL_RESOLUTION_PENDING}
+                            else state
                         )
                         catalog.last_attention_push_at = expected_at
                         if event is not None:
@@ -2262,7 +2332,9 @@ class CatalogStore:
                         catalog.last_attention_push_state = state
                         if event is not None:
                             event.delivered_at = datetime.now(UTC)
-                            event.channel_results = {"apns_ios": {"accepted": True}}
+                            channel_results = dict(event.channel_results or {})
+                            channel_results["apns_ios"] = {"accepted": True}
+                            event.channel_results = channel_results
                         changed = True
                     elif action == "resolution" and current == _CATALOG_STALL_RESOLUTION_PENDING and same_at and same_event:
                         catalog.last_attention_push_state = f"{state}:resolved"

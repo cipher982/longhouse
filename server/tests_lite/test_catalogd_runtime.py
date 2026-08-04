@@ -16,6 +16,7 @@ from zerg.catalogd.schema import read_catalog_meta
 from zerg.catalogd.server import CatalogDaemon
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveNotificationEvent
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
@@ -71,6 +72,7 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
             )
         )
     engine.dispose()
+
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -273,6 +275,7 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
                 "session_id": session_id,
                 "action": "attention",
                 "state": "stalled",
+                "previous_state": "",
                 "notification_event_id": notification_event_id,
                 "occurred_at": now.isoformat(),
                 "attention_push_at": now.isoformat(),
@@ -312,4 +315,60 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
         ).mappings().one()
         assert catalog["last_attention_push_state"] == "stalled"
         assert catalog["last_attention_notification_id"] == notification_event_id
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_apply_audits_catalog_attention_suppression_without_targets(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(LiveUser.__table__.insert().values(id=8, email="audit@example.com", prefs={}))
+        connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id=session_id,
+                owner_id="8",
+                provider="codex",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="codex",
+                environment="dev",
+                started_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        event = {
+            **_event(
+                session_id=session_id,
+                runtime_key=f"codex:{session_id}",
+                dedupe_key="catalog-stalled-no-targets-1",
+                occurred_at=now,
+            ),
+            "phase": "stalled",
+            "payload": {"stall_notification": True},
+        }
+        result = await client.call("session.runtime.apply.v2", {"events": [event]})
+        assert "attention_actions" not in result
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        audit = connection.execute(LiveNotificationEvent.__table__.select()).mappings().one()
+        assert audit["channel_results"] == {"suppressed": "no_ios_targets"}
     engine.dispose()

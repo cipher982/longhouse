@@ -1089,7 +1089,7 @@ class CatalogDaemon:
             session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
             action = _bounded_text(request.params["action"], "action", 32)
             state = _bounded_text(request.params["state"], "state", 32)
-            previous_state = _bounded_text(request.params["previous_state"], "previous_state", 64)
+            previous_state = _bounded_text_allow_empty(request.params["previous_state"], "previous_state", 64)
             notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
             occurred_at = _parse_datetime(request.params["occurred_at"], "occurred_at")
             attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
@@ -1111,13 +1111,14 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _commit_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "action", "state", "notification_event_id", "occurred_at", "attention_push_at"}
+        expected = {"session_id", "action", "state", "previous_state", "notification_event_id", "occurred_at", "attention_push_at"}
         if set(request.params) != expected:
             return self._error(request, "invalid_request", "notification.apns.attention.commit.v2 has invalid parameters")
         try:
             session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
             action = _bounded_text(request.params["action"], "action", 32)
             state = _bounded_text(request.params["state"], "state", 32)
+            _bounded_text_allow_empty(request.params["previous_state"], "previous_state", 64)
             notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
             occurred_at = _parse_datetime(request.params["occurred_at"], "occurred_at")
             attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
@@ -3458,6 +3459,14 @@ def _validate_hash_batch(value: object, *, field: str) -> tuple[str, ...]:
 def _bounded_text(value: object, field: str, maximum_bytes: int) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
+    if len(value.encode("utf-8")) > maximum_bytes:
+        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
+    return value
+
+
+def _bounded_text_allow_empty(value: object, field: str, maximum_bytes: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
     if len(value.encode("utf-8")) > maximum_bytes:
         raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
     return value

@@ -79,7 +79,8 @@ def _catalog_attention_notification(action: dict) -> SessionAttentionPush | Sess
     )
     occurred_at = datetime.fromisoformat(str(action["occurred_at"]))
     session_id = str(action["session_id"])
-    if action.get("kind") == "resolution":
+    kind = action.get("kind")
+    if kind == "resolution":
         return SessionAttentionResolutionPush(
             session_id=session_id,
             previous_state="stalled",
@@ -89,6 +90,8 @@ def _catalog_attention_notification(action: dict) -> SessionAttentionPush | Sess
             collapse_id=f"lh-attn-resolved-{session_id}",
             targets=targets,
         )
+    if kind != "attention":
+        raise ValueError(f"unknown catalog attention action kind: {kind!r}")
     return SessionAttentionPush(
         session_id=session_id,
         state="stalled",

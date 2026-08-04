@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -110,6 +111,42 @@ def test_catalog_attention_dispatch_rolls_back_rejected_send():
             "attention_push_at": occurred_at.isoformat(),
         },
     )
+
+
+def test_catalog_attention_dispatch_commits_accepted_send_and_rejects_unknown_kind():
+    session_id = str(uuid4())
+    event_id = str(uuid4())
+    occurred_at = datetime.now(timezone.utc).replace(microsecond=0)
+    action = {
+        "kind": "attention",
+        "session_id": session_id,
+        "state": "stalled",
+        "previous_state": "",
+        "notification_event_id": event_id,
+        "occurred_at": occurred_at.isoformat(),
+        "title": "Catalog stalled session",
+        "summary": "No provider progress",
+        "targets": [{"device_token": "d" * 64, "push_environment": "sandbox"}],
+    }
+    catalogd = SimpleNamespace(call=AsyncMock(return_value={"committed": True}))
+
+    with patch("zerg.routers.runtime.send_session_attention_push", new=AsyncMock(return_value=True)):
+        asyncio.run(_dispatch_catalog_attention_actions([action], catalogd))
+
+    catalogd.call.assert_awaited_once_with(
+        "notification.apns.attention.commit.v2",
+        {
+            "session_id": session_id,
+            "action": "attention",
+            "state": "stalled",
+            "previous_state": "",
+            "notification_event_id": event_id,
+            "occurred_at": occurred_at.isoformat(),
+            "attention_push_at": occurred_at.isoformat(),
+        },
+    )
+    with pytest.raises(ValueError):
+        _catalog_attention_notification({**action, "kind": "unexpected"})
 
 
 def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):
