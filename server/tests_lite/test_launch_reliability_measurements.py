@@ -161,6 +161,34 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
     assert report["provider_scenarios"]["evidence_level_counts"] == {"hermetic": 1, "live_token_required": 1}
 
 
+def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    harness = tmp_path / "harness.json"
+    harness.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "status": "pass",
+                        "data": {
+                            "operation_evidence": {
+                                "pause_request_detect": {"level": "hermetic", "status": "pass"},
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    report = MODULE.build_report([matrix], [harness, harness])
+
+    assert report["provider_scenarios"]["result_status_counts"] == {"pass": 1}
+    assert report["provider_scenarios"]["operation_status_counts"] == {"pass": 1}
+    assert len(report["inputs"]["provider_harness_artifacts"]) == 1
+
+
 def test_report_does_not_observe_failed_recovery(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False, retry_after=3)
@@ -567,6 +595,19 @@ def test_future_issue_resolution_fails_closed(tmp_path: Path):
     assert "after observed_at" in report["inputs"]["invalid_artifacts"][0]["error"]
 
 
+def test_episode_after_artifact_generation_fails_closed(tmp_path: Path):
+    series = tmp_path / "future-episode.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    payload["generated_at"] = "2026-08-04T11:00:00Z"
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "invalid"
+    assert "after dogfood.generated_at" in report["inputs"]["invalid_artifacts"][0]["error"]
+
+
 def test_truthless_dogfood_episode_fails_closed(tmp_path: Path):
     series = tmp_path / "truthless.json"
     _dogfood_series(series)
@@ -581,6 +622,22 @@ def test_truthless_dogfood_episode_fails_closed(tmp_path: Path):
     assert report["report_status"] == "invalid"
     assert "must include expected and observed" in report["inputs"]["invalid_artifacts"][0]["error"]
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
+
+
+def test_mixed_valid_and_invalid_dogfood_inputs_clear_numeric_claims(tmp_path: Path):
+    valid = tmp_path / "valid.json"
+    _dogfood_series(valid)
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps({"schema_version": 1, "artifact_kind": "wrong"}))
+
+    report = MODULE.build_report([], dogfood_paths=[valid, invalid])
+
+    assert report["report_status"] == "invalid"
+    assert report["dogfood_series"]["episode_count"] == 0
+    assert report["dogfood_series"]["input_status"] == "invalid"
+    assert report["measures"]["false_red_rate"]["status"] == "not_observed"
+    assert report["dogfood_series"]["false_red_rate"]["rate"] is None
+    assert report["dogfood_series"]["false_red_rate"]["denominator"] is None
 
 
 def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):

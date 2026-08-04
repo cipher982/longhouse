@@ -267,7 +267,7 @@ def _load_dogfood_series(
                 raise ValueError(f"artifact_kind must be {DOGFOOD_ARTIFACT_KIND!r}")
             if artifact.get("schema_version") != DOGFOOD_SCHEMA_VERSION:
                 raise ValueError(f"schema_version must be {DOGFOOD_SCHEMA_VERSION}")
-            _timestamp(artifact.get("generated_at"), label="dogfood.generated_at")
+            generated_at = _timestamp(artifact.get("generated_at"), label="dogfood.generated_at")
             provenance = artifact.get("provenance")
             if not isinstance(provenance, dict):
                 raise ValueError("dogfood.provenance must be an object")
@@ -294,6 +294,8 @@ def _load_dogfood_series(
                     episode.get("observed_at"),
                     label=f"episode {index}.observed_at",
                 )
+                if observed_at > generated_at:
+                    raise ValueError(f"episode {index}.observed_at is after dogfood.generated_at")
                 episode_id = episode["episode_id"]
                 if episode_id in seen_episode_ids or episode_id in loaded_ids:
                     raise ValueError(f"duplicate episode_id: {episode_id}")
@@ -523,7 +525,7 @@ def _dogfood_summary(
             "denominator": eligible_failure_cases,
             "rate": hidden_failure_cases / eligible_failure_cases if series_eligible and eligible_failure_cases else None,
             "numerator_definition": "dogfood_expected_risk_observed_healthy_and_fresh",
-            "denominator_definition": "dogfood_expected_red_risk_or_stale_producer_cases",
+            "denominator_definition": "dogfood_expected_red_risk_or_nonfresh_producer_cases",
         },
         "action_coverage": {
             "status": "observed" if series_eligible and actionable else "not_observed",
@@ -568,6 +570,54 @@ def _dogfood_summary(
             "denominator_definition": "dogfood_source_events",
         },
     }
+
+
+def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
+    """Remove usable numeric claims when any dogfood input is invalid."""
+
+    summary["input_status"] = "invalid"
+    summary["episode_count"] = 0
+    summary["source"] = []
+    summary["observation_window"] = {
+        "status": "invalid",
+        "reason": "one or more dogfood artifacts failed validation",
+        "first_observed_at": None,
+        "last_observed_at": None,
+        "span_seconds": None,
+        "distinct_observation_count": 0,
+        "minimum_episode_count": MIN_DOGFOOD_EPISODES,
+        "minimum_span_seconds": MIN_DOGFOOD_SPAN_SECONDS,
+    }
+    for metric_name in (
+        "automatic_recovery_time",
+        "false_red_rate",
+        "hidden_failure_rate",
+        "action_coverage",
+        "unresolved_event_bearing_issue_age",
+        "duplicate_replayed_discarded_evidence",
+    ):
+        metric = summary[metric_name]
+        metric["status"] = "not_observed"
+        metric["reason"] = "one or more dogfood artifacts failed validation"
+        for field in (
+            "sample_count",
+            "numerator",
+            "denominator",
+            "rate",
+            "unresolved_count",
+            "max_age_seconds",
+            "median_age_seconds",
+            "accounted_events",
+            "unaccounted_events",
+        ):
+            if field in metric:
+                metric[field] = None
+        if "seconds" in metric:
+            metric["seconds"] = {"min": None, "median": None, "max": None}
+        if "totals" in metric:
+            metric["totals"] = {field: None for field in CONSERVATION_FIELDS}
+        if "conservation_status" in metric:
+            metric["conservation_status"] = None
 
 
 def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, Any]]:
@@ -733,7 +783,12 @@ def build_report(
     harness_operation_statuses: Counter[str] = Counter()
     blocked_operations: list[dict[str, str]] = []
     harness_inputs: list[str] = []
+    seen_harness_paths: set[Path] = set()
     for path in harness_paths:
+        path = path.expanduser().resolve()
+        if path in seen_harness_paths:
+            continue
+        seen_harness_paths.add(path)
         try:
             artifact = _json(path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -774,17 +829,7 @@ def build_report(
         "invalid" if dogfood_invalid else "valid" if dogfood_inputs else "absent"
     )
     if dogfood_invalid:
-        dogfood_summary["observation_window"]["status"] = "invalid"
-        for metric_name in (
-            "automatic_recovery_time",
-            "false_red_rate",
-            "hidden_failure_rate",
-            "action_coverage",
-            "unresolved_event_bearing_issue_age",
-            "duplicate_replayed_discarded_evidence",
-        ):
-            dogfood_summary[metric_name]["status"] = "not_observed"
-            dogfood_summary[metric_name]["reason"] = "one or more dogfood artifacts failed validation"
+        _invalidate_dogfood_summary(dogfood_summary)
 
     def observed_or_fallback(name: str, fallback: dict[str, Any]) -> dict[str, Any]:
         candidate = dogfood_summary[name]
@@ -864,7 +909,7 @@ def build_report(
                     "status": "observed",
                     "scope": "measured_clean_runs",
                     "sample_count": len(successful),
-                    "source": "successful matrix.measurements",
+                    "source": [_input_reference(path) for path, _ in successful],
                 }
                 if successful
                 else _not_observed("no measured matrix run with a positive retry queue converged to zero and complete cleanup")
