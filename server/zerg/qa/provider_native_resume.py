@@ -55,6 +55,7 @@ SPECS = {
         resume_flag="--resume",
         credential_binding_id="claude_provider_token",
         state_patterns=(
+            ".claude/channels/longhouse/sessions/*.json",
             ".longhouse/managed-local/contracts/claude/*.json",
             "managed-local/contracts/claude/*.json",
         ),

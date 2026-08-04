@@ -8,11 +8,13 @@ import pytest
 
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
+from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _provider_process_pid
+from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -37,6 +39,21 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
+
+
+def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:
+    state = tmp_path / ".claude" / "channels" / "longhouse" / "sessions" / "session.json"
+    state.parent.mkdir(parents=True)
+    state.write_text("{}")
+
+    assert state in _state_candidates(SPECS["claude"], tmp_path)
+
+
+def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
+    receipt = tmp_path / "receipt.json"
+    write_codex_json(receipt, {"path": tmp_path / "provider"})
+
+    assert json.loads(receipt.read_text()) == {"path": str(tmp_path / "provider")}
 
 
 def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path) -> None:
