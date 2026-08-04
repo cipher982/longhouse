@@ -29,6 +29,7 @@ from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
+from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
@@ -818,7 +819,7 @@ def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, mon
     assert process.sent == []
 
 
-def test_claude_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_claude_initial_seed_uses_managed_channel_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
 
     class FakeProviderProcess:
@@ -838,7 +839,7 @@ def test_claude_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path,
 
     def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, "sent", "")
 
     monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
     result = _control_send(
@@ -852,8 +853,116 @@ def test_claude_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path,
 
     assert result["method"] == "longhouse_control"
     assert result["returncode"] == 0
-    assert commands == [[str(args.engine), "claude-channel", "send", "--session-id", "session-1", "--text", "seed"]]
+    assert commands == [
+        [str(args.engine), "claude-channel", "send", "--session-id", "session-1", "--text", "seed"]
+    ]
     assert process.sent == []
+
+
+def test_claude_response_correlation_returns_measured_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "MARKER"
+    tail = {
+        "events": [
+            {"role": "assistant", "content": "prior"},
+            {"role": "user", "content": marker},
+            {"role": "assistant", "content": "new response"},
+        ]
+    }
+    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: tail)
+
+    observed_tail, correlation = _wait_assistant_response_after_marker(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        marker,
+        prior_assistant_event_digests=provider_native_resume._assistant_event_digests(
+            {"events": [{"role": "assistant", "content": "prior"}]}
+        ),
+        timeout=1,
+    )
+
+    assert observed_tail == tail
+    assert correlation == {
+        "method": "transcript_marker_then_new_assistant_event",
+        "marker_observed_in_transcript": True,
+        "prior_assistant_events": 1,
+        "observed_assistant_events": 2,
+        "new_assistant_events": 1,
+        "timed_out": False,
+    }
+
+
+def test_claude_response_correlation_returns_false_facts_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_api_json",
+        lambda *_args, **_kwargs: {"events": [{"role": "user", "content": "MARKER"}]},
+    )
+    ticks = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+
+    _tail, correlation = _wait_assistant_response_after_marker(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        "MARKER",
+        prior_assistant_event_digests=set(),
+        timeout=1,
+    )
+
+    assert correlation["marker_observed_in_transcript"] is True
+    assert correlation["new_assistant_events"] == 0
+    assert correlation["timed_out"] is True
+
+
+@pytest.mark.parametrize(("exit_code", "expected_clean"), [(0, True), (1, False)])
+def test_claude_clean_stop_requires_zero_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exit_code: int,
+    expected_clean: bool,
+) -> None:
+    class FakeProviderProcess:
+        pid = 101
+
+        class Process:
+            @staticmethod
+            def poll() -> int:
+                return exit_code
+
+        process = Process()
+
+        @staticmethod
+        def send(_value: str) -> None:
+            return None
+
+        @staticmethod
+        def wait(_timeout: float) -> int:
+            return exit_code
+
+        @staticmethod
+        def kill_group(_signal: int) -> None:
+            raise AssertionError("clean stop must not need a fallback signal")
+
+    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+
+    receipt = provider_native_resume._stop(
+        SPECS["claude"],
+        _args(tmp_path),
+        {"session_id": "session-1", "claude_pid": 202},
+        FakeProviderProcess(),  # type: ignore[arg-type]
+        force=False,
+    )
+
+    assert receipt["exit_code"] == exit_code
+    assert receipt["clean"] is expected_clean
 
 
 def test_codex_concurrent_lock_error_is_a_refusal_even_if_state_identity_races() -> None:
