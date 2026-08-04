@@ -24,6 +24,7 @@ from zerg.qa.provider_native_resume import _claude_input_prompt_visible
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
+from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
@@ -347,6 +348,11 @@ def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> N
                     "Workspace Trust Required\n[a] Trust this workspace\n",
                     encoding="utf-8",
                 )
+            elif self.drains == 4:
+                recording.write_text(
+                    "Cursor Agent\nPlan, search, build anything\n",
+                    encoding="utf-8",
+                )
             return b""
 
         def send(self, value: str) -> None:
@@ -356,6 +362,12 @@ def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> N
     _wait_cursor_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
 
     assert process.sent == ["a"]
+
+
+def test_cursor_readiness_rejects_the_trust_transition_and_accepts_the_prompt() -> None:
+    assert _cursor_tui_input_ready("Workspace Trust Required [a] Trust this workspace") is False
+    assert _cursor_tui_input_ready("Cursor Agent — Plan, search, build anything") is True
+    assert _cursor_tui_input_ready("Cursor Agent — Trusting workspace...") is False
 
 
 def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path) -> None:
@@ -418,6 +430,9 @@ def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> N
     assert _opencode_tui_is_connected("  OpenCode   CONNECTED to server  ") is True
     assert _opencode_tui_is_connected("OpenCode connected to server") is True
     assert _opencode_tui_is_connected("OpenCode status: longhouse Connected") is True
+    assert _opencode_tui_is_connected(
+        "\x1b[38;2;238;238;238mlonghouse\x1b[0m \x1b[38;2;128;128;128mConnected\x1b[0mLSPs are disabled"
+    ) is True
 
 
 def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> None:

@@ -39,7 +39,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
 QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
-_ANSI_CONTROL_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
+_ANSI_CONTROL_RE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
 RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
@@ -890,21 +890,34 @@ def _wait_cursor_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
 
     del recording  # The process owns the append-only PTY recording.
     deadline = time.monotonic() + timeout
-    accepted_at: float | None = None
     while time.monotonic() < deadline:
         process.drain()
         if process.process.poll() is not None:
             raise RuntimeError("cursor Helm process exited before its TUI became ready")
         _accept_cursor_workspace_trust(process)
-        if getattr(process, "cursor_workspace_trust_sent", False):
-            accepted_at = accepted_at or time.monotonic()
-            if time.monotonic() - accepted_at >= 0.75:
-                return
+        if _cursor_tui_input_ready(_terminal_text(process.recording)):
+            return
         time.sleep(0.1)
 
     # Some provider builds do not render a trust gate for an already-known
     # workspace. The bounded wait still gave late gates a chance to appear;
     # the subsequent native marker is the readiness assertion.
+
+
+def _cursor_tui_input_ready(terminal: str) -> bool:
+    """Recognize Cursor's post-trust prompt before injecting the first turn.
+
+    The native launcher writes its lease before Cursor has finished switching
+    from the workspace-trust screen to the prompt bar. Sending during that
+    transition leaves the text rendered in the bar but never submits a
+    foreground conversation, so no ``store.db`` exists for transcript proof.
+    """
+
+    normalized = re.sub(r"\s+", " ", _ANSI_CONTROL_RE.sub(" ", terminal)).lower()
+    compact = re.sub(r"[^a-z0-9?]+", "", normalized)
+    if "workspacetrustrequired" in compact or "trustingworkspace" in compact:
+        return False
+    return "cursoragent" in compact and ("plansearchbuildanything" in compact or "promptbar" in compact)
 
 
 def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 30.0) -> None:
@@ -997,11 +1010,11 @@ def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: f
 
 
 def _opencode_tui_is_connected(terminal: str) -> bool:
-    normalized = re.sub(r"\s+", " ", terminal).lower()
+    normalized = re.sub(r"\s+", " ", _ANSI_CONTROL_RE.sub(" ", terminal)).lower()
     # The native bridge logs "event monitor disconnected" into the same PTY.
     # A substring check therefore declared the TUI ready while it was actually
     # reporting a failed SSE connection.
-    if re.search(r"\blonghouse\s+connected\b", normalized) is not None:
+    if re.search(r"\b(?:longhouse|opencode)\s+connected(?=\s|lsp|$)", normalized) is not None:
         return True
     return re.search(r"\bopencode\b", normalized) is not None and re.search(r"(?<!dis)\bconnected\b", normalized) is not None
 
@@ -1926,7 +1939,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             args.agents_token,
             initial_state["session_id"],
             timeout=5 if spec.provider == "claude" else 45,
-            allow_unprojected=spec.provider == "claude",
+            allow_unprojected=spec.provider in {"claude", "cursor"},
         )
         initial_prior_assistant_event_digests = _assistant_event_digests(initial_prior_tail)
         initial_send = _control_send(
