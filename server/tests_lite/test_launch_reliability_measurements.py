@@ -260,3 +260,114 @@ def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path:
     assert report["measures"]["hidden_failure_rate"]["reason"] == "no expected broken/degraded cases in supplied health fault matrix"
     assert report["measures"]["action_coverage"]["status"] == "not_observed"
     assert report["measures"]["action_coverage"]["reason"] == "no cases with an expected action in supplied health fault matrix"
+
+
+def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
+    series = tmp_path / "dogfood.json"
+    series.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "launch_reliability_dogfood_series",
+                "episodes": [
+                    {
+                        "episode_id": "episode-1",
+                        "observed_at": "2026-08-04T12:00:10Z",
+                        "recovery_duration_seconds": 10.0,
+                        "expected": {"state": "degraded", "action": "inspect_storage_source"},
+                        "observed": {
+                            "health_state": "degraded",
+                            "suggested_action_ids": ["inspect_storage_source"],
+                        },
+                        "event_bearing_issue": {
+                            "status": "resolved",
+                            "opened_at": "2026-08-04T12:00:00Z",
+                            "resolved_at": "2026-08-04T12:00:08Z",
+                        },
+                        "evidence_conservation": {
+                            "source_events": 4,
+                            "archived_events": 3,
+                            "replayed_events": 1,
+                            "duplicate_events": 1,
+                            "discarded_events": 0,
+                            "unresolved_events": 1,
+                        },
+                    },
+                    {
+                        "episode_id": "episode-2",
+                        "observed_at": "2026-08-04T12:01:30Z",
+                        "recovery_duration_seconds": 12.0,
+                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "observed": {
+                            "health_state": "broken",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
+                        "event_bearing_issue": {
+                            "status": "unresolved",
+                            "opened_at": "2026-08-04T12:00:00Z",
+                        },
+                        "evidence_conservation": {
+                            "source_events": 2,
+                            "archived_events": 2,
+                            "replayed_events": 0,
+                            "duplicate_events": 0,
+                            "discarded_events": 0,
+                            "unresolved_events": 0,
+                        },
+                    },
+                ],
+            }
+        )
+    )
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "ok"
+    assert report["dogfood_series"]["episode_count"] == 2
+    assert report["dogfood_series"]["automatic_recovery_time"]["sample_count"] == 2
+    assert report["measures"]["false_red_rate"]["scope"] == "dogfood_episode_series"
+    assert report["measures"]["false_red_rate"]["rate"] == 0.0
+    assert report["measures"]["hidden_failure_rate"]["rate"] == 0.0
+    assert report["measures"]["action_coverage"]["rate"] == 1.0
+    assert report["measures"]["unresolved_event_bearing_issue_age"]["max_age_seconds"] == 90.0
+    conservation = report["measures"]["duplicate_replayed_discarded_evidence"]
+    assert conservation["totals"] == {
+        "archived_events": 5,
+        "discarded_events": 0,
+        "duplicate_events": 1,
+        "replayed_events": 1,
+        "source_events": 6,
+        "unresolved_events": 1,
+    }
+    assert conservation["conservation_status"] == "complete"
+
+
+def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
+    series = tmp_path / "dogfood.json"
+    series.write_text(
+        json.dumps(
+            {
+                "artifact_kind": "launch_reliability_dogfood_series",
+                "episodes": [
+                    {
+                        "episode_id": "episode-1",
+                        "observed_at": "2026-08-04T12:00:00Z",
+                        "evidence_conservation": {
+                            "source_events": 1,
+                            "archived_events": 2,
+                            "replayed_events": 0,
+                            "duplicate_events": 0,
+                            "discarded_events": 0,
+                            "unresolved_events": 0,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "invalid"
+    assert "accounts for more events" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["dogfood_series"]["episode_count"] == 0
