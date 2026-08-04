@@ -312,6 +312,33 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
     assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": False}
 
 
+def test_native_resume_oracle_accepts_claude_correlation_without_literal_echo() -> None:
+    from zerg.qa.provider_resume_oracles import native_resume_assertions
+
+    observation = {
+        "same_longhouse_session": True,
+        "same_provider_thread": True,
+        "new_run": True,
+        "new_connection": True,
+        "new_app_server_process": True,
+        "provider_neutral_resume_intent": True,
+        "native_resume_command": True,
+        "bridge_subscribed": True,
+        "post_resume_provider_activity": True,
+        "post_resume_response_correlated": True,
+        "post_resume_marker_in_assistant_transcript": False,
+        "stale_input_rejected": True,
+        "stale_generation_dispatched": False,
+        "concurrent_resume_refused": True,
+        "artifact_secret_scan_passed": True,
+        "final_cleanup_verified": True,
+        "orphan_count": 0,
+        "clean_stop_verified": True,
+    }
+
+    assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": True}
+
+
 def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkeypatch) -> None:
     from pathlib import Path
 

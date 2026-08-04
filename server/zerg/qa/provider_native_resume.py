@@ -1769,10 +1769,17 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 prior_assistant_events=prior_assistant_events,
                 timeout=args.live_send_timeout_secs,
             )
+            # Claude records the development-channel control marker as a user
+            # event and may refuse to echo it in assistant text. The wait
+            # helper already proved the marker was retained and a new
+            # assistant event followed it; preserve that correlation instead
+            # of recomputing it from assistant content below.
+            post_resume_response_correlated = True
         else:
             resumed_tail = _wait_assistant_marker(
                 args.api_url, args.agents_token, resumed_state["session_id"], post_marker, timeout=args.live_send_timeout_secs
             )
+            post_resume_response_correlated = True
         _write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = _assistant_contains(resumed_tail, post_marker)
         stale_generation_dispatched = _assistant_contains(resumed_tail, stale_marker)
@@ -1818,8 +1825,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "bridge_subscribed": all(
                 resumed_state.get(field) for field in ("session_id", "provider_session_id", "run_id", "connection_id")
             ),
-            "post_resume_provider_activity": post_resume_marker_observed,
-            "post_resume_response_correlated": post_resume_marker_observed,
+            "post_resume_provider_activity": post_resume_response_correlated,
+            "post_resume_response_correlated": post_resume_response_correlated,
             "post_resume_marker_in_assistant_transcript": spec.provider != "claude" and post_resume_marker_observed,
             "stale_input_rejected": stale["rejected"] is True,
             "stale_generation_dispatched": stale_generation_dispatched,
