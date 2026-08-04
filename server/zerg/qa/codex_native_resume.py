@@ -20,8 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.provider_native_resume import TranscriptShipper
+from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
+
+_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
@@ -51,6 +55,7 @@ REGISTRATION = ProducerRegistration(
     network_policy="shared_provider_egress",
     required_artifacts=(
         "provider_binary_receipt",
+        "transcript_shipper_receipt",
         "resume_intent_receipt",
         "initial_bridge_state",
         "initial_transcript",
@@ -115,7 +120,11 @@ class _RuntimeHostHTTPError(RuntimeError):
 def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers={"X-Agents-Token": token, "Accept": "application/json"},
+        headers={
+            "X-Agents-Token": token,
+            "Accept": "application/json",
+            "User-Agent": _RUNTIME_HOST_USER_AGENT,
+        },
         data=b"" if method == "POST" else None,
         method=method,
     )
@@ -413,6 +422,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     session_id = ""
     old_pids: set[int] = set()
     final_cleanup: dict[str, Any] = {"verified": False}
+    shipper: TranscriptShipper | None = None
     try:
         initial_summary, _, isolation_root = bridge_canary._start_bridge(
             args,
@@ -426,6 +436,15 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         thread_id = str(initial_state.get("thread_id") or "")
         if not session_id or not thread_id:
             raise RuntimeError("initial bridge did not create a resumable provider thread")
+        shipper_environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
+        shipper = _start_transcript_shipper(
+            "codex",
+            args,
+            home=Path(shipper_environment["HOME"]),
+            environment=shipper_environment,
+            evidence_root=root,
+        )
+        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         seed_marker = f"LONGHOUSE_CODEX_RESUME_SEED_{uuid.uuid4().hex}"
         _send_marker(args, isolation_root, session_id, seed_marker)
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
@@ -542,6 +561,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
         _write_json(root / "cleanup-receipt.json", final_cleanup)
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         redacted_secret_files = _redact_retained_secrets(
             root,
             [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
@@ -607,6 +628,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         redacted_secret_files = _redact_retained_secrets(
             root,
             [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
@@ -630,6 +653,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "result.json", failure)
         return failure
     finally:
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
