@@ -564,11 +564,11 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             home=Path(shipper_environment["HOME"]),
             environment=shipper_environment,
             evidence_root=root,
-            # codex-bridge --isolation-root writes managed state under
-            # <isolation-root>/longhouse and <isolation-root>/codex-bridge.
+            # codex-bridge --isolation-root writes managed state under the
+            # same <isolation-root>/longhouse tree that the shipper watches.
             # Keep the real transcript provider HOME separate, but point the
-            # shipper at that same Longhouse home so its watcher can observe
-            # and publish the bridge lease.
+            # shipper at that Longhouse home so it observes and publishes the
+            # bridge lease and retained terminal state.
             longhouse_home=isolation_root / "longhouse",
         )
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)

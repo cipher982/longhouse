@@ -826,7 +826,7 @@ def _accept_claude_permission_prompt(process: PtyProcess) -> None:
     must acknowledge it before looking for the registered session.
     """
 
-    if process.claude_permission_acceptance_sent:
+    if getattr(process, "claude_permission_acceptance_sent", False):
         return
     compact = re.sub(r"\s+", "", _terminal_text(process.recording))
     if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
@@ -921,6 +921,13 @@ def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
         process.drain()
         if process.process.poll() is not None:
             raise RuntimeError("Claude Helm process exited before its TUI became ready")
+        # The native development-channel selector can appear after the
+        # managed contract has already been written. Keep handling that
+        # provider-owned control record while waiting for the actual prompt;
+        # otherwise the readiness wait observes the selector forever and the
+        # channel server never initializes.
+        _accept_claude_permission_prompt(process)
+        _accept_claude_development_channel_prompt(process)
         terminal = _terminal_text(process.recording)
         if re.search(r"[❯>]\s*Try\b", terminal):
             process.settle()
@@ -965,11 +972,18 @@ def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: f
         process.drain()
         if process.process.poll() is not None:
             raise RuntimeError("opencode Helm process exited before its TUI became ready")
-        compact = re.sub(r"\s+", "", _terminal_text(recording)).lower()
-        if "opencode" in compact and "connected" in compact:
+        if _opencode_tui_is_connected(_terminal_text(recording)):
             return
         time.sleep(0.1)
     raise RuntimeError("opencode TUI did not publish its connected state")
+
+
+def _opencode_tui_is_connected(terminal: str) -> bool:
+    normalized = re.sub(r"\s+", " ", terminal).lower()
+    # The native bridge logs "event monitor disconnected" into the same PTY.
+    # A substring check therefore declared the TUI ready while it was actually
+    # reporting a failed SSE connection.
+    return re.search(r"\bopencode\b", normalized) is not None and re.search(r"(?<!dis)\bconnected\b", normalized) is not None
 
 
 def _prepare_claude_profile(
@@ -1423,25 +1437,49 @@ def _wait_cursor_idle(
     longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
     if not longhouse_home:
         raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
-    path = Path(longhouse_home) / "managed-local" / "cursor-helm" / f"{state['session_id']}.phase.json"
+    root = Path(longhouse_home) / "managed-local" / "cursor-helm"
+    path = root / f"{state['session_id']}.phase.json"
+    claim_path = root / "binding-probes" / f"{state['session_id']}.json"
     deadline = time.monotonic() + timeout
-    last: dict[str, Any] = {}
+    last_identity: dict[str, Any] = {}
     while time.monotonic() < deadline:
         try:
             payload = _read_json(path)
         except (OSError, json.JSONDecodeError):
             payload = {}
-        last = payload
+        try:
+            claim = _read_json(claim_path)
+        except (OSError, json.JSONDecodeError):
+            claim = {}
+        last_identity = {
+            "phase": {key: payload.get(key) for key in ("session_id", "conversation_id", "launch_id", "phase") if key in payload},
+            "binding": {
+                key: claim.get(key)
+                for key in ("schema_version", "provider", "status", "session_id", "conversation_uuid", "launch_id", "run_id")
+                if key in claim
+            },
+        }
+        binding_matches = (
+            claim.get("schema_version") == 2
+            and claim.get("provider") == "cursor"
+            and claim.get("status") == "observed"
+            and claim.get("session_id") == state.get("session_id")
+            and claim.get("conversation_uuid") == state.get("provider_session_id")
+            and claim.get("run_id") == state.get("run_id")
+            and bool(claim.get("launch_id"))
+        )
         if (
             payload.get("session_id") == state.get("session_id")
             and payload.get("conversation_id") == state.get("provider_session_id")
+            and payload.get("launch_id") == claim.get("launch_id")
             and payload.get("phase") == "idle"
+            and binding_matches
         ):
             return payload
         time.sleep(0.25)
     raise RuntimeError(
-        "Cursor native hooks did not publish idle phase "
-        f"(path={path}, last_phase={last.get('phase')!r}, last_conversation={last.get('conversation_id')!r})"
+        "Cursor native hooks did not publish an identity-matched idle phase "
+        f"(phase_path={path}, claim_path={claim_path}, identity={json.dumps(last_identity, sort_keys=True)})"
     )
 
 

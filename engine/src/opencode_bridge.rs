@@ -6,6 +6,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -118,15 +119,16 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
+    // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
+    // instead of asking the OS for an ephemeral port. A Resume can therefore
+    // reconnect to a dead/stale server or collide with another factory case.
+    // Reserve a localhost port ourselves and make this server generation's
+    // URL unambiguous.
+    let port = free_local_port()?;
     command
-        .args([
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--print-logs",
-        ])
+        .args(["serve", "--hostname", "127.0.0.1", "--port"])
+        .arg(port.to_string())
+        .args(["--print-logs"])
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
@@ -722,6 +724,15 @@ fn read_listen_url(path: &Path) -> Result<Option<String>> {
         .map(str::to_owned))
 }
 
+fn free_local_port() -> Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .context("reserve a localhost port for the OpenCode server")?;
+    Ok(listener
+        .local_addr()
+        .context("read the reserved OpenCode localhost port")?
+        .port())
+}
+
 fn tail(path: &Path) -> Result<String> {
     let mut text = String::new();
     OpenOptions::new()
@@ -812,6 +823,21 @@ async fn assert_session_exists(
 }
 
 async fn assert_health(server_url: &str, password: &str) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_error = anyhow::anyhow!("OpenCode server health check timed out");
+    loop {
+        match assert_health_once(server_url, password).await {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+        if Instant::now() >= deadline {
+            return Err(last_error);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn assert_health_once(server_url: &str, password: &str) -> Result<()> {
     let health = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?
@@ -1115,6 +1141,12 @@ mod tests {
     fn accepts_lf_and_crlf_sse_boundaries() {
         assert_eq!(sse_frame_boundary("data: one\n\nnext"), Some((9, 2)));
         assert_eq!(sse_frame_boundary("data: one\r\n\r\nnext"), Some((9, 4)));
+    }
+
+    #[test]
+    fn reserves_an_available_localhost_port() {
+        let port = free_local_port().unwrap();
+        let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
     }
 
     #[test]

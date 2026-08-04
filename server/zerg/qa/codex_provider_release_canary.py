@@ -932,7 +932,12 @@ def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bi
 
 
 def _bridge_state_root(isolation_root: Path) -> Path:
-    return isolation_root / "codex-bridge"
+    # The direct bridge must publish into the same managed-local tree that the
+    # disposable Machine Agent watches. Keeping this under a sibling
+    # `isolation_root/codex-bridge` directory lets the bridge work locally but
+    # leaves the agent blind to the stopped observation; its orphan janitor can
+    # then remove the retained Resume contract before the hosted assertion.
+    return isolation_root / "longhouse" / "managed-local" / "codex-bridge"
 
 
 def _provider_runtime_environment(

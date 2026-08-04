@@ -25,6 +25,7 @@ from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
+from zerg.qa.provider_native_resume import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _start_transcript_shipper
@@ -309,16 +310,38 @@ def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path
     assert process.settled is True
 
 
+def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> None:
+    assert _opencode_tui_is_connected("OpenCode event monitor disconnected; retrying") is False
+    assert _opencode_tui_is_connected("OpenCode connected to server") is True
+
+
 def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> None:
-    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
     longhouse_home = tmp_path / "longhouse"
     phase = longhouse_home / "managed-local" / "cursor-helm" / "session-1.phase.json"
     phase.parent.mkdir(parents=True)
+    claim = phase.parent / "binding-probes" / "session-1.json"
+    claim.parent.mkdir(parents=True)
+    claim.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
     phase.write_text(
         json.dumps(
             {
                 "session_id": "session-1",
                 "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
                 "phase": "idle",
             }
         ),
