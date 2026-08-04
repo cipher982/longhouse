@@ -88,6 +88,20 @@ def test_native_resume_accepts_disposable_provider_home(tmp_path: Path, monkeypa
     assert _isolated_provider_home() == home
 
 
+def test_codex_native_resume_tui_uses_the_bridge_provider_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", "/root")
+    isolation_root = tmp_path / "isolation"
+
+    environment = codex_native_resume._native_resume_tui_environment(isolation_root, "session-1")
+
+    assert environment["HOME"] == str(isolation_root / "provider-home")
+    assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
+    assert environment["LONGHOUSE_MANAGED_SESSION_ID"] == "session-1"
+
+
 def test_codex_main_serializes_path_values_in_result_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

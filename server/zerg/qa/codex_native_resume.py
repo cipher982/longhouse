@@ -365,6 +365,12 @@ def _wait_for_marker(state_file: Path, marker: str, *, timeout: int) -> tuple[di
     return state, thread_path
 
 
+def _native_resume_tui_environment(isolation_root: Path, session_id: str) -> dict[str, str]:
+    environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
+    environment["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    return environment
+
+
 def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -462,8 +468,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 return True
             return False
 
-        tui_env = os.environ.copy()
-        tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+        tui_env = _native_resume_tui_environment(isolation_root, session_id)
         tui_result = bridge_canary._record_pty_session(args, command, recording, env=tui_env, ready=subscribed)
         if tui_result.returncode not in {0, 124} or subscribed_state is None:
             raise RuntimeError("stock Codex native resume command did not subscribe to the retained thread")
