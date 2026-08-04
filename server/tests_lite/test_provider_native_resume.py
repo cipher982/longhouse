@@ -384,7 +384,7 @@ def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> Non
 def test_other_provider_resume_markers_keep_the_long_form() -> None:
     marker = _resume_marker("opencode", "POST")
 
-    assert marker.startswith("LONGHOUSE_OPENCODE_POST_")
+    assert marker.startswith("LONGHOUSE_OPENCODE_RESUME_POST_")
     assert len(marker.rsplit("_", 1)[-1]) == 32
     assert _resume_marker_prompt("opencode", marker) == f"Reply exactly {marker} and nothing else."
 

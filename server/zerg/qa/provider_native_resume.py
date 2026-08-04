@@ -1694,7 +1694,12 @@ def _resume_marker(provider: str, phase: str) -> str:
 
     if provider == "cursor":
         return f"LH_CURSOR_{phase}_{uuid.uuid4().hex[:10]}"
-    return f"LONGHOUSE_{provider.upper()}_{phase}_{uuid.uuid4().hex}"
+    legacy_phase = {
+        "SEED": "RESUME_SEED",
+        "STALE": "STALE",
+        "POST": "RESUME_POST",
+    }[phase]
+    return f"LONGHOUSE_{provider.upper()}_{legacy_phase}_{uuid.uuid4().hex}"
 
 
 def _resume_marker_prompt(provider: str, marker: str) -> str:
