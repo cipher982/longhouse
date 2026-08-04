@@ -290,6 +290,124 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
 
 
 @pytest.mark.asyncio
+async def test_projector_cutover_certificate_requires_zero_lag_and_repair_revokes_it(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    projector = "embedding-cert-test"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        unbound = await client.call(
+            "projector.coverage.certify.v2",
+            {"projector": projector, "observed_at": now.isoformat()},
+        )
+        assert unbound == {
+            "certified": False,
+            "created": False,
+            "reason": "store_not_bound",
+            "commit_seq": "0",
+        }
+        store_id = str(uuid4())
+        await client.call(
+            "projector.store.bind.v2",
+            {
+                "projector": projector,
+                "store_id": store_id,
+                "schema_generation": "searchd-test-v1",
+                "observed_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "desired_revision": 1,
+                "observed_at": now.isoformat(),
+            },
+        )
+        pending = await client.call(
+            "projector.coverage.certify.v2",
+            {"projector": projector, "observed_at": now.isoformat()},
+        )
+        assert pending["certified"] is False
+        assert pending["lag_count"] == 1
+
+        claim_token = str(uuid4())
+        claimed = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "certifier",
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert len(claimed["claimed"]) == 1
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": claim_token,
+                "completed_revision": 1,
+                "completed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        certified = await client.call(
+            "projector.coverage.certify.v2",
+            {"projector": projector, "observed_at": (now + timedelta(seconds=2)).isoformat()},
+        )
+        assert certified["certified"] is True
+        assert certified["created"] is True
+
+        complete = await client.call("projector.coverage.read.v2", {"projector": projector})
+        assert complete["certificate"]["certified_commit_seq"] == certified["certified_commit_seq"]
+        assert complete["store_binding"] == {
+            "store_id": store_id,
+            "schema_generation": "searchd-test-v1",
+            "commit_seq": "1",
+        }
+        assert complete["lag_count"] == 0
+        assert complete["oldest_lag_at"] is None
+        assert complete["oldest_lag_seconds"] is None
+
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "desired_revision": 2,
+                "observed_at": (now + timedelta(seconds=3)).isoformat(),
+            },
+        )
+        head = await client.call("projector.coverage.read.v2", {"projector": projector})
+        assert head["certificate"] == complete["certificate"]
+        assert head["lag_count"] == 1
+        assert head["oldest_lag_at"] is not None
+        assert head["oldest_lag_seconds"] >= 0
+
+        repaired = await client.call(
+            "projector.state.requeue.v2",
+            {
+                "projector": projector,
+                "session_ids": [session_id],
+                "observed_at": (now + timedelta(seconds=4)).isoformat(),
+            },
+        )
+        assert repaired["changed"] is True
+        revoked = await client.call("projector.coverage.read.v2", {"projector": projector})
+        assert revoked["certificate"] is None
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_catalog_restart_releases_projector_claim_without_losing_completed_revision(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

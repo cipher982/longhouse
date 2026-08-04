@@ -22,10 +22,15 @@ def _coverage(*, commit_seq: str = "10", sessions: int = 5_901, episodes: int = 
     return {
         "ready": True,
         "projector": "embeddings-5090578d9565-256d-p2",
+        "cutover_certified_commit_seq": "9",
+        "cutover_certified_at": "2026-08-02T00:00:00+00:00",
         "catalog_lag_count": 0,
         "catalog_indexed_through": commit_seq,
+        "catalog_oldest_lag_at": None,
+        "catalog_oldest_lag_seconds": None,
         "catalog_commit_seq": commit_seq,
         "catalog_observed_at": f"2026-08-02T00:00:{int(commit_seq) % 60:02d}+00:00",
+        "resident_stale": False,
         "expected_sessions": sessions,
         "published_sessions": sessions,
         "expected_episodes": episodes,
@@ -143,7 +148,7 @@ def test_report_records_corpus_range_and_fails_errors_or_mixed_spaces():
     )
 
     metadata = report.corpus_coverage_metadata()
-    assert metadata["status"] == "complete"
+    assert metadata["status"] == "current"
     assert metadata["catalog_commit_seq"] == {"min": 10, "max": 12}
     assert metadata["expected_episodes"] == {"min": 82_958, "max": 82_960}
     assert report.false_negative_rate() == pytest.approx(1 / 3)

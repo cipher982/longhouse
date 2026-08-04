@@ -821,6 +821,37 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Stable digest for retained native-resume contracts.
+///
+/// Contract scans refresh `observed_at` and `valid_until` on every pass. Those
+/// timestamps describe evidence freshness and must not make the daemon POST a
+/// heartbeat every five seconds. Identity, provider state, and availability
+/// changes do need to reach the Runtime Host immediately, so only those stable
+/// fields participate here.
+pub fn continuation_evidence_digest(payload: &HeartbeatPayload) -> String {
+    let mut contracts: Vec<String> = payload
+        .machine_evidence
+        .iter()
+        .flat_map(|evidence| evidence.continuation.iter())
+        .map(|fact| {
+            serde_json::to_string(&(
+                &fact.authority_class,
+                &fact.provider,
+                &fact.session_id,
+                &fact.provider_session_id,
+                &fact.cwd,
+                &fact.contract_state,
+                &fact.unavailable_reason,
+                &fact.source,
+                &fact.raw_locator,
+            ))
+            .expect("typed continuation evidence must serialize")
+        })
+        .collect();
+    contracts.sort();
+    stable_component(&format!("continuation=[{}]", contracts.join(";")))
+}
+
 /// Build lease views from a pre-collected set of bridge observations.
 /// Kept pure (no fs/ps side effects) so the reaper and tests can share
 /// the same scan pass.
