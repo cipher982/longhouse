@@ -95,6 +95,7 @@ def test_cursor_qualification_workspace_has_project_identity(tmp_path: Path, mon
     global_config = tmp_path / "gitconfig"
     global_config.write_text(f"[init]\n\ttemplatedir = {template}\n", encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template))
 
     _initialize_cursor_workspace(workspace)
 

@@ -1711,6 +1711,7 @@ def _initialize_cursor_workspace(path: Path) -> None:
     # A qualification project must not inherit a developer's Git template
     # hooks or system-level init policy. Cursor only needs the project marker;
     # the harness must not execute arbitrary host hooks while creating it.
+    environment.pop("GIT_TEMPLATE_DIR", None)
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
     environment["GIT_CONFIG_GLOBAL"] = os.devnull
     completed = subprocess.run(
