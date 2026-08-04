@@ -593,7 +593,9 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
 def test_claude_development_channel_prompt_selects_local_development_once(tmp_path: Path) -> None:
     recording = tmp_path / "claude.tty"
     recording.write_text(
-        "Loading development channel\nI am using this for local development\nExit\n",
+        # Cursor-addressed Claude redraws can drop characters from the loading
+        # label once ANSI controls are stripped. The option text is stable.
+        "Loding developmetchannel\nI am using this for local development\nExit\n",
         encoding="utf-8",
     )
 

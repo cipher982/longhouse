@@ -841,7 +841,11 @@ def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
     if getattr(process, "claude_development_channel_acceptance_sent", False):
         return
     compact = re.sub(r"\s+", "", _terminal_text(process.recording)).lower()
-    if "loadingdevelopmentchannel" in compact and "iamusingthisforlocaldevelopment" in compact and "exit" in compact:
+    # The loading label is cursor-addressed and Claude's PTY redraw can omit
+    # characters when ANSI controls are stripped. The visible option text is
+    # the stable selector contract; require it plus Exit, not the decorative
+    # loading label.
+    if "iamusingthisforlocaldevelopment" in compact and "exit" in compact:
         # Claude renders an unnumbered selector with the local-development
         # acknowledgement before Exit. The provider docs say the first option
         # is selected by default. Let the screen finish entering its input
