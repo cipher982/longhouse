@@ -40,6 +40,20 @@ def _record(**changes) -> ProviderCapabilityProofRecord:
         architecture="arm64",
         raw_reference_digests=("sha256:transcript",),
         longhouse_git_sha="abc123",
+        factory_source_sha="f" * 40,
+        accepted_epoch_id="factory-v3-test",
+        accepted_epoch_digest="sha256:epoch",
+        verifier_bundle_digest="sha256:verifier",
+        compile_report_digest="sha256:compile",
+        plan_digest="sha256:plan",
+        sandbox_receipt_digest="sha256:sandbox",
+        cleanup_receipt_digest="sha256:cleanup",
+        worker_id="factory-worker-1",
+        worker_census_digest="sha256:census",
+        acquisition_provenance={"method": "staged_release"},
+        auth_mechanism="factory_token_v1",
+        observed_activity=("provider_activity",),
+        credential_binding_facts={"provider_token": "admitted"},
     )
     return replace(record, **changes)
 
@@ -154,6 +168,16 @@ def test_applicability_accepts_exact_trusted_pass() -> None:
 
     assert result.applicable is True
     assert result.reason_codes == ()
+
+
+def test_legacy_proof_cannot_satisfy_non_variant_requirement() -> None:
+    legacy = replace(_record(), schema_version=LEGACY_PROOF_SCHEMA_VERSION)
+    requirement = _requirement(trusted_artifact_ids=frozenset({legacy.artifact_id}))
+
+    result = evaluate_proof_applicability(legacy, requirement, observed_at=NOW)
+
+    assert result.applicable is False
+    assert "proof_schema_legacy" in result.reason_codes
 
 
 def test_variant_applicability_requires_exact_v3_variant_and_retained_content() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import subprocess
@@ -289,6 +290,7 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
         "new_run": True,
         "new_connection": True,
         "new_app_server_process": True,
+        "provider_neutral_resume_intent": True,
         "native_resume_command": True,
         "bridge_subscribed": True,
         "post_resume_provider_activity": True,
@@ -380,18 +382,20 @@ def test_retained_artifact_secret_scan_redacts_and_reports_leak(tmp_path) -> Non
 def test_direct_producer_registration_names_real_evidence_and_cleanup() -> None:
     registration = REGISTRATION.to_dict()
 
-    assert registration["scenario_revision"] == 3
+    assert registration["scenario_revision"] == 4
     assert registration["assertion_cells"] == [
         {"assertion_id": "native_provider_resume_proven", "variant": "clean_exit"},
         {"assertion_id": "native_provider_resume_proven", "variant": "process_loss"},
     ]
     assert registration["observed_activity"] == [
+        "provider_neutral_resume_intent",
         "native_resume_command",
         "post_resume_provider_activity",
         "stale_input_rejected",
         "concurrent_resume_refused",
         "artifact_secret_scan_passed",
     ]
+    assert "resume_intent_receipt" in registration["required_artifacts"]
     assert "cleanup_receipt" in registration["required_artifacts"]
     assert "no_orphan_provider_processes" in registration["required_cleanup"]
 
@@ -401,3 +405,22 @@ def test_direct_producer_registration_cli_needs_no_execution_arguments(capsys) -
 
     assert main(["--registration"]) == 0
     assert "codex.native_resume.v1" in capsys.readouterr().out
+
+
+def test_codex_resume_intent_maps_exact_session_to_provider_thread(tmp_path) -> None:
+    from zerg.qa.codex_native_resume import _validate_resume_intent
+
+    args = argparse.Namespace(repo_root=tmp_path / "repo")
+    session_id = "11111111-1111-4111-8111-111111111111"
+    intent = {
+        "session_id": session_id,
+        "provider": "codex",
+        "cwd": str(args.repo_root),
+        "available": True,
+        "argv": ["longhouse", "codex", "--cwd", str(args.repo_root), "--resume-session", session_id],
+        "handoff": "terminal_command",
+    }
+
+    receipt = _validate_resume_intent(args, session_id, intent)
+
+    assert receipt["identity_valid"] is True

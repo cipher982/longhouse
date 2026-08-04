@@ -1,8 +1,8 @@
 """Pure executable provider-capability proof records and qualification.
 
-Schema v3 keeps v2 records readable as immutable history.  A v2 record can
-never satisfy a variant-scoped requirement: it has no variant, accepted epoch,
-compiled plan, worker, or retained-content identity to make that claim.
+Schema v3 keeps v2 records readable as immutable history. A v2 record can
+never satisfy a current requirement: it has no accepted epoch, compiled plan,
+worker, or retained-content identity to make that claim.
 """
 
 from __future__ import annotations
@@ -341,8 +341,7 @@ def evaluate_proof_applicability(
         reasons.append("semantic_proof_missing")
     if record.assertion_variant != requirement.assertion_variant:
         reasons.append("proof_assertion_variant_mismatch")
-    if requirement.assertion_variant is not None:
-        reasons.extend(v3_provenance_gaps(record))
+    reasons.extend(v3_provenance_gaps(record))
     if record.scenario_revision < requirement.minimum_scenario_revision:
         reasons.append("proof_scenario_revision_mismatch")
     if record.provider_contract_digest != requirement.provider_contract_digest:

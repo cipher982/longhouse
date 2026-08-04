@@ -64,8 +64,7 @@ def _rejection_reasons(
     reasons: list[str] = list(integrity_reasons.get(record.artifact_id, ()))
     if record.assertion_variant != assertion.variant:
         reasons.append("proof_assertion_variant_mismatch")
-    if assertion.variant is not None:
-        reasons.extend(v3_provenance_gaps(record))
+    reasons.extend(v3_provenance_gaps(record))
     if record.scenario_id != assertion.scenario_id:
         reasons.append("proof_scenario_mismatch")
     if record.scenario_revision < assertion.minimum_scenario_revision:

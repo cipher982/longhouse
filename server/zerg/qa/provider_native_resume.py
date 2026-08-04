@@ -94,7 +94,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=1,
         scenario_id="helm_cold_resume",
-        scenario_revision=3,
+        scenario_revision=4,
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -105,6 +105,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         modes=("helm",),
         evidence_classes=("live_token",),
         observed_activity=(
+            "provider_neutral_resume_intent",
             "native_resume_command",
             "post_resume_provider_activity",
             "stale_input_rejected",
@@ -117,6 +118,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         network_policy="shared_provider_egress",
         required_artifacts=(
             "provider_binary_receipt",
+            "resume_intent_receipt",
             "initial_bridge_state",
             "initial_transcript",
             "native_resume_terminal_recording",
@@ -316,7 +318,19 @@ def _cleanup_processes(
             forced_pids.append(process.pid)
             process.kill_group(signal.SIGKILL)
             process.wait(5)
-    provider_pids = sorted({_provider_process_pid(spec, state) for state in states})
+    provider_pids: list[int] = []
+    provider_pid_errors: list[dict[str, str]] = []
+    for state in states:
+        try:
+            provider_pids.append(_provider_process_pid(spec, state))
+        except RuntimeError as exc:
+            provider_pid_errors.append(
+                {
+                    "session_id": str(state.get("session_id") or "unknown"),
+                    "error": str(exc),
+                }
+            )
+    provider_pids = sorted(set(provider_pids))
     forced_provider_pids: list[int] = []
     for pid in provider_pids:
         if _signal_pid_if_alive(pid, signal.SIGKILL):
@@ -334,6 +348,7 @@ def _cleanup_processes(
     endpoint_receipts = [_endpoint_absence(state) for state in states]
     orphan_count = sum(not receipt["process_exited"] or not receipt["process_group_dead"] for receipt in process_receipts)
     orphan_count += sum(not receipt["process_dead"] for receipt in provider_process_receipts)
+    orphan_count += len(provider_pid_errors)
     endpoints_absent = all(receipt["absent"] for receipt in endpoint_receipts)
     verified = orphan_count == 0 and endpoints_absent
     return {
@@ -342,6 +357,7 @@ def _cleanup_processes(
         "orphan_count": orphan_count,
         "processes": process_receipts,
         "provider_processes": provider_process_receipts,
+        "provider_pid_errors": provider_pid_errors,
         "forced_cleanup_pids": forced_pids,
         "forced_provider_cleanup_pids": forced_provider_pids,
         "control_endpoints": endpoint_receipts,
@@ -415,16 +431,98 @@ def _wait_state(
     raise RuntimeError(f"{spec.provider} Helm state did not expose the registered run and connection")
 
 
-def _api_json(api_url: str, token: str, path: str) -> dict[str, Any]:
+def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
         headers={"X-Agents-Token": token, "Accept": "application/json"},
+        data=b"" if method == "POST" else None,
+        method=method,
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
         raise RuntimeError("Runtime Host returned a non-object")
     return payload
+
+
+def _wait_resume_intent(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    session_id: str,
+    *,
+    timeout: float = 45,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last_reason = "resume intent was not projected"
+    while time.monotonic() < deadline:
+        try:
+            intent = _api_json(
+                args.api_url,
+                args.agents_token,
+                f"sessions/{session_id}/resume-intent",
+                method="POST",
+            )
+        except (OSError, urllib.error.URLError) as exc:
+            last_reason = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.5)
+            continue
+        if intent.get("available") is True:
+            return intent
+        last_reason = str(intent.get("reason") or "resume intent unavailable")
+        time.sleep(0.5)
+    raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
+
+
+def _command_from_resume_intent(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    session_id: str,
+    intent: dict[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    expected_argv = [
+        "longhouse",
+        spec.provider,
+        "--cwd",
+        str(args.repo_root),
+        spec.resume_flag,
+        session_id,
+    ]
+    received_argv = intent.get("argv")
+    identity_valid = (
+        intent.get("available") is True
+        and intent.get("session_id") == session_id
+        and intent.get("provider") == spec.provider
+        and intent.get("cwd") == str(args.repo_root)
+        and intent.get("handoff") == "terminal_command"
+        and received_argv == expected_argv
+    )
+    if not identity_valid:
+        raise RuntimeError("provider-neutral Resume intent did not match the exact session, provider, cwd, and native selector")
+    selector_index = expected_argv.index(spec.resume_flag)
+    overrides = [
+        "--url",
+        args.api_url,
+        "--token",
+        args.agents_token,
+        spec.binary_flag,
+        str(args.provider_bin),
+    ]
+    if spec.provider == "cursor":
+        overrides.extend(("--permission-mode", "auto_approve"))
+    command = [str(args.longhouse_cli), *expected_argv[1:selector_index], *overrides, *expected_argv[selector_index:]]
+    receipt = {
+        "requested_at": _now(),
+        "intent": intent,
+        "identity_valid": identity_valid,
+        "executed_argv": command,
+        "factory_overrides": [
+            "runtime_host",
+            "agents_token",
+            "provider_binary",
+            *(("permission_mode",) if spec.provider == "cursor" else ()),
+        ],
+    }
+    return command, receipt
 
 
 def _assistant_contains(value: Any, marker: str) -> bool:
@@ -608,7 +706,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             stale = {"marker": stale_marker, "rejected": False}
         _write_json(root / "stale-input-receipt.json", stale)
 
-        resumed_command = _launch_command(spec, args, initial_state["session_id"])
+        resume_intent = _wait_resume_intent(spec, args, initial_state["session_id"])
+        resumed_command, resume_intent_receipt = _command_from_resume_intent(
+            spec,
+            args,
+            initial_state["session_id"],
+            resume_intent,
+        )
+        _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         resumed = PtyProcess(
             resumed_command,
             cwd=args.repo_root,
@@ -635,7 +740,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         stale_generation_dispatched = _assistant_contains(resumed_tail, stale_marker)
 
         concurrent = PtyProcess(
-            _launch_command(spec, args, resumed_state["session_id"]),
+            list(resumed_command),
             cwd=args.repo_root,
             env=environment,
             recording=root / "concurrent-resume-attempt.tty",
@@ -674,6 +779,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "new_app_server_process": resumed_provider_pid != initial_provider_pid,
             "initial_provider_pid": initial_provider_pid,
             "resumed_provider_pid": resumed_provider_pid,
+            "provider_neutral_resume_intent": resume_intent_receipt["identity_valid"] is True,
             "native_resume_command": (
                 spec.resume_flag in resumed_command
                 and resumed_command[resumed_command.index(spec.resume_flag) + 1] == initial_state["session_id"]

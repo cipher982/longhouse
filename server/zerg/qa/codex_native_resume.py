@@ -11,6 +11,8 @@ import shutil
 import signal
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -25,7 +27,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
     producer_revision=1,
     scenario_id="helm_cold_resume",
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),
@@ -36,6 +38,7 @@ REGISTRATION = ProducerRegistration(
     modes=("helm",),
     evidence_classes=("live_token",),
     observed_activity=(
+        "provider_neutral_resume_intent",
         "native_resume_command",
         "post_resume_provider_activity",
         "stale_input_rejected",
@@ -48,6 +51,7 @@ REGISTRATION = ProducerRegistration(
     network_policy="shared_provider_egress",
     required_artifacts=(
         "provider_binary_receipt",
+        "resume_intent_receipt",
         "initial_bridge_state",
         "initial_transcript",
         "native_resume_terminal_recording",
@@ -99,6 +103,61 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
     ]
+
+
+def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
+        headers={"X-Agents-Token": token, "Accept": "application/json"},
+        data=b"" if method == "POST" else None,
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runtime Host returned a non-object")
+    return payload
+
+
+def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: float = 45) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last_reason = "resume intent was not projected"
+    while time.monotonic() < deadline:
+        try:
+            intent = _api_json(
+                args.api_url,
+                args.agents_token,
+                f"sessions/{session_id}/resume-intent",
+                method="POST",
+            )
+        except (OSError, urllib.error.URLError) as exc:
+            last_reason = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.5)
+            continue
+        if intent.get("available") is True:
+            return intent
+        last_reason = str(intent.get("reason") or "resume intent unavailable")
+        time.sleep(0.5)
+    raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
+
+
+def _validate_resume_intent(args: argparse.Namespace, session_id: str, intent: dict[str, Any]) -> dict[str, Any]:
+    expected_argv = ["longhouse", "codex", "--cwd", str(args.repo_root), "--resume-session", session_id]
+    identity_valid = (
+        intent.get("available") is True
+        and intent.get("session_id") == session_id
+        and intent.get("provider") == "codex"
+        and intent.get("cwd") == str(args.repo_root)
+        and intent.get("handoff") == "terminal_command"
+        and intent.get("argv") == expected_argv
+    )
+    if not identity_valid:
+        raise RuntimeError("provider-neutral Resume intent did not match the exact Codex session, cwd, and native selector")
+    return {
+        "requested_at": _now(),
+        "intent": intent,
+        "identity_valid": identity_valid,
+    }
 
 
 def _pid_alive(pid: int) -> bool:
@@ -352,6 +411,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         if stale_input_receipt["rejected"] is not True:
             raise RuntimeError("input addressed to the terminated Resume generation was accepted")
 
+        resume_intent = _wait_resume_intent(args, session_id)
+        resume_intent_receipt = _validate_resume_intent(args, session_id, resume_intent)
+
         resumed_summary, _, _ = bridge_canary._start_bridge(
             args,
             evidence_root=root,
@@ -377,6 +439,16 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             ws_url,
             "--no-alt-screen",
         ]
+        native_resume_command = command[:3] == [str(args.codex_bin), "resume", thread_id]
+        resume_intent_receipt.update(
+            {
+                "provider_thread_id": thread_id,
+                "native_argv": command,
+                "session_to_provider_thread_mapping_valid": bool(session_id and thread_id),
+                "native_selector_valid": native_resume_command,
+            }
+        )
+        _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         subscribed_state: dict[str, Any] | None = None
 
         def subscribed() -> bool:
@@ -456,7 +528,11 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 initial_state.get("app_server_pid"),
                 initial_state.get("app_server_process_start_time"),
             ),
-            "native_resume_command": True,
+            "provider_neutral_resume_intent": (
+                resume_intent_receipt["identity_valid"] is True
+                and resume_intent_receipt["session_to_provider_thread_mapping_valid"] is True
+            ),
+            "native_resume_command": native_resume_command,
             "bridge_subscribed": resumed_before_activity.get("thread_subscription_status") == "subscribed",
             "post_resume_provider_activity": resumed_state.get("last_turn_status") == "completed",
             "post_resume_marker_in_assistant_transcript": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),

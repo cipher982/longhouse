@@ -35,6 +35,7 @@ def native_resume_assertions(variant: str, observation: Mapping[str, object]) ->
         and observation.get("new_run") is True
         and observation.get("new_connection") is True
         and observation.get("new_app_server_process") is True
+        and observation.get("provider_neutral_resume_intent") is True
         and observation.get("native_resume_command") is True
         and observation.get("bridge_subscribed") is True
         and observation.get("post_resume_provider_activity") is True

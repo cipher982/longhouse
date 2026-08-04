@@ -257,7 +257,7 @@ def test_codex_direct_resume_registration_is_authored_beside_executable() -> Non
         ("native_provider_resume_proven", "process_loss"),
     )
     assert producer.evidence_classes == ("live_token",)
-    assert producer.scenario_revision == 3
+    assert producer.scenario_revision == 4
     assert producer.executable is True
     assert producer.executable_module == "zerg.qa.codex_native_resume"
 
