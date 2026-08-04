@@ -151,6 +151,27 @@ def test_measurement_contract_matches_installed_health_matrix() -> None:
     assert tuple(MATRIX_MODULE.CASES) == HEALTH_CASES
 
 
+def test_partial_installed_health_matrix_cannot_qualify(monkeypatch) -> None:
+    monkeypatch.setattr(MATRIX_MODULE, "resolve_binary", lambda _: Path("/bin/echo"))
+    monkeypatch.setattr(MATRIX_MODULE, "version_probe", lambda _: {"output": "test"})
+    monkeypatch.setattr(
+        MATRIX_MODULE,
+        "run_case",
+        lambda case, binary: {"case": case, "observed": {}, "expected": {}},
+    )
+
+    artifact = MATRIX_MODULE.run_matrix(
+        type(
+            "Args",
+            (),
+            {"binary": Path("/bin/echo"), "case": [HEALTH_CASES[0]]},
+        )()
+    )
+
+    assert artifact["verdict"] == "partial"
+    assert artifact["scenarios"] == [HEALTH_CASES[0]]
+
+
 def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Path):
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"

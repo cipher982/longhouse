@@ -533,7 +533,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": 1,
         "artifact_kind": "installed_native_health_fault_matrix",
         "generated_at": rfc3339(utc_now()),
-        "verdict": "green",
+        # A partial run is useful for diagnosis, but it is not qualification
+        # evidence. Keep it distinct so a subset cannot be mistaken for the
+        # complete installed fault matrix.
+        "verdict": "green" if selected == CASES else "partial",
         "implementation": version_probe(binary),
         "scenarios": [result["case"] for result in results],
         "results": results,
