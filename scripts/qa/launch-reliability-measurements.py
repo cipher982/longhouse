@@ -239,6 +239,7 @@ def _health_measurements(paths: Iterable[Path], invalid: list[dict[str, str]]) -
             "scope": scope,
             "numerator": false_red_cases,
             "denominator": broken_cases,
+            "denominator_definition": "observed_broken_cases",
             "rate": (false_red_cases / broken_cases) if broken_cases else None,
             "source": references,
         },
@@ -418,7 +419,12 @@ def build_report(
         "health_fault_matrix": health_summary,
         "measures": {
             "automatic_recovery_time": (
-                {"status": "observed", "source": "successful matrix.measurements"}
+                {
+                    "status": "observed",
+                    "scope": "measured_clean_runs",
+                    "sample_count": len(successful),
+                    "source": "successful matrix.measurements",
+                }
                 if successful
                 else _not_observed("no measured matrix run with a positive retry queue converged to zero and complete cleanup")
             ),

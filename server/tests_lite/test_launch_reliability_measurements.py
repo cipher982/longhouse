@@ -91,7 +91,7 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
             {
                 "results": [
                     {
-                        "status": "pass",
+                        "status": "blocked",
                         "data": {
                             "operation_evidence": {
                                 "pause_request_detect": {"level": "hermetic", "status": "pass"},
@@ -110,7 +110,7 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
 
     report = MODULE.build_report([matrix], [harness])
 
-    assert report["provider_scenarios"]["result_status_counts"] == {"pass": 1}
+    assert report["provider_scenarios"]["result_status_counts"] == {"blocked": 1}
     assert report["provider_scenarios"]["operation_status_counts"] == {"blocked": 1, "pass": 1}
     assert report["provider_scenarios"]["blocked_operations"][0]["operation"] == "live_answer_delivery"
     assert report["provider_scenarios"]["evidence_level_counts"] == {"hermetic": 1, "live_token_required": 1}
@@ -217,6 +217,7 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
         "scope": "installed_health_fault_matrix",
         "numerator": 1,
         "denominator": 2,
+        "denominator_definition": "observed_broken_cases",
         "rate": 0.5,
         "source": [{"path": str(matrix), "sha256": MODULE._sha256(matrix)}],
     }
