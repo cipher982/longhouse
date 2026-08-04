@@ -332,6 +332,34 @@ def stop_host(host: Host | None) -> None:
         host.process.wait(timeout=5)
 
 
+def stop_processes_for_root(root: Path) -> None:
+    """Reap detached Runtime Host workers for this disposable test root."""
+
+    needle = str(root)
+    for _ in range(2):
+        listing = subprocess.run(
+            ["ps", "-Ao", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        pids: list[int] = []
+        for line in listing.stdout.splitlines():
+            fields = line.strip().split(None, 1)
+            if len(fields) != 2 or needle not in fields[1]:
+                continue
+            try:
+                pid = int(fields[0])
+            except ValueError:
+                continue
+            if pid != os.getpid():
+                pids.append(pid)
+        for pid in pids:
+            kill_group(pid, grace=0.1)
+        if pids:
+            time.sleep(0.2)
+
+
 def create_device_token(base_url: str) -> str:
     code, body = http_json(
         f"{base_url}/api/devices/tokens",
@@ -1025,6 +1053,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         base_url = f"http://127.0.0.1:{port}"
         token = create_device_token(base_url)
         stop_host(host)
+        stop_processes_for_root(temp_root)
         host = None
 
         for provider in selected_providers:
@@ -1391,6 +1420,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             except subprocess.TimeoutExpired:
                 pass
         stop_host(host)
+        stop_processes_for_root(temp_root)
         if os.environ.get("LONGHOUSE_KEEP_INSTALLED_FAULT_ROOT") != "1":
             shutil.rmtree(temp_root, ignore_errors=True)
 
