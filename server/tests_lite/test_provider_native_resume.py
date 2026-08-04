@@ -8,6 +8,7 @@ import pytest
 
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
+from zerg.qa import codex_native_resume
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _cleanup_processes
@@ -54,6 +55,46 @@ def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
     write_codex_json(receipt, {"path": tmp_path / "provider"})
 
     assert json.loads(receipt.read_text()) == {"path": str(tmp_path / "provider")}
+
+
+def test_codex_main_serializes_path_values_in_result_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    engine = tmp_path / "longhouse-engine"
+    provider = tmp_path / "codex"
+    for executable in (engine, provider):
+        executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o755)
+    result_path = tmp_path / "evidence"
+
+    monkeypatch.setenv("CODEX_API_URL", "https://runtime.example")
+    monkeypatch.setenv("CODEX_AGENTS_TOKEN", "device-token")
+    monkeypatch.setattr(
+        codex_native_resume,
+        "run_native_resume",
+        lambda args: {"status": "pass", "path": result_path},
+    )
+
+    assert (
+        codex_native_resume.main(
+            [
+                "--variant",
+                "clean_exit",
+                "--evidence-root",
+                str(tmp_path),
+                "--repo-root",
+                str(tmp_path),
+                "--engine",
+                str(engine),
+                "--codex-bin",
+                str(provider),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["path"] == str(result_path)
 
 
 def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path) -> None:
