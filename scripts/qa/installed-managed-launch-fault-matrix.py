@@ -155,6 +155,40 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def source_provenance(path: Path) -> dict[str, Any]:
+    """Bind an installed binary to its source worktree when one is present."""
+
+    path = path.resolve()
+    repository = next(
+        (candidate for candidate in path.parents if (candidate / ".git").exists()),
+        None,
+    )
+    revision = None
+    dirty = None
+    if repository is not None:
+        result = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        revision = result.stdout.strip() if result.returncode == 0 else None
+        status = subprocess.run(
+            ["git", "-C", str(repository), "status", "--short"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        dirty = bool(status.stdout.strip()) if status.returncode == 0 else None
+    return {
+        "path": str(path),
+        "sha256": sha256_file(path),
+        "source_worktree": str(repository) if repository is not None else None,
+        "source_git_sha": revision,
+        "source_dirty": dirty,
+    }
+
+
 def harness_provenance() -> dict[str, Any]:
     """Bind evidence to the exact harness bytes, commit, and invocation."""
 
@@ -938,8 +972,8 @@ def scoped_process_table(scope: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
     The disposable root also contains the Runtime Host and Machine Agent, so
     scanning that root and killing every match is unsafe. Exact recorded PIDs
-    and their recorded process groups form the cleanup boundary; no host-wide
-    process or open-file scan is part of the cleanup decision.
+    and their recorded process groups form this scoped cleanup boundary; no
+    host-wide process or open-file scan is part of this scoped decision.
     """
 
     selected: set[int] = set()
@@ -2488,10 +2522,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 else "installed_provider_owner_and_host_adoption"
             ),
             "implementation": {
-                "longhouse": str(longhouse_bin),
-                "longhouse_engine": str(engine_bin),
-                "longhouse_sha256": sha256_file(longhouse_bin),
-                "engine_sha256": sha256_file(engine_bin),
+                "longhouse": source_provenance(longhouse_bin),
+                "longhouse_engine": source_provenance(engine_bin),
             },
             "harness": harness_provenance(),
             "provider_binaries": provider_evidence,
@@ -2528,6 +2560,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_root": str(evidence_root),
         }
     finally:
+        primary_exception = sys.exc_info()[1]
+        cleanup_errors: list[str] = []
         for _, live in live_commands:
             try:
                 result = next(
@@ -2546,8 +2580,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     cleanup_scope=result.get("cleanup_scope"),
                 )
-            except Exception:
-                pass
+            except Exception as error:  # noqa: BLE001 - cleanup must be reported.
+                cleanup_errors.append(
+                    f"live-command cleanup {type(error).__name__}: {error}"
+                )
         live_commands.clear()
         if engine_handle is not None:
             engine_handle.close()
@@ -2558,10 +2594,27 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 engine.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        stop_host(host)
-        stop_processes_for_root(temp_root)
+        try:
+            stop_host(host)
+        except Exception as error:  # noqa: BLE001 - cleanup must be reported.
+            cleanup_errors.append(f"Runtime Host cleanup {type(error).__name__}: {error}")
+        try:
+            stop_processes_for_root(temp_root)
+        except Exception as error:  # noqa: BLE001 - cleanup must be reported.
+            cleanup_errors.append(
+                f"temporary-root cleanup {type(error).__name__}: {error}"
+            )
         if os.environ.get("LONGHOUSE_KEEP_INSTALLED_FAULT_ROOT") != "1":
             shutil.rmtree(temp_root, ignore_errors=True)
+        if cleanup_errors:
+            details = "; ".join(cleanup_errors)
+            if primary_exception is not None:
+                raise ProcessScanFailure(
+                    "primary matrix failure preserved: "
+                    f"{type(primary_exception).__name__}: {primary_exception}; "
+                    f"cleanup failures: {details}"
+                ) from primary_exception
+            raise ProcessScanFailure(f"installed matrix cleanup failed: {details}")
 
 
 def build_parser() -> argparse.ArgumentParser:
