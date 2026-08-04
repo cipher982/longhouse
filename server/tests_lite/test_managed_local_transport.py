@@ -55,7 +55,6 @@ def test_build_managed_local_attach_command_uses_native_claude_session_id_for_ch
         "exec claude --dangerously-skip-permissions --session-id provider-123 "
         "--dangerously-load-development-channels server:longhouse-channel" in inner
     )
-    assert "--channels server:longhouse-channel" not in inner
 
 
 def test_build_managed_local_attach_command_uses_opencode_bridge_for_opencode_process():

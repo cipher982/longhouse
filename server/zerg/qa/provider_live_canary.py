@@ -1167,17 +1167,13 @@ def _run_claude_channels_shape(binary: str) -> dict[str, Any]:
     ):
         return _fail(
             "claude_development_channels_contract_missing",
-            "Claude does not recognize the development channel flag Longhouse needs for private MCP channels.",
+            "Claude does not recognize the development channel flag Longhouse needs for its private MCP channel.",
             evidence=_command_evidence(result),
         )
-    required_tokens = ("--session-id", "--resume", "--dangerously-skip-permissions")
-    missing = [token for token in required_tokens if token not in output]
-    if missing:
-        return _status(
-            "warn",
-            reason="claude_development_channels_contract_unconfirmed",
-            message=_CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE,
-            missing=missing,
+    if result.returncode != 0:
+        return _fail(
+            "claude_channels_probe_failed",
+            "Claude rejected the development channel flag Longhouse needs for its private MCP channel.",
             evidence=_command_evidence(result),
         )
     return _status("pass", evidence=_command_evidence(result))

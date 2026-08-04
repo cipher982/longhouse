@@ -619,10 +619,7 @@ if args == ["--dangerously-load-development-channels", "server:longhouse-channel
     if os.environ.get("FAKE_CLAUDE_CHANNELS_MISSING") == "1":
         print("unknown option --dangerously-load-development-channels", file=sys.stderr)
         raise SystemExit(1)
-    if os.environ.get("FAKE_CLAUDE_CHANNELS_UNCONFIRMED") == "1":
-        print("--session-id --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
-        raise SystemExit(0)
-    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    print("2.9.9-fake (Claude Code)")
     raise SystemExit(0)
 
 print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
@@ -3985,9 +3982,7 @@ def test_cold_resume_factory_requires_direct_live_token_adapter_proof(
     result = uah.run_provider_resume_factory(adapter, package)
     assert result.status == expected
     assert result.data is not None
-    assert result.data["assertions"]["native_provider_resume_proven"] is (
-        native_status == "pass" and evidence_level == "live_token"
-    )
+    assert result.data["assertions"]["native_provider_resume_proven"] is (native_status == "pass" and evidence_level == "live_token")
 
 
 def test_script_entrypoint_emits_normalized_artifact(tmp_path: Path) -> None:
