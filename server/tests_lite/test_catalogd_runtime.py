@@ -526,6 +526,137 @@ async def test_pending_catalog_attention_replays_after_restart_and_commits(daemo
 
 
 @pytest.mark.asyncio
+async def test_catalog_attention_queue_releases_after_quiet_hours(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    quiet_start = (now - timedelta(hours=1)).strftime("%H:%M")
+    quiet_end = (now + timedelta(hours=1)).strftime("%H:%M")
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert().values(
+                id=12,
+                email="quiet-hours@example.com",
+                prefs={"quiet_hours_start": quiet_start, "quiet_hours_end": quiet_end},
+            )
+        )
+        connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id=session_id,
+                owner_id="12",
+                provider="codex",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="codex",
+                environment="dev",
+                project="zerg",
+                started_at=now,
+            )
+        )
+        connection.execute(
+            LiveAPNSDeviceRegistration.__table__.insert().values(
+                id=str(uuid4()),
+                owner_id=12,
+                platform="ios",
+                device_token="g" * 64,
+                push_environment="sandbox",
+                created_at=now,
+                updated_at=now,
+                last_seen_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        stalled = await client.call(
+            "session.runtime.apply.v2",
+            {
+                "events": [
+                    {
+                        **_event(
+                            session_id=session_id,
+                            runtime_key=f"codex:{session_id}",
+                            dedupe_key="catalog-quiet-hours-1",
+                            occurred_at=now,
+                        ),
+                        "phase": "stalled",
+                        "payload": {"stall_notification": True},
+                    }
+                ]
+            },
+        )
+        assert "attention_actions" not in stalled
+        queued = await client.call(
+            "notification.apns.attention.pending.list.v2",
+            {"observed_at": (now + timedelta(seconds=30)).isoformat(), "limit": 100},
+        )
+        assert queued["actions"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.begin() as connection:
+        connection.execute(LiveUser.__table__.update().where(LiveUser.id == 12).values(prefs={}))
+        event_id = connection.execute(
+            LiveSessionCatalog.__table__.select()
+            .with_only_columns(LiveSessionCatalog.last_attention_notification_id)
+            .where(LiveSessionCatalog.session_id == session_id)
+        ).scalar_one()
+        connection.execute(
+            LiveNotificationEvent.__table__.update()
+            .where(LiveNotificationEvent.id == event_id)
+            .values(eligible_at=now + timedelta(seconds=30))
+        )
+    engine.dispose()
+
+    restarted = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await restarted.start()
+    replay_client = CatalogClient(socket_path)
+    try:
+        released = await replay_client.call(
+            "notification.apns.attention.pending.list.v2",
+            {"observed_at": (now + timedelta(seconds=60)).isoformat(), "limit": 100},
+        )
+        assert released["actions"][0]["kind"] == "attention"
+        assert released["actions"][0]["notification_event_id"] == event_id
+        committed = await replay_client.call(
+            "notification.apns.attention.commit.v2",
+            {
+                "session_id": session_id,
+                "action": "attention",
+                "state": "stalled",
+                "previous_state": "stalled:pending",
+                "notification_event_id": event_id,
+                "occurred_at": now.isoformat(),
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert committed["committed"] is True
+    finally:
+        await replay_client.close()
+        await restarted.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        audit = connection.execute(LiveNotificationEvent.__table__.select().where(LiveNotificationEvent.id == event_id)).mappings().one()
+        assert audit["channel_results"]["queued"] is True
+        assert audit["channel_results"]["apns_ios"] == {"accepted": True}
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_pending_catalog_stall_attention_replays_after_restart_and_commits(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)

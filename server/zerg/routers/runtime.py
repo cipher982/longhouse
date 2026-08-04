@@ -252,6 +252,17 @@ def _retain_catalog_attention_task(task: asyncio.Task) -> None:
     task.add_done_callback(_finish)
 
 
+async def stop_catalog_attention_tasks() -> None:
+    """Drain in-flight APNs dispatches before catalogd shuts down."""
+
+    tasks = tuple(_catalog_attention_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _catalog_attention_tasks.difference_update(tasks)
+
+
 async def run_catalog_attention_replay_loop() -> None:
     """Replay APNs actions whose dispatch or commit was interrupted."""
 

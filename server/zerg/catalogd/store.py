@@ -553,6 +553,37 @@ def _live_runtime_attention_actions(
                 occurred_at=occurred_at,
                 event_type="session_stalled",
             )
+            if policy.action == AttentionDeliveryAction.QUEUE:
+                targets = _live_attention_targets(orm, owner_id)
+                if not targets:
+                    _live_record_attention_policy_decision(
+                        orm,
+                        owner_id=owner_id,
+                        session_id=session_id,
+                        event_type="session_stalled",
+                        state_key=f"stalled:{occurred_at.isoformat()}",
+                        collapse_key=f"lh-attn-{session_id}",
+                        occurred_at=occurred_at,
+                        reason="no_ios_targets",
+                    )
+                    continue
+                event = _live_attention_event(
+                    orm,
+                    catalog=catalog,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    event_type="session_stalled",
+                    state_key=f"stalled:{occurred_at.isoformat()}",
+                    occurred_at=occurred_at,
+                    collapse_key=f"lh-attn-{session_id}",
+                )
+                event.eligible_at = policy.queue_until or occurred_at
+                channel_results = dict(event.channel_results or {})
+                channel_results["queued"] = True
+                event.channel_results = channel_results
+                catalog.last_attention_push_state = _CATALOG_STALL_PENDING
+                catalog.last_attention_push_at = occurred_at
+                continue
             if policy.action != AttentionDeliveryAction.DELIVER:
                 if user is not None:
                     _live_record_attention_policy_decision(

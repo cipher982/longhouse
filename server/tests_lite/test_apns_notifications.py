@@ -32,6 +32,8 @@ from zerg.models.user import User
 from zerg.routers.runtime import _catalog_attention_locks
 from zerg.routers.runtime import _catalog_attention_notification
 from zerg.routers.runtime import _dispatch_catalog_attention_actions
+from zerg.routers.runtime import _retain_catalog_attention_task
+from zerg.routers.runtime import stop_catalog_attention_tasks
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
 from zerg.services.apns_sender import APNSDeviceTarget
@@ -214,6 +216,52 @@ def test_catalog_attention_dispatch_retains_pending_on_transient_send_failure():
             "attention_push_at": occurred_at.isoformat(),
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_catalog_attention_dispatch_tasks_are_drained_on_shutdown():
+    session_id = str(uuid4())
+    event_id = str(uuid4())
+    occurred_at = datetime.now(timezone.utc).replace(microsecond=0)
+    action = {
+        "kind": "attention",
+        "session_id": session_id,
+        "state": "stalled",
+        "previous_state": "",
+        "notification_event_id": event_id,
+        "occurred_at": occurred_at.isoformat(),
+        "targets": [{"device_token": "f" * 64, "push_environment": "sandbox"}],
+    }
+    catalogd = SimpleNamespace(call=AsyncMock(return_value={"valid": True}))
+    send_started = asyncio.Event()
+    send_blocked = asyncio.Event()
+
+    async def blocked_send(_notification, **_kwargs):
+        send_started.set()
+        await send_blocked.wait()
+        return True
+
+    with patch("zerg.routers.runtime.send_session_attention_push", new=blocked_send):
+        task = asyncio.create_task(_dispatch_catalog_attention_actions([action], catalogd))
+        _retain_catalog_attention_task(task)
+        await send_started.wait()
+        await stop_catalog_attention_tasks()
+
+    assert task.cancelled()
+    assert catalogd.call.await_args_list == [
+        (
+            (
+                "notification.apns.attention.validate.v2",
+                {
+                    "session_id": session_id,
+                    "action": "attention",
+                    "state": "stalled",
+                    "notification_event_id": event_id,
+                    "attention_push_at": occurred_at.isoformat(),
+                },
+            ),
+        ),
+    ]
 
 
 def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):

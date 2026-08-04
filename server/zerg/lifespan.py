@@ -444,6 +444,12 @@ async def lifespan(app: FastAPI):
         if catalog_mode and not _settings.testing:
             await _stop_local_embedding_initializer(app)
             await _stop_catalog_attention_replayer(app)
+            try:
+                from zerg.routers.runtime import stop_catalog_attention_tasks
+
+                await stop_catalog_attention_tasks()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop catalog APNs attention tasks after startup failure")
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
@@ -521,6 +527,12 @@ async def lifespan(app: FastAPI):
         if catalog_mode and not _settings.testing:
             await _stop_local_embedding_initializer(app)
             await _stop_catalog_attention_replayer(app)
+            try:
+                from zerg.routers.runtime import stop_catalog_attention_tasks
+
+                await stop_catalog_attention_tasks()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop catalog APNs attention tasks")
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
