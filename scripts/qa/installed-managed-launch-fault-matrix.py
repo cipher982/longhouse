@@ -155,6 +155,34 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def harness_provenance() -> dict[str, Any]:
+    """Bind evidence to the exact harness bytes, commit, and invocation."""
+
+    path = Path(__file__).resolve()
+    repository = path.parents[2]
+    revision = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    relative_path = str(path.relative_to(repository))
+    dirty = subprocess.run(
+        ["git", "-C", str(repository), "status", "--short", "--", relative_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {
+        "path": str(path),
+        "git_sha": revision.stdout.strip() if revision.returncode == 0 else None,
+        "sha256": sha256_file(path),
+        "argv": list(sys.argv),
+        "cwd": os.getcwd(),
+        "dirty": bool(dirty.stdout.strip()) if dirty.returncode == 0 else None,
+    }
+
+
 def resolve_file(raw: str | None, name: str) -> Path:
     candidate = Path(raw).expanduser() if raw else None
     if candidate is None:
@@ -409,14 +437,24 @@ def stop_processes_for_root(root: Path) -> None:
     """Reap detached Runtime Host workers for this disposable test root."""
 
     needle = str(root)
-    for _ in range(2):
-        listing = subprocess.run(
-            ["ps", "-Ao", "pid=,command="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        pids: list[int] = []
+
+    def matching_processes() -> dict[int, str]:
+        try:
+            listing = subprocess.run(
+                ["ps", "-Ao", "pid=,command="],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ProcessScanFailure(f"ps root-process scan failed: {error}") from error
+        if listing.returncode != 0:
+            raise ProcessScanFailure(
+                "ps root-process scan failed: "
+                f"returncode={listing.returncode} stderr={listing.stderr.strip()}"
+            )
+        processes: dict[int, str] = {}
         for line in listing.stdout.splitlines():
             fields = line.strip().split(None, 1)
             if len(fields) != 2 or needle not in fields[1]:
@@ -425,12 +463,28 @@ def stop_processes_for_root(root: Path) -> None:
                 pid = int(fields[0])
             except ValueError:
                 continue
-            if pid != os.getpid():
-                pids.append(pid)
-        for pid in pids:
-            kill_group(pid, grace=0.1)
-        if pids:
+            if pid == os.getpid():
+                continue
+            identity = process_start_identity(pid)
+            if identity is not None:
+                processes[pid] = identity
+        return processes
+
+    for _ in range(2):
+        processes = matching_processes()
+        for pid, identity in processes.items():
+            # The host-wide match is only a candidate. Re-check the exact
+            # start identity immediately before signalling its group.
+            if process_start_identity(pid) == identity:
+                kill_group(pid, grace=0.1)
+        if processes:
             time.sleep(0.2)
+    remaining = matching_processes()
+    if remaining:
+        raise ProcessScanFailure(
+            "detached Runtime Host workers remain after cleanup: "
+            f"{sorted(remaining)}"
+        )
 
 
 def create_device_token(base_url: str) -> str:
@@ -463,14 +517,25 @@ def redact(text: str, token: str) -> str:
     return text.replace(token, "<device-token-redacted>")
 
 
-def session_process_groups(session_id: str) -> set[int]:
-    listing = subprocess.run(
-        ["ps", "-Ao", "pid=,pgid=,command="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    groups: set[int] = set()
+def session_process_groups(session_id: str) -> dict[int, dict[int, str]]:
+    """Find session-bearing groups and record identities before signalling."""
+
+    try:
+        listing = subprocess.run(
+            ["ps", "-Ao", "pid=,pgid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ProcessScanFailure(f"ps session-group scan failed: {error}") from error
+    if listing.returncode != 0:
+        raise ProcessScanFailure(
+            "ps session-group scan failed: "
+            f"returncode={listing.returncode} stderr={listing.stderr.strip()}"
+        )
+    groups: dict[int, dict[int, str]] = {}
     for line in listing.stdout.splitlines():
         fields = line.strip().split(None, 2)
         if len(fields) != 3 or session_id not in fields[2]:
@@ -480,9 +545,25 @@ def session_process_groups(session_id: str) -> set[int]:
             pgid = int(fields[1])
         except ValueError:
             continue
-        if pid != os.getpid() and pgid != os.getpgrp():
-            groups.add(pgid)
+        if pid == os.getpid() or pgid == os.getpgrp():
+            continue
+        identity = process_start_identity(pid)
+        if identity is not None:
+            groups.setdefault(pgid, {})[pid] = identity
     return groups
+
+
+def verified_session_groups(groups: dict[int, dict[int, str]]) -> set[int]:
+    """Return only groups with an identity-verified live session member."""
+
+    verified: set[int] = set()
+    for pgid, members in groups.items():
+        if any(
+            process_start_identity(pid) == identity
+            for pid, identity in members.items()
+        ):
+            verified.add(pgid)
+    return verified
 
 
 def cleanup_detached_provider(
@@ -503,27 +584,30 @@ def cleanup_detached_provider(
         check=False,
     )
     groups = session_process_groups(session_id)
-    for pgid in groups:
+    for pgid in verified_session_groups(groups):
         try:
             os.killpg(pgid, signal.SIGTERM)
         except (OSError, PermissionError):
             pass
     time.sleep(0.5)
-    remaining = sorted(session_process_groups(session_id))
+    remaining_groups = session_process_groups(session_id)
+    remaining = sorted(verified_session_groups(remaining_groups))
     for pgid in remaining:
         try:
             os.killpg(pgid, signal.SIGKILL)
         except (OSError, PermissionError):
             pass
     time.sleep(0.2)
+    final_groups = session_process_groups(session_id)
+    final_group_ids = sorted(verified_session_groups(final_groups))
     return {
-        "status": "pass" if not session_process_groups(session_id) else "fail",
+        "status": "pass" if not final_group_ids else "fail",
         "stop_returncode": stop.returncode,
         "stop_output": redact(
             (stop.stdout or "") + (stop.stderr or ""),
             env.get("LONGHOUSE_DEVICE_TOKEN", ""),
         ),
-        "remaining_process_groups": sorted(session_process_groups(session_id)),
+        "remaining_process_groups": final_group_ids,
     }
 
 
@@ -756,12 +840,23 @@ def start_live_command(
 
 
 def process_start_identity(pid: int) -> str | None:
-    result = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "lstart="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ProcessScanFailure(f"ps process-identity scan failed: {error}") from error
+    # macOS ps returns 1 when a process disappears between observations. That
+    # is a valid absence result; any other nonzero status is an observer error.
+    if result.returncode not in {0, 1}:
+        raise ProcessScanFailure(
+            "ps process-identity scan failed: "
+            f"returncode={result.returncode} stderr={result.stderr.strip()}"
+        )
     value = result.stdout.strip()
     return value or None
 
@@ -788,6 +883,11 @@ def process_records(pids: set[int]) -> dict[int, dict[str, Any]]:
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ProcessScanFailure(f"ps process-record scan failed: {error}") from error
+    if listing.returncode not in {0, 1}:
+        raise ProcessScanFailure(
+            "ps process-record scan failed: "
+            f"returncode={listing.returncode} stderr={listing.stderr.strip()}"
+        )
     records: dict[int, dict[str, Any]] = {}
     for line in listing.stdout.splitlines():
         fields = line.strip().split(None, 4)
@@ -818,6 +918,12 @@ def process_group_pids(pgid: int) -> set[int]:
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ProcessScanFailure(f"pgrep process-group scan failed: {error}") from error
+    # pgrep returns 1 for a valid empty group and >1 for an observer failure.
+    if result.returncode not in {0, 1}:
+        raise ProcessScanFailure(
+            "pgrep process-group scan failed: "
+            f"returncode={result.returncode} stderr={result.stderr.strip()}"
+        )
     pids: set[int] = set()
     for line in result.stdout.splitlines():
         try:
@@ -2387,6 +2493,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "longhouse_sha256": sha256_file(longhouse_bin),
                 "engine_sha256": sha256_file(engine_bin),
             },
+            "harness": harness_provenance(),
             "provider_binaries": provider_evidence,
             "scenarios": [
                 "installed_provider_launch_while_runtime_host_unavailable",
@@ -2513,6 +2620,7 @@ def main(argv: list[str] | None = None) -> int:
             "evidence_root": str(getattr(args, "_resolved_evidence_root", "")),
             "temporary_root": str(getattr(args, "_temporary_root", "")),
             "provider_auth": getattr(args, "_provider_auth", {}),
+            "harness": harness_provenance(),
         }
     evidence_root = Path(
         artifact.get("evidence_root")
