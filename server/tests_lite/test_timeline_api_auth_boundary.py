@@ -210,7 +210,7 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
             user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-                                                                    )
+        )
         db.add(session)
         db.flush()
         db.refresh(session)
@@ -261,10 +261,10 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
             git_branch="main",
             started_at=datetime.now(timezone.utc),
             ended_at=None,
-                        user_messages=1,
+            user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-                                                        )
+        )
         db.add(session)
         db.flush()
         db.refresh(session)
@@ -295,7 +295,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
         assert payload["control"]["source_runner_id"] == 9
         assert payload["control"]["source_runner_name"] == "work-laptop"
         assert payload["control"]["attach_command"]
-        assert "--channels server:longhouse-channel" in payload["control"]["attach_command"]
+        assert "--dangerously-load-development-channels server:longhouse-channel" in payload["control"]["attach_command"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
@@ -611,9 +611,7 @@ def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp
         base = datetime.now(timezone.utc)
         events = [
             AgentEvent(session_id=session_id, role="user", content_text="event 1", timestamp=base),
-            AgentEvent(
-                session_id=session_id, role="assistant", content_text="event 2", timestamp=base + timedelta(seconds=1)
-            ),
+            AgentEvent(session_id=session_id, role="assistant", content_text="event 2", timestamp=base + timedelta(seconds=1)),
             AgentEvent(
                 session_id=session_id,
                 role="tool",
@@ -621,9 +619,7 @@ def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp
                 tool_output_text="x" * 2500,
                 timestamp=base + timedelta(seconds=2),
             ),
-            AgentEvent(
-                session_id=session_id, role="assistant", content_text="event 4", timestamp=base + timedelta(seconds=3)
-            ),
+            AgentEvent(session_id=session_id, role="assistant", content_text="event 4", timestamp=base + timedelta(seconds=3)),
         ]
         db.add_all(events)
         db.commit()
@@ -1187,15 +1183,13 @@ def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp
             user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-                                                        )
+        )
         db.add(session)
         db.flush()
         db.refresh(session)
         from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
-        seed_managed_kernel_rows(
-            db, session, control_plane="claude_channel_bridge", state="detached"
-        )
+        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge", state="detached")
         db.add(
             SessionRuntimeState(
                 runtime_key=f"claude:{session.id}",
@@ -1254,7 +1248,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
             user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-                                                        )
+        )
         db.add(session)
         db.flush()
         db.refresh(session)

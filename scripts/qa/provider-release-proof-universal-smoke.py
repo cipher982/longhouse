@@ -252,9 +252,9 @@ if args == ["--help"]:
     print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
     raise SystemExit(0)
 
-if args == ["--channels", "server:longhouse-channel", "--version"]:
+if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
     if os.environ.get("FAKE_CLAUDE_CHANNELS_MISSING") == "1":
-        print("unknown option --channels", file=sys.stderr)
+        print("unknown option --dangerously-load-development-channels", file=sys.stderr)
         raise SystemExit(1)
     print("2.9.9-fake (Claude Code)")
     raise SystemExit(0)

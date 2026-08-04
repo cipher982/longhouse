@@ -12,6 +12,7 @@ from zerg.qa import antigravity_resume_policy
 from zerg.qa import codex_native_resume
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.provider_native_resume import SPECS
+from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
 from zerg.qa.provider_native_resume import _cleanup_processes
@@ -214,9 +215,7 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
     assert receipt["status"] == "pass"
     assert receipt["daemon_paused"] is True
     assert receipt["daemon_restarted"] is True
-    assert run_commands[0][run_commands[0].index("--db") + 1] == str(
-        tmp_path / "longhouse-home/agent/longhouse-shipper.db"
-    )
+    assert run_commands[0][run_commands[0].index("--db") + 1] == str(tmp_path / "longhouse-home/agent/longhouse-shipper.db")
     assert len(commands) == 2
     assert shipper.stop()["process_dead"] is True
 
@@ -515,6 +514,50 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
 
     assert process.sent == ["2\r"]
     assert process.claude_permission_acceptance_sent is True
+
+
+def test_claude_development_channel_prompt_selects_local_development_once(tmp_path: Path) -> None:
+    recording = tmp_path / "claude.tty"
+    recording.write_text(
+        "Loading development channel\nI am using this for local development\nExit\n",
+        encoding="utf-8",
+    )
+
+    class FakeProcess:
+        claude_development_channel_acceptance_sent = False
+
+        def __init__(self) -> None:
+            self.recording = recording
+            self.sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProcess()
+
+    _accept_claude_development_channel_prompt(process)  # type: ignore[arg-type]
+    _accept_claude_development_channel_prompt(process)  # type: ignore[arg-type]
+
+    assert process.sent == ["1\r"]
+    assert process.claude_development_channel_acceptance_sent is True
+
+
+def test_provider_state_evidence_redacts_nested_secrets() -> None:
+    from zerg.qa.provider_native_resume import _redact_state_for_evidence
+
+    state = _redact_state_for_evidence(
+        {
+            "session_id": "session-1",
+            "auth_token": "bridge-secret",
+            "nested": {"hook_token": "hook-secret", "provider_pid": 123},
+        }
+    )
+
+    assert state == {
+        "session_id": "session-1",
+        "auth_token": "<redacted>",
+        "nested": {"hook_token": "<redacted>", "provider_pid": 123},
+    }
 
 
 def test_cursor_initial_seed_uses_provider_terminal_before_idle_control(tmp_path: Path) -> None:

@@ -41,6 +41,7 @@ QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
 _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
+_EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|access_key|authorization)$")
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -374,6 +375,7 @@ class PtyProcess:
         self.master = master
         self.recording = recording
         self.claude_permission_acceptance_sent = False
+        self.claude_development_channel_acceptance_sent = False
         self.cursor_workspace_trust_sent = False
         self.recording.parent.mkdir(parents=True, exist_ok=True)
         self._stream = self.recording.open("ab", buffering=0)
@@ -832,6 +834,19 @@ def _accept_claude_permission_prompt(process: PtyProcess) -> None:
         process.claude_permission_acceptance_sent = True
 
 
+def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
+    """Select Claude's explicit local-development channel acknowledgement."""
+
+    if getattr(process, "claude_development_channel_acceptance_sent", False):
+        return
+    compact = re.sub(r"\s+", "", _terminal_text(process.recording)).lower()
+    if "loadingdevelopmentchannel" in compact and "iamusingthisforlocaldevelopment" in compact and "exit" in compact:
+        # Claude renders the local-development acknowledgement before Exit.
+        # Select it by its visible ordinal rather than relying on cursor state.
+        process.send("1\r")
+        process.claude_development_channel_acceptance_sent = True
+
+
 def _accept_cursor_workspace_trust(process: PtyProcess) -> None:
     """Accept Cursor's provider-owned first-run workspace trust gate once."""
 
@@ -1036,6 +1051,23 @@ def _normalize_state(spec: ProviderSpec, payload: dict[str, Any], path: Path) ->
     }
 
 
+def _redact_state_for_evidence(value: Any) -> Any:
+    """Keep provider identity state useful without retaining bridge secrets."""
+
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if _EVIDENCE_SECRET_KEY_RE.search(normalized) or normalized.endswith(("_token", "_secret", "_password", "_api_key")):
+                redacted[str(key)] = "<redacted>"
+            else:
+                redacted[str(key)] = _redact_state_for_evidence(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_state_for_evidence(item) for item in value]
+    return value
+
+
 def _wait_state(
     spec: ProviderSpec,
     home: Path,
@@ -1056,6 +1088,7 @@ def _wait_state(
                 )
             if spec.provider == "claude":
                 _accept_claude_permission_prompt(process)
+                _accept_claude_development_channel_prompt(process)
             elif spec.provider == "cursor":
                 _accept_cursor_workspace_trust(process)
         for path in _state_candidates(spec, home):
@@ -1441,7 +1474,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(initial, root / "initial.tty")
         states.append(initial_state)
-        _write_json(root / "initial-bridge-state.json", initial_state)
+        _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         initial_provider_pid = _provider_process_pid(spec, initial_state)
         seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
         _control_send(spec, args, initial_state, initial, f"Reply exactly {seed_marker} and nothing else.", initial=True)
@@ -1491,7 +1524,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         states.append(resumed_state)
-        _write_json(root / "resumed-bridge-state.json", resumed_state)
+        _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
         post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
         post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")

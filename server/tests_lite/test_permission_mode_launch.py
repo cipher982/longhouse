@@ -96,7 +96,7 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
         session=session,
         attach_command=(
             "zsh -lc 'export LONGHOUSE_PROVIDER_SESSION_ID=prov-1; "
-            "exec claude --session-id prov-1 --channels server:longhouse-channel'"
+            "exec claude --session-id prov-1 --dangerously-load-development-channels server:longhouse-channel'"
         ),
     )
 

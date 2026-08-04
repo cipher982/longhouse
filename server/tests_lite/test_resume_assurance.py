@@ -421,6 +421,6 @@ def test_codex_resume_intent_maps_exact_session_to_provider_thread(tmp_path) -> 
         "handoff": "terminal_command",
     }
 
-    receipt = _validate_resume_intent(args, session_id, intent)
+    receipt = _validate_resume_intent(args, session_id, intent, cwd=args.repo_root)
 
     assert receipt["identity_valid"] is True

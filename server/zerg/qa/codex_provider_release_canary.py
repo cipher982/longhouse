@@ -22,6 +22,8 @@ import subprocess
 import tempfile
 import termios
 import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -129,6 +131,113 @@ def _status(status: str, **fields: Any) -> dict[str, Any]:
     data = {"status": status}
     data.update(fields)
     return data
+
+
+def _post_runtime_json(
+    api_url: str,
+    agents_token: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    method: str = "POST",
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/{path.lstrip('/')}",
+        headers={
+            "X-Agents-Token": agents_token,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "LonghouseProviderFactory/1.0",
+        },
+        data=json.dumps(payload or {}, separators=(",", ":")).encode("utf-8") if method == "POST" else None,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read(4096).decode("utf-8", "replace")[:1000]
+        except OSError:
+            detail = ""
+        raise RuntimeError(f"Runtime Host {method} {path} failed with HTTP {exc.code}: {detail}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Runtime Host {method} {path} returned a non-object")
+    return result
+
+
+def _register_managed_codex_launch(
+    args: argparse.Namespace,
+    *,
+    cwd: Path,
+    session_id: str | None = None,
+    provider_thread_id: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    capabilities = _post_runtime_json(
+        args.api_url,
+        args.agents_token,
+        "api/agents/storage/v2/capabilities",
+        method="GET",
+    )
+    machine_name = str(capabilities.get("machine_id") or "").strip()
+    if not machine_name:
+        raise RuntimeError("Runtime Host storage capabilities did not return the authenticated machine identity")
+    payload: dict[str, Any] = {
+        "cwd": str(cwd),
+        "provider": "codex",
+        "project": "provider-factory",
+        "display_name": "Longhouse provider qualification",
+        "loop_mode": "assist",
+        "machine_name": machine_name,
+        "permission_mode": "provider_local",
+    }
+    if session_id is not None:
+        payload.update(
+            {
+                "session_id": session_id,
+                "resume_attempt_id": str(uuid.uuid4()),
+                "provider_thread_id": provider_thread_id,
+            }
+        )
+    response = _post_runtime_json(
+        args.api_url,
+        args.agents_token,
+        "api/sessions/managed-local/this-device",
+        payload,
+    )
+    returned_session_id = str(response.get("session_id") or "").strip()
+    returned_run_id = str(response.get("run_id") or "").strip()
+    coordination_token = str(response.get("coordination_token") or "").strip()
+    if not returned_session_id:
+        raise RuntimeError("Runtime Host returned no managed Codex session identity")
+    if not returned_run_id:
+        raise RuntimeError("Runtime Host returned no managed Codex run identity")
+    if session_id is not None and returned_session_id != session_id:
+        raise RuntimeError("Runtime Host returned a different Codex session during Resume registration")
+    if not coordination_token:
+        raise RuntimeError("Runtime Host returned no Codex coordination authority")
+    return response, machine_name
+
+
+def _report_managed_codex_launch_outcome(
+    args: argparse.Namespace,
+    *,
+    session_id: str,
+    run_id: str,
+    outcome: str,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    return _post_runtime_json(
+        args.api_url,
+        args.agents_token,
+        f"api/agents/sessions/{session_id}/launch-outcome",
+        {
+            "run_id": run_id,
+            "outcome": outcome,
+            "error_code": "provider_launch_failed" if outcome == "aborted" else None,
+            "error_message": error_message[:2000] if error_message else None,
+        },
+    )
 
 
 def _fail(code: str, message: str, **fields: Any) -> dict[str, Any]:
@@ -878,18 +987,31 @@ def _start_bridge(
     isolation_root: Path | None = None,
     resume_thread_id: str | None = None,
     resume_thread_path: str | None = None,
+    register_managed: bool = False,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str], Path]:
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
         raise RuntimeError("longhouse-engine binary was not found")
 
-    session_id = session_id or str(uuid.uuid4())
     isolation_root = isolation_root or Path(tempfile.mkdtemp(prefix=f"lhx-{launch_mode[:1]}-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
 
     create_initial_thread = launch_mode == "detached_ui" and not resume_thread_id
+    managed_response: dict[str, Any] | None = None
+    machine_name: str | None = None
+    launch_confirmed = False
+    if register_managed:
+        managed_response, machine_name = _register_managed_codex_launch(
+            args,
+            cwd=workspace,
+            session_id=None if create_initial_thread else session_id,
+            provider_thread_id=resume_thread_id,
+        )
+        session_id = str(managed_response["session_id"])
+    else:
+        session_id = session_id or str(uuid.uuid4())
+    log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
     command = [
         engine,
         "codex-bridge",
@@ -915,6 +1037,9 @@ def _start_bridge(
         str(args.bridge_start_timeout_secs),
         "--json",
     ]
+    if managed_response is not None:
+        command.extend(["--run-id", str(managed_response["run_id"])])
+        command.extend(["--machine-name", machine_name or "provider-factory"])
     if create_initial_thread:
         command.append("--create-initial-thread")
     if resume_thread_id:
@@ -937,21 +1062,56 @@ def _start_bridge(
         )
         _write_json(evidence_root / "codex-auth-receipt.json", auth_receipt)
     env["LONGHOUSE_CODEX_BRIDGE_TOKEN"] = args.agents_token
-    result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
-    if result.returncode != 0:
-        raise RuntimeError(json.dumps(_command_evidence(result, secrets=[args.agents_token])))
+    if managed_response is not None:
+        env["LONGHOUSE_COORDINATION_TOKEN"] = str(managed_response["coordination_token"])
     try:
-        summary = _load_json_stdout(result)
-    except ValueError as exc:
-        raise RuntimeError(
-            json.dumps(
-                {
-                    "error": str(exc),
-                    "evidence": _command_evidence(result, secrets=[args.agents_token]),
-                }
+        result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
+        if result.returncode != 0:
+            raise RuntimeError(json.dumps(_command_evidence(result, secrets=[args.agents_token])))
+        try:
+            summary = _load_json_stdout(result)
+        except ValueError as exc:
+            raise RuntimeError(
+                json.dumps(
+                    {
+                        "error": str(exc),
+                        "evidence": _command_evidence(result, secrets=[args.agents_token]),
+                    }
+                )
+            ) from exc
+        if managed_response is not None:
+            _report_managed_codex_launch_outcome(
+                args,
+                session_id=session_id,
+                run_id=str(managed_response["run_id"]),
+                outcome="confirmed",
             )
-        ) from exc
-    return summary, result, isolation_root
+            launch_confirmed = True
+            _write_json(
+                evidence_root / f"managed-launch-{launch_mode.replace('_', '-')}.json",
+                {
+                    "provider": "codex",
+                    "session_id": session_id,
+                    "run_id": managed_response["run_id"],
+                    "machine_name": machine_name,
+                    "launch_mode": launch_mode,
+                    "outcome": "confirmed",
+                },
+            )
+        return summary, result, isolation_root
+    except Exception as exc:
+        if managed_response is not None and not launch_confirmed:
+            try:
+                _report_managed_codex_launch_outcome(
+                    args,
+                    session_id=session_id,
+                    run_id=str(managed_response["run_id"]),
+                    outcome="aborted",
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+        raise
 
 
 def _managed_bridge_credentials_gap(args: argparse.Namespace) -> dict[str, Any] | None:

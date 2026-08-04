@@ -22,6 +22,7 @@ from typing import Any
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _qualification_secrets
+from zerg.qa.provider_native_resume import _redact_state_for_evidence
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -181,8 +182,14 @@ def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: f
     raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
 
 
-def _validate_resume_intent(args: argparse.Namespace, session_id: str, intent: dict[str, Any]) -> dict[str, Any]:
-    expected_argv = ["longhouse", "codex", "--cwd", str(args.repo_root), "--resume-session", session_id]
+def _validate_resume_intent(
+    args: argparse.Namespace,
+    session_id: str,
+    intent: dict[str, Any],
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    expected_argv = ["longhouse", "codex", "--cwd", str(cwd), "--resume-session", session_id]
     identity_valid = (
         intent.get("available") is True
         and intent.get("session_id") == session_id
@@ -432,6 +439,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             evidence_root=root,
             codex_bin=str(args.codex_bin),
             launch_mode="detached_ui",
+            register_managed=True,
         )
         session_id = str(initial_summary.get("session_id") or "")
         initial_state_file = Path(str(initial_summary.get("state_file") or ""))
@@ -457,7 +465,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         seed_marker = f"LONGHOUSE_CODEX_RESUME_SEED_{uuid.uuid4().hex}"
         _send_marker(args, isolation_root, session_id, seed_marker)
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
-        _write_json(root / "initial-bridge-state.json", initial_state)
+        _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         shutil.copy2(initial_thread_path, root / "initial-transcript.jsonl")
         _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
         old_pids = {int(value) for value in (initial_state.get("pid"), initial_state.get("app_server_pid")) if value}
@@ -475,7 +483,12 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("input addressed to the terminated Resume generation was accepted")
 
         resume_intent = _wait_resume_intent(args, session_id)
-        resume_intent_receipt = _validate_resume_intent(args, session_id, resume_intent)
+        resume_intent_receipt = _validate_resume_intent(
+            args,
+            session_id,
+            resume_intent,
+            cwd=isolation_root / "workspace",
+        )
 
         resumed_summary, _, _ = bridge_canary._start_bridge(
             args,
@@ -486,6 +499,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             isolation_root=isolation_root,
             resume_thread_id=thread_id,
             resume_thread_path=str(initial_thread_path),
+            register_managed=True,
         )
         resumed_state_file = Path(str(resumed_summary.get("state_file") or ""))
         ws_url = str(resumed_summary.get("ws_url") or "")
@@ -539,7 +553,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         )
         stale_input_receipt["assistant_marker_observed_after_resume"] = stale_generation_dispatched
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)
-        _write_json(root / "resumed-bridge-state.json", resumed_state)
+        _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         _write_json(root / "post-resume-send.json", send_summary)
         _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")

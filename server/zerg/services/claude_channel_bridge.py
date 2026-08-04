@@ -14,10 +14,7 @@ from zerg.services.managed_session_env import build_managed_session_env_exports
 
 CLAUDE_CHANNEL_SERVER_NAME = "longhouse-channel"
 CLAUDE_COORDINATION_SERVER_NAME = "longhouse-coordination"
-# Claude now exposes the approved native-channel surface as --channels. The
-# old development-only flag remains parseable in some releases but refuses to
-# load this channel at runtime.
-CLAUDE_CHANNEL_DEVELOPMENT_FLAG = "--channels"
+CLAUDE_CHANNEL_DEVELOPMENT_FLAG = "--dangerously-load-development-channels"
 
 
 def _quote(value: str) -> str:

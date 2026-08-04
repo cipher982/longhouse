@@ -1149,7 +1149,7 @@ def _run_claude_command_shape(binary: str) -> dict[str, Any]:
 
 
 def _run_claude_channels_shape(binary: str) -> dict[str, Any]:
-    argv = [binary, "--channels", "server:longhouse-channel", "--version"]
+    argv = [binary, "--dangerously-load-development-channels", "server:longhouse-channel", "--help"]
     try:
         result = subprocess.run(
             argv,
@@ -1161,16 +1161,19 @@ def _run_claude_channels_shape(binary: str) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _fail("claude_channels_probe_failed", f"{type(exc).__name__}: {exc}", argv=argv)
     output = f"{result.stdout}\n{result.stderr}"
-    if "unknown option --channels" in output or "Unknown option '--channels'" in output:
+    if (
+        "unknown option --dangerously-load-development-channels" in output
+        or "Unknown option '--dangerously-load-development-channels'" in output
+    ):
         return _fail(
             "claude_development_channels_contract_missing",
-            "Claude does not recognize the approved channel flag Longhouse needs for private MCP channels.",
+            "Claude does not recognize the development channel flag Longhouse needs for its private MCP channel.",
             evidence=_command_evidence(result),
         )
     if result.returncode != 0:
         return _fail(
             "claude_channels_probe_failed",
-            "Claude rejected the approved native channel flag.",
+            "Claude rejected the development channel flag Longhouse needs for its private MCP channel.",
             evidence=_command_evidence(result),
         )
     return _status("pass", evidence=_command_evidence(result))
