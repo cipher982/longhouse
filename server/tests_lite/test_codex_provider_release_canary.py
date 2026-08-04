@@ -90,6 +90,57 @@ def test_start_bridge_passes_isolated_environment_to_engine(
     assert environment["LONGHOUSE_CODEX_BRIDGE_TOKEN"] == "test-agents-token"
 
 
+def test_start_bridge_registers_and_confirms_managed_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    seen: dict[str, object] = {}
+    outcomes: list[dict[str, object]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["argv"] = argv
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, '{"state_file":"state.json"}\n', "")
+
+    monkeypatch.setattr(
+        canary,
+        "_register_managed_codex_launch",
+        lambda *args, **kwargs: (
+            {
+                "session_id": "session-1",
+                "run_id": "run-1",
+                "coordination_token": "coordination-secret",
+            },
+            "machine-1",
+        ),
+    )
+    monkeypatch.setattr(
+        canary,
+        "_report_managed_codex_launch_outcome",
+        lambda args, **kwargs: outcomes.append(dict(kwargs)) or {"recorded": True},
+    )
+    monkeypatch.setattr(canary, "_run", fake_run)
+
+    canary._start_bridge(
+        args,
+        evidence_root=tmp_path / "evidence",
+        codex_bin="/bin/codex",
+        launch_mode="detached_ui",
+        isolation_root=tmp_path / "isolation",
+        register_managed=True,
+    )
+
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert "--run-id" in argv and argv[argv.index("--run-id") + 1] == "run-1"
+    assert "--machine-name" in argv and argv[argv.index("--machine-name") + 1] == "machine-1"
+    environment = seen["env"]
+    assert isinstance(environment, dict)
+    assert environment["LONGHOUSE_COORDINATION_TOKEN"] == "coordination-secret"
+    assert outcomes == [{"session_id": "session-1", "run_id": "run-1", "outcome": "confirmed"}]
+
+
 def test_fake_app_server_binary_proves_installed_engine_permission_protocol(tmp_path: Path) -> None:
     engine = tmp_path / "longhouse-engine"
     engine.write_text(
