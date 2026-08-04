@@ -42,6 +42,7 @@ HEALTH_STATES = frozenset({"healthy", "degraded", "broken", "unknown"})
 PRODUCER_FRESHNESS_STATES = frozenset({"fresh", "stale", "unknown"})
 HEALTH_ARTIFACT_KIND = "installed_native_health_fault_matrix"
 HEALTH_SCHEMA_VERSION = 1
+MAX_HEALTH_OBSERVATION_AGE_SECONDS = 300.0
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -657,8 +658,9 @@ def _health_measurements(
     references: list[dict[str, str]] = []
     seen_paths: set[Path] = set()
     seen_hashes: set[str] = set()
-    seen_identities: set[tuple[str, str, tuple[str, ...]]] = set()
+    seen_identities: dict[tuple[str, str, tuple[str, ...]], str] = {}
     total = 0
+    run_count = 0
     broken_cases = 0
     false_red_cases = 0
     eligible_failure_cases = 0
@@ -742,16 +744,37 @@ def _health_measurements(
                 collected_at = observed.get("collected_at")
                 if _timestamp(collected_at, label=f"health result {index}.observed.collected_at") > generated_at:
                     raise ValueError(f"health result {index}.observed.collected_at is after health.generated_at")
+                collected_at_value = _timestamp(
+                    collected_at, label=f"health result {index}.observed.collected_at"
+                )
+                if (generated_at - collected_at_value).total_seconds() > MAX_HEALTH_OBSERVATION_AGE_SECONDS:
+                    raise ValueError(
+                        f"health result {index}.observed.collected_at is older than "
+                        f"{MAX_HEALTH_OBSERVATION_AGE_SECONDS:g} seconds before health.generated_at"
+                    )
                 validated_results.append(
                     (case, expected_state, observed_state, expected_action, set(suggested_actions))
                 )
+            if seen_cases != set(scenarios):
+                raise ValueError("health results must cover every declared scenario exactly once")
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    {"scenarios": scenarios, "results": results},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
         except ValueError as exc:
             invalid.append({"path": str(path), "error": str(exc)})
             continue
-        if identity in seen_identities:
+        prior_fingerprint = seen_identities.get(identity)
+        if prior_fingerprint is not None:
+            if prior_fingerprint != fingerprint:
+                invalid.append({"path": str(path), "error": "health artifact conflicts with an existing run identity"})
             continue
-        seen_identities.add(identity)
+        seen_identities[identity] = fingerprint
         references.append(_input_reference(path))
+        run_count += 1
         for _, expected_state, observed_state, expected_action, suggested in validated_results:
             total += 1
             if observed_state == "broken":
@@ -803,13 +826,15 @@ def _health_measurements(
             "source": references,
         },
     }
-    return references, {"case_count": total, "measurements": measurements}
+    return references, {"case_count": total, "run_count": run_count, "measurements": measurements}
 
 
 def _invalidate_health_summary(summary: dict[str, Any]) -> None:
     """Remove usable numeric claims when any health artifact is invalid."""
 
+    summary["input_status"] = "invalid"
     summary["case_count"] = 0
+    summary["run_count"] = 0
     for metric in summary["measurements"].values():
         metric["status"] = "not_observed"
         metric["reason"] = "one or more health artifacts failed validation"
@@ -951,6 +976,8 @@ def build_report(
     )
     if len(invalid) > invalid_before_health:
         _invalidate_health_summary(health_summary)
+    else:
+        health_summary["input_status"] = "valid" if health_inputs else "absent"
     invalid_before_dogfood = len(invalid)
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(
         dogfood_paths,

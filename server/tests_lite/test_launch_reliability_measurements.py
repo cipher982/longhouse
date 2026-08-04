@@ -405,6 +405,85 @@ def test_reserialized_health_artifact_is_counted_once(tmp_path: Path):
     assert report["measures"]["false_red_rate"]["denominator"] == 1
 
 
+def test_health_artifact_requires_every_declared_scenario(tmp_path: Path):
+    matrix = tmp_path / "truncated-health.json"
+    payload = _health_artifact(
+        [
+            {
+                "case": "missing_engine_status",
+                "expected": {"state": "broken", "action": "inspect_local_health"},
+                "observed": {
+                    "health_state": "broken",
+                    "suggested_action_ids": ["inspect_local_health"],
+                },
+            },
+            {
+                "case": "stale_projection",
+                "expected": {"state": "degraded", "action": "inspect_local_health"},
+                "observed": {"health_state": "degraded", "suggested_action_ids": []},
+            },
+        ]
+    )
+    payload["results"] = payload["results"][:1]
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["report_status"] == "invalid"
+    assert "cover every declared scenario" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["health_fault_matrix"]["case_count"] == 0
+
+
+def test_conflicting_health_artifact_identity_invalidates_the_batch(tmp_path: Path):
+    first = tmp_path / "first-health.json"
+    second = tmp_path / "conflicting-health.json"
+    payload = _health_artifact(
+        [
+            {
+                "case": "missing_engine_status",
+                "expected": {"state": "broken", "action": "inspect_local_health"},
+                "observed": {
+                    "health_state": "broken",
+                    "suggested_action_ids": ["inspect_local_health"],
+                },
+            }
+        ]
+    )
+    first.write_text(json.dumps(payload))
+    payload["results"][0]["observed"]["health_state"] = "healthy"
+    second.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[first, second])
+
+    assert report["report_status"] == "invalid"
+    assert "conflicts with an existing run identity" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["health_fault_matrix"]["case_count"] == 0
+
+
+def test_stale_health_observation_invalidates_the_artifact(tmp_path: Path):
+    matrix = tmp_path / "stale-health.json"
+    payload = _health_artifact(
+        [
+            {
+                "case": "missing_engine_status",
+                "expected": {"state": "broken", "action": "inspect_local_health"},
+                "observed": {
+                    "health_state": "broken",
+                    "suggested_action_ids": ["inspect_local_health"],
+                    "collected_at": "2026-08-04T12:00:00Z",
+                },
+            }
+        ]
+    )
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["report_status"] == "invalid"
+    assert "older than 300 seconds" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["health_fault_matrix"]["case_count"] == 0
+
+
 def test_malformed_health_label_invalidates_the_entire_artifact(tmp_path: Path):
     matrix = tmp_path / "health.json"
     matrix.write_text(
