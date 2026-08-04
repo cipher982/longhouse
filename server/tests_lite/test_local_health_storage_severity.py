@@ -91,6 +91,19 @@ def test_explicit_archive_pause_is_visible_without_backlog():
         canonical_sessions_invalid=False,
     ) == (False, True)
 
+    _state, _severity, headline, _reasons, _actions = _classify_health(
+        service={"status": "running"},
+        engine_status={"exists": True, "age_seconds": 1, "payload": {}},
+        transport_sample=None,
+        transport_assessment=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={"state": "complete", "mode": "paused"},
+        managed_summary={},
+        managed_sessions=[],
+    )
+    assert headline == "Longhouse archive repair is paused"
+
 
 def test_dead_letters_remain_the_primary_headline_when_archive_is_paused():
     state, severity, headline, reasons, _actions = _classify_health(

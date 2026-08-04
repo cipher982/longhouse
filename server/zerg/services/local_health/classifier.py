@@ -640,6 +640,8 @@ def _degraded_health_headline(
         headline = "A managed provider bridge state file is missing"
     elif "archive_dead_lettered" in reasons:
         headline = "Longhouse archive repair needs attention"
+    elif "archive_repair_paused" in reasons:
+        headline = "Longhouse archive repair is paused"
     elif "archive_repair_draining" in reasons:
         headline = (
             "Uploading archive backlog"
