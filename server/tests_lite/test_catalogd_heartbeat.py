@@ -366,6 +366,23 @@ def test_machine_health_projection_preserves_critical_evidence_after_size_fallba
     }
 
 
+def test_machine_health_projection_sanitizes_nonfinite_json_numbers():
+    row = _heartbeat(
+        device_id="cinder",
+        received_at=datetime.now(UTC),
+        digest="digest",
+    )
+    row["raw_json"] = '{"storage_v2_outbox":{"pending_bytes":1e999,"blocked_bytes":NaN,"blocked_source_count":2}}'
+
+    projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
+
+    assert projected["storage_v2_outbox"] == {
+        "blocked_bytes": None,
+        "blocked_source_count": 2,
+        "pending_bytes": None,
+    }
+
+
 @pytest.mark.asyncio
 async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(daemon_paths):
     database_path, socket_path = daemon_paths

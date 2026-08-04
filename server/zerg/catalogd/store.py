@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 from contextlib import contextmanager
 from datetime import UTC
@@ -9900,7 +9901,12 @@ def _decode_machine_health_raw_json(value: object) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     try:
-        decoded = json.loads(str(value or "{}"), parse_int=_parse_machine_health_int)
+        decoded = json.loads(
+            str(value or "{}"),
+            parse_constant=lambda _value: None,
+            parse_float=_parse_machine_health_float,
+            parse_int=_parse_machine_health_int,
+        )
     except json.JSONDecodeError as exc:
         raise RuntimeError("machine health heartbeat JSON is invalid") from exc
     if not isinstance(decoded, dict):
@@ -9916,9 +9922,16 @@ def _parse_machine_health_int(value: str) -> int | None:
     return parsed if 0 <= parsed <= _MACHINE_HEALTH_MAX_U64 else None
 
 
+def _parse_machine_health_float(value: str) -> float | None:
+    parsed = float(value)
+    return parsed if math.isfinite(parsed) else None
+
+
 def _sanitize_machine_health_value(value: Any) -> Any:
     if isinstance(value, int) and not isinstance(value, bool):
         return value if 0 <= value <= _MACHINE_HEALTH_MAX_U64 else None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {str(key): _sanitize_machine_health_value(item) for key, item in value.items()}
     if isinstance(value, list):
