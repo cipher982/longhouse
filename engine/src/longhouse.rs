@@ -16,7 +16,8 @@ mod managed_terminal;
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use managed_launch_lifecycle::{
-    register_managed_launch, register_managed_launch_with_timeout, ManagedLaunchResponse,
+    register_managed_launch, register_managed_launch_with_timeout,
+    spawn_managed_launch_registration_retry, ManagedLaunchRegistrationRetry, ManagedLaunchResponse,
     ManagedLaunchTransaction,
 };
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
@@ -29,7 +30,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -902,117 +903,6 @@ fn write_claude_degraded_mcp_config(session_id: &str) -> anyhow::Result<PrivateT
     Ok(PrivateTempFile { path })
 }
 
-struct ClaudeRegistrationRetry {
-    provider_alive: Arc<AtomicBool>,
-    cancel: Arc<AtomicBool>,
-}
-
-impl Drop for ClaudeRegistrationRetry {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
-    }
-}
-
-fn spawn_claude_registration_retry(
-    url: &str,
-    token: &str,
-    payload: serde_json::Value,
-    session_id: &str,
-) -> ClaudeRegistrationRetry {
-    let url = url.to_string();
-    let token = token.to_string();
-    let session_id = session_id.to_string();
-    let provider_alive = Arc::new(AtomicBool::new(false));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let provider_alive_for_thread = Arc::clone(&provider_alive);
-    let cancel_for_thread = Arc::clone(&cancel);
-    std::thread::spawn(move || {
-        for attempt in 0..5 {
-            if cancel_for_thread.load(Ordering::Acquire) {
-                return;
-            }
-            let Ok(runtime) = tokio::runtime::Runtime::new() else {
-                return;
-            };
-            match register_managed_launch_with_timeout(
-                &runtime,
-                &url,
-                &token,
-                "Claude degraded",
-                &payload,
-                Some(&session_id),
-                Duration::from_secs(2),
-            ) {
-                Ok(response) => {
-                    if response.provider_session_id.as_deref()
-                        != payload.get("provider_session_id").and_then(|value| value.as_str())
-                    {
-                        eprintln!(
-                            "Longhouse warning: degraded Claude registration returned a different provider identity"
-                        );
-                        let _transaction = ManagedLaunchTransaction::new(
-                            &runtime,
-                            &url,
-                            &token,
-                            &response.session_id,
-                            &response.run_id,
-                        );
-                    } else {
-                        let mut transaction = ManagedLaunchTransaction::new(
-                            &runtime,
-                            &url,
-                            &token,
-                            &response.session_id,
-                            &response.run_id,
-                        );
-                        for _ in 0..100 {
-                            if cancel_for_thread.load(Ordering::Acquire) {
-                                return;
-                            }
-                            if provider_alive_for_thread.load(Ordering::Acquire) {
-                                if let Err(error) = transaction.confirm() {
-                                    eprintln!(
-                                        "Longhouse warning: recovered Claude registration could not be confirmed: {error:#}"
-                                    );
-                                }
-                                return;
-                            }
-                            std::thread::sleep(Duration::from_millis(100));
-                        }
-                        eprintln!(
-                            "Longhouse warning: Claude exited before recovered registration became ready"
-                        );
-                    }
-                    return;
-                }
-                Err(error) if attempt < 4 => {
-                    for _ in 0..2_u64.pow(attempt) {
-                        if cancel_for_thread.load(Ordering::Acquire) {
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-                    if attempt == 0 {
-                        eprintln!(
-                            "Longhouse warning: Runtime Host is still unavailable; Claude is running locally and registration will retry"
-                        );
-                    }
-                    let _ = error;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "Longhouse warning: could not recover Claude Helm registration: {error:#}"
-                    );
-                }
-            }
-        }
-    });
-    ClaudeRegistrationRetry {
-        provider_alive,
-        cancel,
-    }
-}
-
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
@@ -1082,11 +972,15 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         payload["session_id"] = json!(Uuid::new_v4().to_string());
         payload["provider_session_id"] = json!(Uuid::new_v4().to_string());
     }
-    let mut degraded_registration: Option<ClaudeRegistrationRetry> = None;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
     let expected_session_id = if resume_target.is_some() {
-        resume_target.as_ref().map(|target| target.session_id.as_str())
+        resume_target
+            .as_ref()
+            .map(|target| target.session_id.as_str())
     } else {
-        payload.get("session_id").and_then(serde_json::Value::as_str)
+        payload
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
     };
     let registration = if resume_target.is_some() {
         register_managed_launch(
@@ -1121,11 +1015,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 .get("session_id")
                 .and_then(serde_json::Value::as_str)
                 .context("Claude degraded launch lost its client-minted session identity")?;
-            degraded_registration = Some(spawn_claude_registration_retry(
+            degraded_registration = Some(spawn_managed_launch_registration_retry(
                 &url,
                 &token,
+                "Claude",
                 payload.clone(),
                 session_id,
+                "claude_channel_bridge",
             ));
             eprintln!(
                 "Longhouse warning: starting Claude in degraded Helm mode; durable upload will catch up if the Runtime Host recovers, while remote control is unavailable until registration recovers ({error:#})"
@@ -1137,7 +1033,12 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let session_id = response
         .as_ref()
         .map(|response| response.session_id.clone())
-        .or_else(|| payload.get("session_id").and_then(|value| value.as_str()).map(str::to_owned))
+        .or_else(|| {
+            payload
+                .get("session_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
         .context("degraded Claude launch has no session identity")?;
     let run_id = response
         .as_ref()
@@ -1152,17 +1053,32 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let provider_session_id = response
         .as_ref()
         .and_then(|response| response.provider_session_id.clone())
-        .or_else(|| payload.get("provider_session_id").and_then(|value| value.as_str()).map(str::to_owned))
+        .or_else(|| {
+            payload
+                .get("provider_session_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
         .context("Longhouse did not return a Claude provider session")?;
     let mut launch_transaction = response.as_ref().map(|response| {
-        ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
+        ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        )
     });
     if let Some(response) = response.as_ref() {
         response.validate_transport("Claude", "claude_channel_bridge")?;
         let expected_provider_session_id = resume_target
             .as_ref()
             .map(|target| target.provider_session_id.as_str())
-            .or_else(|| payload.get("provider_session_id").and_then(|value| value.as_str()));
+            .or_else(|| {
+                payload
+                    .get("provider_session_id")
+                    .and_then(|value| value.as_str())
+            });
         if response.provider_session_id.as_deref() != expected_provider_session_id {
             drop(launch_transaction);
             anyhow::bail!("Claude registration returned a different provider session; the new run was aborted");
@@ -1181,7 +1097,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .and_then(|response| response.hook_token.as_deref())
         .unwrap_or(&token);
     let coordination_token = match response.as_ref() {
-        Some(response) => Some(response.require_authority("Claude", "claude_channel_bridge")?.to_owned()),
+        Some(response) => Some(
+            response
+                .require_authority("Claude", "claude_channel_bridge")?
+                .to_owned(),
+        ),
         None => None,
     };
     let mcp_config = if let Some(coordination_token) = coordination_token.as_deref() {
@@ -1241,7 +1161,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             provider_alive.store(true, Ordering::Release);
         }
         match launch_transaction.as_mut() {
-            Some(transaction) => transaction.confirm(),
+            Some(transaction) => {
+                transaction.confirm_in_background();
+                Ok(())
+            }
             None => Ok(()),
         }
     });
@@ -1307,7 +1230,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             ("resume_attempt_id", json!(Uuid::new_v4().to_string())),
             ("provider_thread_id", json!(target.provider_session_id)),
         ],
-        None => vec![],
+        None => vec![("session_id", json!(Uuid::new_v4().to_string()))],
     };
     let mut payload = ManagedLaunchRegistration {
         provider: "opencode",
@@ -1329,28 +1252,64 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         payload["launch_surface"] = json!(surface);
     }
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(
-        &runtime,
-        &url,
-        &token,
-        if resume_target.is_some() {
-            "OpenCode resume"
-        } else {
-            "OpenCode"
-        },
-        &payload,
-        resume_target
-            .as_ref()
-            .map(|target| target.session_id.as_str()),
-    )?;
-    let mut launch_transaction = ManagedLaunchTransaction::new(
-        &runtime,
-        &url,
-        &token,
-        &response.session_id,
-        &response.run_id,
-    );
-    let coordination_token = response.require_authority("OpenCode", "opencode_server_bridge")?;
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .context("OpenCode launch lost its session identity")?;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
+    let response = if resume_target.is_some() {
+        register_managed_launch(
+            &runtime,
+            &url,
+            &token,
+            "OpenCode resume",
+            &payload,
+            Some(expected_session_id),
+        )?
+    } else {
+        match register_managed_launch_with_timeout(
+            &runtime,
+            &url,
+            &token,
+            "OpenCode",
+            &payload,
+            Some(expected_session_id),
+            Duration::from_millis(750),
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                degraded_registration = Some(spawn_managed_launch_registration_retry(
+                    &url,
+                    &token,
+                    "OpenCode",
+                    payload.clone(),
+                    expected_session_id,
+                    "opencode_server_bridge",
+                ));
+                eprintln!(
+                    "Longhouse warning: starting OpenCode in degraded Helm mode; local provider ownership is active and registration will retry while this Helm wrapper remains alive ({error:#})"
+                );
+                ManagedLaunchResponse::degraded_from_payload(
+                    &payload,
+                    "OpenCode",
+                    "opencode_server_bridge",
+                )?
+            }
+        }
+    };
+    response.validate_transport("OpenCode", "opencode_server_bridge")?;
+    let mut launch_transaction = if degraded_registration.is_none() {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ))
+    } else {
+        None
+    };
+    let coordination_token = response.coordination_token().map(str::to_owned);
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -1377,8 +1336,12 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             } else {
                 "detached"
             },
-        ])
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        ]);
+    if let Some(coordination_token) = coordination_token.as_deref() {
+        start.env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+    } else {
+        start.env_remove("LONGHOUSE_COORDINATION_TOKEN");
+    }
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
     }
@@ -1392,6 +1355,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     let output = start.output().context("start native OpenCode bridge")?;
     if !output.status.success() {
+        if let Some(registration) = &degraded_registration {
+            registration.provider_alive.store(false, Ordering::Release);
+        }
         let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
         anyhow::bail!(
             "OpenCode bridge failed: {}",
@@ -1407,6 +1373,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             return Err(error);
         }
     };
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(true, Ordering::Release);
+    }
     if resume_target
         .as_ref()
         .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
@@ -1414,9 +1383,8 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
-        return Err(error);
+    if let Some(transaction) = launch_transaction.as_mut() {
+        transaction.confirm_in_background();
     }
     println!(
         "Managed OpenCode ready\n→ {}/s/{}",
@@ -1436,6 +1404,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             "Attach: longhouse opencode attach --session-id {}",
             response.session_id
         );
+        if let Some(registration) = &degraded_registration {
+            registration.provider_alive.store(true, Ordering::Release);
+        }
         return Ok(());
     }
     let mut attach = Command::new(&bridge);
@@ -1866,19 +1837,67 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         } else {
             PermissionMode::ProviderLocal
         },
-        extra: vec![],
+        extra: vec![("session_id", json!(Uuid::new_v4().to_string()))],
     }
     .to_json();
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(&runtime, &url, &token, "Codex", &payload, None)?;
-    let mut launch_transaction = ManagedLaunchTransaction::new(
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .context("Codex launch lost its client-minted session identity")?;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
+    let response = match register_managed_launch_with_timeout(
         &runtime,
         &url,
         &token,
-        &response.session_id,
-        &response.run_id,
-    );
-    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
+        "Codex",
+        &payload,
+        Some(expected_session_id),
+        Duration::from_millis(750),
+    ) {
+        Ok(response) => Some(response),
+        Err(error) => {
+            let response = ManagedLaunchResponse::degraded_from_payload(
+                &payload,
+                "Codex",
+                "codex_app_server",
+            )?;
+            degraded_registration = Some(spawn_managed_launch_registration_retry(
+                &url,
+                &token,
+                "Codex",
+                payload.clone(),
+                expected_session_id,
+                "codex_app_server",
+            ));
+            eprintln!(
+                "Longhouse warning: starting Codex in degraded Helm mode; local provider ownership is active and registration will retry while this Helm wrapper remains alive ({error:#})"
+            );
+            Some(response)
+        }
+    };
+    if let Some(response) = response.as_ref() {
+        if let Some(registered) = response.managed_transport.as_deref() {
+            if registered != "codex_app_server" {
+                anyhow::bail!(
+                    "Runtime Host returned an unsupported managed-local transport for Codex (expected codex_app_server, got {registered})"
+                );
+            }
+        }
+    }
+    let response = response.context("Codex launch has no local session identity")?;
+    let mut launch_transaction = if degraded_registration.is_none() {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ))
+    } else {
+        None
+    };
+    let coordination_token = response.coordination_token().map(str::to_owned);
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
@@ -1906,8 +1925,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             launch_mode,
             "--json",
         ])
-        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token)
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token);
+    if let Some(coordination_token) = coordination_token.as_deref() {
+        bridge.env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+    } else {
+        bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN");
+    }
     if !attach {
         bridge.arg("--create-initial-thread");
     }
@@ -1919,6 +1942,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     }
     let output = bridge.output().context("start native Codex bridge")?;
     if !output.status.success() {
+        if let Some(registration) = &degraded_registration {
+            registration.provider_alive.store(false, Ordering::Release);
+        }
         anyhow::bail!(
             "Codex bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -1926,6 +1952,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     }
     let bridge: BridgeStartResponse =
         serde_json::from_slice(&output.stdout).context("parse native Codex bridge response")?;
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(true, Ordering::Release);
+    }
     if !attach
         && bridge
             .thread_id
@@ -1939,13 +1968,8 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        let _ = stop_codex_bridge(
-            &response.session_id,
-            Some(response.run_id.as_str()),
-            "launch_confirmation_failed",
-        );
-        return Err(error);
+    if let Some(transaction) = launch_transaction.as_mut() {
+        transaction.confirm_in_background();
     }
     println!(
         "Managed Codex ready\n→ {}/s/{}",
@@ -1964,6 +1988,13 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "Attach: longhouse codex attach --session-id {}",
             response.session_id
         );
+        // The bridge owns the provider after this process exits. A future
+        // durable registration worker will take over retries for detached
+        // launches; do not pretend this wrapper can keep the retry thread
+        // alive after returning.
+        if let Some(registration) = &degraded_registration {
+            registration.provider_alive.store(true, Ordering::Release);
+        }
         return Ok(());
     }
     if let Err(error) = record_codex_contract(
@@ -2096,10 +2127,7 @@ fn launch_managed_codex_resume(
         stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
         anyhow::bail!("Codex resumed a different provider thread; the new run was stopped");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
-        return Err(error);
-    }
+    launch_transaction.confirm_in_background();
     if let Err(error) = record_codex_contract(
         &response.session_id,
         cwd,
@@ -2655,9 +2683,8 @@ fn wait_for_child_or_signal(
             }
 
             let mut raw_status = 0;
-            let waited = unsafe {
-                libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED)
-            };
+            let waited =
+                unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED) };
             if waited == pid {
                 if libc::WIFEXITED(raw_status) {
                     return Ok(libc::WEXITSTATUS(raw_status));
@@ -2718,10 +2745,7 @@ fn terminate_child(child: &mut std::process::Child, process_group: Option<libc::
 }
 
 #[cfg(unix)]
-fn terminate_and_reap_child(
-    child: &mut std::process::Child,
-    process_group: Option<libc::pid_t>,
-) {
+fn terminate_and_reap_child(child: &mut std::process::Child, process_group: Option<libc::pid_t>) {
     terminate_child(child, process_group);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -2824,9 +2848,7 @@ fn run_managed_provider_trampoline(args: ManagedProviderTrampolineArgs) -> anyho
 }
 
 #[cfg(not(unix))]
-fn run_managed_provider_trampoline(
-    _args: ManagedProviderTrampolineArgs,
-) -> anyhow::Result<()> {
+fn run_managed_provider_trampoline(_args: ManagedProviderTrampolineArgs) -> anyhow::Result<()> {
     anyhow::bail!("managed provider terminal handoff is unsupported on this platform")
 }
 
@@ -2872,10 +2894,7 @@ fn run_foreground_command_after_spawn(
     let child_release_write = release_fds[1];
 
     let program = command.get_program().to_os_string();
-    let provider_args = command
-        .get_args()
-        .map(OsString::from)
-        .collect::<Vec<_>>();
+    let provider_args = command.get_args().map(OsString::from).collect::<Vec<_>>();
     let provider_env = command
         .get_envs()
         .map(|(key, value)| (key.to_os_string(), value.map(OsString::from)))

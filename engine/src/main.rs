@@ -1649,8 +1649,7 @@ fn main() -> anyhow::Result<()> {
                     claude_dir,
                     launch_mode,
                     resume_provider_session_id,
-                    coordination_token: std::env::var("LONGHOUSE_COORDINATION_TOKEN")
-                        .unwrap_or_default(),
+                    coordination_token: std::env::var("LONGHOUSE_COORDINATION_TOKEN").ok(),
                 })?;
                 println!("{}", serde_json::to_string(&result)?);
             }

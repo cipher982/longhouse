@@ -23,7 +23,10 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use uuid::Uuid;
 
-use crate::managed_launch_lifecycle::ManagedLaunchResponse;
+use crate::managed_launch_lifecycle::{
+    register_managed_launch_with_timeout, spawn_managed_launch_registration_retry,
+    ManagedLaunchRegistrationRetry, ManagedLaunchResponse,
+};
 
 const STATE_DIR: &str = "managed-local/cursor-helm";
 
@@ -427,12 +430,12 @@ fn coordination_token(
     config: &LaunchConfig,
     registration: Option<&ManagedLaunchResponse>,
     session_id: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     if let Some(token) = registration.and_then(ManagedLaunchResponse::coordination_token) {
-        return Ok(token.to_owned());
+        return Ok(Some(token.to_owned()));
     }
     if config.resume_session.is_none() {
-        anyhow::bail!("Longhouse did not issue coordination authority for this session");
+        return Ok(None);
     }
     let machine = home(config.config_dir.as_deref())?.join("machine");
     let state: Value = serde_json::from_slice(&fs::read(machine.join("state.json"))?)?;
@@ -476,6 +479,7 @@ fn coordination_token(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
+            .map(Some)
             .context("Longhouse returned empty coordination authority")
     })
 }
@@ -629,14 +633,16 @@ pub fn serve_coordination_mcp() -> anyhow::Result<()> {
     ))
 }
 
-fn register(
+fn registration_payload(
     config: &LaunchConfig,
     cwd: &Path,
     session_id: &str,
     permission_mode: &str,
     resume_provider_thread_id: Option<&str>,
-) -> anyhow::Result<ManagedLaunchResponse> {
-    let (url, token, machine_name) = registration_credentials(config)?;
+) -> anyhow::Result<Value> {
+    let machine_name = registration_credentials(config)
+        .map(|(_, _, machine_name)| machine_name)
+        .unwrap_or_else(|_| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
     let mut payload = crate::managed_launch_payload::ManagedLaunchRegistration {
         provider: "cursor",
         cwd,
@@ -669,8 +675,27 @@ fn register(
     if let Some(surface) = launch_surface {
         payload["launch_surface"] = json!(surface);
     }
+    Ok(payload)
+}
+
+fn register(
+    config: &LaunchConfig,
+    cwd: &Path,
+    session_id: &str,
+    permission_mode: &str,
+    resume_provider_thread_id: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Result<ManagedLaunchResponse> {
+    let (url, token, _) = registration_credentials(config)?;
+    let payload = registration_payload(
+        config,
+        cwd,
+        session_id,
+        permission_mode,
+        resume_provider_thread_id,
+    )?;
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = crate::managed_launch_lifecycle::register_managed_launch(
+    let response = register_managed_launch_with_timeout(
         &runtime,
         &url,
         &token,
@@ -681,8 +706,8 @@ fn register(
         },
         &payload,
         Some(session_id),
+        timeout,
     )?;
-    response.require_authority("Cursor", crate::cursor_helm_control::CURSOR_HELM_TRANSPORT)?;
     Ok(response)
 }
 
@@ -968,25 +993,79 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         anyhow::bail!("Cursor Helm session {session_id} is already attached");
     }
     let launch_id = Uuid::new_v4().to_string();
-    // Creation and cold Resume use the same server transaction. A failed
-    // registration must stop before cursor-agent owns the provider thread.
-    let registered = register(
+    let payload = registration_payload(
         &config,
         &cwd,
         &session_id,
         &permission_mode,
         resume_conversation.as_deref(),
-    )
-    .context("register Cursor Helm launch")?;
-    let (lifecycle_url, lifecycle_token, _) = registration_credentials(&config)?;
+    )?;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
+    let registered = if config.resume_session.is_some() {
+        register(
+            &config,
+            &cwd,
+            &session_id,
+            &permission_mode,
+            resume_conversation.as_deref(),
+            Duration::from_secs(10),
+        )?
+    } else {
+        match registration_credentials(&config) {
+            Ok((url, token, _)) => match register(
+                &config,
+                &cwd,
+                &session_id,
+                &permission_mode,
+                resume_conversation.as_deref(),
+                Duration::from_millis(750),
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    degraded_registration = Some(spawn_managed_launch_registration_retry(
+                        &url,
+                        &token,
+                        "Cursor",
+                        payload.clone(),
+                        &session_id,
+                        crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+                    ));
+                    eprintln!(
+                        "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and registration will retry while this Helm wrapper remains alive ({error:#})"
+                    );
+                    ManagedLaunchResponse::degraded_from_payload(
+                        &payload,
+                        "Cursor",
+                        crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+                    )?
+                }
+            },
+            Err(error) => {
+                eprintln!(
+                    "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and registration is unavailable ({error:#})"
+                );
+                ManagedLaunchResponse::degraded_from_payload(
+                    &payload,
+                    "Cursor",
+                    crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+                )?
+            }
+        }
+    };
+    registered.validate_transport("Cursor", crate::cursor_helm_control::CURSOR_HELM_TRANSPORT)?;
+    let lifecycle_credentials = registration_credentials(&config).ok();
     let lifecycle_runtime = tokio::runtime::Runtime::new()?;
-    let mut launch_transaction = crate::managed_launch_lifecycle::ManagedLaunchTransaction::new(
-        &lifecycle_runtime,
-        &lifecycle_url,
-        &lifecycle_token,
-        &registered.session_id,
-        &registered.run_id,
-    );
+    let mut launch_transaction = lifecycle_credentials.as_ref().and_then(|(url, token, _)| {
+        degraded_registration.is_none().then(|| {
+            crate::managed_launch_lifecycle::ManagedLaunchTransaction::new(
+                &lifecycle_runtime,
+                url,
+                token,
+                &registered.session_id,
+                &registered.run_id,
+            )
+        })
+    });
     let hook_url = config.url.clone().or_else(|| {
         home(config.config_dir.as_deref()).ok().and_then(|root| {
             fs::read(root.join("machine/state.json"))
@@ -1199,7 +1278,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         let now = Utc::now().to_rfc3339();
         write_json(
             &dir.join(format!("{session_id}.json")),
-            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":"registered","started_at":now,"updated_at":now}),
+            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if degraded_registration.is_some() { "degraded" } else { "registered" },"started_at":now,"updated_at":now}),
         )?;
         let terminal = Terminal(0, raw(0)?);
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
@@ -1219,20 +1298,17 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 libc::close(master);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
+            if let Some(registration) = &degraded_registration {
+                registration.provider_alive.store(false, Ordering::Release);
+            }
             return Err(error);
         }
     };
-    if let Err(error) = launch_transaction.confirm() {
-        drop(terminal);
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-            if slave_hold >= 0 {
-                libc::close(slave_hold);
-            }
-            libc::close(master);
-            libc::waitpid(pid, std::ptr::null_mut(), 0);
-        }
-        return Err(error);
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(true, Ordering::Release);
+    }
+    if let Some(transaction) = launch_transaction.as_mut() {
+        transaction.confirm_in_background();
     }
     sync_winsize(master);
     let socket_stop = stop.clone();
@@ -1258,7 +1334,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                     &server_session,
                     &server_conversation,
                     &server_launch,
-                    Some(&server_coordination_token),
+                    server_coordination_token.as_deref(),
                 ),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(std::time::Duration::from_millis(25))
@@ -1366,6 +1442,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     );
     unsafe {
         libc::close(master);
+    }
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(false, Ordering::Release);
     }
     if config.open {
         if let Some(url) = hook_url.as_deref() {
@@ -1582,7 +1661,7 @@ mod tests {
 
         assert_eq!(
             coordination_token(&config, None, "11111111-1111-4111-8111-111111111111").unwrap(),
-            "resumed-secret"
+            Some("resumed-secret".to_string())
         );
         server.join().unwrap();
     }

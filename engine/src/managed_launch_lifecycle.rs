@@ -8,6 +8,11 @@
 use anyhow::Context;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
 
 const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -24,6 +29,41 @@ pub struct ManagedLaunchResponse {
 }
 
 impl ManagedLaunchResponse {
+    /// Build the local side of a degraded Helm launch. The provider owns the
+    /// first process locally; registration can converge later using the same
+    /// client-minted identities.
+    pub fn degraded_from_payload(
+        payload: &Value,
+        provider_name: &str,
+        expected_transport: &str,
+    ) -> anyhow::Result<Self> {
+        let session_id = payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("degraded {provider_name} launch has no session identity"))?;
+        let run_id = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_URL,
+            format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+        )
+        .to_string();
+        Ok(Self {
+            session_id: session_id.to_owned(),
+            run_id,
+            provider_session_id: payload
+                .get("provider_session_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            permission_mode: payload
+                .get("permission_mode")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            hook_token: None,
+            managed_transport: Some(expected_transport.to_owned()),
+            coordination_token: None,
+        })
+    }
+
     pub fn validate_transport(
         &self,
         provider_name: &str,
@@ -53,6 +93,131 @@ impl ManagedLaunchResponse {
         self.validate_transport(provider_name, expected_transport)?;
         self.coordination_token()
             .context("Longhouse did not issue coordination authority for this session")
+    }
+}
+
+/// A bounded owner-local recovery loop for an initially unreachable Runtime
+/// Host. It never owns the provider process and is cancelled when the launch
+/// wrapper exits. Successful registration confirms the same run identity; it
+/// does not silently create a second session.
+pub struct ManagedLaunchRegistrationRetry {
+    pub provider_alive: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for ManagedLaunchRegistrationRetry {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+
+pub fn spawn_managed_launch_registration_retry(
+    url: &str,
+    token: &str,
+    provider_name: &str,
+    payload: Value,
+    expected_session_id: &str,
+    expected_transport: &str,
+) -> ManagedLaunchRegistrationRetry {
+    let url = url.to_owned();
+    let token = token.to_owned();
+    let provider_name = provider_name.to_owned();
+    let expected_session_id = expected_session_id.to_owned();
+    let expected_transport = expected_transport.to_owned();
+    let provider_alive = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let provider_alive_for_thread = Arc::clone(&provider_alive);
+    let cancel_for_thread = Arc::clone(&cancel);
+    thread::spawn(move || {
+        let mut delay = std::time::Duration::from_secs(1);
+        for attempt in 0..16 {
+            if cancel_for_thread.load(Ordering::Acquire) {
+                return;
+            }
+            let Ok(runtime) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            match register_managed_launch_with_timeout(
+                &runtime,
+                &url,
+                &token,
+                &provider_name,
+                &payload,
+                Some(&expected_session_id),
+                std::time::Duration::from_secs(2),
+            ) {
+                Ok(response) => {
+                    if let Err(error) =
+                        response.validate_transport(&provider_name, &expected_transport)
+                    {
+                        eprintln!(
+                            "Longhouse warning: recovered {provider_name} registration returned an invalid transport: {error:#}"
+                        );
+                        return;
+                    }
+                    if let Some(expected_provider_session_id) = payload
+                        .get("provider_session_id")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                    {
+                        if response.provider_session_id.as_deref()
+                            != Some(expected_provider_session_id)
+                        {
+                            eprintln!(
+                                "Longhouse warning: recovered {provider_name} registration returned a different provider identity"
+                            );
+                            return;
+                        }
+                    }
+                    let mut transaction = ManagedLaunchTransaction::new(
+                        &runtime,
+                        &url,
+                        &token,
+                        &response.session_id,
+                        &response.run_id,
+                    );
+                    while !cancel_for_thread.load(Ordering::Acquire)
+                        && !provider_alive_for_thread.load(Ordering::Acquire)
+                    {
+                        thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    if cancel_for_thread.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if let Err(error) = transaction.confirm() {
+                        eprintln!(
+                            "Longhouse warning: recovered {provider_name} registration could not be confirmed: {error:#}"
+                        );
+                    }
+                    return;
+                }
+                Err(error) if attempt < 15 => {
+                    if attempt == 0 {
+                        eprintln!(
+                            "Longhouse warning: Runtime Host is still unavailable; {provider_name} is running locally and registration will retry"
+                        );
+                    }
+                    let deadline = std::time::Instant::now() + delay;
+                    while !cancel_for_thread.load(Ordering::Acquire)
+                        && std::time::Instant::now() < deadline
+                    {
+                        thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    delay =
+                        std::cmp::min(delay.saturating_mul(2), std::time::Duration::from_secs(60));
+                    let _ = error;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Longhouse warning: could not recover {provider_name} Helm registration within the retry budget: {error:#}"
+                    );
+                }
+            }
+        }
+    });
+    ManagedLaunchRegistrationRetry {
+        provider_alive,
+        cancel,
     }
 }
 
@@ -100,6 +265,51 @@ impl<'a> ManagedLaunchTransaction<'a> {
         ))?;
         self.confirmed = true;
         Ok(())
+    }
+
+    /// Confirm without making provider terminal ownership wait on the
+    /// Runtime Host. The launch is already locally usable; the receipt is a
+    /// remote convergence detail and is retried in a detached worker.
+    pub fn confirm_in_background(&mut self) {
+        if self.confirmed {
+            return;
+        }
+        self.confirmed = true;
+        let url = self.url.to_owned();
+        let device_token = self.device_token.to_owned();
+        let session_id = self.session_id.to_owned();
+        let run_id = self.run_id.to_owned();
+        thread::spawn(move || {
+            let mut delay = std::time::Duration::from_millis(250);
+            for attempt in 0..4 {
+                let Ok(runtime) = tokio::runtime::Runtime::new() else {
+                    return;
+                };
+                match runtime.block_on(report_launch_outcome(
+                    &url,
+                    &device_token,
+                    &session_id,
+                    &run_id,
+                    LaunchOutcome::Confirmed,
+                    None,
+                )) {
+                    Ok(()) => return,
+                    Err(error) if attempt < 3 => {
+                        thread::sleep(delay);
+                        delay = std::cmp::min(
+                            delay.saturating_mul(2),
+                            std::time::Duration::from_secs(2),
+                        );
+                        let _ = error;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Longhouse warning: managed launch receipt could not be confirmed after local startup: {error:#}"
+                        );
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -331,5 +541,28 @@ mod tests {
         assert!(response
             .require_authority("Codex", "codex_app_server")
             .is_err());
+    }
+
+    #[test]
+    fn degraded_response_preserves_client_minted_identity() {
+        let payload = serde_json::json!({
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "provider_session_id": "22222222-2222-4222-8222-222222222222",
+            "permission_mode": "provider_local"
+        });
+        let response = ManagedLaunchResponse::degraded_from_payload(
+            &payload,
+            "Codex",
+            "codex_app_server",
+        )
+        .unwrap();
+        assert_eq!(response.session_id, payload["session_id"]);
+        assert_eq!(
+            response.provider_session_id.as_deref(),
+            payload["provider_session_id"].as_str()
+        );
+        assert_eq!(response.permission_mode.as_deref(), Some("provider_local"));
+        assert_eq!(response.managed_transport.as_deref(), Some("codex_app_server"));
+        assert!(!response.run_id.is_empty());
     }
 }

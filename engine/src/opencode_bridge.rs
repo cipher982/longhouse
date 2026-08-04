@@ -31,7 +31,10 @@ pub struct StartConfig {
     pub claude_dir: Option<PathBuf>,
     pub launch_mode: String,
     pub resume_provider_session_id: Option<String>,
-    pub coordination_token: String,
+    /// Absent during degraded Helm startup. The stock provider and local
+    /// bridge remain usable; the Runtime Host can attach coordination
+    /// authority when registration catches up.
+    pub coordination_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -67,10 +70,11 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     ) {
         bail!("unsupported OpenCode launch mode");
     }
-    let coordination_token = config.coordination_token.trim();
-    if coordination_token.is_empty() {
-        bail!("Longhouse did not issue coordination authority for this session");
-    }
+    let coordination_token = config
+        .coordination_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let state_dir = state_dir(config.claude_dir.as_deref())?;
     let _start_lock = acquire_start_lock(&state_dir.join(format!("{session_id}.start.lock")))?;
     let state_path = state_dir.join(format!("{session_id}.json"));
@@ -197,17 +201,20 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
 fn opencode_mcp_config(
     engine: &Path,
     session_id: &str,
-    coordination_token: &str,
+    coordination_token: Option<&str>,
 ) -> serde_json::Value {
+    let mut environment = json!({
+        "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+    });
+    if let Some(token) = coordination_token {
+        environment["LONGHOUSE_COORDINATION_TOKEN"] = json!(token);
+    }
     json!({
         "mcp": {
             "longhouse": {
                 "type": "local",
                 "command": [engine, "claude-channel", "serve"],
-                "environment": {
-                    "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
-                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-                },
+                "environment": environment,
                 "enabled": true,
             }
         }
@@ -893,7 +900,7 @@ mod tests {
         let config = opencode_mcp_config(
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
-            "session-secret",
+            Some("session-secret"),
         );
         let server = &config["mcp"]["longhouse"];
         assert_eq!(server["command"][0], "/opt/longhouse-engine");
@@ -933,6 +940,21 @@ mod tests {
             embedded["mcp"]["longhouse"]["environment"]["LONGHOUSE_COORDINATION_TOKEN"],
             "session-secret"
         );
+    }
+
+    #[test]
+    fn degraded_mcp_config_keeps_local_channel_without_authority() {
+        let config = opencode_mcp_config(
+            Path::new("/opt/longhouse-engine"),
+            "11111111-1111-4111-8111-111111111111",
+            None,
+        );
+        let environment = &config["mcp"]["longhouse"]["environment"];
+        assert_eq!(
+            environment["LONGHOUSE_MANAGED_SESSION_ID"],
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert!(environment.get("LONGHOUSE_COORDINATION_TOKEN").is_none());
     }
 
     #[test]
