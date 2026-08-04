@@ -549,6 +549,17 @@ def _start_initial_bridge(
     )
 
 
+def _record_post_stop_ship_receipt(
+    root: Path,
+    transition: dict[str, Any],
+    shipper: TranscriptShipper,
+) -> dict[str, Any]:
+    receipt = shipper.flush("post-stop")
+    transition["post_stop_transcript_ship"] = receipt
+    _write_json(root / "post-stop-transcript-ship-receipt.json", receipt)
+    return receipt
+
+
 def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -621,8 +632,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             # The direct bridge does not write the normal retained contract.
             # Publish the equivalent snapshot before flushing so the real
             # Machine Agent scanner can observe it in this cold-resume window.
-            process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
-            _write_json(root / "post-stop-transcript-ship-receipt.json", process_transition["post_stop_transcript_ship"])
+            _record_post_stop_ship_receipt(root, process_transition, shipper)
         _write_json(root / "process-transition-receipt.json", process_transition)
         _write_json(
             root / "resume-contract-receipt.json",
