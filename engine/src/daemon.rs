@@ -642,12 +642,14 @@ fn apply_archive_repair_control(
     payload.archive_backlog.pause_actor = None;
     payload.archive_backlog.pause_reason = None;
     payload.archive_backlog.pause_updated_at = None;
-    if mode == ArchiveRepairMode::Paused && payload.archive_backlog.pending_ranges > 0 {
+    if mode == ArchiveRepairMode::Paused {
         payload.archive_backlog.state = "paused".to_string();
         payload.archive_backlog.pause_actor = control.actor.clone();
         payload.archive_backlog.pause_reason = control.reason.clone();
         payload.archive_backlog.pause_updated_at = control.updated_at.clone();
-        return;
+        if payload.archive_backlog.pending_ranges > 0 {
+            return;
+        }
     }
     if payload.archive_backlog.dead_ranges > 0 {
         payload.archive_backlog.state = "dead_lettered".to_string();
@@ -6924,6 +6926,35 @@ mod tests {
             Some("user paused while travelling")
         );
         assert!(!payload.is_offline);
+    }
+
+    #[test]
+    fn test_archive_paused_empty_status_keeps_attribution() {
+        let mut payload = empty_heartbeat_payload();
+        let control = ArchiveRepairControl {
+            mode: Some("paused".to_string()),
+            actor: Some("menu_bar".to_string()),
+            reason: Some("user paused before catch-up".to_string()),
+            updated_at: Some("2026-07-13T12:00:00Z".to_string()),
+            ..Default::default()
+        };
+
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Trickle);
+
+        assert_eq!(payload.archive_backlog.mode, "paused");
+        assert_eq!(payload.archive_backlog.state, "complete");
+        assert_eq!(
+            payload.archive_backlog.pause_actor.as_deref(),
+            Some("menu_bar")
+        );
+        assert_eq!(
+            payload.archive_backlog.pause_reason.as_deref(),
+            Some("user paused before catch-up")
+        );
+        assert_eq!(
+            payload.archive_backlog.pause_updated_at.as_deref(),
+            Some("2026-07-13T12:00:00Z")
+        );
     }
 
     #[test]

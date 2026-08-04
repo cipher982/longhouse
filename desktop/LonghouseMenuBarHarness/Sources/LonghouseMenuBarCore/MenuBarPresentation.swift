@@ -89,7 +89,7 @@ extension HealthSnapshot {
             "engine_status_missing", "engine_status_unreadable", "engine_status_stale",
         ]
         let inspectReasons: Set<String> = [
-            "archive_dead_lettered", "orphaned_managed_bridge",
+            "archive_dead_lettered", "archive_repair_paused", "orphaned_managed_bridge",
             "managed_session_control_degraded", "provider_release_blocked",
             "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
             "consecutive_failures", "connect_errors", "server_errors",

@@ -168,6 +168,57 @@ def test_machine_health_surfaces_explicit_archive_pause_without_backlog():
     assert summary.suggested_action_ids == ("inspect_archive",)
 
 
+def test_machine_health_prioritizes_dead_letters_over_archive_pause():
+    pinned_now = datetime(2026, 8, 4, 4, 30, 0, tzinfo=timezone.utc)
+    row = SimpleNamespace(
+        device_id="cinder",
+        received_at=pinned_now,
+        version="0.1.33-dev",
+        last_ship_at=None,
+        last_ship_attempt_at=None,
+        last_ship_result=None,
+        last_ship_latency_ms=None,
+        last_ship_http_status=None,
+        spool_pending=0,
+        spool_dead=0,
+        parse_errors_1h=0,
+        consecutive_failures=0,
+        ship_attempts_1h=1,
+        ship_successes_1h=1,
+        ship_rate_limited_1h=0,
+        ship_server_errors_1h=0,
+        ship_payload_rejections_1h=0,
+        ship_payload_too_large_1h=0,
+        ship_retryable_client_errors_1h=0,
+        ship_connect_errors_1h=0,
+        ship_latency_p50_ms_1h=None,
+        ship_latency_p95_ms_1h=None,
+        disk_free_bytes=100,
+        is_offline=False,
+        raw_json=json.dumps(
+            {
+                "archive_backlog": {
+                    "state": "dead_lettered",
+                    "mode": "paused",
+                    "pending_ranges": 0,
+                    "pending_bytes": 0,
+                    "dead_ranges": 2,
+                    "dead_bytes": 4096,
+                }
+            }
+        ),
+    )
+
+    summary = machine_health_service.build_machine_transport_health_summary(
+        row,
+        stale_after_seconds=3600,
+        now=pinned_now,
+    )
+
+    assert summary.status_reason == "archive_dead_lettered"
+    assert summary.reasons == ("archive_dead_lettered", "archive_repair_paused")
+
+
 def _make_db(tmp_path):
     db_path = tmp_path / "test_agents_machine_health.db"
     engine = make_engine(f"sqlite:///{db_path}")

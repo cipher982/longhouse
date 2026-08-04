@@ -92,6 +92,30 @@ def test_explicit_archive_pause_is_visible_without_backlog():
     ) == (False, True)
 
 
+def test_dead_letters_remain_the_primary_headline_when_archive_is_paused():
+    state, severity, headline, reasons, _actions = _classify_health(
+        service={"status": "running"},
+        engine_status={"exists": True, "age_seconds": 1, "payload": {}},
+        transport_sample=None,
+        transport_assessment=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={
+            "state": "dead_lettered",
+            "mode": "paused",
+            "dead_ranges": 2,
+            "dead_bytes": 4096,
+        },
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    assert state == "degraded"
+    assert severity == "yellow"
+    assert headline == "Longhouse archive repair needs attention"
+    assert reasons == ["archive_dead_lettered", "archive_repair_paused"]
+
+
 def test_unresolved_storage_sources_promote_repair_severity():
     assert _health_flags_for(unresolved=1) == (True, True)
 

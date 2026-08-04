@@ -638,8 +638,8 @@ def _degraded_health_headline(
         headline = "A provider session working directory was replaced"
     elif REASON_BRIDGE_STATE_PATH_MISSING in reasons:
         headline = "A managed provider bridge state file is missing"
-    elif "archive_repair_paused" in reasons:
-        headline = "Longhouse archive repair is paused"
+    elif "archive_dead_lettered" in reasons:
+        headline = "Longhouse archive repair needs attention"
     elif "archive_repair_draining" in reasons:
         headline = (
             "Uploading archive backlog"
@@ -648,8 +648,6 @@ def _degraded_health_headline(
             if archive_state == "scanning"
             else "Live shipping healthy; archive repair draining"
         )
-    elif "archive_dead_lettered" in reasons:
-        headline = "Longhouse archive repair needs attention"
     elif "archive_backlog_pending" in reasons:
         headline = "Archive upload blocked" if archive_state == "blocked" else "Longhouse archive repair pending"
     elif "storage_v2_sources_blocked" in reasons:

@@ -548,18 +548,20 @@ def _archive_dead_letter_summary(archive_repair: dict[str, Any]) -> str:
     return "Archive repair has dead-lettered work."
 
 
+def _archive_repair_is_paused(archive_repair: dict[str, Any]) -> bool:
+    return str(archive_repair.get("mode") or "").strip() == "paused" or str(archive_repair.get("state") or "").strip() == "paused"
+
+
 def _overlay_archive_repair_reasons(
     reasons: tuple[str, ...],
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, ...]:
-    if (
-        str(archive_repair.get("mode") or "").strip() == "paused" or str(archive_repair.get("state") or "").strip() == "paused"
-    ) and "archive_repair_paused" not in reasons:
+    if _archive_has_dead_letters(archive_repair) and "archive_dead_lettered" not in reasons:
+        reasons = (*reasons, "archive_dead_lettered")
+    if _archive_repair_is_paused(archive_repair) and "archive_repair_paused" not in reasons:
         reasons = (*reasons, "archive_repair_paused")
-    if not _archive_has_dead_letters(archive_repair) or "archive_dead_lettered" in reasons:
-        return reasons
-    return (*reasons, "archive_dead_lettered")
+    return reasons
 
 
 def _overlay_archive_repair_status(
@@ -569,21 +571,19 @@ def _overlay_archive_repair_status(
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, str, str]:
-    if status == "healthy" and (
-        str(archive_repair.get("mode") or "").strip() == "paused" or str(archive_repair.get("state") or "").strip() == "paused"
-    ):
+    if status == "healthy" and _archive_has_dead_letters(archive_repair):
+        return (
+            "degraded",
+            "archive_dead_lettered",
+            _archive_dead_letter_summary(archive_repair),
+        )
+    if status == "healthy" and _archive_repair_is_paused(archive_repair):
         return (
             "degraded",
             "archive_repair_paused",
             "Archive repair is paused; inspect the local archive state.",
         )
-    if not _archive_has_dead_letters(archive_repair) or status != "healthy":
-        return status, status_reason, status_summary
-    return (
-        "degraded",
-        "archive_dead_lettered",
-        _archive_dead_letter_summary(archive_repair),
-    )
+    return status, status_reason, status_summary
 
 
 def _overlay_heartbeat_staleness(

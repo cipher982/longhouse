@@ -358,6 +358,23 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func archivePauseIsInspectableNotNormal() {
+        let snapshot = presentationSnapshot(
+            reasons: ["archive_repair_paused"], sessions: [],
+            archive: ArchiveBacklogStatus(
+                state: "complete", mode: "paused", pendingRanges: 0,
+                pendingPaths: 0, pendingSessions: 0, pendingBytes: 0,
+                deadRanges: 0, deadBytes: 0
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.needsStatusItemBadge)
+    }
+
+    @Test
     func archivePendingWhileIdleDoesNotBadge() {
         let snapshot = presentationSnapshot(
             reasons: ["archive_backlog_pending"], sessions: [],

@@ -2000,6 +2000,10 @@ fn machine_state_hash(
             .map(|value| Value::from(value.to_string()))
             .unwrap_or(Value::Null),
     );
+    payload.insert(
+        "archive_repair_mode",
+        Value::from(default_archive_repair_mode_for_url(runtime_url)),
+    );
     let encoded = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     format!("{:x}", Sha256::digest(encoded.as_bytes()))
 }
@@ -5585,7 +5589,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
         assert_eq!(
             hash,
-            "323c324778672b567522d29687b14f1e273951dbba28ff1dc10f3bd8c5d2c09f"
+            "a6ce8e28a8d367b76f96f347168128fdc2cd40194072824220bcdac531235145"
         );
     }
 }

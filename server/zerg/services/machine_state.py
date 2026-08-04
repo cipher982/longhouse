@@ -203,9 +203,22 @@ def machine_state_source_hash(state: MachineState | None) -> str | None:
         "machine_name": state.machine_name,
         "desktop_app_enabled": state.desktop_app_enabled,
         "desired_bundle_version": state.desired_bundle_version,
+        "archive_repair_mode": _default_archive_repair_mode_for_url(state.runtime_url),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _default_archive_repair_mode_for_url(url: str | None) -> str:
+    """Keep the installed service posture in the launch-state hash."""
+    try:
+        hostname = urlparse(url or "").hostname or ""
+    except Exception:
+        hostname = ""
+    hostname = hostname.lower().rstrip(".")
+    if hostname == "longhouse.ai" or hostname.endswith(".longhouse.ai"):
+        return "trickle"
+    return "drain"
 
 
 def _machine_state_from_payload(payload: dict[str, object]) -> MachineState:
