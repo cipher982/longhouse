@@ -156,6 +156,9 @@ def test_legacy_storage_payload_does_not_infer_risk_from_latest_block_kind():
 
     assert context.storage_unresolved_blocked_sources == 0
     assert context.storage_block_proof_unknown is True
+    reasons, actions = _collect_health_reasons(context, transport_assessment=None)
+    assert reasons == ["storage_v2_sources_proof_unknown"]
+    assert actions == ["Update Longhouse and inspect the retained source evidence"]
 
 
 def test_legacy_safe_storage_payload_is_attention_not_false_green():

@@ -815,10 +815,10 @@ def _collect_health_reasons(
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
     )
-    if context.storage_blocked_sources > 0 and context.storage_unresolved_blocked_sources == 0:
+    if context.storage_blocked_sources > 0 and context.storage_unresolved_blocked_sources == 0 and not context.storage_block_proof_unknown:
         reasons.append("storage_v2_sources_blocked")
         source_suffix = f" --source-epoch {context.storage_latest_block_source_epoch}" if context.storage_latest_block_source_epoch else ""
-        _with_action(actions, f"Inspect retained source evidence: longhouse shipping inspect{source_suffix} --json")
+        _with_action(actions, f"Inspect retained source evidence: longhouse shipping inspect{source_suffix} --json.")
     if context.storage_unresolved_blocked_sources > 0:
         reasons.append("storage_v2_sources_unresolved")
         unresolved_source_epoch = context.storage_latest_unresolved_block_source_epoch
@@ -830,7 +830,7 @@ def _collect_health_reasons(
                 if unresolved_source_epoch
                 else " with longhouse shipping inspect --json"
             )
-            + " before retrying or discarding it",
+            + " before retrying or discarding it.",
         )
     if context.storage_block_proof_unknown:
         reasons.append("storage_v2_sources_proof_unknown")

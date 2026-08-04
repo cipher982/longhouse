@@ -1080,6 +1080,11 @@ fn native_desktop_suggested_actions(
                 "Source reconciliation is pending; inspect engine-status.json for progress."
                     .to_string(),
             ],
+            (Some(0), _) => vec![
+                format!(
+                    "Inspect retained source evidence with {inspect_command} to understand the reconciliation state."
+                ),
+            ],
             (None, _) => vec![
                 "Update Longhouse and inspect retained source evidence before retrying or discarding it."
                     .to_string(),
