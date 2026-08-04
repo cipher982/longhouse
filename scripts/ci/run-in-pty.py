@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import pty
 import select
 import subprocess
 import sys
+import termios
 import time
 
 
@@ -34,6 +36,13 @@ def _drain(master: int, *, quiet_for: float = 0.1) -> None:
         deadline = time.monotonic() + quiet_for
 
 
+def _attach_controlling_tty(slave: int) -> None:
+    """Give the child a real controlling terminal, not only TTY-backed stdio."""
+
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+
 def main() -> int:
     argv = sys.argv[1:]
     timeout = None
@@ -45,10 +54,18 @@ def main() -> int:
 
     # Do not use pty.spawn here. On macOS it makes the command the session
     # leader of this outer PTY, which changes nested forkpty teardown behavior.
-    # Longhouse only needs TTY-backed stdio for these product smokes.
+    # The child still needs a controlling terminal because managed provider
+    # foreground handoff uses tcsetpgrp, not only isatty().
     master, slave = pty.openpty()
     try:
-        process = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+        process = subprocess.Popen(
+            argv,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            close_fds=True,
+            preexec_fn=lambda: _attach_controlling_tty(slave),
+        )
     finally:
         os.close(slave)
 
