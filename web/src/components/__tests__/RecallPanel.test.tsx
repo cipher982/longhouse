@@ -31,10 +31,15 @@ describe("RecallPanel", () => {
         coverage: {
           ready: true,
           projector: "embeddings-test-256d-p2",
+          cutover_certified_commit_seq: "9",
+          cutover_certified_at: "2026-08-02T00:00:00+00:00",
           catalog_lag_count: 0,
           catalog_indexed_through: "10",
+          catalog_oldest_lag_at: null,
+          catalog_oldest_lag_seconds: null,
           catalog_commit_seq: "10",
           catalog_observed_at: "2026-08-02T00:00:00+00:00",
+          resident_stale: false,
           expected_sessions: 5_901,
           published_sessions: 5_901,
           expected_episodes: 82_958,
@@ -88,8 +93,35 @@ describe("RecallPanel", () => {
 
     expect(screen.getByText("Semantic #1 + Lexical #2")).toBeInTheDocument();
     expect(screen.getByText("The migration completed successfully.")).toBeInTheDocument();
-    expect(screen.getByText(/Complete corpus: 82,958 episodes/)).toBeInTheDocument();
+    expect(screen.getByText(/Current corpus: 82,958 episodes/)).toBeInTheDocument();
     expect(screen.queryByText("3%")).not.toBeInTheDocument();
+  });
+
+  it("labels a bounded live head as a snapshot instead of a complete corpus", () => {
+    const current = hookMocks.useRecall();
+    hookMocks.useRecall.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        coverage: {
+          ...current.data.coverage,
+          catalog_lag_count: 1,
+          catalog_indexed_through: "9",
+          catalog_oldest_lag_at: "2026-08-02T00:00:00+00:00",
+          catalog_oldest_lag_seconds: 1,
+          resident_stale: true,
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/Corpus snapshot: 82,958 episodes · 1 session updating/)).toBeInTheDocument();
+    expect(screen.queryByText(/Current corpus/)).not.toBeInTheDocument();
   });
 
   it("requests only the explicitly selected retrieval mode", async () => {

@@ -1245,23 +1245,7 @@ export interface RecallResponse {
   server_commit: string | null;
 }
 
-export interface RecallCoverage {
-  ready: true;
-  projector: string;
-  catalog_lag_count: 0;
-  catalog_indexed_through: string;
-  catalog_commit_seq: string;
-  catalog_observed_at: string;
-  expected_sessions: number;
-  published_sessions: number;
-  expected_episodes: number;
-  current_episodes: number;
-  invalid_vectors: 0;
-  unnormalized_vectors: 0;
-  unlocatable_episodes: 0;
-  episode_count_mismatches: 0;
-  missing_session_ids: [];
-}
+export type RecallCoverage = components["schemas"]["RecallCoverage"];
 
 export interface RecallFilters {
   query: string;
