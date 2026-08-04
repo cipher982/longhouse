@@ -114,6 +114,7 @@ _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _SHADOW_PARITY_ENV = "LONGHOUSE_SHADOW_PARITY_ENABLED"
 _CATALOG_STALL_PENDING = "stalled:pending"
 _CATALOG_STALL_RESOLUTION_PENDING = "stalled:resolved:pending"
+_CATALOG_ATTENTION_REPLAY_GRACE = timedelta(seconds=30)
 
 
 def _live_attention_targets(orm: Session, owner_id: int) -> list[dict[str, str]]:
@@ -313,6 +314,8 @@ def _live_pending_attention_action(
         return None
     phase = str(runtime.phase or "").strip()
     runtime_signal_at = _as_aware_utc(runtime.last_runtime_signal_at) or observed_at
+    if 0 <= (observed_at - runtime_signal_at).total_seconds() < _CATALOG_ATTENTION_REPLAY_GRACE.total_seconds():
+        return None
     attention_push_at = _as_aware_utc(catalog.last_attention_push_at)
     if attention_push_at is None:
         attention_push_at = _as_aware_utc(event.event_started_at) or observed_at
@@ -359,6 +362,14 @@ def _live_pending_attention_action(
             event_type="session_stalled",
         )
         if policy.action == AttentionDeliveryAction.QUEUE:
+            event.eligible_at = policy.queue_until or observed_at
+            channel_results = dict(event.channel_results or {})
+            channel_results["queued"] = True
+            channel_results["replayed"] = {
+                "status": "queued",
+                "reason": str(policy.reason or policy.action.value),
+            }
+            event.channel_results = channel_results
             return None
         if policy.action != AttentionDeliveryAction.DELIVER:
             _live_clear_pending_attention(
@@ -431,15 +442,20 @@ def _list_pending_apns_attention_actions(
     observed_at: datetime,
     limit: int,
 ) -> list[dict[str, Any]]:
-    catalogs = (
+    pending_session_ids = (
         orm.query(LiveSessionCatalog)
         .filter(LiveSessionCatalog.last_attention_push_state.in_({_CATALOG_STALL_PENDING, _CATALOG_STALL_RESOLUTION_PENDING}))
         .order_by(LiveSessionCatalog.last_attention_push_at.asc(), LiveSessionCatalog.session_id.asc())
-        .limit(limit)
+        .with_entities(LiveSessionCatalog.session_id)
         .all()
     )
     actions: list[dict[str, Any]] = []
-    for catalog in catalogs:
+    for (session_id,) in pending_session_ids:
+        if len(actions) >= limit:
+            break
+        catalog = orm.get(LiveSessionCatalog, str(session_id))
+        if catalog is None:
+            continue
         runtime = (
             orm.query(LiveRuntimeState)
             .filter(LiveRuntimeState.session_id == catalog.session_id)

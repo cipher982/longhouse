@@ -73,7 +73,6 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
         )
     engine.dispose()
 
-
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -124,19 +123,23 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
 
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
-        state = connection.execute(
-            LiveRuntimeState.__table__.select().where(LiveRuntimeState.runtime_key == "codex:catalog-runtime")
-        ).mappings().one()
+        state = (
+            connection.execute(LiveRuntimeState.__table__.select().where(LiveRuntimeState.runtime_key == "codex:catalog-runtime"))
+            .mappings()
+            .one()
+        )
         assert state["phase"] == "running"
         assert state["active_tool"] == "Shell"
-        catalog = connection.execute(
-            LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
-        ).mappings().one()
+        catalog = (
+            connection.execute(LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)).mappings().one()
+        )
         assert catalog["user_state"] == "active"
         assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
-        live_preview = connection.execute(
-            LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == preview_session_id)
-        ).mappings().one()
+        live_preview = (
+            connection.execute(LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == preview_session_id))
+            .mappings()
+            .one()
+        )
         assert live_preview["preview_text"] == "streaming output"
         assert read_catalog_meta(engine).commit_seq == 3
     engine.dispose()
@@ -175,9 +178,7 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
     with engine.begin() as connection:
-        connection.execute(
-            LiveUser.__table__.insert().values(id=7, email="catalog@example.com", prefs={})
-        )
+        connection.execute(LiveUser.__table__.insert().values(id=7, email="catalog@example.com", prefs={}))
         connection.execute(
             LiveSession.__table__.insert().values(
                 session_id=session_id,
@@ -310,9 +311,9 @@ async def test_runtime_apply_prepares_catalog_stall_attention_and_rollback(daemo
 
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
-        catalog = connection.execute(
-            LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
-        ).mappings().one()
+        catalog = (
+            connection.execute(LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)).mappings().one()
+        )
         assert catalog["last_attention_push_state"] == "stalled"
         assert catalog["last_attention_notification_id"] == notification_event_id
     engine.dispose()
@@ -509,16 +510,134 @@ async def test_pending_catalog_attention_replays_after_restart_and_commits(daemo
 
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
-        catalog = connection.execute(
-            LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
-        ).mappings().one()
+        catalog = (
+            connection.execute(LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)).mappings().one()
+        )
         assert catalog["last_attention_push_state"] == "stalled:resolved"
-        audit = connection.execute(
-            LiveNotificationEvent.__table__.select().where(LiveNotificationEvent.id == resolution_event_id)
-        ).mappings().one()
+        audit = (
+            connection.execute(LiveNotificationEvent.__table__.select().where(LiveNotificationEvent.id == resolution_event_id))
+            .mappings()
+            .one()
+        )
         assert audit["resolved_at"] is not None
         assert audit["channel_results"]["resolution_apns_ios"] == {"accepted": True}
         assert attention_event_id == resolution_event_id
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_catalog_stall_attention_replays_after_restart_and_commits(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(LiveUser.__table__.insert().values(id=11, email="attention-restart@example.com", prefs={}))
+        connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id=session_id,
+                owner_id="11",
+                provider="codex",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="codex",
+                environment="dev",
+                project="zerg",
+                summary_title="Restarted attention session",
+                started_at=now,
+            )
+        )
+        connection.execute(
+            LiveAPNSDeviceRegistration.__table__.insert().values(
+                id=str(uuid4()),
+                owner_id=11,
+                platform="ios",
+                device_token="f" * 64,
+                push_environment="sandbox",
+                created_at=now,
+                updated_at=now,
+                last_seen_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        stalled = await client.call(
+            "session.runtime.apply.v2",
+            {
+                "events": [
+                    {
+                        **_event(
+                            session_id=session_id,
+                            runtime_key=f"codex:{session_id}",
+                            dedupe_key="catalog-attention-restart-1",
+                            occurred_at=now,
+                        ),
+                        "phase": "stalled",
+                        "payload": {"stall_notification": True},
+                    }
+                ]
+            },
+        )
+        attention_event_id = stalled["attention_actions"][0]["notification_event_id"]
+    finally:
+        await client.close()
+        await daemon.close()
+
+    restarted = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await restarted.start()
+    replay_client = CatalogClient(socket_path)
+    try:
+        replayed = await replay_client.call(
+            "notification.apns.attention.pending.list.v2",
+            {"observed_at": (now + timedelta(minutes=1)).isoformat(), "limit": 100},
+        )
+        assert len(replayed["actions"]) == 1
+        action = replayed["actions"][0]
+        assert action["kind"] == "attention"
+        assert action["session_id"] == session_id
+        assert action["notification_event_id"] == attention_event_id
+        assert action["previous_state"] == "stalled:pending"
+        committed = await replay_client.call(
+            "notification.apns.attention.commit.v2",
+            {
+                "session_id": session_id,
+                "action": "attention",
+                "state": "stalled",
+                "previous_state": "",
+                "notification_event_id": attention_event_id,
+                "occurred_at": now.isoformat(),
+                "attention_push_at": now.isoformat(),
+            },
+        )
+        assert committed["committed"] is True
+    finally:
+        await replay_client.close()
+        await restarted.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        catalog = (
+            connection.execute(LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)).mappings().one()
+        )
+        assert catalog["last_attention_push_state"] == "stalled"
+        audit = (
+            connection.execute(LiveNotificationEvent.__table__.select().where(LiveNotificationEvent.id == attention_event_id))
+            .mappings()
+            .one()
+        )
+        assert audit["delivered_at"] is not None
+        assert audit["channel_results"]["apns_ios"] == {"accepted": True}
     engine.dispose()
 
 
@@ -618,13 +737,15 @@ async def test_pending_catalog_attention_closes_if_session_recovered_before_rest
 
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
-        catalog = connection.execute(
-            LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
-        ).mappings().one()
+        catalog = (
+            connection.execute(LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)).mappings().one()
+        )
         assert catalog["last_attention_push_state"] is None
-        audit = connection.execute(
-            LiveNotificationEvent.__table__.select().where(LiveNotificationEvent.id == attention_event_id)
-        ).mappings().one()
+        audit = (
+            connection.execute(LiveNotificationEvent.__table__.select().where(LiveNotificationEvent.id == attention_event_id))
+            .mappings()
+            .one()
+        )
         assert audit["resolved_at"] is not None
         assert audit["channel_results"]["replayed"] == {"status": "recovered_while_pending"}
     engine.dispose()

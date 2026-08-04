@@ -117,6 +117,13 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         finally:
             calls.append("telemetry_stop")
 
+    async def attention_replay_loop():
+        calls.append("attention_replayer_start")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            calls.append("attention_replayer_stop")
+
     async def noop_async(*_args, **_kwargs):
         return None
 
@@ -157,6 +164,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         "zerg.services.storage_telemetry_snapshot.run_storage_telemetry_refresh_loop",
         telemetry_loop,
     )
+    monkeypatch.setattr("zerg.routers.runtime.run_catalog_attention_replay_loop", attention_replay_loop)
     monkeypatch.setattr("zerg.services.maintenance.stop_maintenance_loop", noop_async)
     monkeypatch.setattr("zerg.utils.async_runner.get_shared_runner", lambda: Runner())
     monkeypatch.setattr("zerg.websocket.manager.topic_manager.shutdown", noop_async)
@@ -169,9 +177,10 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         assert "search_projector_start" in calls
         embedding_release.set()
         await app.state.embedding_initializer_task
-        assert calls[:5] == [
+        assert calls[:6] == [
             "catalogd_start",
             "searchd_start",
+            "attention_replayer_start",
             "raw_workers_start",
             "render_workers_start",
             "search_projector_start",
@@ -183,9 +192,11 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         assert app.state.catalogd_ping["ready"] is True
         assert app.state.searchd_ping is None
         assert app.state.storage_telemetry_task.done() is False
+        assert app.state.catalog_attention_replayer_task.done() is False
 
-    assert calls[-7:] == [
+    assert calls[-8:] == [
         "runner_stop",
+        "attention_replayer_stop",
         "telemetry_stop",
         "search_projector_stop",
         "raw_workers_stop",
