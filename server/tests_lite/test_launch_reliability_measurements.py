@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/qa/launch-reliability-measurements.py"
@@ -16,6 +17,26 @@ MATRIX_SPEC = importlib.util.spec_from_file_location("installed_health_fault_mat
 assert MATRIX_SPEC is not None and MATRIX_SPEC.loader is not None
 MATRIX_MODULE = importlib.util.module_from_spec(MATRIX_SPEC)
 MATRIX_SPEC.loader.exec_module(MATRIX_MODULE)
+
+REPO_ROOT = SCRIPT.parents[2]
+DOGFOOD_GENERATOR = REPO_ROOT / "scripts" / "qa" / "launch_reliability_dogfood.py"
+
+
+def _dogfood_provenance() -> dict[str, object]:
+    return {
+        "generator": "scripts/qa/launch_reliability_dogfood.py",
+        "generator_path": str(DOGFOOD_GENERATOR),
+        "generator_sha256": MODULE._sha256(DOGFOOD_GENERATOR),
+        "generator_dirty": False,
+        "git_sha": subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+        "repository": str(REPO_ROOT),
+        "repository_dirty": False,
+    }
 
 
 def _matrix(
@@ -67,9 +88,7 @@ def _matrix(
 
 def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object = None) -> None:
     episodes = []
-    for index, observed_at in enumerate(
-        ("2026-08-04T12:00:00Z", "2026-08-04T12:30:00Z", "2026-08-04T13:00:00Z")
-    ):
+    for index, observed_at in enumerate(("2026-08-04T12:00:00Z", "2026-08-04T12:30:00Z", "2026-08-04T13:00:00Z")):
         episodes.append(
             {
                 "episode_id": "same" if duplicate_ids else f"episode-{index}",
@@ -94,11 +113,7 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
                 "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
                 "generated_at": "2026-08-04T13:00:30Z",
-                "provenance": {
-                    "generator": "test-fixture",
-                    "git_sha": "0" * 40,
-                    "repository_dirty": False,
-                },
+                "provenance": _dogfood_provenance(),
                 "episodes": episodes,
             }
         )
@@ -295,9 +310,7 @@ def test_malformed_provider_harness_marks_report_invalid(tmp_path: Path):
     report = MODULE.build_report([matrix], [harness])
 
     assert report["report_status"] == "invalid"
-    assert report["inputs"]["invalid_artifacts"] == [
-        {"path": str(harness), "error": "provider harness artifact has no results list"}
-    ]
+    assert report["inputs"]["invalid_artifacts"] == [{"path": str(harness), "error": "provider harness artifact has no results list"}]
 
 
 def test_dirty_harness_is_not_a_measured_clean_run(tmp_path: Path):
@@ -626,9 +639,7 @@ def test_malformed_health_label_invalidates_the_entire_artifact(tmp_path: Path):
     assert report["health_fault_matrix"]["case_count"] == 0
     assert report["measures"]["hidden_failure_rate"]["status"] == "not_observed"
     assert report["inputs"]["health_artifacts"] == []
-    assert report["inputs"]["invalid_artifacts"] == [
-        {"path": str(matrix), "error": "health result 0.expected.state is invalid"}
-    ]
+    assert report["inputs"]["invalid_artifacts"] == [{"path": str(matrix), "error": "health result 0.expected.state is invalid"}]
 
 
 def test_invalid_health_sibling_scrubs_valid_health_measures(tmp_path: Path):
@@ -697,11 +708,7 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
                 "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
                 "generated_at": "2026-08-04T13:00:30Z",
-                "provenance": {
-                    "generator": "test-fixture",
-                    "git_sha": "0" * 40,
-                    "repository_dirty": False,
-                },
+                "provenance": _dogfood_provenance(),
                 "episodes": [
                     {
                         "episode_id": "episode-1",
@@ -824,11 +831,7 @@ def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
                 "schema_version": 1,
                 "artifact_kind": "launch_reliability_dogfood_series",
                 "generated_at": "2026-08-04T13:00:30Z",
-                "provenance": {
-                    "generator": "test-fixture",
-                    "git_sha": "0" * 40,
-                    "repository_dirty": False,
-                },
+                "provenance": _dogfood_provenance(),
                 "episodes": [
                     {
                         "episode_id": "episode-1",
@@ -957,6 +960,34 @@ def test_truthless_dogfood_episode_fails_closed(tmp_path: Path):
     assert report["report_status"] == "invalid"
     assert "must include expected and observed" in report["inputs"]["invalid_artifacts"][0]["error"]
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
+
+
+def test_observation_error_is_not_admissible_evidence(tmp_path: Path):
+    series = tmp_path / "observation-error.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    payload["episodes"][0]["observation_error"] = "local-health timed out"
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "invalid"
+    assert "observation_error" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["dogfood_series"]["episode_count"] == 0
+
+
+def test_dogfood_provenance_must_match_current_revision(tmp_path: Path):
+    series = tmp_path / "wrong-provenance.json"
+    _dogfood_series(series)
+    payload = json.loads(series.read_text())
+    payload["provenance"]["git_sha"] = "0" * 40
+    series.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], dogfood_paths=[series])
+
+    assert report["report_status"] == "invalid"
+    assert "does not match" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["dogfood_series"]["episode_count"] == 0
 
 
 def test_mixed_valid_and_invalid_dogfood_inputs_clear_numeric_claims(tmp_path: Path):

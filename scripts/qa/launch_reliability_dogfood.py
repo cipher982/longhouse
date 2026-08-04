@@ -15,9 +15,9 @@ import argparse
 import hashlib
 import json
 import math
+import shutil
 import subprocess
 import sys
-import time
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -83,6 +83,7 @@ def provenance(root: Path) -> dict[str, Any]:
         script_status = _git(root, "status", "--porcelain", "--", str(relative))
     return {
         "generator": "scripts/qa/launch_reliability_dogfood.py",
+        "generator_path": str(script),
         "generator_sha256": _sha256(script),
         "git_sha": _git(root, "rev-parse", "HEAD"),
         "repository": str(root),
@@ -145,6 +146,14 @@ def collect_snapshot(
     if result.returncode != 0:
         detail = (result.stderr or "non-zero exit").strip()[-500:]
         return payload, f"local-health exited {result.returncode}: {detail}"
+    missing = [
+        field for field in ("health_state", "engine_status") if field not in payload
+    ]
+    if missing:
+        return (
+            payload,
+            f"local-health payload is missing required fields: {', '.join(missing)}",
+        )
     return payload, None
 
 
@@ -192,15 +201,21 @@ def _issue(args: argparse.Namespace) -> dict[str, Any] | None:
     return issue
 
 
+def _resolve_binary(value: Path) -> Path:
+    raw = str(value)
+    if "/" not in raw:
+        resolved = shutil.which(raw)
+        if resolved is None:
+            raise ValueError(f"longhouse binary is not on PATH: {raw}")
+        return Path(resolved).resolve()
+    return value.expanduser().resolve()
+
+
 def collect(args: argparse.Namespace) -> dict[str, Any]:
-    root = (args.repo_root or _repository_root()).resolve()
-    longhouse_bin = args.longhouse_bin.resolve()
+    root = (getattr(args, "repo_root", None) or _repository_root()).resolve()
+    longhouse_bin = _resolve_binary(args.longhouse_bin)
     if not longhouse_bin.is_file():
         raise ValueError(f"longhouse binary does not exist: {longhouse_bin}")
-    if args.sample_count < 1:
-        raise ValueError("--sample-count must be at least 1")
-    if args.interval_seconds < 0:
-        raise ValueError("--interval-seconds must be non-negative")
     if args.recovery_duration_seconds is not None and (
         args.recovery_duration_seconds < 0
         or not math.isfinite(args.recovery_duration_seconds)
@@ -214,64 +229,60 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     }
     issue = _issue(args)
     conservation = _conservation(args.evidence_conservation_json)
-    episodes: list[dict[str, Any]] = []
-    prefix = args.episode_id or datetime.now(UTC).strftime("dogfood-%Y%m%dT%H%M%SZ")
-    for index in range(args.sample_count):
-        if index:
-            time.sleep(args.interval_seconds)
-        snapshot, error = collect_snapshot(
-            longhouse_bin,
-            timeout_seconds=args.timeout_seconds,
-        )
-        observed_at = (
-            _parse_timestamp(snapshot.get("collected_at"))
-            if snapshot.get("collected_at")
-            else _utc_now()
-        )
-        observed: dict[str, Any] = {
-            "health_state": _health_state(snapshot),
-            "producer_freshness": _freshness(snapshot),
-            "suggested_action_ids": _action_ids(snapshot),
-        }
-        if isinstance(snapshot.get("severity"), str):
-            observed["severity"] = snapshot["severity"]
-        if isinstance(snapshot.get("reasons"), list):
-            observed["reasons"] = [
-                item for item in snapshot["reasons"] if isinstance(item, str)
-            ]
-        episode: dict[str, Any] = {
-            "episode_id": prefix if args.sample_count == 1 else f"{prefix}-{index + 1}",
-            "expected": expected,
-            "observed": observed,
-            "observed_at": observed_at,
-        }
-        if args.recovery_duration_seconds is not None:
-            episode["recovery_duration_seconds"] = args.recovery_duration_seconds
-        if issue is not None:
-            episode["event_bearing_issue"] = issue
-        if conservation is not None:
-            episode["evidence_conservation"] = conservation
-        if error is not None:
-            episode["observation_error"] = error
-        episodes.append(episode)
+    snapshot_started_at = _utc_now()
+    snapshot, error = collect_snapshot(
+        longhouse_bin,
+        timeout_seconds=args.timeout_seconds,
+    )
+    # The provider-reported collected_at can be cached or malformed. The
+    # collector's wall clock is the authoritative observation time used for
+    # the longitudinal window; retain the provider value only as context.
+    observed_at = _utc_now()
+    observed: dict[str, Any] = {
+        "health_state": _health_state(snapshot),
+        "producer_freshness": _freshness(snapshot),
+        "suggested_action_ids": _action_ids(snapshot),
+    }
+    if isinstance(snapshot.get("severity"), str):
+        observed["severity"] = snapshot["severity"]
+    if isinstance(snapshot.get("reasons"), list):
+        observed["reasons"] = [
+            item for item in snapshot["reasons"] if isinstance(item, str)
+        ]
+    if isinstance(snapshot.get("collected_at"), str):
+        observed["producer_collected_at"] = snapshot["collected_at"]
+    episode: dict[str, Any] = {
+        "episode_id": args.episode_id,
+        "expected": expected,
+        "observed": observed,
+        "observed_at": observed_at,
+        "collector_started_at": snapshot_started_at,
+    }
+    if args.recovery_duration_seconds is not None:
+        episode["recovery_duration_seconds"] = args.recovery_duration_seconds
+    if issue is not None:
+        episode["event_bearing_issue"] = issue
+    if conservation is not None:
+        episode["evidence_conservation"] = conservation
+    if error is not None:
+        # The measurement consumer rejects any episode carrying this field.
+        # Keeping the diagnostic artifact makes the failed observation
+        # inspectable without allowing it into a denominator.
+        episode["observation_error"] = error
     return {
         "artifact_kind": "launch_reliability_dogfood_series",
         "generated_at": _utc_now(),
         "provenance": provenance(root),
         "schema_version": 1,
-        "episodes": episodes,
+        "episodes": [episode],
     }
 
 
 def parser() -> argparse.ArgumentParser:
-    root = _repository_root()
     command = argparse.ArgumentParser(description=__doc__)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--longhouse-bin", type=Path, default=Path("longhouse"))
-    command.add_argument("--repo-root", type=Path, default=root)
-    command.add_argument("--episode-id")
-    command.add_argument("--sample-count", type=int, default=1)
-    command.add_argument("--interval-seconds", type=float, default=0.0)
+    command.add_argument("--episode-id", required=True)
     command.add_argument("--timeout-seconds", type=float, default=20.0)
     command.add_argument(
         "--expected-health-state",
