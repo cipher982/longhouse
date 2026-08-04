@@ -44,6 +44,8 @@ _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
 RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 _EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|access_key|authorization)$")
+_DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
+_PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -1307,6 +1309,22 @@ def _wait_resume_intent(
     raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
 
 
+def _resume_intent_timeout(*, variant: str) -> float:
+    """Allow the machine to publish a process-loss terminal fact.
+
+    A clean provider exit publishes its terminal event synchronously.  A
+    killed Helm owner has to be observed by the Machine Agent's complete
+    managed-process reconciliation; startup deliberately defers that scan for
+    two minutes so live transcript shipping can warm first.  The factory must
+    wait for that real evidence instead of treating the intermediate
+    ``run_active`` response as a failed Resume implementation.
+    """
+
+    if variant == "process_loss":
+        return _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS
+    return _DEFAULT_RESUME_INTENT_TIMEOUT_SECS
+
+
 def _wait_session_tail(
     api_url: str,
     token: str,
@@ -2098,7 +2116,12 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             stale = {"marker": stale_marker, "rejected": False}
         _write_json(root / "stale-input-receipt.json", stale)
 
-        resume_intent = _wait_resume_intent(spec, args, initial_state["session_id"])
+        resume_intent = _wait_resume_intent(
+            spec,
+            args,
+            initial_state["session_id"],
+            timeout=_resume_intent_timeout(variant=args.variant),
+        )
         resumed_command, resume_intent_receipt = _command_from_resume_intent(
             spec,
             args,
