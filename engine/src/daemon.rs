@@ -1123,32 +1123,33 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             && current.root == provider.root
                             && current.extension == provider.extension
                     }) {
-                        providers.push(provider);
-                        added = true;
+                        match watcher.watch_provider_roots(std::slice::from_ref(&provider)) {
+                            Ok(_) => {
+                                providers.push(provider);
+                                added = true;
+                            }
+                            Err(error) => tracing::warn!(
+                                provider = provider.name,
+                                root = %provider.root.display(),
+                                error = %error,
+                                "Could not add newly discovered provider session root to watcher; will retry"
+                            ),
+                        }
                     }
                 }
                 if added {
-                    match watcher.watch_provider_roots(&providers) {
-                        Ok(watched) => {
-                            tracing::info!(
-                                watched,
-                                provider_count = providers.len(),
-                                "Refreshed provider session roots"
-                            );
-                            maybe_start_reconciliation_scan(
-                                &mut discovery_tasks,
-                                &providers,
-                                &scheduler,
-                                &deferred_retries,
-                                config.archive_repair_mode,
-                                "provider root discovery",
-                            );
-                        }
-                        Err(error) => tracing::warn!(
-                            error = %error,
-                            "Could not add newly discovered provider session root to watcher"
-                        ),
-                    }
+                    tracing::info!(
+                        provider_count = providers.len(),
+                        "Refreshed provider session roots"
+                    );
+                    maybe_start_reconciliation_scan(
+                        &mut discovery_tasks,
+                        &providers,
+                        &scheduler,
+                        &deferred_retries,
+                        config.archive_repair_mode,
+                        "provider root discovery",
+                    );
                 }
             }
 
