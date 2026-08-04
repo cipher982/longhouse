@@ -740,7 +740,7 @@ def test_provider_state_evidence_redacts_nested_secrets() -> None:
     }
 
 
-def test_cursor_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> None:
+def test_cursor_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
 
     class FakeProviderProcess:
@@ -756,6 +756,13 @@ def test_cursor_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> 
             self.sent.append(value)
 
     process = FakeProviderProcess()
+    commands: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
     result = _control_send(
         SPECS["cursor"],
         args,
@@ -765,9 +772,10 @@ def test_cursor_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> 
         initial=True,
     )
 
-    assert result["method"] == "provider_tty_bootstrap"
+    assert result["method"] == "longhouse_control"
     assert result["returncode"] == 0
-    assert process.sent == ["seed\r"]
+    assert commands == [[str(args.engine), "cursor-helm", "send", "--session-id", "session-1", "--text", "seed"]]
+    assert process.sent == []
 
 
 def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, monkeypatch) -> None:
@@ -810,7 +818,7 @@ def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, mon
     assert process.sent == []
 
 
-def test_claude_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> None:
+def test_claude_initial_seed_uses_native_control_after_tui_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
 
     class FakeProviderProcess:
@@ -826,6 +834,13 @@ def test_claude_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> 
             self.sent.append(value)
 
     process = FakeProviderProcess()
+    commands: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
     result = _control_send(
         SPECS["claude"],
         args,
@@ -835,8 +850,17 @@ def test_claude_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> 
         initial=True,
     )
 
-    assert result == {"method": "provider_tty_bootstrap", "returncode": 0}
-    assert process.sent == ["seed\r"]
+    assert result["method"] == "longhouse_control"
+    assert result["returncode"] == 0
+    assert commands == [[str(args.engine), "claude-channel", "send", "--session-id", "session-1", "--text", "seed"]]
+    assert process.sent == []
+
+
+def test_codex_concurrent_lock_error_is_a_refusal_even_if_state_identity_races() -> None:
+    assert codex_native_resume._is_concurrent_lock_refusal(
+        "codex bridge start failed: another codex bridge already owns lock /tmp/bridge.lock"
+    )
+    assert not codex_native_resume._is_concurrent_lock_refusal("codex bridge start failed: provider exited")
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:

@@ -1426,11 +1426,6 @@ def _control_send(
     *,
     initial: bool = False,
 ) -> dict[str, Any]:
-    if initial and spec.provider in {"claude", "cursor"}:
-        if process.process.poll() is not None:
-            raise RuntimeError(f"{spec.provider} terminal control owner is no longer live")
-        process.send(text + "\r")
-        return {"method": "provider_tty_bootstrap", "returncode": 0}
     if spec.provider == "claude":
         command = [str(args.engine), "claude-channel", "send", "--session-id", state["session_id"], "--text", text]
     elif spec.provider == "cursor":
@@ -1716,15 +1711,39 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             initial.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(initial, root / "initial.tty")
+        if spec.provider == "cursor":
+            # Cursor publishes its Helm lease before its provider-owned TUI is
+            # ready to accept a managed send.  The native control socket is
+            # authoritative, but it deliberately rejects a send during that
+            # startup phase rather than injecting into a raw PTY.
+            _wait_cursor_idle(initial_state, environment)
         states.append(initial_state)
         _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         initial_provider_pid = _provider_process_pid(spec, initial_state)
         seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
+        initial_prior_assistant_events = 0
+        if spec.provider == "claude":
+            initial_prior_tail = _api_json(
+                args.api_url,
+                args.agents_token,
+                f"sessions/{initial_state['session_id']}/tail?limit=100&roles=user,assistant",
+            )
+            initial_prior_assistant_events = _assistant_event_count(initial_prior_tail)
         _control_send(spec, args, initial_state, initial, f"Reply exactly {seed_marker} and nothing else.", initial=True)
         _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
-        initial_tail = _wait_assistant_marker(
-            args.api_url, args.agents_token, initial_state["session_id"], seed_marker, timeout=args.live_send_timeout_secs
-        )
+        if spec.provider == "claude":
+            initial_tail = _wait_assistant_response_after_marker(
+                args.api_url,
+                args.agents_token,
+                initial_state["session_id"],
+                seed_marker,
+                prior_assistant_events=initial_prior_assistant_events,
+                timeout=args.live_send_timeout_secs,
+            )
+        else:
+            initial_tail = _wait_assistant_marker(
+                args.api_url, args.agents_token, initial_state["session_id"], seed_marker, timeout=args.live_send_timeout_secs
+            )
         if spec.provider == "cursor":
             _wait_cursor_idle(initial_state, environment)
         _write_json(root / "initial-transcript.jsonl", initial_tail)

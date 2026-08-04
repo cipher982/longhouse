@@ -455,6 +455,7 @@ def _attempt_concurrent_resume(
             resume_thread_path=str(thread_path),
         )
     except RuntimeError as exc:
+        error = str(exc)
         try:
             active_state = bridge_canary._read_json(active_state_file)
         except (OSError, json.JSONDecodeError):
@@ -462,9 +463,25 @@ def _attempt_concurrent_resume(
         owner_preserved = (
             active_state.get("run_id") == active_run_id and active_state.get("pid") == active_bridge_pid and _pid_alive(active_bridge_pid)
         )
-        return {"rejected": owner_preserved, "owner_preserved": owner_preserved, "error": str(exc)}
+        # The bridge's lock refusal is the authoritative duplicate-owner
+        # result.  The state-file/PID identity check is useful evidence, but
+        # it is not a prerequisite: a failed duplicate start can race with a
+        # state refresh while the active process still owns the lock.  Do not
+        # turn the provider's explicit refusal into a false negative.
+        lock_refusal = _is_concurrent_lock_refusal(error)
+        return {
+            "rejected": lock_refusal,
+            "lock_refusal": lock_refusal,
+            "owner_preserved": owner_preserved,
+            "error": error,
+        }
     cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
     return {"rejected": False, "unexpected_start": summary, "cleanup": cleanup}
+
+
+def _is_concurrent_lock_refusal(error: str) -> bool:
+    normalized = " ".join(error.lower().split())
+    return "another codex bridge already owns lock" in normalized or ("codex bridge" in normalized and "already owns lock" in normalized)
 
 
 def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
