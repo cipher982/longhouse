@@ -33,6 +33,7 @@ from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
+from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
@@ -296,6 +297,7 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
         "_api_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(missing),
     )
+
     assert (
         _wait_session_tail(
             "https://runtime.example",
@@ -306,6 +308,11 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
         )
         == {}
     )
+
+
+def test_process_loss_resume_wait_covers_machine_reconciliation_window() -> None:
+    assert _resume_intent_timeout(variant="clean_exit") == 45.0
+    assert _resume_intent_timeout(variant="process_loss") == 180.0
 
 
 def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
