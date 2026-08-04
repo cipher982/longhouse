@@ -1514,11 +1514,25 @@ def _wait_assistant_response_after_marker(
     }
 
 
+def _cursor_hook_event_bytes(state: dict[str, Any], environment: dict[str, str]) -> int:
+    """Return the current lifecycle-hook log size for a managed Cursor run."""
+
+    longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
+    if not longhouse_home:
+        raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
+    path = Path(longhouse_home) / "managed-local" / "cursor-helm" / "hook-events" / f"{state['session_id']}.ndjson"
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
 def _wait_cursor_idle(
     state: dict[str, Any],
     environment: dict[str, str],
     *,
     timeout: float = 45.0,
+    minimum_hook_event_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Wait for the provider-owned Cursor hook to publish an idle phase."""
 
@@ -1528,6 +1542,7 @@ def _wait_cursor_idle(
     root = Path(longhouse_home) / "managed-local" / "cursor-helm"
     path = root / f"{state['session_id']}.phase.json"
     claim_path = root / "binding-probes" / f"{state['session_id']}.json"
+    hook_events_path = root / "hook-events" / f"{state['session_id']}.ndjson"
     deadline = time.monotonic() + timeout
     last_identity: dict[str, Any] = {}
     while time.monotonic() < deadline:
@@ -1556,6 +1571,14 @@ def _wait_cursor_idle(
             and claim.get("run_id") == state.get("run_id")
             and bool(claim.get("launch_id"))
         )
+        if minimum_hook_event_bytes is not None:
+            try:
+                hook_event_bytes = hook_events_path.stat().st_size
+            except OSError:
+                hook_event_bytes = 0
+            if hook_event_bytes <= minimum_hook_event_bytes:
+                time.sleep(0.25)
+                continue
         if (
             payload.get("session_id") == state.get("session_id")
             and payload.get("conversation_id") == state.get("provider_session_id")
@@ -1961,6 +1984,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         initial_prior_assistant_event_digests = _assistant_event_digests(initial_prior_tail)
         if spec.provider == "cursor":
+            initial_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
             bootstrap_send = _control_send(
                 spec,
                 args,
@@ -1970,7 +1994,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 initial=True,
             )
             _write_json(root / "initial-bootstrap-send.json", bootstrap_send)
-            _wait_cursor_idle(initial_state, environment)
+            _wait_cursor_idle(
+                initial_state,
+                environment,
+                minimum_hook_event_bytes=initial_hook_event_bytes,
+            )
             _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
@@ -2066,6 +2094,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             # first hook phase. Bootstrap one harmless foreground prompt
             # through the disposable PTY, then require the native hook to
             # publish idle before exercising the real Helm control socket.
+            resume_hook_event_bytes = _cursor_hook_event_bytes(resumed_state, environment)
             bootstrap_send = _control_send(
                 spec,
                 args,
@@ -2075,7 +2104,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 initial=True,
             )
             _write_json(root / "resume-bootstrap-send.json", bootstrap_send)
-            _wait_cursor_idle(resumed_state, environment)
+            _wait_cursor_idle(
+                resumed_state,
+                environment,
+                minimum_hook_event_bytes=resume_hook_event_bytes,
+            )
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
