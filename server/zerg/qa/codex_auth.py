@@ -47,7 +47,12 @@ def login_with_api_key(
         raise CodexAuthError("cannot create isolated CODEX_HOME") from exc
 
     child_environment = dict(environment)
+    # These are Longhouse/factory bindings, not stock Codex auth inputs. The
+    # provider must authenticate against the disposable CODEX_HOME created for
+    # this invocation; never let a worker's ambient OpenAI or Codex profile
+    # decide which account the canary uses.
     child_environment.pop("CODEX_API_KEY", None)
+    child_environment.pop("OPENAI_API_KEY", None)
     try:
         result = subprocess.run(
             [str(binary), "login", "--with-api-key"],

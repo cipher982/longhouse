@@ -5,17 +5,23 @@
 
 use std::ffi::CString;
 use std::fs;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::thread;
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use chrono::Utc;
@@ -302,19 +308,82 @@ fn resolve_bin(explicit: Option<String>) -> anyhow::Result<String> {
     anyhow::bail!("cursor-agent executable not found. Install Cursor's CLI or set --cursor-bin.")
 }
 fn cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String> {
-    let output = std::process::Command::new(bin)
+    // Cursor 2026.07.23-e383d2b prints the conversation UUID but keeps the
+    // create-chat process alive. Waiting for Command::output() therefore
+    // blocks Helm before its managed state can be published. Treat the first
+    // valid UUID line as the command's completion boundary and reap the
+    // provider helper immediately.
+    let mut command = std::process::Command::new(bin);
+    command
         .arg("create-chat")
         .current_dir(cwd)
-        .output()?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cursor-agent create-chat failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // The helper can leave a provider child behind after it prints the UUID.
+    // Give it a private process group so the bounded reap does not orphan
+    // provider work when the helper itself is terminated.
+    command.process_group(0);
+    let mut child = command.spawn().context("spawn cursor-agent create-chat")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("cursor-agent create-chat stdout was not captured")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("cursor-agent create-chat stderr was not captured")?;
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let stdout_reader = thread::spawn(move || {
+        let mut line = String::new();
+        let result = BufReader::new(stdout).read_line(&mut line).map(|_| line);
+        let _ = stdout_tx.send(result);
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut text = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut text);
+        text
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let received = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break Err(anyhow::anyhow!("cursor-agent create-chat timed out"));
+        }
+        match stdout_rx.recv_timeout(remaining) {
+            Ok(Ok(line)) => break Ok(line),
+            Ok(Err(error)) => break Err(error.into()),
+            Err(RecvTimeoutError::Timeout) => {
+                break Err(anyhow::anyhow!("cursor-agent create-chat timed out"));
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                break Err(anyhow::anyhow!("cursor-agent create-chat returned no id"));
+            }
+        }
+    };
+
+    let id_result = received.and_then(|line| {
+        let id = line.trim().to_owned();
+        Uuid::parse_str(&id)
+            .map(|_| id)
+            .context("cursor-agent create-chat returned invalid id")
+    });
+    if child.try_wait()?.is_none() {
+        let process_group = child.id() as libc::pid_t;
+        if unsafe { libc::killpg(process_group, libc::SIGKILL) } != 0 {
+            let _ = child.kill();
+        }
     }
-    let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    Uuid::parse_str(&id).context("cursor-agent create-chat returned invalid id")?;
-    Ok(id)
+    let status = child.wait()?;
+    let _ = stdout_reader.join();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    match id_result {
+        Ok(id) => Ok(id),
+        Err(error) if !status.success() && !stderr.trim().is_empty() => Err(error.context(
+            format!("cursor-agent create-chat failed: {}", stderr.trim()),
+        )),
+        Err(error) => Err(error),
+    }
 }
 fn raw(fd: RawFd) -> anyhow::Result<libc::termios> {
     unsafe {
@@ -1396,6 +1465,27 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::os::fd::FromRawFd;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    #[test]
+    fn cursor_chat_reaps_helper_after_uuid_without_waiting_for_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("cursor-agent");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s\\n' '11111111-1111-4111-8111-111111111111'\nsleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = std::time::Instant::now();
+        let conversation = cursor_chat(script.to_str().unwrap(), root.path()).unwrap();
+
+        assert_eq!(conversation, "11111111-1111-4111-8111-111111111111");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     fn serve_request(
         dir: &Path,

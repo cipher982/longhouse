@@ -480,6 +480,9 @@ class LiveSessionLaunchAttempt(LiveBase):
     execution_lifetime = Column(String(32), nullable=False, server_default=text("'live_control'"))
     client_request_id = Column(String(64), nullable=True, index=True)
     command_id = Column(String(64), nullable=True, index=True)
+    # Complete managed-local replay contract, persisted independently of the
+    # consumable archive outbox so a lost-response retry remains idempotent.
+    launch_fingerprint = Column(String(64), nullable=True)
     state = Column(String(32), nullable=False, server_default=text("'pending'"), index=True)
     error_code = Column(String(64), nullable=True)
     error_message = Column(Text, nullable=True)

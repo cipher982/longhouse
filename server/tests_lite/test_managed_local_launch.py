@@ -186,6 +186,23 @@ def test_managed_local_launch_plan_builds_claude_attach_command_without_archive_
     assert plan.managed_transport == "claude_channel_bridge"
 
 
+def test_managed_local_launch_plan_preserves_client_minted_provider_identity():
+    provider_session_id = "11111111-1111-4111-8111-111111111111"
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=1,
+            runner_target="cinder",
+            cwd="/tmp/demo",
+            provider="claude",
+            machine_name="cinder",
+            native_claude_channels_available=True,
+            provider_session_id=provider_session_id,
+        )
+    )
+
+    assert plan.provider_session_id == provider_session_id
+
+
 def test_managed_local_launch_response_contract_rejects_missing_claude_provider_id():
     from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
     from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract

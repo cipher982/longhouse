@@ -6,6 +6,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -99,24 +100,35 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     let binary = resolve_binary(config.opencode_bin)?;
     let password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let log_path = state_dir.join("logs").join(format!("{session_id}.log"));
+    // A Resume starts a fresh `opencode serve` process but reuses the
+    // Longhouse session's state/log filename. Truncating the log makes the
+    // readiness URL belong to this server generation; appending would let
+    // `read_listen_url` observe a dead URL from the previous owner before the
+    // new process has emitted its own listener line.
     let log = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&log_path)?;
     let mut command = Command::new(&binary);
     let engine = std::env::current_exe().context("resolve native engine for OpenCode MCP")?;
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
-    let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token);
+    let model = std::env::var("LONGHOUSE_OPENCODE_MODEL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
+    // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
+    // instead of asking the OS for an ephemeral port. A Resume can therefore
+    // reconnect to a dead/stale server or collide with another factory case.
+    // Reserve a localhost port ourselves and make this server generation's
+    // URL unambiguous.
+    let port = free_local_port()?;
     command
-        .args([
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--print-logs",
-        ])
+        .args(["serve", "--hostname", "127.0.0.1", "--port"])
+        .arg(port.to_string())
+        .args(["--print-logs"])
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
@@ -198,8 +210,9 @@ fn opencode_mcp_config(
     engine: &Path,
     session_id: &str,
     coordination_token: &str,
+    model: Option<&str>,
 ) -> serde_json::Value {
-    json!({
+    let mut config = json!({
         "mcp": {
             "longhouse": {
                 "type": "local",
@@ -211,7 +224,11 @@ fn opencode_mcp_config(
                 "enabled": true,
             }
         }
-    })
+    });
+    if let Some(model) = model {
+        config["model"] = Value::String(model.to_owned());
+    }
+    config
 }
 
 fn configure_opencode_environment(
@@ -278,7 +295,8 @@ pub fn attach(
     let binary = resolve_binary(opencode_bin)?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(assert_health(&state.server_url, &state.password))?;
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args([
             "attach",
             &state.server_url,
@@ -287,9 +305,18 @@ pub fn attach(
         ])
         .current_dir(&state.cwd)
         .env("OPENCODE_SERVER_USERNAME", &state.username)
-        .env("OPENCODE_SERVER_PASSWORD", &state.password)
-        .spawn()
-        .context("attach stock OpenCode TUI")?;
+        .env("OPENCODE_SERVER_PASSWORD", &state.password);
+    if let Some(model) = std::env::var("LONGHOUSE_OPENCODE_MODEL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    {
+        command.env(
+            "OPENCODE_CONFIG_CONTENT",
+            serde_json::to_string(&json!({"model": model}))?,
+        );
+    }
+    let mut child = command.spawn().context("attach stock OpenCode TUI")?;
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let monitor_server_url = state.server_url.clone();
     let monitor_username = state.username.clone();
@@ -373,8 +400,13 @@ async fn monitor_opencode_events_once(
 ) -> Result<()> {
     let mut response = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
+        // OpenCode's long-lived SSE endpoint can close a compressed response
+        // without a complete compression trailer. Ask for identity bytes so
+        // the monitor can consume the event stream as the provider emits it.
+        .no_gzip()
         .build()?
         .get(format!("{server_url}/global/event"))
+        .header("Accept-Encoding", "identity")
         .basic_auth(username, Some(password))
         .send()
         .await?;
@@ -692,6 +724,15 @@ fn read_listen_url(path: &Path) -> Result<Option<String>> {
         .map(str::to_owned))
 }
 
+fn free_local_port() -> Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .context("reserve a localhost port for the OpenCode server")?;
+    Ok(listener
+        .local_addr()
+        .context("read the reserved OpenCode localhost port")?
+        .port())
+}
+
 fn tail(path: &Path) -> Result<String> {
     let mut text = String::new();
     OpenOptions::new()
@@ -782,6 +823,21 @@ async fn assert_session_exists(
 }
 
 async fn assert_health(server_url: &str, password: &str) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_error = anyhow::anyhow!("OpenCode server health check timed out");
+    loop {
+        match assert_health_once(server_url, password).await {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+        if Instant::now() >= deadline {
+            return Err(last_error);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn assert_health_once(server_url: &str, password: &str) -> Result<()> {
     let health = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?
@@ -894,6 +950,7 @@ mod tests {
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             "session-secret",
+            None,
         );
         let server = &config["mcp"]["longhouse"];
         assert_eq!(server["command"][0], "/opt/longhouse-engine");
@@ -906,6 +963,17 @@ mod tests {
         assert_eq!(
             server["environment"]["LONGHOUSE_MANAGED_SESSION_ID"],
             "11111111-1111-4111-8111-111111111111"
+        );
+
+        let configured = opencode_mcp_config(
+            Path::new("/opt/longhouse-engine"),
+            "11111111-1111-4111-8111-111111111111",
+            "session-secret",
+            Some("openrouter/deepseek/deepseek-v4-flash"),
+        );
+        assert_eq!(
+            configured["model"],
+            "openrouter/deepseek/deepseek-v4-flash"
         );
 
         let mut command = Command::new("opencode");
@@ -1073,6 +1141,12 @@ mod tests {
     fn accepts_lf_and_crlf_sse_boundaries() {
         assert_eq!(sse_frame_boundary("data: one\n\nnext"), Some((9, 2)));
         assert_eq!(sse_frame_boundary("data: one\r\n\r\nnext"), Some((9, 4)));
+    }
+
+    #[test]
+    fn reserves_an_available_localhost_port() {
+        let port = free_local_port().unwrap();
+        let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
     }
 
     #[test]

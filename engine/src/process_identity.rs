@@ -33,7 +33,17 @@ impl ProcessFact {
     /// rather than a backgrounded or detached process.
     pub fn is_foreground_tty(&self) -> bool {
         let tty = self.tty.trim();
-        !tty.is_empty() && tty != "??" && self.stat.contains('+')
+        !tty.is_empty()
+            && tty != "??"
+            && !self.is_stopped_or_zombie()
+            && self.stat.contains('+')
+    }
+
+    /// A stopped provider is still present in `ps`, but it cannot make
+    /// progress or respond to terminal input. Treat it as non-live evidence
+    /// for UI attachment decisions instead of calling it a foreground TUI.
+    pub fn is_stopped_or_zombie(&self) -> bool {
+        self.stat.starts_with('T') || self.stat.starts_with('Z')
     }
 }
 
@@ -403,6 +413,14 @@ mod tests {
                 .unwrap()
                 .1;
         assert!(!background.is_foreground_tty());
+
+        let stopped = parse_process_fact(
+            "  104 ttys003  T+   Mon May  5 11:58:00 2026 claude --resume",
+        )
+        .unwrap()
+        .1;
+        assert!(stopped.is_stopped_or_zombie());
+        assert!(!stopped.is_foreground_tty());
     }
 
     #[test]

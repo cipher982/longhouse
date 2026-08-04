@@ -6622,6 +6622,11 @@ export interface components {
              */
             session_id?: string | null;
             /**
+             * Provider Session Id
+             * @description Optional client-minted provider-native identity for degraded Helm convergence
+             */
+            provider_session_id?: string | null;
+            /**
              * Resume Attempt Id
              * @description Idempotency identity for an explicit managed-session resume
              */

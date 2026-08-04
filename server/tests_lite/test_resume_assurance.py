@@ -294,6 +294,7 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
         "native_resume_command": True,
         "bridge_subscribed": True,
         "post_resume_provider_activity": True,
+        "post_resume_response_correlated": True,
         "post_resume_marker_in_assistant_transcript": True,
         "stale_input_rejected": True,
         "stale_generation_dispatched": False,
@@ -309,6 +310,33 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
     observation["stale_generation_dispatched"] = False
     observation["post_resume_provider_activity"] = False
     assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": False}
+
+
+def test_native_resume_oracle_accepts_claude_correlation_without_literal_echo() -> None:
+    from zerg.qa.provider_resume_oracles import native_resume_assertions
+
+    observation = {
+        "same_longhouse_session": True,
+        "same_provider_thread": True,
+        "new_run": True,
+        "new_connection": True,
+        "new_app_server_process": True,
+        "provider_neutral_resume_intent": True,
+        "native_resume_command": True,
+        "bridge_subscribed": True,
+        "post_resume_provider_activity": True,
+        "post_resume_response_correlated": True,
+        "post_resume_marker_in_assistant_transcript": False,
+        "stale_input_rejected": True,
+        "stale_generation_dispatched": False,
+        "concurrent_resume_refused": True,
+        "artifact_secret_scan_passed": True,
+        "final_cleanup_verified": True,
+        "orphan_count": 0,
+        "clean_stop_verified": True,
+    }
+
+    assert native_resume_assertions("clean_exit", observation) == {"native_provider_resume_proven": True}
 
 
 def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkeypatch) -> None:
@@ -329,6 +357,11 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
         "_process_start_time",
         lambda pid: "bridge-start" if pid == 101 else "provider-start",
     )
+    monkeypatch.setattr(
+        codex_native_resume.bridge_canary,
+        "_read_json",
+        lambda _path: {"terminal_state": "session_ended", "terminal_published": True},
+    )
     monkeypatch.setattr(codex_native_resume.os, "kill", lambda pid, sig: killed.append((pid, sig)))
 
     receipt = codex_native_resume._force_process_loss(
@@ -339,11 +372,13 @@ def test_process_loss_targets_only_recorded_bridge_and_provider_processes(monkey
             "app_server_process_start_time": "provider-start",
         },
         Path("/build/provider"),
+        Path("/tmp/provider-factory-test-state.json"),
     )
 
-    assert [pid for pid, _ in killed] == [101, 202]
+    assert [pid for pid, _ in killed] == [202, 101]
     assert receipt["bridge"]["dead"] is True
     assert receipt["app_server"]["dead"] is True
+    assert receipt["bridge"]["terminal_commit_observed"] is True
 
 
 def test_process_loss_refuses_reused_pid(monkeypatch) -> None:
@@ -364,6 +399,7 @@ def test_process_loss_refuses_reused_pid(monkeypatch) -> None:
                 "app_server_process_start_time": "provider-start",
             },
             Path("/build/provider"),
+            Path("/tmp/provider-factory-test-state.json"),
         )
 
 
@@ -421,6 +457,6 @@ def test_codex_resume_intent_maps_exact_session_to_provider_thread(tmp_path) -> 
         "handoff": "terminal_command",
     }
 
-    receipt = _validate_resume_intent(args, session_id, intent)
+    receipt = _validate_resume_intent(args, session_id, intent, cwd=args.repo_root)
 
     assert receipt["identity_valid"] is True
