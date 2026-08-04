@@ -181,7 +181,10 @@ def _add_transport_health_reasons(
     if "parse_errors" in transport_assessment.reasons:
         _with_action(actions, "Inspect recent dead letters and parser errors")
     if "spool_dead" in transport_assessment.reasons:
-        _with_action(actions, "Inspect archive dead letters: longhouse archive status")
+        _with_action(
+            actions,
+            "Inspect shipping state: longhouse local-health --fast --json",
+        )
 
 
 def _add_service_status_reasons(

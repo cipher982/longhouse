@@ -574,7 +574,11 @@ fn shell_quote_path(path: &Path) -> String {
 
 fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
     let _ = args.fast;
-    let mut command = Command::new(paired_engine_path()?);
+    let engine = paired_engine_path()?;
+    if !engine.is_file() {
+        anyhow::bail!("paired longhouse-engine not found at {}", engine.display());
+    }
+    let mut command = Command::new(engine);
     command.args(["device", "local-health"]);
     if args.json {
         command.arg("--json");
