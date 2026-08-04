@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 237,
+  "file_count": 240,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1057,6 +1057,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_provider_capability_proof_store.py",
+      "providers": [
+        "claude",
+        "cursor"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_provider_factory_model.py",
       "providers": [
         "antigravity",
@@ -1107,6 +1114,14 @@
       "providers": [
         "claude",
         "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_native_resume.py",
+      "providers": [
+        "claude",
+        "cursor",
         "opencode"
       ]
     },
@@ -1626,6 +1641,14 @@
       "providers": [
         "antigravity",
         "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/provider_native_resume.py",
+      "providers": [
+        "claude",
+        "cursor",
         "opencode"
       ]
     },

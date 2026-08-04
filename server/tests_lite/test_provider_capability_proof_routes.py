@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 from dataclasses import replace
 from datetime import UTC
@@ -21,10 +23,22 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.main import app
 from zerg.routers import provider_capability_proofs as routes
+from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.services.provider_capability_proof_store import ProofPublication
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+
+
+def _blob_digest(label: str) -> str:
+    return f"sha256:{hashlib.sha256(label.encode()).hexdigest()}"
+
+
+_BLOB_CONTENT = {
+    _blob_digest(label): label.encode()
+    for label in ("raw", "epoch", "verifier", "census", "compile", "plan", "sandbox", "cleanup")
+}
 
 
 def _record(**changes) -> ProviderCapabilityProofRecord:
@@ -48,24 +62,51 @@ def _record(**changes) -> ProviderCapabilityProofRecord:
         platform="darwin",
         architecture="arm64",
         run_reference="github-actions://cipher982/longhouse/actions/runs/12345/attempts/2",
-        raw_reference_digests=("sha256:raw",),
+        raw_reference_digests=(_blob_digest("raw"),),
+        assertion_variant="clean_exit",
+        factory_source_sha="f" * 40,
+        accepted_epoch_id="helm-resume-v1-test",
+        accepted_epoch_digest=_blob_digest("epoch"),
+        verifier_bundle_digest=_blob_digest("verifier"),
+        compile_report_digest=_blob_digest("compile"),
+        plan_digest=_blob_digest("plan"),
+        sandbox_receipt_digest=_blob_digest("sandbox"),
+        cleanup_receipt_digest=_blob_digest("cleanup"),
+        worker_id="factory-worker-1",
+        worker_census_digest=_blob_digest("census"),
+        acquisition_provenance={"method": "staged_release", "source": "official"},
+        auth_mechanism="factory_token_v1",
+        observed_activity=("native_resume_command", "post_resume_provider_activity"),
+        credential_binding_facts={"codex_provider_token": "admitted"},
     )
     return replace(record, **changes)
 
 
 def _bundle(*records: ProviderCapabilityProofRecord) -> dict:
-    return {
-        "schema_version": 2,
+    payload = {
+        "schema_version": 3,
         "artifact_kind": "provider_capability_proof_bundle",
         "records": [record.serialize() for record in records],
+        "publication": {
+            "worker_id": "factory-worker-1",
+            "worker_census_digest": _blob_digest("census"),
+            "auth_mechanism": "factory_token_v1",
+            "published_at": "2026-07-22T18:01:00Z",
+        },
+        "blobs": [
+            {"digest": digest, "content_base64": base64.b64encode(_BLOB_CONTENT[digest]).decode()}
+            for digest in sorted(set().union(*(set(record.referenced_content_digests()) for record in records)))
+        ],
         # Publisher claims are deliberately ignored. Trust is derived from the
         # authenticated request and exact records accepted by the Runtime Host.
         "trusted_artifact_ids": ["publisher-controlled-value"],
     }
+    payload["bundle_digest"] = routes._bundle_digest(payload)
+    return payload
 
 
 def _client(monkeypatch, tmp_path: Path, *, factory_token: str | None = "factory-secret") -> TestClient:
-    store = ProviderCapabilityProofStore(tmp_path / "proofs")
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
     monkeypatch.setattr(
         routes,
@@ -79,6 +120,21 @@ def _client(monkeypatch, tmp_path: Path, *, factory_token: str | None = "factory
 
 def _factory_headers() -> dict[str, str]:
     return {"X-Provider-Capability-Factory-Token": "factory-secret"}
+
+
+def _write_trusted(store: ProviderCapabilityProofStore, record: ProviderCapabilityProofRecord) -> None:
+    for digest in record.referenced_content_digests():
+        store.write_blob(_BLOB_CONTENT[digest], expected_digest=digest)
+    store.write(
+        record,
+        publication=ProofPublication(
+            worker_id="factory-worker-1",
+            worker_census_digest=_blob_digest("census"),
+            auth_mechanism="factory_token_v1",
+            published_at="2026-07-22T18:01:00Z",
+            bundle_digest=_blob_digest("published-bundle"),
+        ),
+    )
 
 
 def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_derived(monkeypatch, tmp_path: Path) -> None:
@@ -97,7 +153,7 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
         first.json()
         == second.json()
         == {
-            "schema_version": 1,
+            "schema_version": 2,
             "accepted": 1,
             "trusted_artifact_ids": [record.artifact_id],
         }
@@ -105,10 +161,72 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
     assert fetched.status_code == 200
     assert fetched.json()["artifact_kind"] == "trusted_provider_capability_proof_bundle"
     assert fetched.json()["trusted_artifact_ids"] == [record.artifact_id]
-    assert fetched.json()["records"] == [record.serialize()]
+    assert {key: fetched.json()["records"][0][key] for key in record.serialize()} == record.serialize()
+    assert fetched.json()["records"][0]["store_integrity"] == {"admissible": True, "reason_codes": []}
     assert fetched.json()["records"][0]["run_reference"] == record.run_reference
     assert fetched.json()["total_records"] == 1
     assert fetched.json()["truncated"] is False
+
+
+def test_factory_rejects_new_v2_publication_but_keeps_old_history_non_admissible(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    legacy = _record(
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        generated_at=datetime.now(UTC).isoformat(),
+        schema_version=LEGACY_PROOF_SCHEMA_VERSION,
+    )
+    payload = {
+        "schema_version": LEGACY_PROOF_SCHEMA_VERSION,
+        "artifact_kind": "provider_capability_proof_bundle",
+        "records": [legacy.serialize()],
+    }
+    routes._legacy_proof_store().write(legacy)
+    try:
+        published = client.post(
+            "/api/internal/provider-capability-proofs",
+            headers=_factory_headers(),
+            json=payload,
+        )
+        fetched = client.get("/api/agents/provider-capability-proofs")
+        projection = routes.build_capability_projection_payload()
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert published.status_code == 422
+    assert published.json()["detail"] == "historical schema-v2 proofs are read-only and cannot be published"
+    visible = next(record for record in fetched.json()["records"] if record["artifact_id"] == legacy.artifact_id)
+    assert visible["schema_version"] == 2
+    assert visible["store_integrity"] == {
+        "admissible": False,
+        "reason_codes": ["proof_schema_legacy", "historical_schema_v2"],
+    }
+    assert legacy.artifact_id not in fetched.json()["trusted_artifact_ids"]
+    row = next(
+        item
+        for item in projection["capabilities"]
+        if item["provider"] == "codex" and item["assertion_id"] == legacy.assertion_id
+    )
+    assert row["proof_status"] == "unacceptable_evidence"
+    assert row["proof_artifact_id"] is None
+    assert row["latest_proof_artifact_id"] == legacy.artifact_id
+    assert "proof_schema_legacy" in row["admissibility_reasons"]
+
+
+def test_factory_publication_timestamp_requires_timezone(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    payload = _bundle(_record())
+    payload["publication"]["published_at"] = "2026-07-22T18:01:00"
+    payload["bundle_digest"] = routes._bundle_digest(payload)
+    try:
+        response = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=payload)
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "proof bundle publication timestamp must include a timezone"
 
 
 def test_factory_publish_is_absent_when_token_is_unconfigured(monkeypatch, tmp_path: Path) -> None:
@@ -163,6 +281,7 @@ def test_factory_rejects_tampering_before_any_record_is_written(monkeypatch, tmp
     tampered["artifact_id"] = "0" * 64
     payload = _bundle(valid)
     payload["records"].append(tampered)
+    payload["bundle_digest"] = routes._bundle_digest(payload)
     try:
         response = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=payload)
         fetched = client.get("/api/agents/provider-capability-proofs")
@@ -200,6 +319,7 @@ def test_factory_rejects_unknown_provider_and_bundle_schema(monkeypatch, tmp_pat
     client = _client(monkeypatch, tmp_path)
     invalid_schema = _bundle(_record())
     invalid_schema["schema_version"] = 1
+    invalid_schema["bundle_digest"] = routes._bundle_digest(invalid_schema)
     try:
         unknown_provider = client.post(
             "/api/internal/provider-capability-proofs",
@@ -273,11 +393,12 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     # date eventually ages past the assertion's real max_age_seconds and the
     # test starts asserting "stale" instead of "pass".
     generated_at = datetime.now(UTC).isoformat()
-    store = ProviderCapabilityProofStore(tmp_path / "proofs")
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
-    store.write(
-        _record(
+    proof = _record(
             assertion_id="coordination_instructions_model_visible",
+            assertion_variant=None,
+            scenario_id="codex_coordination_awareness_create",
             outcome=AssertionOutcome.PASS,
             generated_at=generated_at,
             # The schema's real acceptable_evidence for this assertion is
@@ -287,7 +408,7 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
             # "proven" row silently becomes unacceptable_evidence instead.
             evidence_class=EvidenceClass.LIVE_TOKEN,
         )
-    )
+    _write_trusted(store, proof)
     client = _client(monkeypatch, tmp_path)
     try:
         response = client.get("/api/agents/provider-capabilities")
@@ -330,15 +451,16 @@ def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp
     from zerg.dependencies.auth import require_admin
 
     generated_at = datetime.now(UTC).isoformat()
-    store = ProviderCapabilityProofStore(tmp_path / "proofs")
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
-    store.write(
-        _record(
+    proof = _record(
             assertion_id="coordination_instructions_model_visible",
+            assertion_variant=None,
+            scenario_id="codex_coordination_awareness_create",
             outcome=AssertionOutcome.PASS,
             generated_at=generated_at,
         )
-    )
+    _write_trusted(store, proof)
     api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_admin=True)
     api_app.dependency_overrides[require_admin] = lambda: None
     client = TestClient(app, backend="asyncio")

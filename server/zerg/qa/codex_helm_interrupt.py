@@ -21,6 +21,7 @@ from zerg.qa import qualification_request
 from zerg.qa.codex_auth import CodexAuthError
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -410,6 +411,7 @@ def _record(
     evidence_class: EvidenceClass,
 ) -> ProviderCapabilityProofRecord:
     return ProviderCapabilityProofRecord(
+        schema_version=LEGACY_PROOF_SCHEMA_VERSION,
         provider="codex",
         provider_version=provider_version,
         provider_executable_identity=provider_identity,

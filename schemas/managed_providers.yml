@@ -956,6 +956,7 @@ providers:
       runtime_prerequisites: [session_context]
       required_assertions:
       - id: unsupported_resume_is_typed_and_side_effect_free
+        variant: policy_disabled
         scenario_id: resume_unsupported
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1

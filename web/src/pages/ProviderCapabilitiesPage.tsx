@@ -22,6 +22,15 @@ interface ProviderCapabilityRow {
   proof_status: string;
   generated_at: string | null;
   evidence_class: string | null;
+  proof_artifact_id: string | null;
+  latest_proof_artifact_id: string | null;
+  latest_outcome: string | null;
+  admissibility_reasons: string[];
+  accepted_epoch_id: string | null;
+  plan_digest: string | null;
+  producer_id: string | null;
+  worker_id: string | null;
+  open_case_id: string | null;
 }
 
 interface ProviderCapabilityProjectionResponse {
@@ -55,6 +64,7 @@ function proofStatusBadgeVariant(status: string): "success" | "warning" | "error
     case "stale":
     case "blocked":
     case "skipped":
+    case "unacceptable_evidence":
       return "warning";
     case "never_proven":
     default:
@@ -147,6 +157,7 @@ export default function ProviderCapabilitiesPage() {
               <Table.Cell isHeader>Proof status</Table.Cell>
               <Table.Cell isHeader>Evidence class</Table.Cell>
               <Table.Cell isHeader>Last proven</Table.Cell>
+              <Table.Cell isHeader>Assurance</Table.Cell>
             </Table.Header>
             <Table.Body>
               {rows.map((row) => (
@@ -161,6 +172,19 @@ export default function ProviderCapabilitiesPage() {
                   </Table.Cell>
                   <Table.Cell>{row.evidence_class ?? "—"}</Table.Cell>
                   <Table.Cell>{formatGeneratedAt(row.generated_at)}</Table.Cell>
+                  <Table.Cell>
+                    {row.proof_artifact_id ? (
+                      <span title={row.proof_artifact_id}>
+                        proof <code>{row.proof_artifact_id.slice(0, 12)}</code>
+                        {row.worker_id ? ` · ${row.worker_id}` : ""}
+                      </span>
+                    ) : row.admissibility_reasons.length > 0 ? (
+                      <span title={row.admissibility_reasons.join(", ")}>{row.admissibility_reasons.join(", ")}</span>
+                    ) : (
+                      "No admissible proof"
+                    )}
+                    {row.latest_outcome && row.latest_outcome !== "pass" ? ` · latest ${row.latest_outcome}` : ""}
+                  </Table.Cell>
                 </Table.Row>
               ))}
             </Table.Body>

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -53,6 +54,7 @@ def publish_scenario_assertions(
         if not isinstance(passed, bool):
             raise ValueError(f"scenario assertion {assertion_id} outcome must be boolean")
         record = ProviderCapabilityProofRecord(
+            schema_version=LEGACY_PROOF_SCHEMA_VERSION,
             provider=identity.provider,
             provider_version=identity.provider_version,
             provider_executable_identity=identity.provider_executable_identity,
