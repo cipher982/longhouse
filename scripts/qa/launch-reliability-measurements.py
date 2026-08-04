@@ -36,7 +36,18 @@ def discover_matrix_artifacts(inputs: Iterable[Path]) -> list[Path]:
     seen: set[Path] = set()
     for raw in inputs:
         path = raw.expanduser().resolve()
-        candidates = [path] if path.is_file() else sorted(path.glob(f"*/{MATRIX_FILENAME}"))
+        if not path.exists():
+            raise ValueError(f"matrix input does not exist: {path}")
+        if path.is_file():
+            candidates = [path]
+        else:
+            candidates = []
+            direct = path / MATRIX_FILENAME
+            if direct.is_file():
+                candidates.append(direct)
+            candidates.extend(sorted(path.glob(f"*/{MATRIX_FILENAME}")))
+        if not candidates:
+            raise ValueError(f"matrix input contains no {MATRIX_FILENAME}: {path}")
         for candidate in candidates:
             candidate = candidate.resolve()
             if candidate in seen:
@@ -67,12 +78,19 @@ def _auth_gaps(artifact: dict[str, Any]) -> list[str]:
     )
 
 
-def _provider_owned_failure_count(artifact: dict[str, Any]) -> int:
-    return sum(
-        1
-        for failure in artifact.get("provider_startup_failures") or []
-        if isinstance(failure, dict) and failure.get("provider")
-    )
+def _startup_failure_counts(artifact: dict[str, Any]) -> dict[str, int]:
+    counts = {"provider_owned": 0, "harness_precondition": 0, "unknown": 0}
+    for failure in artifact.get("provider_startup_failures") or []:
+        if not isinstance(failure, dict) or not failure.get("provider"):
+            continue
+        qualification = failure.get("qualification")
+        if qualification == "provider_owned_start_failure":
+            counts["provider_owned"] += 1
+        elif qualification == "harness_precondition_unmet":
+            counts["harness_precondition"] += 1
+        else:
+            counts["unknown"] += 1
+    return counts
 
 
 def _measured_run(artifact: dict[str, Any]) -> bool:
@@ -95,7 +113,7 @@ def _successful_recovery(artifact: dict[str, Any]) -> bool:
         _measured_run(artifact)
         and isinstance(before, int)
         and isinstance(after, int)
-        and before >= 0
+        and before > 0
         and after == 0
         and len(cleanup) == len(artifact.get("providers") or [])
         and all(status == "pass" for status in cleanup)
@@ -127,9 +145,9 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         if _auth_gaps(artifact)
     ]
     provider_failures = [
-        {"path": str(path), "count": _provider_owned_failure_count(artifact)}
+        {"path": str(path), "count": _startup_failure_counts(artifact)["provider_owned"]}
         for path, artifact in measured
-        if _provider_owned_failure_count(artifact)
+        if _startup_failure_counts(artifact)["provider_owned"]
     ]
 
     history = []
@@ -148,7 +166,7 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
                 },
                 "cleanup": {"pass": cleanup.count("pass"), "total": len(cleanup)},
                 "auth_gaps": _auth_gaps(artifact),
-                "provider_owned_startup_failures": _provider_owned_failure_count(artifact),
+                "startup_failures": _startup_failure_counts(artifact),
                 "recovery_duration_seconds": measurements.get("recovery_duration_seconds"),
                 "run_duration_seconds": measurements.get("run_duration_seconds"),
                 "harness_repository_git_sha": (artifact.get("harness") or {}).get("repository_git_sha"),
@@ -158,6 +176,8 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
 
     harness_results: Counter[str] = Counter()
     harness_levels: Counter[str] = Counter()
+    harness_operation_statuses: Counter[str] = Counter()
+    blocked_operations: list[dict[str, str]] = []
     harness_inputs: list[str] = []
     for path in harness_paths:
         try:
@@ -171,8 +191,20 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
                 continue
             status = str(result.get("status") or "unknown")
             harness_results[status] += 1
-            for evidence in (result.get("data") or {}).get("operation_evidence", {}).values():
+            operation_evidence = (result.get("data") or {}).get("operation_evidence", {})
+            for operation, evidence in operation_evidence.items():
                 if isinstance(evidence, dict):
+                    operation_status = str(evidence.get("status") or "unknown")
+                    harness_operation_statuses[operation_status] += 1
+                    if operation_status == "blocked":
+                        blocked_operations.append(
+                            {
+                                "provider": str(result.get("provider") or "unknown"),
+                                "scenario": str(result.get("scenario") or "unknown"),
+                                "operation": str(operation),
+                                "failure_code": str(evidence.get("failure_code") or "unknown"),
+                            }
+                        )
                     level = str(evidence.get("level") or "unknown")
                     harness_levels[level] += 1
 
@@ -216,11 +248,15 @@ def build_report(matrix_paths: Iterable[Path], harness_paths: Iterable[Path] = (
         },
         "provider_scenarios": {
             "result_status_counts": dict(sorted(harness_results.items())),
+            "operation_status_counts": dict(sorted(harness_operation_statuses.items())),
+            "blocked_operations": blocked_operations,
             "evidence_level_counts": dict(sorted(harness_levels.items())),
         },
         "measures": {
             "automatic_recovery_time": (
-                {"status": "observed", "source": "matrix.measurements"} if recovery_seconds else _not_observed("no measured clean matrix run")
+                {"status": "observed", "source": "successful matrix.measurements"}
+                if successful
+                else _not_observed("no measured matrix run with a positive retry queue converged to zero and complete cleanup")
             ),
             "false_red_rate": _not_observed("retained matrix artifacts do not include a user-action/data-risk ground-truth label"),
             "hidden_failure_rate": _not_observed("no longitudinal producer-freshness truth series was supplied"),

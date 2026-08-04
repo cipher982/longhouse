@@ -11,7 +11,14 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-def _matrix(*, path: Path, verdict: str = "yellow", auth_gap: bool = True, provider_failure: bool = False) -> None:
+def _matrix(
+    *,
+    path: Path,
+    verdict: str = "yellow",
+    auth_gap: bool = True,
+    provider_failure: bool = False,
+    retry_after: int = 0,
+) -> None:
     providers = []
     for provider in ("claude", "codex", "opencode", "cursor"):
         providers.extend(
@@ -35,9 +42,11 @@ def _matrix(*, path: Path, verdict: str = "yellow", auth_gap: bool = True, provi
         "verdict": verdict,
         "providers": providers,
         "provider_auth": auth,
-        "provider_startup_failures": ([{"provider": "claude"}] if provider_failure else []),
+        "provider_startup_failures": (
+            [{"provider": "claude", "qualification": "provider_owned_start_failure"}] if provider_failure else []
+        ),
         "retry_intents_before_recovery": 8,
-        "retry_intents_after_recovery": 0,
+        "retry_intents_after_recovery": retry_after,
         "measurements": {"recovery_duration_seconds": 5.0, "run_duration_seconds": 100.0},
         "harness": {"repository_dirty": False, "harness_file_dirty": False, "repository_git_sha": "harness-sha"},
         "implementation": {"longhouse": {"source_git_sha": "implementation-sha"}},
@@ -62,6 +71,8 @@ def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Pa
     assert matrix["cleanup_pass_rate"] == 1.0
     assert len(matrix["auth_precondition_runs"]) == 1
     assert len(matrix["provider_owned_failure_runs"]) == 1
+    assert matrix["history"][0]["startup_failures"]["harness_precondition"] == 0
+    assert matrix["history"][1]["startup_failures"]["provider_owned"] == 1
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
 
 
@@ -77,8 +88,12 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
                         "status": "pass",
                         "data": {
                             "operation_evidence": {
-                                "pause_request_detect": {"level": "hermetic"},
-                                "live_answer_delivery": {"level": "live_token_required", "status": "blocked"},
+                                "pause_request_detect": {"level": "hermetic", "status": "pass"},
+                                "live_answer_delivery": {
+                                    "level": "live_token_required",
+                                    "status": "blocked",
+                                    "failure_code": "answer_pause_provider_delivery_unproven",
+                                },
                             }
                         },
                     }
@@ -90,4 +105,27 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
     report = MODULE.build_report([matrix], [harness])
 
     assert report["provider_scenarios"]["result_status_counts"] == {"pass": 1}
+    assert report["provider_scenarios"]["operation_status_counts"] == {"blocked": 1, "pass": 1}
+    assert report["provider_scenarios"]["blocked_operations"][0]["operation"] == "live_answer_delivery"
     assert report["provider_scenarios"]["evidence_level_counts"] == {"hermetic": 1, "live_token_required": 1}
+
+
+def test_report_does_not_observe_failed_recovery(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False, retry_after=3)
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["successful_recovery_count"] == 0
+    assert report["measures"]["automatic_recovery_time"]["status"] == "not_observed"
+
+
+def test_missing_matrix_input_fails_closed(tmp_path: Path):
+    missing = tmp_path / "missing"
+
+    try:
+        MODULE.discover_matrix_artifacts([missing])
+    except ValueError as exc:
+        assert "does not exist" in str(exc)
+    else:
+        raise AssertionError("missing matrix input must fail closed")
