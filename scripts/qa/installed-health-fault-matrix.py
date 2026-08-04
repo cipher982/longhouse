@@ -287,6 +287,8 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                         "blocked_source_count": 1,
                         "unresolved_blocked_source_count": 1,
                         "latest_block_kind": "source_epoch_conflict_unresolved",
+                        "latest_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
+                        "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
                     }
                 ),
             )
@@ -347,6 +349,18 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
 
         observed = invoke(binary, root)
         assert_health(observed, **expected)
+        if case == "unresolved_source_conflict":
+            expected_action = (
+                "Inspect retained source evidence with longhouse shipping inspect "
+                "--source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json "
+                "before retrying or discarding it."
+            )
+            suggested_actions = observed["payload"].get("suggested_actions")
+            if suggested_actions != [expected_action]:
+                raise AssertionError(
+                    "expected the installed unresolved-source action to preserve the "
+                    f"source epoch, got {suggested_actions!r}"
+                )
         return {"case": case, "expected": expected, "observed": observed["payload"]}
 
 

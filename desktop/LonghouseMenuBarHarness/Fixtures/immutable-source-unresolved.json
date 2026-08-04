@@ -4,8 +4,8 @@
   "health_state": "broken",
   "severity": "red",
   "headline": "Longhouse has unresolved durable source evidence",
-  "reasons": ["storage_v2_sources_blocked", "storage_v2_sources_unresolved"],
-  "suggested_actions": ["Inspect the blocked source proof in engine-status.json before retrying or discarding it."],
+  "reasons": ["storage_v2_sources_unresolved"],
+  "suggested_actions": ["Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it."],
   "suggested_action_ids": ["inspect_storage_source"],
   "service": { "status": "running" },
   "engine_status": {
@@ -24,7 +24,9 @@
         "unresolved_blocked_source_count": 1,
         "blocked_bytes": 4096,
         "latest_block_kind": "source_epoch_conflict",
-        "latest_block_detail": "newer reconciliation is pending; one older source remains unresolved",
+        "latest_block_detail": "Runtime Host rejected the exact envelope and has no manifest for its source epoch",
+        "latest_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
+        "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
         "byte_limit": 1073741824
       }
     }
