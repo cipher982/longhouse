@@ -189,7 +189,7 @@ impl Drop for ManagedLaunchRegistrationRetry {
             && !self.state.provider_alive.load(Ordering::Acquire)
             && !self.state.keep_intent.load(Ordering::Acquire)
         {
-            let _ = fs::remove_file(&self.state.intent_path);
+            let _ = remove_retry_intent_if_present(&self.state.intent_path);
         }
     }
 }
@@ -215,7 +215,7 @@ impl ManagedLaunchRegistrationRetry {
             return;
         }
         self.state.keep_intent.store(false, Ordering::Release);
-        let _ = fs::remove_file(&self.state.intent_path);
+        let _ = remove_retry_intent_if_present(&self.state.intent_path);
     }
 
     /// Retain a ready launch after the foreground wrapper exits. The provider
@@ -225,7 +225,7 @@ impl ManagedLaunchRegistrationRetry {
     pub fn mark_provider_exited(&self) {
         if !self.state.provider_alive.swap(false, Ordering::AcqRel) {
             self.state.keep_intent.store(false, Ordering::Release);
-            let _ = fs::remove_file(&self.state.intent_path);
+            let _ = remove_retry_intent_if_present(&self.state.intent_path);
             return;
         }
         self.state.keep_intent.store(true, Ordering::Release);
@@ -513,24 +513,8 @@ fn persist_retry_intent_at(
     path: &std::path::Path,
     intent: &ManagedLaunchRetryIntent,
 ) -> anyhow::Result<PathBuf> {
-    let directory = path
-        .parent()
-        .context("managed launch retry path has no parent")?;
-    fs::create_dir_all(directory).with_context(|| {
-        format!(
-            "create managed launch retry directory {}",
-            directory.display()
-        )
-    })?;
-    set_private_directory_permissions(directory)?;
-    let bytes = serde_json::to_vec_pretty(intent).context("encode managed launch retry intent")?;
-    let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    write_private_file(&temporary, &bytes)
-        .with_context(|| format!("write managed launch retry intent {}", temporary.display()))?;
-    fs::rename(&temporary, &path)
-        .with_context(|| format!("publish managed launch retry intent {}", path.display()))?;
-    set_private_file_permissions(&path)?;
-    Ok(path.to_path_buf())
+    let _lock = RetryIntentLock::acquire(path)?;
+    persist_retry_intent_at_unlocked(path, intent)
 }
 
 fn persist_outcome_retry_intent_at(
@@ -598,15 +582,72 @@ fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()
     Ok(())
 }
 
+/// Serialize foreground provider callbacks with the Machine Agent's
+/// reconciliation of one retry intent. The JSON file itself is atomically
+/// replaced, so the lock lives in a stable sidecar rather than on the file
+/// that gets renamed.
+struct RetryIntentLock {
+    #[cfg(unix)]
+    file: fs::File,
+}
+
+impl RetryIntentLock {
+    fn acquire(path: &std::path::Path) -> anyhow::Result<Self> {
+        let lock_path = path.with_extension("lock");
+        let directory = lock_path
+            .parent()
+            .context("managed launch retry lock has no parent")?;
+        fs::create_dir_all(directory)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::os::unix::io::AsRawFd;
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .open(&lock_path)
+                .with_context(|| {
+                    format!("open managed launch retry lock {}", lock_path.display())
+                })?;
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error()).with_context(|| {
+                    format!("lock managed launch retry intent {}", path.display())
+                });
+            }
+            return Ok(Self { file });
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+}
+
+impl Drop for RetryIntentLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
+}
+
 fn update_retry_intent<F>(path: &std::path::Path, update: F) -> anyhow::Result<()>
 where
     F: FnOnce(&mut ManagedLaunchRetryIntent),
 {
+    let _lock = RetryIntentLock::acquire(path)?;
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let mut intent: ManagedLaunchRetryIntent =
         serde_json::from_slice(&bytes).context("decode managed launch retry intent")?;
     update(&mut intent);
-    let published = persist_retry_intent_at(path, &intent)?;
+    let published = persist_retry_intent_at_unlocked(path, &intent)?;
     if published != path {
         anyhow::bail!("managed launch retry intent path changed unexpectedly");
     }
@@ -614,6 +655,14 @@ where
 }
 
 fn merge_current_retry_owner_state(
+    path: &std::path::Path,
+    intent: &mut ManagedLaunchRetryIntent,
+) -> anyhow::Result<()> {
+    let _lock = RetryIntentLock::acquire(path)?;
+    merge_current_retry_owner_state_locked(path, intent)
+}
+
+fn merge_current_retry_owner_state_locked(
     path: &std::path::Path,
     intent: &mut ManagedLaunchRetryIntent,
 ) -> anyhow::Result<()> {
@@ -641,12 +690,103 @@ fn persist_retry_intent_with_owner_merge(
     path: &std::path::Path,
     intent: &mut ManagedLaunchRetryIntent,
 ) -> anyhow::Result<()> {
-    merge_current_retry_owner_state(path, intent)?;
-    let published = persist_retry_intent_at(path, intent)?;
+    let _lock = RetryIntentLock::acquire(path)?;
+    merge_current_retry_owner_state_locked(path, intent)?;
+    let published = persist_retry_intent_at_unlocked(path, intent)?;
     if published != path {
         anyhow::bail!("managed launch retry intent path changed unexpectedly");
     }
     Ok(())
+}
+
+fn persist_retry_intent_at_unlocked(
+    path: &std::path::Path,
+    intent: &ManagedLaunchRetryIntent,
+) -> anyhow::Result<PathBuf> {
+    let directory = path
+        .parent()
+        .context("managed launch retry path has no parent")?;
+    fs::create_dir_all(directory).with_context(|| {
+        format!(
+            "create managed launch retry directory {}",
+            directory.display()
+        )
+    })?;
+    set_private_directory_permissions(directory)?;
+    let bytes = serde_json::to_vec_pretty(intent).context("encode managed launch retry intent")?;
+    let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    write_private_file(&temporary, &bytes)
+        .with_context(|| format!("write managed launch retry intent {}", temporary.display()))?;
+    fs::rename(&temporary, path)
+        .with_context(|| format!("publish managed launch retry intent {}", path.display()))?;
+    set_private_file_permissions(path)?;
+    Ok(path.to_path_buf())
+}
+
+fn remove_retry_intent_if_present(path: &std::path::Path) -> anyhow::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = RetryIntentLock::acquire(path)?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
+    }
+}
+
+/// Remove a pre-ready intent only if its latest owner state is still
+/// pre-ready. The second read is inside the same lock as the removal, so a
+/// readiness callback cannot publish `provider_ready=true` between the
+/// daemon's decision and deletion.
+fn remove_unready_retry_intent_if_present(path: &std::path::Path) -> anyhow::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = RetryIntentLock::acquire(path)?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let intent: ManagedLaunchRetryIntent =
+        serde_json::from_slice(&bytes).context("decode current managed launch retry intent")?;
+    if intent.provider_ready {
+        return Ok(false);
+    }
+    fs::remove_file(path).with_context(|| {
+        format!(
+            "remove pre-ready managed launch retry intent {}",
+            path.display()
+        )
+    })?;
+    Ok(true)
+}
+
+/// Mark a pre-ready intent exhausted only if the latest owner state is still
+/// pre-ready. A readiness callback that wins the lock keeps the intent alive
+/// for the normal ready recovery path.
+fn exhaust_unready_retry_intent_if_present(
+    path: &std::path::Path,
+    reason: &str,
+) -> anyhow::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = RetryIntentLock::acquire(path)?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let mut intent: ManagedLaunchRetryIntent =
+        serde_json::from_slice(&bytes).context("decode current managed launch retry intent")?;
+    if intent.provider_ready {
+        return Ok(false);
+    }
+    exhaust_retry_intent(&mut intent, reason);
+    persist_retry_intent_at_unlocked(path, &intent)?;
+    Ok(true)
 }
 
 #[allow(dead_code)] // Used by the Machine Agent daemon binary.
@@ -1000,25 +1140,31 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             }
             match launcher_owner_alive(&intent) {
                 Some(true) if pre_ready_expired(&intent, now) => {
-                    exhaust_retry_intent(
-                        &mut intent,
+                    match exhaust_unready_retry_intent_if_present(
+                        &path,
                         "managed launch did not become ready before its recovery window expired",
-                    );
-                    if let Err(error) = persist_retry_intent_with_owner_merge(&path, &mut intent) {
-                        tracing::warn!(path = %path.display(), error = %error, "Could not persist expired pre-ready managed launch retry intent");
+                    ) {
+                        Ok(true) => {
+                            tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed launch stayed pre-ready until its recovery window expired")
+                        }
+                        Ok(false) => {
+                            tracing::debug!(path = %path.display(), "Managed launch became ready while pre-ready expiry was being evaluated")
+                        }
+                        Err(error) => {
+                            tracing::warn!(path = %path.display(), error = %error, "Could not persist expired pre-ready managed launch retry intent")
+                        }
                     }
-                    tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed launch stayed pre-ready until its recovery window expired");
                     continue;
                 }
                 Some(true) => continue,
                 Some(false) => {
                     tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Removing managed launch intent whose launcher exited before readiness");
-                    let _ = remove_if_present(&path);
+                    let _ = remove_unready_retry_intent_if_present(&path);
                     continue;
                 }
                 None if pre_ready_expired(&intent, now) => {
                     tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Removing stale managed launch intent with no readiness owner identity");
-                    let _ = remove_if_present(&path);
+                    let _ = remove_unready_retry_intent_if_present(&path);
                     continue;
                 }
                 None => continue,
@@ -1186,7 +1332,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
             continue;
         }
-        if let Err(error) = remove_if_present(&path) {
+        if let Err(error) = remove_retry_intent_if_present(&path).map(|_| ()) {
             tracing::warn!(path = %path.display(), error = %error, "Could not remove resolved managed launch retry intent");
             continue;
         }
@@ -1423,6 +1569,8 @@ mod tests {
         let stored: ManagedLaunchRetryIntent =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(stored.provider_ready);
+        assert!(!remove_unready_retry_intent_if_present(&path).unwrap());
+        assert!(path.exists());
         update_retry_intent(&path, |stored| stored.provider_exited = true).unwrap();
         let mut stale = intent;
         merge_current_retry_owner_state(&path, &mut stale).unwrap();

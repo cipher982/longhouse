@@ -610,7 +610,6 @@ def start_live_command(
     use_tty: bool,
     marker: str,
     ready_check: Callable[[int], bool] | None = None,
-    allow_unready: bool = False,
     timeout: float = 45,
 ) -> LiveCommand:
     """Start a provider with a real process handle and wait only for startup.
@@ -657,28 +656,14 @@ def start_live_command(
         provider_ready_observed=False,
     )
     started = time.monotonic()
-    marker_seen_at: float | None = None
     try:
         while time.monotonic() - started < timeout:
             readable, _, _ = select.select([output_fd], [], [], 0.2)
             if readable:
                 _read_live_output(live)
             marker_seen = marker in live.output.decode("utf-8", errors="replace")
-            if marker_seen and marker_seen_at is None:
-                marker_seen_at = time.monotonic()
             if marker_seen and (ready_check is None or ready_check(process.pid)):
                 live.provider_ready_observed = True
-                return live
-            # Provider readiness is persisted by a short-lived native callback
-            # after the degraded marker is printed. Give that callback a small
-            # bounded window before recording an unqualified start; otherwise a
-            # generic marker can race the durable readiness write.
-            if (
-                marker_seen
-                and allow_unready
-                and marker_seen_at is not None
-                and time.monotonic() - marker_seen_at >= 2
-            ):
                 return live
             if process.poll() is not None:
                 _read_live_output(live)
@@ -824,7 +809,6 @@ def run_provider_live(
     base_url: str,
     token: str,
     engine_bin: Path,
-    allow_unready: bool = False,
 ) -> tuple[dict[str, Any], LiveCommand | None]:
     provider_root = evidence_root / "providers" / provider
     provider_root.mkdir(parents=True, exist_ok=True)
@@ -857,7 +841,6 @@ def run_provider_live(
             ready_check=lambda launcher_pid: retry_owner_ready(
                 root, provider, launcher_pid
             ),
-            allow_unready=allow_unready,
         )
     except ProviderLaunchError as error:
         output = redact(error.output, token)
@@ -1008,7 +991,6 @@ def run_concurrent_providers(
     base_url: str,
     token: str,
     engine_bin: Path,
-    allow_unready: bool = False,
 ) -> list[tuple[dict[str, Any], LiveCommand | None]]:
     """Launch the selected installed providers at the same time.
 
@@ -1031,7 +1013,6 @@ def run_concurrent_providers(
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
-                allow_unready=allow_unready,
             )
             for provider in providers
         }
@@ -1131,7 +1112,6 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
-                allow_unready=args.allow_unqualified_recovery,
             )
             results.append(result)
             if live is not None:
@@ -1147,7 +1127,6 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=base_url,
                 token=token,
                 engine_bin=engine_bin,
-                allow_unready=args.allow_unqualified_recovery,
             )
             for result, live in concurrent_results:
                 results.append(result)
@@ -1197,20 +1176,20 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 f"installed outage launches left {retry_count} retry intents, expected {expected_retry_count}"
             )
         retry_intents = read_retry_intents(temp_root)
-        successful_provider_counts = Counter(
+        launch_intent_provider_counts = Counter(
             str(result.get("provider", "")).lower()
             for result in results
-            if result.get("startup_failure") is None
+            if result.get("launch_intent_created")
         )
         intent_provider_counts = Counter(
             str(intent.get("provider_name", "")).lower()
             for intent in retry_intents
         )
-        if intent_provider_counts != successful_provider_counts:
+        if intent_provider_counts != launch_intent_provider_counts:
             raise RuntimeError(
                 "installed launch intents were not attributable one-for-one by provider: "
                 f"intents={dict(intent_provider_counts)} "
-                f"successful_launches={dict(successful_provider_counts)}"
+                f"launch_intents={dict(launch_intent_provider_counts)}"
             )
         args._retry_intents = [
             {

@@ -26,6 +26,11 @@ PYTHON_BIN="$(command -v python3)"
 # smoke root short so the test exercises lifecycle behavior rather than the
 # host's unusually long default macOS TMPDIR prefix.
 TEST_ROOT="$(mktemp -d /tmp/lh.XXXXXX)"
+EVIDENCE_BASE="${LONGHOUSE_LIFECYCLE_SMOKE_EVIDENCE_ROOT:-$ROOT_DIR/.build/canaries/managed-launch-lifecycle}"
+EVIDENCE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+EVIDENCE_DIR="$EVIDENCE_BASE/$EVIDENCE_STAMP"
+mkdir -p "$EVIDENCE_DIR"
+exec > >(tee "$EVIDENCE_DIR/console.log") 2>&1
 HOME_DIR="$TEST_ROOT/home"
 BIN_DIR="$TEST_ROOT/bin"
 SERVER_LOG="$TEST_ROOT/server.log"
@@ -80,6 +85,12 @@ cleanup() {
     wait "$SERVER_PID" 2>/dev/null || true
   fi
   stop_processes_for_test_root
+  for artifact in "$SERVER_LOG" "$ENGINE_LOG" "$TEST_ROOT"/*.out; do
+    if [[ -f "$artifact" ]]; then
+      cp "$artifact" "$EVIDENCE_DIR/" 2>/dev/null || true
+    fi
+  done
+  echo "lifecycle evidence: $EVIDENCE_DIR"
   if [[ "${LONGHOUSE_KEEP_LIFECYCLE_SMOKE_ROOT:-0}" == "1" ]]; then
     echo "preserved lifecycle smoke root: $TEST_ROOT" >&2
   else

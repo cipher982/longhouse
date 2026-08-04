@@ -120,6 +120,7 @@ const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
 const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
+const PROVIDER_ROOT_REFRESH_INTERVAL_SECS: u64 = 30;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
@@ -760,7 +761,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 4. Discover providers. ACP creates run files after the daemon starts;
     // establish its engine-owned root first so the watcher includes it.
     std::fs::create_dir_all(crate::config::get_agent_dir()?.join("cursor-acp-source"))?;
-    let providers = discovery::get_providers();
+    let mut providers = discovery::get_providers();
     if providers.is_empty() {
         // Durable managed-launch recovery and local health must keep running
         // even when no provider has created its session directory yet. A
@@ -917,6 +918,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut fallback_timer = tokio::time::interval(fallback_interval);
     fallback_timer.tick().await; // consume first immediate tick
+
+    let mut provider_root_refresh_timer =
+        tokio::time::interval(Duration::from_secs(PROVIDER_ROOT_REFRESH_INTERVAL_SECS));
+    provider_root_refresh_timer.tick().await; // startup discovery owns the first pass
 
     let mut failed_ship_retry_timer = tokio::time::interval(failed_ship_retry_interval);
     failed_ship_retry_timer.tick().await; // consume first immediate tick
@@ -1101,6 +1106,48 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Err(error) => {
                         tracing::debug!(error = %error, "Runtime Host storage-v2 capability probe unavailable; keeping local recovery alive");
+                    }
+                }
+            }
+
+            // Provider session roots are often created lazily after the Machine
+            // Agent starts. Refresh the known roots and teach the live watcher
+            // about any new directory so first-session writes are not delayed
+            // until a daemon restart.
+            _ = provider_root_refresh_timer.tick() => {
+                let discovered = discovery::get_providers();
+                let mut added = false;
+                for provider in discovered {
+                    if !providers.iter().any(|current| {
+                        current.name == provider.name
+                            && current.root == provider.root
+                            && current.extension == provider.extension
+                    }) {
+                        providers.push(provider);
+                        added = true;
+                    }
+                }
+                if added {
+                    match watcher.watch_provider_roots(&providers) {
+                        Ok(watched) => {
+                            tracing::info!(
+                                watched,
+                                provider_count = providers.len(),
+                                "Refreshed provider session roots"
+                            );
+                            maybe_start_reconciliation_scan(
+                                &mut discovery_tasks,
+                                &providers,
+                                &scheduler,
+                                &deferred_retries,
+                                config.archive_repair_mode,
+                                "provider root discovery",
+                            );
+                        }
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "Could not add newly discovered provider session root to watcher"
+                        ),
                     }
                 }
             }
