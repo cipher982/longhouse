@@ -63,7 +63,7 @@ def _proof_url(runtime_origin: str) -> str:
 
 
 def _parse_remote_bundle(payload: Any) -> tuple[dict[str, tuple[ProviderCapabilityProofRecord, ...]], frozenset[str]]:
-    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {1, 2}:
         raise ValueError("trusted provider proof response schema is invalid")
     if payload.get("artifact_kind") != _REMOTE_BUNDLE_KIND:
         raise ValueError("trusted provider proof response artifact kind is invalid")

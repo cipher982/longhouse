@@ -471,6 +471,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "replacement_started_after_process_loss": args.variant == "process_loss"
             and resumed_state.get("run_id") != initial_state.get("run_id"),
             "final_cleanup_verified": bool(verification.get("verified")),
+            "final_socket_absent": verification.get("socket_absent") is True,
             "orphan_count": orphan_count,
         }
         assertions = native_resume_assertions(args.variant, observation)

@@ -23,6 +23,15 @@ function buildProjection() {
         proof_status: "pass",
         generated_at: "2026-07-29T04:00:00+00:00",
         evidence_class: "live_token",
+        proof_artifact_id: "a".repeat(64),
+        latest_proof_artifact_id: "a".repeat(64),
+        latest_outcome: "pass",
+        admissibility_reasons: [],
+        accepted_epoch_id: "helm-resume-v1-test",
+        plan_digest: "sha256:plan",
+        producer_id: "codex.native_resume.v1@1",
+        worker_id: "clifford:provider-factory",
+        open_case_id: null,
       },
       {
         provider: "cursor",
@@ -34,6 +43,15 @@ function buildProjection() {
         proof_status: "never_proven",
         generated_at: null,
         evidence_class: null,
+        proof_artifact_id: null,
+        latest_proof_artifact_id: null,
+        latest_outcome: null,
+        admissibility_reasons: ["semantic_proof_missing"],
+        accepted_epoch_id: null,
+        plan_digest: null,
+        producer_id: null,
+        worker_id: null,
+        open_case_id: null,
       },
     ],
   };
@@ -81,6 +99,8 @@ describe("ProviderCapabilitiesPage", () => {
     expect(screen.getByText("pass")).toBeInTheDocument();
     expect(screen.getByText("never_proven")).toBeInTheDocument();
     expect(screen.getByText("1 of 2 declared assertions have a passing proof on record.")).toBeInTheDocument();
+    expect(screen.getByTitle("a".repeat(64))).toHaveTextContent("proof aaaaaaaaaaaa · clifford:provider-factory");
+    expect(screen.getByText("semantic_proof_missing")).toBeInTheDocument();
     expect(String(mockFetch.mock.calls[0][0])).toContain(`${config.apiBaseUrl}/admin/provider-capabilities`);
   });
 

@@ -19,6 +19,7 @@ from typing import Pattern
 
 from zerg.qa import qualification_request
 from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -243,6 +244,7 @@ def _record(
     assertion_id: str,
 ) -> ProviderCapabilityProofRecord:
     return ProviderCapabilityProofRecord(
+        schema_version=LEGACY_PROOF_SCHEMA_VERSION,
         provider=profile.provider,
         provider_version=provider_version,
         provider_executable_identity=identity,

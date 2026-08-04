@@ -1000,8 +1000,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         );
     let contract_path = claude_contract_path(&response.session_id)?;
     let retained_contract_existed = contract_path.is_file();
+    let connection_id = Uuid::new_v4().to_string();
     if let Err(error) = record_claude_contract(
         &response.session_id,
+        &response.run_id,
+        &connection_id,
         &cwd,
         &binary,
         provider_session_id,
@@ -1446,6 +1449,8 @@ fn claude_contract_path(session_id: &str) -> anyhow::Result<PathBuf> {
 
 fn record_claude_contract(
     session_id: &str,
+    run_id: &str,
+    connection_id: &str,
     cwd: &Path,
     claude_bin: &str,
     provider_session_id: &str,
@@ -1455,6 +1460,8 @@ fn record_claude_contract(
     let payload = json!({
         "schema_version": 1,
         "session_id": session_id,
+        "run_id": run_id,
+        "connection_id": connection_id,
         "provider": "claude",
         "provider_session_id": provider_session_id,
         "permission_mode": permission_mode,
@@ -3459,6 +3466,8 @@ mod tests {
             || {
                 record_claude_contract(
                     session_id,
+                    "33333333-3333-4333-8333-333333333333",
+                    "44444444-4444-4444-8444-444444444444",
                     &cwd,
                     "/usr/bin/claude",
                     "22222222-2222-4222-8222-222222222222",
@@ -3474,6 +3483,8 @@ mod tests {
                     "22222222-2222-4222-8222-222222222222"
                 );
                 assert_eq!(payload["permission_mode"], "bypass");
+                assert_eq!(payload["run_id"], "33333333-3333-4333-8333-333333333333");
+                assert_eq!(payload["connection_id"], "44444444-4444-4444-8444-444444444444");
                 assert_eq!(payload["control"]["kind"], "claude_channel_bridge");
                 assert!(path.exists());
             },

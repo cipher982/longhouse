@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProofRequirement
@@ -13,7 +14,6 @@ from zerg.services.provider_capability_proof import ProviderCapabilityProofRecor
 from zerg.services.provider_capability_proof import evaluate_proof_applicability
 from zerg.services.provider_capability_proof import proof_record_from_mapping
 from zerg.services.provider_capability_proof import select_proof
-
 
 NOW = datetime(2026, 7, 22, 16, 0, tzinfo=UTC)
 
@@ -65,6 +65,50 @@ def _requirement(**changes) -> ProofRequirement:
     return replace(requirement, **changes)
 
 
+def _variant_record(**changes) -> ProviderCapabilityProofRecord:
+    record = _record(
+        scenario_id="codex_native_resume",
+        assertion_id="native_provider_resume_proven",
+        assertion_variant="clean_exit",
+        factory_source_sha="f" * 40,
+        accepted_epoch_id="helm-resume-v1-test",
+        accepted_epoch_digest="sha256:epoch",
+        verifier_bundle_digest="sha256:verifier",
+        compile_report_digest="sha256:compile",
+        plan_digest="sha256:plan",
+        sandbox_receipt_digest="sha256:sandbox",
+        cleanup_receipt_digest="sha256:cleanup",
+        worker_id="factory-worker-1",
+        worker_census_digest="sha256:census",
+        acquisition_provenance={"method": "staged_release"},
+        auth_mechanism="factory_token_v1",
+        observed_activity=("native_resume_command", "post_resume_provider_activity"),
+        credential_binding_facts={"codex_provider_token": "admitted"},
+    )
+    return replace(record, **changes)
+
+
+def _variant_requirement(record: ProviderCapabilityProofRecord, **changes) -> ProofRequirement:
+    requirement = _requirement(
+        provider=record.provider,
+        provider_version=record.provider_version,
+        provider_executable_identity=record.provider_executable_identity,
+        assertion_id=record.assertion_id,
+        scenario_id=record.scenario_id,
+        trusted_artifact_ids=frozenset({record.artifact_id}),
+        assertion_variant="clean_exit",
+        factory_source_sha=record.factory_source_sha,
+        accepted_epoch_digest=record.accepted_epoch_digest,
+        verifier_bundle_digest=record.verifier_bundle_digest,
+        compile_report_digest=record.compile_report_digest,
+        plan_digest=record.plan_digest,
+        worker_id=record.worker_id,
+        worker_census_digest=record.worker_census_digest,
+        available_content_digests=frozenset(record.referenced_content_digests()),
+    )
+    return replace(requirement, **changes)
+
+
 def test_record_round_trips_with_content_derived_identity() -> None:
     record = _record()
 
@@ -110,6 +154,43 @@ def test_applicability_accepts_exact_trusted_pass() -> None:
 
     assert result.applicable is True
     assert result.reason_codes == ()
+
+
+def test_variant_applicability_requires_exact_v3_variant_and_retained_content() -> None:
+    record = _variant_record()
+    requirement = _variant_requirement(record)
+
+    assert evaluate_proof_applicability(record, requirement, observed_at=NOW).applicable is True
+
+    wrong_variant = _variant_record(assertion_variant="process_loss")
+    wrong = evaluate_proof_applicability(
+        wrong_variant,
+        replace(requirement, trusted_artifact_ids=frozenset({wrong_variant.artifact_id})),
+        observed_at=NOW,
+    )
+    assert "proof_assertion_variant_mismatch" in wrong.reason_codes
+
+    missing_blob = evaluate_proof_applicability(
+        record,
+        replace(requirement, available_content_digests=frozenset()),
+        observed_at=NOW,
+    )
+    assert "proof_referenced_content_missing" in missing_blob.reason_codes
+
+
+def test_legacy_proof_cannot_satisfy_variant_scoped_requirement() -> None:
+    legacy = _variant_record(assertion_variant=None, schema_version=LEGACY_PROOF_SCHEMA_VERSION)
+    requirement = _variant_requirement(
+        legacy,
+        assertion_variant="clean_exit",
+        trusted_artifact_ids=frozenset({legacy.artifact_id}),
+    )
+
+    result = evaluate_proof_applicability(legacy, requirement, observed_at=NOW)
+
+    assert result.applicable is False
+    assert "proof_assertion_variant_mismatch" in result.reason_codes
+    assert "proof_schema_legacy" in result.reason_codes
 
 
 def test_later_failure_does_not_erase_unexpired_applicable_pass() -> None:

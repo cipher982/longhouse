@@ -14,6 +14,8 @@ import json
 import sys
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from typing import Any
 from typing import Mapping
 from typing import Sequence
@@ -59,6 +61,7 @@ class ProducerRegistration:
     oracle_source: str
     oracle_entrypoint: str
     executable_module: str
+    provider_artifact_required: bool = True
     executable: bool = True
 
     def to_dict(self) -> dict[str, Any]:
@@ -192,21 +195,22 @@ def _producer_supports_cell(
     if census.get("architecture") not in registration.get("architectures", []):
         failures.append("architecture")
     artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
-    for field in ("provider", "version", "executable_identity", "build_identity", "entrypoint", "build_root"):
-        if not isinstance(artifact.get(field), str) or not artifact.get(field):
-            failures.append(f"provider_artifact_{field}")
-    if artifact.get("provider") != cell.get("provider"):
-        failures.append("provider_artifact_provider")
-    for field in ("executable_identity", "build_identity"):
-        value = artifact.get(field)
-        if not isinstance(value, str) or not value.startswith("sha256:") or len(value) != 71:
-            failures.append(f"provider_artifact_{field}_digest")
-    if artifact.get("acquisition_method") not in registration.get("acquisition_methods", []):
-        failures.append("acquisition_method")
-    if artifact.get("platform") != census.get("platform"):
-        failures.append("provider_artifact_platform")
-    if artifact.get("architecture") != census.get("architecture"):
-        failures.append("provider_artifact_architecture")
+    if registration.get("provider_artifact_required", True):
+        for field in ("provider", "version", "executable_identity", "build_identity", "entrypoint", "build_root"):
+            if not isinstance(artifact.get(field), str) or not artifact.get(field):
+                failures.append(f"provider_artifact_{field}")
+        if artifact.get("provider") != cell.get("provider"):
+            failures.append("provider_artifact_provider")
+        for field in ("executable_identity", "build_identity"):
+            value = artifact.get(field)
+            if not isinstance(value, str) or not value.startswith("sha256:") or len(value) != 71:
+                failures.append(f"provider_artifact_{field}_digest")
+        if artifact.get("acquisition_method") not in registration.get("acquisition_methods", []):
+            failures.append("acquisition_method")
+        if artifact.get("platform") != census.get("platform"):
+            failures.append("provider_artifact_platform")
+        if artifact.get("architecture") != census.get("architecture"):
+            failures.append("provider_artifact_architecture")
     available_bindings = set(census.get("credential_binding_ids", []))
     if not set(registration.get("credential_binding_ids", [])).issubset(available_bindings):
         failures.append("credential_binding")
@@ -232,12 +236,61 @@ def _producer_supports_cell(
     return failures
 
 
+def _reuse_failures(
+    proof: Mapping[str, Any],
+    cell: Mapping[str, Any],
+    subject: Mapping[str, Any],
+    epoch: Mapping[str, Any],
+    scheduling: Mapping[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
+    expected = {
+        "provider": cell.get("provider"),
+        "assertion_id": cell.get("assertion_id"),
+        "variant": cell.get("variant"),
+        "longhouse_source_sha": subject.get("longhouse_source_sha"),
+        "accepted_epoch_digest": epoch.get("epoch_digest"),
+    }
+    for field, value in expected.items():
+        if proof.get(field) != value:
+            failures.append(field)
+    if cell.get("provider") != "antigravity":
+        for field in ("provider_version", "provider_executable_identity", "provider_build_identity"):
+            expected_value = artifact.get(
+                {
+                    "provider_version": "version",
+                    "provider_executable_identity": "executable_identity",
+                    "provider_build_identity": "build_identity",
+                }[field]
+            )
+            if proof.get(field) != expected_value:
+                failures.append(field)
+    if proof.get("evidence_class") not in cell.get("acceptable_evidence", []):
+        failures.append("evidence_class")
+    artifact_id = proof.get("artifact_id")
+    if not isinstance(artifact_id, str) or len(artifact_id) != 64:
+        failures.append("artifact_id")
+    try:
+        generated = datetime.fromisoformat(str(proof.get("generated_at") or "").replace("Z", "+00:00")).astimezone(UTC)
+        evaluated = datetime.fromisoformat(str(scheduling.get("evaluated_at") or "").replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        failures.append("generated_at")
+    else:
+        if generated > evaluated or (evaluated - generated).total_seconds() >= int(cell.get("max_age_seconds") or 0):
+            failures.append("freshness")
+    if not isinstance(proof.get("publication_message_id"), str) or not proof.get("publication_message_id"):
+        failures.append("publication_message_id")
+    return failures
+
+
 def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Compile one deterministic report and, when valid, an executable plan."""
 
     diagnostics: list[dict[str, Any]] = []
     epoch = payload.get("accepted_epoch") if isinstance(payload.get("accepted_epoch"), Mapping) else {}
     census = payload.get("worker_census") if isinstance(payload.get("worker_census"), Mapping) else {}
+    subjects = payload.get("subjects") if isinstance(payload.get("subjects"), Mapping) else {}
     subject = payload.get("subject") if isinstance(payload.get("subject"), Mapping) else {}
     current_rows = payload.get("current_contract") if isinstance(payload.get("current_contract"), list) else []
     current_inputs = payload.get("protected_inputs") if isinstance(payload.get("protected_inputs"), Mapping) else {}
@@ -282,9 +335,18 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     requested_cells = scheduling.get("requested_cells") if isinstance(scheduling.get("requested_cells"), list) else []
     if sorted(requested_cells, key=_cell_sort_key) != sorted(expected_cells, key=_cell_sort_key):
         diagnostics.append(_diagnostic("scheduled_cell_omission", "scheduling did not request every accepted Resume cell"))
+    raw_decisions = scheduling.get("decisions") if isinstance(scheduling.get("decisions"), list) else []
+    decision_by_key = {
+        _cell_key(item["cell"]): item for item in raw_decisions if isinstance(item, Mapping) and isinstance(item.get("cell"), Mapping)
+    }
+    if len(decision_by_key) != len(raw_decisions) or set(decision_by_key) != {_cell_key(cell) for cell in expected_cells}:
+        diagnostics.append(_diagnostic("scheduling_decisions_invalid", "scheduling did not decide every accepted Resume cell exactly once"))
+    if scheduling.get("max_concurrency") != 1:
+        diagnostics.append(_diagnostic("scheduling_concurrency_invalid", "Resume scheduling must remain single-concurrency"))
 
     compiled_cells: list[dict[str, Any]] = []
     commands: list[dict[str, Any]] = []
+    reused_proofs: list[dict[str, Any]] = []
     for selected in sorted(expected_cells, key=_cell_sort_key):
         key = _cell_key(selected)
         cell = current_by_key.get(key)
@@ -293,11 +355,14 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         if cell is None:
             cell_diagnostics.append(_diagnostic("selected_cell_missing", "selected Resume cell is absent", cell=selected))
         else:
+            provider_subject = subjects.get(str(cell.get("provider")))
+            if not isinstance(provider_subject, Mapping):
+                provider_subject = {}
             for item in census_producers:
                 if not isinstance(item, Mapping) or not isinstance(item.get("registration"), Mapping):
                     continue
                 registration = item["registration"]
-                failures = _producer_supports_cell(registration, cell, census, subject)
+                failures = _producer_supports_cell(registration, cell, census, provider_subject)
                 if not failures:
                     eligible.append(item)
             if not eligible:
@@ -306,17 +371,35 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 cell_diagnostics.append(
                     _diagnostic("eligible_producer_ambiguous", "more than one producer can satisfy the cell", cell=cell)
                 )
+            decision = decision_by_key.get(key)
+            action = decision.get("action") if isinstance(decision, Mapping) else None
+            if action not in {"execute", "reuse"}:
+                cell_diagnostics.append(_diagnostic("scheduling_action_invalid", "cell scheduling action is invalid", cell=cell))
+            elif action == "reuse":
+                proof = decision.get("proof") if isinstance(decision.get("proof"), Mapping) else {}
+                failures = _reuse_failures(proof, cell, provider_subject, epoch, scheduling)
+                if failures:
+                    cell_diagnostics.append(
+                        _diagnostic("scheduled_proof_not_reusable", f"scheduled proof cannot be reused: {sorted(set(failures))}", cell=cell)
+                    )
         diagnostics.extend(cell_diagnostics)
         compiled: dict[str, Any] = {
             "cell": dict(selected),
             "valid": not cell_diagnostics,
             "diagnostics": cell_diagnostics,
             "producer_id": None,
+            "disposition": None,
         }
         if not cell_diagnostics:
             producer = eligible[0]
             registration = producer["registration"]
             compiled["producer_id"] = registration["producer_id"]
+            decision = decision_by_key[key]
+            compiled["disposition"] = decision["action"]
+            if decision["action"] == "reuse":
+                reused_proofs.append(dict(decision["proof"]))
+                compiled_cells.append(compiled)
+                continue
             command = {
                 "producer_id": registration["producer_id"],
                 "producer_revision": registration["producer_revision"],
@@ -332,13 +415,23 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "required_artifacts": list(registration["required_artifacts"]),
                 "required_cleanup": list(registration["required_cleanup"]),
                 "credential_binding_ids": list(registration["credential_binding_ids"]),
-                "provider_artifact": dict(subject["provider_artifact"]),
+                "provider": selected["provider"],
+                "subject_id": provider_subject.get("subject_id"),
+                "provider_artifact": dict(provider_subject.get("provider_artifact") or {}),
+                "provider_contract_digest": sha256_json(cell),
+                "adapter_digest": producer.get("code_digest"),
+                "oracle_digest": producer.get("oracle_digest"),
                 "longhouse_source_sha": subject["longhouse_source_sha"],
                 "worker_id": census.get("worker_id"),
                 "worker_platform": census.get("platform"),
                 "worker_architecture": census.get("architecture"),
                 "sandbox_policy": registration["sandbox_policy"],
                 "network_policy": registration["network_policy"],
+                "priority": "release_gate",
+                "timeout_seconds": 600,
+                "max_cost_usd": 2.0,
+                "freshness_max_age_seconds": cell["max_age_seconds"],
+                "scheduling_reason": decision["reason"],
             }
             commands.append(command)
         compiled_cells.append(compiled)
@@ -368,6 +461,9 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             "worker_census_digest": census.get("census_digest"),
             "subject": dict(subject),
             "commands": commands,
+            "reused_proofs": reused_proofs,
+            "cost_budget_usd": scheduling.get("total_execute_cost_budget_usd"),
+            "max_concurrency": scheduling.get("max_concurrency"),
         }
         plan["plan_digest"] = content_digest(plan, "plan_digest")
         report["plan_digest"] = plan["plan_digest"]
