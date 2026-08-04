@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -214,7 +215,11 @@ def start_host(root: Path, evidence_root: Path, *, port: int, ordinal: int) -> H
     repo_root = Path(__file__).resolve().parents[2]
     server_root = repo_root / "server"
     venv_python = server_root / ".venv" / "bin" / "python"
-    wait_for(lambda: port_is_available(port), 60, f"Runtime Host port {port} to become available")
+    wait_for(
+        lambda: port_is_available(port),
+        60,
+        f"Runtime Host port {port} to become available",
+    )
     uv = shutil.which("uv")
     if venv_python.is_file():
         command = [
@@ -306,11 +311,20 @@ def create_device_token(base_url: str) -> str:
     code, body = http_json(
         f"{base_url}/api/devices/tokens",
         method="POST",
-        payload={"name": "installed-managed-launch-fault-matrix", "device_id": DEVICE_ID},
+        payload={
+            "name": "installed-managed-launch-fault-matrix",
+            "device_id": DEVICE_ID,
+        },
     )
     token = body.get("token")
-    if code not in {200, 201} or not isinstance(token, str) or not token.startswith("zdt_"):
-        raise RuntimeError(f"Runtime Host did not issue a device token: status={code} body={body}")
+    if (
+        code not in {200, 201}
+        or not isinstance(token, str)
+        or not token.startswith("zdt_")
+    ):
+        raise RuntimeError(
+            f"Runtime Host did not issue a device token: status={code} body={body}"
+        )
     return token
 
 
@@ -379,7 +393,10 @@ def cleanup_detached_provider(
     return {
         "status": "pass" if not session_process_groups(session_id) else "fail",
         "stop_returncode": stop.returncode,
-        "stop_output": redact((stop.stdout or "") + (stop.stderr or ""), env.get("LONGHOUSE_DEVICE_TOKEN", "")),
+        "stop_output": redact(
+            (stop.stdout or "") + (stop.stderr or ""),
+            env.get("LONGHOUSE_DEVICE_TOKEN", ""),
+        ),
         "remaining_process_groups": sorted(session_process_groups(session_id)),
     }
 
@@ -425,7 +442,12 @@ def run_tty_command(
             if marker in decoded and not sent_interrupt:
                 marker_seen = True
                 marker_at = marker_at or time.monotonic()
-            if marker_seen and not sent_interrupt and marker_at is not None and time.monotonic() - marker_at >= 3:
+            if (
+                marker_seen
+                and not sent_interrupt
+                and marker_at is not None
+                and time.monotonic() - marker_at >= 3
+            ):
                 sent_interrupt = True
                 try:
                     os.write(master, b"\x03")
@@ -519,7 +541,9 @@ def provider_command(
     if provider == "claude":
         command.extend(["--claude-dir", str(root / "provider-config" / "claude")])
     elif provider == "opencode":
-        command.extend(["--no-attach", "--claude-dir", str(root / "provider-config" / "opencode")])
+        command.extend(
+            ["--no-attach", "--claude-dir", str(root / "provider-config" / "opencode")]
+        )
     elif provider == "codex":
         command.append("--no-attach")
     else:
@@ -579,7 +603,9 @@ def run_provider(
         "provider_binary": str(provider_bin),
         "provider_version": version_probe(provider_bin),
         "facade": str(longhouse_bin),
-        "command": ["<device-token-redacted>" if value == token else value for value in command],
+        "command": [
+            "<device-token-redacted>" if value == token else value for value in command
+        ],
         "returncode": evidence.returncode,
         "timed_out": evidence.timed_out,
         "degraded_marker_seen": evidence.marker_seen,
@@ -597,10 +623,51 @@ def run_provider(
     return result
 
 
+def run_concurrent_providers(
+    providers: tuple[str, ...],
+    *,
+    longhouse_bin: Path,
+    provider_bins: dict[str, Path],
+    root: Path,
+    evidence_root: Path,
+    base_url: str,
+    token: str,
+    engine_bin: Path,
+) -> list[dict[str, Any]]:
+    """Launch the selected installed providers at the same time.
+
+    The provider launchers own their process groups and their provider-specific
+    terminal adapters. Running the existing bounded single-provider probe in a
+    pool preserves those ownership checks while exposing shared-agent races.
+    """
+
+    with ThreadPoolExecutor(
+        max_workers=len(providers), thread_name_prefix="installed-fault"
+    ) as pool:
+        futures = {
+            provider: pool.submit(
+                run_provider,
+                provider,
+                longhouse_bin=longhouse_bin,
+                provider_bin=provider_bins[provider],
+                root=root,
+                evidence_root=evidence_root / "concurrent",
+                base_url=base_url,
+                token=token,
+                engine_bin=engine_bin,
+            )
+            for provider in providers
+        }
+        return [futures[provider].result() for provider in providers]
+
+
 def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    evidence_root = (args.evidence_root or repo_root / ".build/canaries/installed-managed-launch-fault-matrix" / stamp).resolve()
+    evidence_root = (
+        args.evidence_root
+        or repo_root / ".build/canaries/installed-managed-launch-fault-matrix" / stamp
+    ).resolve()
     evidence_root.mkdir(parents=True, exist_ok=True)
     args._resolved_evidence_root = evidence_root
     # Keep this root short: Codex's bridge IPC socket is subject to macOS
@@ -615,13 +682,21 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     selected_providers = tuple(args.provider or PROVIDERS)
     args._selected_providers = selected_providers
     try:
-        longhouse_bin = resolve_file(args.longhouse_bin or os.environ.get("LONGHOUSE_FAULT_LONGHOUSE_BIN"), "longhouse")
-        engine_bin = resolve_file(args.engine_bin or os.environ.get("LONGHOUSE_FAULT_ENGINE_BIN"), "longhouse-engine")
+        longhouse_bin = resolve_file(
+            args.longhouse_bin or os.environ.get("LONGHOUSE_FAULT_LONGHOUSE_BIN"),
+            "longhouse",
+        )
+        engine_bin = resolve_file(
+            args.engine_bin or os.environ.get("LONGHOUSE_FAULT_ENGINE_BIN"),
+            "longhouse-engine",
+        )
         provider_bins: dict[str, Path] = {}
         provider_evidence: dict[str, Any] = {}
         for provider in selected_providers:
             binary_name, env_name, _ = PROVIDER_BINARIES[provider]
-            provider_bins[provider] = resolve_file(os.environ.get(env_name), binary_name)
+            provider_bins[provider] = resolve_file(
+                os.environ.get(env_name), binary_name
+            )
             provider_evidence[provider] = version_probe(provider_bins[provider])
 
         port = choose_port()
@@ -643,11 +718,77 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 engine_bin=engine_bin,
             )
             results.append(result)
-        retry_count = read_retry_count(temp_root)
-        if retry_count != len(selected_providers):
-            raise RuntimeError(
-                f"installed outage launches left {retry_count} retry intents, expected {len(selected_providers)}"
+        concurrent_results: list[dict[str, Any]] = []
+        if args.concurrent:
+            concurrent_results = run_concurrent_providers(
+                selected_providers,
+                longhouse_bin=longhouse_bin,
+                provider_bins=provider_bins,
+                root=temp_root,
+                evidence_root=evidence_root,
+                base_url=base_url,
+                token=token,
+                engine_bin=engine_bin,
             )
+            results.extend(concurrent_results)
+        retry_count = read_retry_count(temp_root)
+        expected_retry_count = len(selected_providers) * (2 if args.concurrent else 1)
+        if retry_count != expected_retry_count:
+            raise RuntimeError(
+                f"installed outage launches left {retry_count} retry intents, expected {expected_retry_count}"
+            )
+
+        cold_restart_evidence: dict[str, Any] | None = None
+        if args.cold_restart:
+            cold_log = evidence_root / "machine-agent-cold-restart.log"
+            cold_handle = cold_log.open("wb")
+            cold_env = runtime_env(temp_root, engine_bin)
+            cold_engine = subprocess.Popen(
+                [
+                    str(engine_bin),
+                    "connect",
+                    "--url",
+                    base_url,
+                    "--token",
+                    token,
+                    "--db",
+                    str(temp_root / "agent.db"),
+                    "--machine-name",
+                    DEVICE_ID,
+                    "--fallback-scan-secs",
+                    "1",
+                    "--spool-replay-secs",
+                    "1",
+                ],
+                env=cold_env,
+                stdout=cold_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            time.sleep(2)
+            first_start_returncode = cold_engine.poll()
+            if first_start_returncode is None:
+                kill_group(cold_engine)
+                cold_engine.wait(timeout=5)
+            elif first_start_returncode not in {0, 1}:
+                cold_handle.close()
+                raise RuntimeError(
+                    "cold-start Machine Agent exited unexpectedly before restart: "
+                    f"{first_start_returncode}"
+                )
+            cold_handle.close()
+            preserved_retry_count = read_retry_count(temp_root)
+            if preserved_retry_count != expected_retry_count:
+                raise RuntimeError(
+                    "cold-start Machine Agent changed durable retry intent count: "
+                    f"{preserved_retry_count} != {expected_retry_count}"
+                )
+            cold_restart_evidence = {
+                "first_start_returncode": first_start_returncode,
+                "expected_outage_exit": first_start_returncode == 1,
+                "retry_intents_preserved": preserved_retry_count,
+                "log": str(cold_log),
+            }
 
         host = start_host(temp_root, evidence_root, port=port, ordinal=2)
         engine_log = evidence_root / "machine-agent.log"
@@ -699,10 +840,21 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "durable_registration_retry_intent_per_provider",
                 "machine_agent_registration_recovery_after_runtime_host_restart",
                 "installed_provider_exit_and_detach_cleanup",
+                *(
+                    ["concurrent_installed_provider_degraded_launch"]
+                    if args.concurrent
+                    else []
+                ),
+                *(
+                    ["machine_agent_cold_restart_before_runtime_host_recovery"]
+                    if args.cold_restart
+                    else []
+                ),
             ],
             "providers": results,
-            "retry_intents_before_recovery": len(selected_providers),
+            "retry_intents_before_recovery": expected_retry_count,
             "retry_intents_after_recovery": 0,
+            "machine_agent_cold_restart": cold_restart_evidence,
             "runtime_host_port": port,
             "machine_agent_log": str(engine_log),
             "evidence_root": str(evidence_root),
@@ -725,6 +877,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine-bin", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--provider", action="append", choices=PROVIDERS)
+    parser.add_argument(
+        "--concurrent",
+        action="store_true",
+        help="Run a second all-provider launch set concurrently.",
+    )
+    parser.add_argument(
+        "--cold-restart",
+        action="store_true",
+        help="Restart a Machine Agent before Runtime Host recovery.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -755,14 +917,18 @@ def main(argv: list[str] | None = None) -> int:
     evidence_root.mkdir(parents=True, exist_ok=True)
     artifact_path = evidence_root / "installed-managed-launch-fault-matrix.json"
     artifact["artifact_path"] = str(artifact_path.resolve())
-    artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    artifact_path.write_text(
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     if args.json:
         print(json.dumps(artifact, indent=2, sort_keys=True))
     else:
         print(f"verdict: {artifact['verdict']}")
         print(f"artifact: {artifact_path}")
         if artifact["verdict"] != "green":
-            print(artifact.get("error", "installed fault matrix failed"), file=sys.stderr)
+            print(
+                artifact.get("error", "installed fault matrix failed"), file=sys.stderr
+            )
     return 0 if artifact["verdict"] == "green" else 1
 
 

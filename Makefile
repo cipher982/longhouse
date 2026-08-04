@@ -428,7 +428,7 @@ test-managed-launch-lifecycle: ## @internal Real Runtime Host + real `longhouse 
 	@./scripts/ci/managed-launch-lifecycle-smoke.sh
 
 test-installed-managed-launch-faults: ## @internal Installed provider degraded launch + Runtime Host recovery qualification
-	@uv run --project server python scripts/qa/installed-managed-launch-fault-matrix.py
+	@uv run --project server python scripts/qa/installed-managed-launch-fault-matrix.py --concurrent --cold-restart
 
 test-installed-native-health-faults: ## @internal Installed native local-health fault qualification
 	@uv run --project server python scripts/qa/installed-health-fault-matrix.py
