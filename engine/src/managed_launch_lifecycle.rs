@@ -684,7 +684,24 @@ fn owner_identity_alive(pid: Option<u32>, recorded_start: Option<&str>) -> Optio
     else {
         return None;
     };
-    process_start_identity(pid).map(|current| current == recorded_start)
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    if output.status.code() == Some(1) {
+        // `ps` ran successfully but found no such process. This is a
+        // definitive owner loss, not an unknown observation, so pre-ready
+        // retry intents can be garbage-collected on the next agent scan.
+        return Some(false);
+    }
+    if !output.status.success() {
+        return None;
+    }
+    let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if current.is_empty() {
+        return Some(false);
+    }
+    Some(current == recorded_start)
 }
 
 fn pre_ready_expired(intent: &ManagedLaunchRetryIntent, now: DateTime<Utc>) -> bool {
@@ -1337,6 +1354,14 @@ mod tests {
 
         assert_eq!(launcher_owner_alive(&intent), Some(true));
         assert!(pre_ready_expired(&intent, Utc::now()));
+    }
+
+    #[test]
+    fn missing_launcher_process_is_dead_not_unknown() {
+        assert_eq!(
+            owner_identity_alive(Some(u32::MAX), Some("missing-process")),
+            Some(false)
+        );
     }
 
     #[test]
