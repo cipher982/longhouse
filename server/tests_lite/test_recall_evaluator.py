@@ -14,10 +14,15 @@ def _coverage() -> dict[str, object]:
     return {
         "ready": True,
         "projector": "embeddings-5090578d9565-256d-p2",
+        "cutover_certified_commit_seq": "9",
+        "cutover_certified_at": "2026-08-02T00:00:00+00:00",
         "catalog_lag_count": 0,
         "catalog_indexed_through": "10",
+        "catalog_oldest_lag_at": None,
+        "catalog_oldest_lag_seconds": None,
         "catalog_commit_seq": "10",
         "catalog_observed_at": "2026-08-02T00:00:10+00:00",
+        "resident_stale": False,
         "expected_sessions": 1,
         "published_sessions": 1,
         "expected_episodes": 1,
@@ -123,6 +128,26 @@ def test_coverage_metadata_reports_observed_defects_instead_of_inventing_zeroes(
     metadata = report.corpus_coverage_metadata()
     assert metadata["status"] == "incomplete"
     assert metadata["resident_defects"]["invalid_vectors"] == {"min": 2, "max": 2}
+
+
+def test_coverage_metadata_distinguishes_bounded_live_head_from_current():
+    evaluator = _module()
+    coverage = _coverage()
+    coverage.update(
+        {
+            "catalog_lag_count": 1,
+            "catalog_indexed_through": "9",
+            "catalog_oldest_lag_at": "2026-08-02T00:00:09+00:00",
+            "catalog_oldest_lag_seconds": 1.0,
+            "resident_stale": True,
+        }
+    )
+    report = evaluator.Report(
+        strategy="semantic",
+        results=[evaluator.Result(evaluator.Query("q", "exact", "q", ["gold"]), ["gold"], 0.1, coverage=coverage)],
+    )
+
+    assert report.corpus_coverage_metadata()["status"] == "bounded_head"
 
 
 def test_category_regression_fails_the_release_gate_at_25():

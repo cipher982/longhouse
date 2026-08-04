@@ -35,6 +35,8 @@ TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
 # the evaluator's real result depth or the baseline named by this release gate.
 DEFAULT_MAX_FALSE_NEGATIVE_RATE = 0.474
 DEFAULT_MIN_RECALL_AT_5 = 0.329
+MAX_LIVE_HEAD_SESSIONS = 100
+MAX_LIVE_HEAD_AGE_SECONDS = 300.0
 # Full-corpus Qwen3-8B @256d baseline measured at k=25. The replacement must
 # improve aggregate recall without buying that gain by regressing any one of
 # the four answer-present query classes.
@@ -214,6 +216,7 @@ class Report:
         projectors = sorted({str(snapshot["projector"]) for snapshot in snapshots})
         unique_snapshots = {
             (
+                str(snapshot["cutover_certified_commit_seq"]),
                 str(snapshot["catalog_commit_seq"]),
                 int(snapshot["expected_sessions"]),
                 int(snapshot["expected_episodes"]),
@@ -227,23 +230,34 @@ class Report:
             "unlocatable_episodes",
             "episode_count_mismatches",
         )
-        coverage_complete = all(
+        coverage_valid = all(
             snapshot["ready"] is True
-            and int(snapshot["catalog_lag_count"]) == 0
-            and snapshot["catalog_indexed_through"] == snapshot["catalog_commit_seq"]
+            and int(snapshot["cutover_certified_commit_seq"]) <= int(snapshot["catalog_commit_seq"])
+            and int(snapshot["catalog_lag_count"]) <= MAX_LIVE_HEAD_SESSIONS
+            and (
+                snapshot["catalog_oldest_lag_seconds"] is None
+                or float(snapshot["catalog_oldest_lag_seconds"]) <= MAX_LIVE_HEAD_AGE_SECONDS
+            )
             and int(snapshot["expected_sessions"]) == int(snapshot["published_sessions"])
             and int(snapshot["expected_episodes"]) == int(snapshot["current_episodes"])
             and all(int(snapshot[field_name]) == 0 for field_name in defect_fields)
             and not snapshot["missing_session_ids"]
             for snapshot in snapshots
         )
+        current = coverage_valid and all(
+            int(snapshot["catalog_lag_count"]) == 0
+            and snapshot["catalog_indexed_through"] == snapshot["catalog_commit_seq"]
+            and snapshot["resident_stale"] is False
+            for snapshot in snapshots
+        )
         return {
-            "status": "complete" if coverage_complete else "incomplete",
+            "status": "current" if current else ("bounded_head" if coverage_valid else "incomplete"),
             "consistent_projector": len(projectors) == 1,
             "projectors": projectors,
             "response_count": len(snapshots),
             "snapshot_count": len(unique_snapshots),
             "catalog_commit_seq": numeric_range("catalog_commit_seq"),
+            "catalog_lag_count": numeric_range("catalog_lag_count"),
             "expected_sessions": numeric_range("expected_sessions"),
             "expected_episodes": numeric_range("expected_episodes"),
             "observed_at": {"first": observed_at[0], "last": observed_at[-1]},
@@ -334,10 +348,15 @@ def search_recall(
         required = {
             "ready",
             "projector",
+            "cutover_certified_commit_seq",
+            "cutover_certified_at",
             "catalog_lag_count",
             "catalog_indexed_through",
+            "catalog_oldest_lag_at",
+            "catalog_oldest_lag_seconds",
             "catalog_commit_seq",
             "catalog_observed_at",
+            "resident_stale",
             "expected_sessions",
             "published_sessions",
             "expected_episodes",
@@ -352,8 +371,37 @@ def search_recall(
             raise ValueError("dense recall returned malformed corpus coverage")
         if (
             coverage["ready"] is not True
-            or coverage["catalog_lag_count"] != 0
-            or coverage["catalog_indexed_through"] != coverage["catalog_commit_seq"]
+            or not isinstance(coverage["cutover_certified_commit_seq"], str)
+            or not coverage["cutover_certified_commit_seq"].isdecimal()
+            or int(coverage["cutover_certified_commit_seq"]) > int(coverage["catalog_commit_seq"])
+            or not isinstance(coverage["cutover_certified_at"], str)
+            or not coverage["cutover_certified_at"]
+            or not isinstance(coverage["catalog_lag_count"], int)
+            or coverage["catalog_lag_count"] < 0
+            or coverage["catalog_lag_count"] > MAX_LIVE_HEAD_SESSIONS
+            or (
+                coverage["catalog_oldest_lag_seconds"] is not None
+                and (
+                    not isinstance(coverage["catalog_oldest_lag_seconds"], (int, float))
+                    or coverage["catalog_oldest_lag_seconds"] < 0
+                    or coverage["catalog_oldest_lag_seconds"] > MAX_LIVE_HEAD_AGE_SECONDS
+                )
+            )
+            or (
+                coverage["catalog_lag_count"] == 0
+                and (
+                    coverage["catalog_oldest_lag_at"] is not None
+                    or coverage["catalog_oldest_lag_seconds"] is not None
+                )
+            )
+            or (
+                coverage["catalog_lag_count"] > 0
+                and (
+                    coverage["catalog_oldest_lag_at"] is None
+                    or coverage["catalog_oldest_lag_seconds"] is None
+                )
+            )
+            or not isinstance(coverage["resident_stale"], bool)
             or coverage["expected_sessions"] != coverage["published_sessions"]
             or coverage["expected_episodes"] != coverage["current_episodes"]
             or any(
