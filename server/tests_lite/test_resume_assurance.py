@@ -294,6 +294,7 @@ def test_native_resume_oracle_requires_post_resume_activity_and_variant_cleanup(
         "native_resume_command": True,
         "bridge_subscribed": True,
         "post_resume_provider_activity": True,
+        "post_resume_response_correlated": True,
         "post_resume_marker_in_assistant_transcript": True,
         "stale_input_rejected": True,
         "stale_generation_dispatched": False,

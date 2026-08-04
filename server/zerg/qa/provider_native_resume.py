@@ -1287,6 +1287,19 @@ def _assistant_contains(value: Any, marker: str) -> bool:
     return False
 
 
+def _assistant_event_count(value: Any) -> int:
+    """Count top-level assistant events without counting nested content twice."""
+
+    if isinstance(value, dict):
+        role = str(value.get("role") or value.get("type") or "").lower()
+        if role == "assistant":
+            return 1
+        return sum(_assistant_event_count(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(_assistant_event_count(item) for item in value)
+    return 0
+
+
 def _wait_assistant_marker(api_url: str, token: str, session_id: str, marker: str, *, timeout: int) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     last: dict[str, Any] = {}
@@ -1310,6 +1323,75 @@ def _wait_assistant_marker(api_url: str, token: str, session_id: str, marker: st
     raise RuntimeError(f"provider transcript did not retain assistant marker {marker}")
 
 
+def _wait_assistant_response_after_marker(
+    api_url: str,
+    token: str,
+    session_id: str,
+    marker: str,
+    *,
+    prior_assistant_events: int,
+    timeout: int,
+) -> dict[str, Any]:
+    """Prove a native control record caused a new provider response.
+
+    Claude's development-channel records are stored as user events, and its
+    safety behavior may refuse to repeat a token received from that peer
+    channel. Correlate the native marker with a *new* assistant event instead
+    of requiring the provider to echo the marker in assistant content.
+    """
+
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        try:
+            last = _api_json(api_url, token, f"sessions/{session_id}/tail?limit=100&roles=user,assistant")
+        except _RuntimeHostHTTPError as exc:
+            if exc.status in {401, 403}:
+                raise
+            time.sleep(0.5)
+            continue
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.5)
+            continue
+        if marker in json.dumps(last, ensure_ascii=False) and _assistant_event_count(last) > prior_assistant_events:
+            return last
+        time.sleep(0.5)
+    raise RuntimeError(f"provider transcript did not correlate native marker with a new assistant response {marker}")
+
+
+def _wait_cursor_idle(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    *,
+    timeout: float = 45.0,
+) -> dict[str, Any]:
+    """Wait for the provider-owned Cursor hook to publish an idle phase."""
+
+    longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
+    if not longhouse_home:
+        raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
+    path = Path(longhouse_home) / "managed-local" / "cursor-helm" / f"{state['session_id']}.phase.json"
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        try:
+            payload = _read_json(path)
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        last = payload
+        if (
+            payload.get("session_id") == state.get("session_id")
+            and payload.get("conversation_id") == state.get("provider_session_id")
+            and payload.get("phase") == "idle"
+        ):
+            return payload
+        time.sleep(0.25)
+    raise RuntimeError(
+        "Cursor native hooks did not publish idle phase "
+        f"(path={path}, last_phase={last.get('phase')!r}, last_conversation={last.get('conversation_id')!r})"
+    )
+
+
 def _control_send(
     spec: ProviderSpec,
     args: argparse.Namespace,
@@ -1319,6 +1401,11 @@ def _control_send(
     *,
     initial: bool = False,
 ) -> dict[str, Any]:
+    if initial and spec.provider in {"claude", "cursor"}:
+        if process.process.poll() is not None:
+            raise RuntimeError(f"{spec.provider} terminal control owner is no longer live")
+        process.send(text + "\r")
+        return {"method": "provider_tty_bootstrap", "returncode": 0}
     if spec.provider == "claude":
         command = [str(args.engine), "claude-channel", "send", "--session-id", state["session_id"], "--text", text]
     elif spec.provider == "cursor":
@@ -1611,6 +1698,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         initial_tail = _wait_assistant_marker(
             args.api_url, args.agents_token, initial_state["session_id"], seed_marker, timeout=args.live_send_timeout_secs
         )
+        if spec.provider == "cursor":
+            _wait_cursor_idle(initial_state, environment)
         _write_json(root / "initial-transcript.jsonl", initial_tail)
 
         transition = _stop(spec, args, initial_state, initial, force=args.variant == "process_loss")
@@ -1654,16 +1743,36 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             resumed.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
+        if spec.provider == "cursor":
+            _wait_cursor_idle(resumed_state, environment)
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
         post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
+        prior_assistant_events = 0
+        if spec.provider == "claude":
+            prior_tail = _api_json(
+                args.api_url,
+                args.agents_token,
+                f"sessions/{resumed_state['session_id']}/tail?limit=100&roles=user,assistant",
+            )
+            prior_assistant_events = _assistant_event_count(prior_tail)
         post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")
         _write_json(root / "post-resume-send.json", post_send)
         _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
-        resumed_tail = _wait_assistant_marker(
-            args.api_url, args.agents_token, resumed_state["session_id"], post_marker, timeout=args.live_send_timeout_secs
-        )
+        if spec.provider == "claude":
+            resumed_tail = _wait_assistant_response_after_marker(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+                post_marker,
+                prior_assistant_events=prior_assistant_events,
+                timeout=args.live_send_timeout_secs,
+            )
+        else:
+            resumed_tail = _wait_assistant_marker(
+                args.api_url, args.agents_token, resumed_state["session_id"], post_marker, timeout=args.live_send_timeout_secs
+            )
         _write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = _assistant_contains(resumed_tail, post_marker)
         stale_generation_dispatched = _assistant_contains(resumed_tail, stale_marker)
@@ -1710,7 +1819,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 resumed_state.get(field) for field in ("session_id", "provider_session_id", "run_id", "connection_id")
             ),
             "post_resume_provider_activity": post_resume_marker_observed,
-            "post_resume_marker_in_assistant_transcript": post_resume_marker_observed,
+            "post_resume_response_correlated": post_resume_marker_observed,
+            "post_resume_marker_in_assistant_transcript": spec.provider != "claude" and post_resume_marker_observed,
             "stale_input_rejected": stale["rejected"] is True,
             "stale_generation_dispatched": stale_generation_dispatched,
             "concurrent_resume_refused": concurrent_refused,

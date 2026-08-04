@@ -12,8 +12,9 @@ from zerg.managed_provider_contract_manifest import managed_provider_contract_en
 from zerg.qa import antigravity_resume_policy
 from zerg.qa import codex_native_resume
 from zerg.qa import provider_native_resume
-from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.codex_native_resume import _redact_process_command
+from zerg.qa.codex_native_resume import _validate_resume_intent
+from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
@@ -28,6 +29,7 @@ from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
+from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import registration_for
@@ -278,6 +280,44 @@ def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> N
     assert process.sent == ["a"]
 
 
+def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    longhouse_home = tmp_path / "longhouse"
+    phase = longhouse_home / "managed-local" / "cursor-helm" / "session-1.phase.json"
+    phase.parent.mkdir(parents=True)
+    phase.write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "phase": "idle",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _wait_cursor_idle(state, {"LONGHOUSE_HOME": str(longhouse_home)})["phase"] == "idle"
+
+
+def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    workspace = tmp_path / "isolated-workspace"
+    workspace.mkdir()
+    session_id = "11111111-1111-4111-8111-111111111111"
+    intent = {
+        "available": True,
+        "session_id": session_id,
+        "provider": "codex",
+        "cwd": str(workspace),
+        "handoff": "terminal_command",
+        "argv": ["longhouse", "codex", "--cwd", str(workspace), "--resume-session", session_id],
+    }
+
+    receipt = _validate_resume_intent(args, session_id, intent, cwd=workspace)
+
+    assert receipt["identity_valid"] is True
+
+
 def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:
     state = tmp_path / ".claude" / "channels" / "longhouse" / "sessions" / "session.json"
     state.parent.mkdir(parents=True)
@@ -416,7 +456,7 @@ def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path:
 def test_codex_process_evidence_redacts_bridge_tokens() -> None:
     command = 'env LONGHOUSE_COORDINATION_TOKEN="zst_secret" codex app-server'
 
-    assert _redact_process_command(command) == 'env LONGHOUSE_COORDINATION_TOKEN=<redacted> codex app-server'
+    assert _redact_process_command(command) == "env LONGHOUSE_COORDINATION_TOKEN=<redacted> codex app-server"
 
 
 def test_codex_main_serializes_path_values_in_result_output(
@@ -672,7 +712,7 @@ def test_provider_state_evidence_redacts_nested_secrets() -> None:
     }
 
 
-def test_cursor_initial_seed_uses_managed_control_after_tui_ready(tmp_path: Path, monkeypatch) -> None:
+def test_cursor_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> None:
     args = _args(tmp_path)
 
     class FakeProviderProcess:
@@ -688,13 +728,6 @@ def test_cursor_initial_seed_uses_managed_control_after_tui_ready(tmp_path: Path
             self.sent.append(value)
 
     process = FakeProviderProcess()
-    commands: list[list[str]] = []
-
-    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
-        commands.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(provider_native_resume.subprocess, "run", fake_run)
     result = _control_send(
         SPECS["cursor"],
         args,
@@ -704,10 +737,9 @@ def test_cursor_initial_seed_uses_managed_control_after_tui_ready(tmp_path: Path
         initial=True,
     )
 
-    assert result["method"] == "longhouse_control"
+    assert result["method"] == "provider_tty_bootstrap"
     assert result["returncode"] == 0
-    assert commands == [[str(args.engine), "cursor-helm", "send", "--session-id", "session-1", "--text", "seed"]]
-    assert process.sent == []
+    assert process.sent == ["seed\r"]
 
 
 def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, monkeypatch) -> None:
@@ -742,12 +774,41 @@ def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, mon
         {"session_id": "session-1"},
         process,  # type: ignore[arg-type]
         "seed",
-        initial=True,
+        initial=False,
     )
 
     assert result["attempts"] == 2
     assert len(commands) == 2
     assert process.sent == []
+
+
+def test_claude_initial_seed_bootstraps_through_the_real_tui(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+
+    class FakeProviderProcess:
+        class Process:
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        process = Process()
+        sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProviderProcess()
+    result = _control_send(
+        SPECS["claude"],
+        args,
+        {"session_id": "session-1"},
+        process,  # type: ignore[arg-type]
+        "seed",
+        initial=True,
+    )
+
+    assert result == {"method": "provider_tty_bootstrap", "returncode": 0}
+    assert process.sent == ["seed\r"]
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
