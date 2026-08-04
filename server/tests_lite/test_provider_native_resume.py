@@ -129,6 +129,7 @@ def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
 
 def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
+    repo_root = Path(__file__).resolve().parents[2]
     exit_code = antigravity_resume_policy.main(
         [
             "--variant",
@@ -136,7 +137,7 @@ def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -
             "--evidence-root",
             str(evidence),
             "--repo-root",
-            str(tmp_path),
+            str(repo_root),
             "--engine",
             str(tmp_path / "engine"),
             "--longhouse-cli",

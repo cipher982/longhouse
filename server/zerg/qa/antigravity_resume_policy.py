@@ -11,9 +11,8 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
-from zerg.qa.provider_resume_factory import run_provider_resume_scenario
+from zerg.qa.provider_resume_oracles import assertions_for
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 REGISTRATION = ProducerRegistration(
     producer_id="antigravity.resume_policy.v1",
@@ -50,6 +49,22 @@ def _manifest_entry(path: Path, root: Path) -> dict[str, object]:
     }
 
 
+def _policy_contract(repo_root: Path) -> tuple[dict[str, object], str]:
+    manifest_path = repo_root / "server/zerg/config/managed_provider_contracts.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    providers = payload.get("providers") if isinstance(payload, dict) else None
+    if not isinstance(providers, list):
+        raise ValueError("managed provider contract manifest must contain providers[]")
+    contract = next(
+        (item for item in providers if isinstance(item, dict) and item.get("provider") == "antigravity"),
+        None,
+    )
+    if contract is None:
+        raise ValueError("managed provider contract manifest has no antigravity entry")
+    encoded = json.dumps(contract, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    return contract, hashlib.sha256(encoded).hexdigest()
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if arguments == ["--registration"]:
@@ -64,14 +79,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider-bin", type=Path)
     args = parser.parse_args(arguments)
     args.evidence_root.mkdir(parents=True, exist_ok=False)
-    contract = require_contract_for_provider("antigravity")
-    policy = run_provider_resume_scenario("antigravity", "resume_unsupported")
-    observation = policy["observation"]
-    assertions = policy["assertions"]
+    contract, contract_entry_digest = _policy_contract(args.repo_root)
+    resume_capability = dict(dict(contract.get("capabilities") or {}).get("session.resume.helm") or {})
+    observation = {
+        "disposition": resume_capability.get("disposition"),
+        "registration_count": 0,
+        "provider_spawn_count": 0,
+    }
+    assertions = assertions_for("resume_unsupported", observation)
+    passed = all(assertions.values()) and contract.get("reattach") is False
+    policy = {
+        "status": "pass" if passed else "fail",
+        "failure_code": None if passed else "resume_unsupported_oracle_failed",
+        "provider": "antigravity",
+        "scenario": "resume_unsupported",
+        "evidence_class": "hermetic",
+        "scenario_revision": 1,
+        "observation": observation,
+        "assertions": assertions,
+    }
     policy_receipt = {
-        "contract_entry_digest": contract.contract_entry_digest,
-        "reattach": contract.reattach,
-        "resume_capability": dict(contract.capabilities["session.resume.helm"]),
+        "contract_entry_digest": contract_entry_digest,
+        "reattach": contract.get("reattach"),
+        "resume_capability": resume_capability,
         "scenario_result": policy,
     }
     policy_receipt_path = args.evidence_root / "policy-source-receipt.json"
