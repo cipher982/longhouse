@@ -1794,6 +1794,7 @@ def test_live_control_lease_only_adopts_nonterminal_launch_readiness(tmp_path, i
                 execution_lifetime="live_control",
                 client_request_id=None,
                 command_id=f"managed-local-{session_id}",
+                launch_fingerprint=None,
                 started_at=now,
                 expires_at=now + timedelta(minutes=5),
                 launch_actor="user",

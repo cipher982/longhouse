@@ -23,6 +23,7 @@ from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
+from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _opencode_tui_is_connected
@@ -84,6 +85,15 @@ def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> No
     ):
         assert (home / relative).is_dir()
     assert (configured_claude / "projects").is_dir()
+
+
+def test_cursor_qualification_workspace_has_project_identity(tmp_path: Path) -> None:
+    workspace = tmp_path / "cursor-workspace"
+    workspace.mkdir()
+
+    _initialize_cursor_workspace(workspace)
+
+    assert (workspace / ".git").is_dir()
 
 
 def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(

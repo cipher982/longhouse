@@ -116,6 +116,29 @@ pub fn register_managed_launch(
     payload: &Value,
     expected_session_id: Option<&str>,
 ) -> anyhow::Result<ManagedLaunchResponse> {
+    register_managed_launch_with_timeout(
+        runtime,
+        url,
+        device_token,
+        provider_name,
+        payload,
+        expected_session_id,
+        REGISTRATION_TIMEOUT,
+    )
+}
+
+/// Register with a caller-selected bound. Degraded Helm uses a short first
+/// attempt so a Runtime Host outage cannot gate the provider TUI, then retries
+/// the same client-minted identity in the background.
+pub fn register_managed_launch_with_timeout(
+    runtime: &tokio::runtime::Runtime,
+    url: &str,
+    device_token: &str,
+    provider_name: &str,
+    payload: &Value,
+    expected_session_id: Option<&str>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<ManagedLaunchResponse> {
     let endpoint = format!(
         "{}/api/sessions/managed-local/this-device",
         url.trim_end_matches('/')
@@ -125,7 +148,7 @@ pub fn register_managed_launch(
             .post(endpoint)
             .header("X-Agents-Token", device_token)
             .json(payload)
-            .timeout(REGISTRATION_TIMEOUT)
+            .timeout(timeout)
             .send()
             .await
             .with_context(|| format!("register managed {provider_name} launch"))?;

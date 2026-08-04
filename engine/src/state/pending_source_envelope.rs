@@ -546,6 +546,72 @@ pub fn retire_after_host_replacement(
     Ok(())
 }
 
+/// Retire a blocked request whose byte range was proven to contain no
+/// canonical events or media. The raw request and proof remain in the
+/// supersession audit, while the durable cursor advances past provider
+/// startup metadata that Longhouse does not ingest.
+pub fn retire_empty_source(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+    expected_range_start: u64,
+    retired_through: u64,
+    expected_request_body_zstd: &[u8],
+    reason: &str,
+    proof_json: &str,
+) -> Result<()> {
+    if retired_through <= expected_range_start {
+        bail!("empty source retirement must advance the durable cursor");
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let advanced = tx.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = ?1, updated_at = ?2
+         WHERE source_epoch = ?3 AND lane = 'durable' AND last_position = ?4",
+        params![
+            to_sql_u64(retired_through)?,
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string(),
+            to_sql_u64(expected_range_start)?,
+        ],
+    )?;
+    if advanced != 1 {
+        bail!("empty source retirement proof no longer matches the durable cursor");
+    }
+    let changed = tx.execute(
+        "DELETE FROM pending_source_envelope
+         WHERE source_epoch = ?1 AND envelope_id = ?2
+           AND request_body_zstd = ?3
+           AND blocked_at IS NOT NULL
+           AND block_kind = 'source_epoch_conflict_unresolved'",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+        ],
+    )?;
+    if changed != 1 {
+        bail!("empty source retirement proof no longer matches the blocked envelope");
+    }
+    tx.execute(
+        "INSERT INTO pending_source_envelope_supersession (
+             source_epoch, envelope_id, old_request_body_zstd,
+             new_request_body_zstd, reason, proof_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+            Vec::<u8>::new(),
+            reason,
+            proof_json,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Advance the durable cursor and forget the exact retry in one transaction.
 pub fn acknowledge_and_delete(
     conn: &mut Connection,

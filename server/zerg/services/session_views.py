@@ -1818,6 +1818,10 @@ class RecallMatch(BaseModel):
     start_order_time_us: Optional[int] = Field(default=None, exclude=True)
 
 
+RECALL_LIVE_HEAD_MAX_SESSIONS = 100
+RECALL_LIVE_HEAD_MAX_AGE_SECONDS = 300.0
+
+
 class RecallCoverage(BaseModel):
     """Complete-corpus certificate observed by a successful dense request."""
 
@@ -1825,10 +1829,22 @@ class RecallCoverage(BaseModel):
 
     ready: Literal[True]
     projector: str = Field(min_length=1)
-    catalog_lag_count: Literal[0]
+    cutover_certified_commit_seq: str = Field(pattern=r"^[0-9]+$")
+    cutover_certified_at: str = Field(min_length=1)
+    search_store_id: str
+    search_schema_generation: str = Field(min_length=1)
+    catalog_lag_count: int = Field(ge=0, le=RECALL_LIVE_HEAD_MAX_SESSIONS)
     catalog_indexed_through: str = Field(pattern=r"^[0-9]+$")
+    catalog_oldest_lag_at: Optional[str] = None
+    catalog_oldest_lag_seconds: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=RECALL_LIVE_HEAD_MAX_AGE_SECONDS,
+        allow_inf_nan=False,
+    )
     catalog_commit_seq: str = Field(pattern=r"^[0-9]+$")
     catalog_observed_at: str = Field(min_length=1)
+    resident_stale: bool
     expected_sessions: int = Field(ge=0)
     published_sessions: int = Field(ge=0)
     expected_episodes: int = Field(ge=0)
@@ -1841,8 +1857,20 @@ class RecallCoverage(BaseModel):
 
     @model_validator(mode="after")
     def validate_complete_coverage(self) -> "RecallCoverage":
-        if self.catalog_indexed_through != self.catalog_commit_seq:
+        try:
+            parsed_store_id = UUID(self.search_store_id)
+        except ValueError as exc:
+            raise ValueError("search_store_id must be a canonical UUID") from exc
+        if str(parsed_store_id) != self.search_store_id:
+            raise ValueError("search_store_id must be a canonical UUID")
+        if int(self.cutover_certified_commit_seq) > int(self.catalog_commit_seq):
+            raise ValueError("cutover certificate cannot exceed the observed catalog watermark")
+        if self.catalog_lag_count == 0 and (self.catalog_oldest_lag_at is not None or self.catalog_oldest_lag_seconds is not None):
+            raise ValueError("zero catalog lag cannot have an oldest lag")
+        if self.catalog_lag_count == 0 and self.catalog_indexed_through != self.catalog_commit_seq:
             raise ValueError("complete recall coverage requires the current catalog watermark")
+        if self.catalog_lag_count > 0 and (self.catalog_oldest_lag_at is None or self.catalog_oldest_lag_seconds is None):
+            raise ValueError("nonzero catalog lag requires its oldest age")
         if self.expected_sessions != self.published_sessions:
             raise ValueError("complete recall coverage requires every expected session publication")
         if self.expected_episodes != self.current_episodes:

@@ -25,6 +25,8 @@ class FakeClient:
     async def call(self, method, params=None, **_kwargs):
         parsed = dict(params or {})
         self.calls.append((method, parsed))
+        if method == "projector.coverage.certify.v2" and method not in self.responses:
+            return {"certified": False, "created": False, "lag_count": 1, "commit_seq": "1"}
         response = self.responses[method]
         return response(parsed) if callable(response) else response
 

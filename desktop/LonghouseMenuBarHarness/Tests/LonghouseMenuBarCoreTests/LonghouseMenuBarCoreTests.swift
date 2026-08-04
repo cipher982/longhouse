@@ -195,6 +195,55 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func nativePayloadConflictPromotesRepairWithoutReasonCode() {
+        let snapshot = presentationSnapshot(sessions: [], storageBlocked: 2)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.headline == "Durable upload blocked for 2 sources")
+    }
+
+    @Test
+    func nativePayloadShipFailuresPromoteRetryingTransport() {
+        let snapshot = presentationSnapshot(sessions: [], shipFailures: 5)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let transport = presentation.facts.first(where: { $0.id == "transport" })
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Local upload is retrying")
+        #expect(transport?.value == "Retrying")
+        #expect(transport?.promotion == .inspect)
+    }
+
+    @Test
+    func staleNativeShipFailuresDoNotClaimActiveRetrying() {
+        let snapshot = presentationSnapshot(
+            reasons: ["engine_status_stale"], sessions: [], shipFailures: 5, engineFresh: false
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let transport = presentation.facts.first(where: { $0.id == "transport" })
+
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.headline == "Current local status unavailable")
+        #expect(transport?.value == "Unknown")
+        #expect(transport?.promotion == .unavailable)
+    }
+
+    @Test
+    func freshNativeEngineCountsAsRunningWhenServiceEvidenceIsAbsent() {
+        let snapshot = presentationSnapshot(sessions: [], serviceStatus: nil)
+
+        let local = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+            .facts.first(where: { $0.id == "local-agent" })
+
+        #expect(local?.value == "Running")
+        #expect(local?.promotion == .normal)
+    }
+
+    @Test
     func youngImmutablePendingWorkStaysNormal() {
         let snapshot = presentationSnapshot(sessions: [], storagePending: 2)
 
@@ -2907,18 +2956,19 @@ private func presentationSnapshot(
     archive: ArchiveBacklogStatus? = nil,
     storageBlocked: Int = 0,
     storagePending: Int = 0,
+    shipFailures: Int = 0,
     isOffline: Bool = false,
     engineFresh: Bool = true,
-    serviceStatus: String = "running"
+    serviceStatus: String? = "running"
 ) -> HealthSnapshot {
     HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
         healthState: "healthy", severity: "green", headline: "Healthy",
         reasons: reasons, suggestedActions: [],
-        service: ServiceSnapshot(
-            platform: "macos", status: serviceStatus, serviceName: "com.longhouse.shipper",
+        service: serviceStatus.map { status in ServiceSnapshot(
+            platform: "macos", status: status, serviceName: "com.longhouse.shipper",
             serviceFile: nil, logPath: nil
-        ),
+        ) },
         engineStatus: EngineStatusSnapshot(
             path: nil, exists: true, fresh: engineFresh, ageSeconds: engineFresh ? 1 : 600,
             payload: EngineStatusPayload(
@@ -2929,7 +2979,7 @@ private func presentationSnapshot(
                     blockedBytes: 0, latestBlockKind: nil, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),
-                parseErrorCount1H: 0, consecutiveShipFailures: 0, diskFreeBytes: nil,
+                parseErrorCount1H: 0, consecutiveShipFailures: shipFailures, diskFreeBytes: nil,
                 isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
             ),
             error: nil

@@ -275,6 +275,10 @@ async def _write_hot_managed_local_launch_readiness(
             run_id = str(result.get("run_id") or "").strip()
             if not run_id:
                 raise RuntimeError("catalogd local launch response is missing run_id")
+            catalog_provider_session_id = str(result.get("provider_session_id") or "").strip() or None
+            expected_provider_session_id = str(plan.provider_session_id or "").strip() or None
+            if catalog_provider_session_id != expected_provider_session_id:
+                raise RuntimeError("catalogd local launch response returned a different provider_session_id")
             return run_id
         except CatalogUnavailable as exc:
             raise ManagedLocalLaunchError(
@@ -338,6 +342,10 @@ async def _write_hot_managed_local_launch_readiness(
                 execution_lifetime="live_control",
                 client_request_id=None,
                 command_id=command_id,
+                # This direct-write path has no idempotent replay predicate, so
+                # there is no request contract to fingerprint. Catalogd's
+                # create_local_launch owns the retry path and computes its own.
+                launch_fingerprint=None,
                 started_at=now,
                 expires_at=expires_at,
                 launch_actor=plan.launch_actor,
@@ -430,6 +438,12 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
             "Optional client-minted session UUID for Degraded Helm. Retries and later "
             "convergence must reuse this identity instead of minting a replacement."
         ),
+    )
+    provider_session_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description=("Optional client-minted provider-native identity for degraded Helm convergence"),
     )
     resume_attempt_id: uuid.UUID | None = Field(
         None,
@@ -1622,6 +1636,7 @@ async def launch_managed_local_this_device(
             launch_actor=body.launch_actor,
             launch_surface=body.launch_surface,
             session_id=body.session_id,
+            provider_session_id=body.provider_session_id or body.provider_thread_id,
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.

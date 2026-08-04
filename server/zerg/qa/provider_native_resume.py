@@ -1298,12 +1298,14 @@ def _command_from_resume_intent(
     intent: dict[str, Any],
     *,
     use_credential_files: bool = False,
+    cwd: Path | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
+    working_directory = cwd or args.repo_root
     expected_argv = [
         "longhouse",
         spec.provider,
         "--cwd",
-        str(args.repo_root),
+        str(working_directory),
         spec.resume_flag,
         session_id,
     ]
@@ -1312,7 +1314,7 @@ def _command_from_resume_intent(
         intent.get("available") is True
         and intent.get("session_id") == session_id
         and intent.get("provider") == spec.provider
-        and intent.get("cwd") == str(args.repo_root)
+        and intent.get("cwd") == str(working_directory)
         and intent.get("handoff") == "terminal_command"
         and received_argv == expected_argv
     )
@@ -1633,12 +1635,14 @@ def _launch_command(
     session_id: str | None,
     *,
     use_credential_files: bool = False,
+    cwd: Path | None = None,
 ) -> list[str]:
+    working_directory = cwd or args.repo_root
     command = [
         str(args.longhouse_cli),
         spec.provider,
         "--cwd",
-        str(args.repo_root),
+        str(working_directory),
         "--url",
         args.api_url,
     ]
@@ -1723,6 +1727,30 @@ def _isolated_provider_home() -> Path:
     return home
 
 
+def _initialize_cursor_workspace(path: Path) -> None:
+    """Give Cursor the project identity it requires before loading hooks.
+
+    Cursor Agent's project-level hook loader does not activate for an arbitrary
+    empty directory.  The qualification workspace is intentionally disposable,
+    but it still needs to look like the kind of project a real Cursor session
+    opens.  Initializing only the local Git metadata keeps the provider profile
+    and the checked-out Longhouse source isolated while making that prerequisite
+    explicit in the harness.
+    """
+
+    completed = subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"Cursor qualification workspace could not initialize Git: {detail}")
+
+
 def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]:
     spec = SPECS[provider]
     registration = registration_for(provider)
@@ -1751,6 +1779,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     shipper: TranscriptShipper | None = None
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
+    provider_cwd = args.repo_root
     try:
         home = _isolated_provider_home()
         # Make every provider path explicit before any provider or engine
@@ -1758,6 +1787,13 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         environment["HOME"] = str(home)
         environment["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
         environment["CURSOR_HOME"] = str(home / ".cursor")
+        if spec.provider == "cursor":
+            # Cursor CLI loads project hooks from <cwd>/.cursor/hooks.json.
+            # Use a disposable project root so the factory never modifies the
+            # checked-out source tree or relies on a global provider profile.
+            provider_cwd = root / "cursor-workspace"
+            provider_cwd.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _initialize_cursor_workspace(provider_cwd)
         if spec.provider == "claude":
             onboarding = _prepare_claude_profile(
                 binary=args.provider_bin,
@@ -1777,7 +1813,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         if spec.provider == "cursor":
             cursor_hooks = subprocess.run(
-                [str(args.engine), "cursor-helm", "configure-hooks", "--cursor-dir", environment["CURSOR_HOME"]],
+                [str(args.engine), "cursor-helm", "configure-hooks", "--cursor-dir", str(provider_cwd / ".cursor")],
                 cwd=args.repo_root,
                 env=environment,
                 capture_output=True,
@@ -1791,14 +1827,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     "returncode": cursor_hooks.returncode,
                     "stdout": cursor_hooks.stdout[-2000:],
                     "stderr": cursor_hooks.stderr[-2000:],
-                    "cursor_dir": environment["CURSOR_HOME"],
+                    "cursor_dir": str(provider_cwd / ".cursor"),
+                    "workspace_is_git_project": (provider_cwd / ".git").is_dir(),
                 },
             )
             if cursor_hooks.returncode != 0:
                 raise RuntimeError(f"Cursor native hook configuration failed: {cursor_hooks.stderr[-1000:]}")
         initial = PtyProcess(
-            _launch_command(spec, args, None, use_credential_files=True),
-            cwd=args.repo_root,
+            _launch_command(spec, args, None, use_credential_files=True, cwd=provider_cwd),
+            cwd=provider_cwd,
             env=environment,
             recording=root / "initial.tty",
         )
@@ -1892,11 +1929,12 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             initial_state["session_id"],
             resume_intent,
             use_credential_files=True,
+            cwd=provider_cwd,
         )
         _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         resumed = PtyProcess(
             resumed_command,
-            cwd=args.repo_root,
+            cwd=provider_cwd,
             env=environment,
             recording=root / "native-resume.tty",
         )
@@ -1968,7 +2006,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
 
         concurrent = PtyProcess(
             list(resumed_command),
-            cwd=args.repo_root,
+            cwd=provider_cwd,
             env=environment,
             recording=root / "concurrent-resume-attempt.tty",
         )

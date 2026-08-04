@@ -34,6 +34,7 @@ use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_cursor_helm_scan;
 use crate::managed_opencode_scan;
+use crate::managed_resume_scan;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority};
@@ -489,7 +490,7 @@ impl ManagedObservationSnapshot {
 }
 
 fn managed_provider_state_dirs() -> Vec<PathBuf> {
-    [
+    let mut dirs: Vec<PathBuf> = [
         managed_bridge_scan::default_codex_bridge_state_dir(),
         managed_antigravity_scan::default_antigravity_state_dir(),
         managed_claude_scan::default_claude_channel_state_dir(),
@@ -498,7 +499,23 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
     ]
     .into_iter()
     .flatten()
-    .collect()
+    .collect();
+    if let Ok(longhouse_home) = config::get_longhouse_home() {
+        for dir in managed_resume_scan::resume_contract_dirs(&longhouse_home) {
+            // Create the evidence roots before starting notify. A provider may
+            // write its first retained contract after daemon startup; watching
+            // only an absent child directory would miss that transition.
+            if let Err(error) = std::fs::create_dir_all(&dir) {
+                tracing::warn!(
+                    path = %dir.display(),
+                    %error,
+                    "Unable to create retained resume evidence directory"
+                );
+            }
+            dirs.push(dir);
+        }
+    }
+    dirs
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -2731,10 +2748,12 @@ fn record_flight_sample(
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
-    payload
+    let session_digest = payload
         .sessions_digest
         .clone()
-        .unwrap_or_else(|| heartbeat::session_snapshot_digest(payload))
+        .unwrap_or_else(|| heartbeat::session_snapshot_digest(payload));
+    let continuation_digest = heartbeat::continuation_evidence_digest(payload);
+    format!("sessions={session_digest}|continuation={continuation_digest}")
 }
 
 fn runtime_truth_changed(previous: Option<&str>, current: &str) -> bool {
@@ -5565,6 +5584,66 @@ mod tests {
         assert_ne!(
             runtime_truth_signature(&first),
             runtime_truth_signature(&second)
+        );
+    }
+
+    #[test]
+    fn test_runtime_truth_signature_tracks_stable_continuation_identity() {
+        let mut first = empty_heartbeat_payload();
+        first.machine_evidence = Some(heartbeat::MachineEvidence {
+            schema_version: 3,
+            observed_at: "2026-08-03T12:00:00Z".to_string(),
+            identities: Vec::new(),
+            run: Vec::new(),
+            process: Vec::new(),
+            activity: Vec::new(),
+            control: Vec::new(),
+            transcript: Vec::new(),
+            process_snapshot_scopes: Vec::new(),
+            readiness: Vec::new(),
+            continuation: vec![heartbeat::ContinuationEvidence {
+                authority_class: "managed".to_string(),
+                provider: "opencode".to_string(),
+                session_id: "session-1".to_string(),
+                provider_session_id: Some("ses_1".to_string()),
+                cwd: Some("/tmp/workspace".to_string()),
+                contract_state: "valid".to_string(),
+                unavailable_reason: None,
+                observed_at: "2026-08-03T12:00:00Z".to_string(),
+                valid_until: "2026-08-03T12:20:00Z".to_string(),
+                source: "managed_resume_contract_scan".to_string(),
+                raw_locator: "opencode/session-1".to_string(),
+            }],
+        });
+        let mut timestamp_only = first.clone();
+        timestamp_only
+            .machine_evidence
+            .as_mut()
+            .unwrap()
+            .observed_at = "2026-08-03T12:00:05Z".to_string();
+        timestamp_only
+            .machine_evidence
+            .as_mut()
+            .unwrap()
+            .continuation[0]
+            .observed_at = "2026-08-03T12:00:05Z".to_string();
+        timestamp_only
+            .machine_evidence
+            .as_mut()
+            .unwrap()
+            .continuation[0]
+            .valid_until = "2026-08-03T12:20:05Z".to_string();
+        assert_eq!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&timestamp_only)
+        );
+
+        let mut changed = first.clone();
+        changed.machine_evidence.as_mut().unwrap().continuation[0].provider_session_id =
+            Some("ses_2".to_string());
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&changed)
         );
     }
 
