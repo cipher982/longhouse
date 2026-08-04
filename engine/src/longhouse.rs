@@ -21,6 +21,7 @@ use managed_launch_lifecycle::{
     ManagedLaunchTransaction,
 };
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::ffi::OsString;
@@ -60,6 +61,11 @@ enum Commands {
     Machine {
         #[command(subcommand)]
         command: MachineCommand,
+    },
+    /// Inspect retained durable shipping evidence without invoking Python.
+    Shipping {
+        #[command(subcommand)]
+        command: ShippingCommand,
     },
     /// Configure native Longhouse hooks for Claude.
     #[command(args_conflicts_with_subcommands = true)]
@@ -205,6 +211,12 @@ enum MachineCommand {
     Repair(MachineRepairArgs),
 }
 
+#[derive(Subcommand)]
+enum ShippingCommand {
+    /// Inspect retained source evidence for a blocked or pending upload.
+    Inspect(ShippingInspectArgs),
+}
+
 #[derive(Args)]
 struct MachineRepairArgs {
     #[arg(long)]
@@ -213,6 +225,22 @@ struct MachineRepairArgs {
     repair_service: bool,
     #[arg(long)]
     json: bool,
+    #[arg(long)]
+    state_root: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct ShippingInspectArgs {
+    /// Inspect one exact source epoch.
+    #[arg(long)]
+    source_epoch: Option<String>,
+    /// Maximum source intents to show (bounded to keep the repair surface responsive).
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
+    /// Emit machine-readable evidence.
+    #[arg(long)]
+    json: bool,
+    /// Longhouse home override for diagnostics and tests.
     #[arg(long)]
     state_root: Option<PathBuf>,
 }
@@ -726,6 +754,168 @@ fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
+    Ok(())
+}
+
+/// Resolve the shipper database without creating it or running schema
+/// migrations. This command is used by repair UI, so inspection must remain
+/// safe while the Machine Agent owns the live database.
+fn shipping_database_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
+    let home = state_root
+        .map(Path::to_path_buf)
+        .unwrap_or(longhouse_home()?);
+    Ok(home.join("agent/longhouse-shipper.db"))
+}
+
+fn read_shipping_source_rows(
+    state_root: Option<&Path>,
+    source_epoch: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<(PathBuf, Vec<serde_json::Value>)> {
+    if !(1..=500).contains(&limit) {
+        anyhow::bail!("--limit must be between 1 and 500");
+    }
+    let database = shipping_database_path(state_root)?;
+    if !database.is_file() {
+        return Ok((database, Vec::new()));
+    }
+
+    let connection = Connection::open_with_flags(
+        &database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("open shipping database read-only: {}", database.display()))?;
+    connection
+        .busy_timeout(Duration::from_secs(1))
+        .context("configure shipping inspection read timeout")?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT pending.source_epoch,
+               pending.source_path,
+               pending.range_start,
+               pending.range_end,
+               pending.envelope_id,
+               pending.raw_bytes,
+               pending.event_count,
+               pending.has_reply_evidence,
+               pending.created_at,
+               pending.attempt_count,
+               pending.last_attempt_at,
+               pending.blocked_at,
+               pending.block_kind,
+               pending.block_detail,
+               epoch.provider,
+               epoch.opaque_source_id
+        FROM pending_source_envelope AS pending
+        LEFT JOIN source_epoch_registry AS epoch
+          ON epoch.source_epoch = pending.source_epoch
+        WHERE (?1 IS NULL OR pending.source_epoch = ?1)
+        ORDER BY pending.blocked_at IS NOT NULL DESC, pending.created_at, pending.source_epoch
+        LIMIT ?2
+        "#,
+    )?;
+    let rows = statement
+        .query_map(rusqlite::params![source_epoch, limit as i64], |row| {
+            Ok(json!({
+                "source_epoch": row.get::<_, String>(0)?,
+                "source_path": row.get::<_, String>(1)?,
+                "range_start": row.get::<_, i64>(2)?,
+                "range_end": row.get::<_, i64>(3)?,
+                "envelope_id": row.get::<_, String>(4)?,
+                "raw_bytes": row.get::<_, i64>(5)?,
+                "event_count": row.get::<_, i64>(6)?,
+                "has_reply_evidence": row.get::<_, i64>(7)?,
+                "created_at": row.get::<_, String>(8)?,
+                "attempt_count": row.get::<_, i64>(9)?,
+                "last_attempt_at": row.get::<_, Option<String>>(10)?,
+                "blocked_at": row.get::<_, Option<String>>(11)?,
+                "block_kind": row.get::<_, Option<String>>(12)?,
+                "block_detail": row.get::<_, Option<String>>(13)?,
+                "provider": row.get::<_, Option<String>>(14)?,
+                "opaque_source_id": row.get::<_, Option<String>>(15)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((database, rows))
+}
+
+fn native_shipping_inspect(args: ShippingInspectArgs) -> anyhow::Result<()> {
+    let (database, rows) = read_shipping_source_rows(
+        args.state_root.as_deref(),
+        args.source_epoch.as_deref(),
+        args.limit,
+    )?;
+    let payload = json!({
+        "schema_version": 1,
+        "action_id": "inspect_storage_source",
+        "read_only": true,
+        "database": database,
+        "source_epoch": args.source_epoch,
+        "rows": rows,
+        "note": "Rows are retained source evidence. Safe metadata conflicts are reconciled by the Machine Agent; unresolved event-bearing rows must not be retried or discarded blindly.",
+    });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    let rows = payload
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    println!("Durable shipping source evidence (read-only)");
+    println!("  database: {}", database.display());
+    println!("  rows: {}", rows.len());
+    if rows.is_empty() {
+        println!("  No retained source intents matched the requested scope.");
+        return Ok(());
+    }
+    for row in rows {
+        let provider = row
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let source = row
+            .get("opaque_source_id")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| row.get("source_path").and_then(serde_json::Value::as_str))
+            .unwrap_or("unknown");
+        let block_kind = row
+            .get("block_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("pending");
+        let risk = if !matches!(
+            block_kind,
+            "pending" | "source_epoch_conflict" | "render_generation_revision_conflict"
+        ) {
+            "unresolved evidence risk"
+        } else {
+            "metadata/reconciliation work"
+        };
+        println!(
+            "  {provider} {source} epoch={} range={}..{} kind={block_kind}",
+            row.get("source_epoch")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            row.get("range_start")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+            row.get("range_end")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+        );
+        println!(
+            "    risk: {risk}; attempts={}; detail={}",
+            row.get("attempt_count")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+            row.get("block_detail")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-"),
+        );
+    }
+    println!("  action: inspect this evidence before retrying or discarding it");
     Ok(())
 }
 
@@ -3712,6 +3902,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Machine { command } => match command {
             MachineCommand::Repair(args) => native_machine_repair(args)?,
         },
+        Commands::Shipping { command } => match command {
+            ShippingCommand::Inspect(args) => native_shipping_inspect(args)?,
+        },
         Commands::Claude { command, launch } => match command {
             Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
             None => launch_managed_claude(launch)?,
@@ -3755,6 +3948,80 @@ mod tests {
         assert!(command.is_none());
         assert!(launch.no_attach);
         assert!(launch.attach);
+    }
+
+    #[test]
+    fn shipping_parser_preserves_the_menu_bar_repair_command() {
+        let cli = Cli::try_parse_from([
+            "longhouse",
+            "shipping",
+            "inspect",
+            "--source-epoch",
+            "epoch-1",
+            "--limit",
+            "7",
+            "--json",
+        ])
+        .unwrap();
+        let Commands::Shipping { command } = cli.command.unwrap() else {
+            panic!("expected shipping command");
+        };
+        let ShippingCommand::Inspect(args) = command;
+        assert_eq!(args.source_epoch.as_deref(), Some("epoch-1"));
+        assert_eq!(args.limit, 7);
+        assert!(args.json);
+    }
+
+    #[test]
+    fn shipping_inspection_reads_source_evidence_without_writing_the_database() {
+        let root = tempfile::tempdir().unwrap();
+        let agent = root.path().join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let database = agent.join("longhouse-shipper.db");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE source_epoch_registry (
+                    source_epoch TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    opaque_source_id TEXT NOT NULL
+                );
+                CREATE TABLE pending_source_envelope (
+                    source_epoch TEXT PRIMARY KEY,
+                    source_path TEXT NOT NULL,
+                    range_start INTEGER NOT NULL,
+                    range_end INTEGER NOT NULL,
+                    envelope_id TEXT NOT NULL,
+                    raw_bytes INTEGER NOT NULL,
+                    event_count INTEGER NOT NULL,
+                    has_reply_evidence INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL,
+                    last_attempt_at TEXT,
+                    blocked_at TEXT,
+                    block_kind TEXT,
+                    block_detail TEXT
+                );
+                INSERT INTO source_epoch_registry VALUES ('epoch-1', 'claude', 'source-1');
+                INSERT INTO pending_source_envelope VALUES (
+                    'epoch-1', '/tmp/transcript.jsonl', 10, 20, 'envelope-1',
+                    100, 2, 1, '2026-08-04T00:00:00Z', 3, NULL,
+                    '2026-08-04T00:01:00Z', 'source_epoch_conflict', 'metadata changed'
+                );",
+            )
+            .unwrap();
+        drop(connection);
+        let size_before = std::fs::metadata(&database).unwrap().len();
+
+        let (resolved, rows) =
+            read_shipping_source_rows(Some(root.path()), Some("epoch-1"), 50).unwrap();
+
+        assert_eq!(resolved, database);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["source_epoch"], "epoch-1");
+        assert_eq!(rows[0]["provider"], "claude");
+        assert_eq!(rows[0]["block_kind"], "source_epoch_conflict");
+        assert_eq!(std::fs::metadata(&database).unwrap().len(), size_before);
     }
 
     #[cfg(unix)]
