@@ -506,6 +506,48 @@ def test_full_column_gate_accepts_the_result_of_an_explicit_live_interaction_att
     assert gate["provider_status"] == ("pass" if status == "pass" else "blocked")
 
 
+def test_full_column_gate_uses_declared_nested_native_source_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    payload = _passing_claude_full_column_payload()
+    digest = "sha256:" + "a" * 64
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    contract = interaction_semantics.contract_for_provider("claude")
+    assert contract is not None
+    reduced_contract = replace(contract, interaction_probes=(contract.interaction_probes[0],))
+    monkeypatch.setattr(
+        interaction_semantics,
+        "contract_for_provider",
+        lambda _provider: reduced_contract,
+    )
+
+    source_root = tmp_path / "evidence" / "interaction" / "live-probe"
+    source_root.mkdir(parents=True)
+    data = _live_claude_interaction_data(source_root, digest=digest, evidence_class="live_token")
+    raw_root = source_root.parent / "raw"
+    raw_root.mkdir()
+    observation_path = Path(str(data["raw_observation_path"]))
+    events_path = Path(str(data["raw_events_path"]))
+    observation_path = observation_path.rename(raw_root / observation_path.name)
+    events_path = events_path.rename(raw_root / events_path.name)
+    data["raw_observation_path"] = str(observation_path)
+    data["raw_events_path"] = str(events_path)
+    interaction["status"] = "pass"
+    interaction.pop("failure_code", None)
+    interaction["data"] = data
+    interaction["qualification_request_digest"] = digest
+
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        payload,
+        provider="claude",
+        qualification_request_digest=digest,
+        interaction_evidence_class="live_token",
+    )
+
+    assert gate["status"] == "pass"
+    assert gate["provider_status"] == "pass"
+
+
 def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(tmp_path: Path) -> None:
     payload = _passing_full_column_payload()
     interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
