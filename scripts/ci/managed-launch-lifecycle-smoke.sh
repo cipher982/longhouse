@@ -46,6 +46,17 @@ stop_process_tree() {
   kill -KILL "$pid" 2>/dev/null || true
 }
 
+stop_and_reap() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  # Provider facades and the Machine Agent can stay in their control loop when
+  # the Runtime Host has already gone away. Recurse first, then force the
+  # exact test process after the short grace period in stop_process_tree;
+  # waiting on a soft kill alone can leave the EXIT trap hung indefinitely.
+  stop_process_tree "$pid"
+  wait "$pid" 2>/dev/null || true
+}
+
 stop_processes_for_test_root() {
   local pid
   for pid in $(ps -axo pid=,command= | grep -F "$TEST_ROOT" | awk '{print $1}' || true); do
@@ -56,16 +67,13 @@ stop_processes_for_test_root() {
 
 cleanup() {
   if [[ -n "$CURSOR_CONTROL_PID" ]]; then
-    kill "$CURSOR_CONTROL_PID" 2>/dev/null || true
-    wait "$CURSOR_CONTROL_PID" 2>/dev/null || true
+    stop_and_reap "$CURSOR_CONTROL_PID"
   fi
   if [[ -n "$CLAUDE_CONTROL_PID" ]]; then
-    kill "$CLAUDE_CONTROL_PID" 2>/dev/null || true
-    wait "$CLAUDE_CONTROL_PID" 2>/dev/null || true
+    stop_and_reap "$CLAUDE_CONTROL_PID"
   fi
   if [[ -n "$ENGINE_PID" ]]; then
-    kill "$ENGINE_PID" 2>/dev/null || true
-    wait "$ENGINE_PID" 2>/dev/null || true
+    stop_and_reap "$ENGINE_PID"
   fi
   if [[ -n "$SERVER_PID" ]]; then
     stop_process_tree "$SERVER_PID"
