@@ -1718,16 +1718,14 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
         process.kill_group(signal.SIGKILL)
         method = "sigkill_exact_owner_group"
     elif spec.provider == "cursor":
-        control_result = subprocess.run(
-            [str(args.engine), "cursor-helm", "stop", "--session-id", state["session_id"]],
-            cwd=args.repo_root,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        control_returncode = control_result.returncode
-        method = "cursor_helm_stop"
+        # `cursor-helm stop` is the product terminate operation and
+        # intentionally SIGKILLs the provider. The clean-exit assurance cell
+        # must exercise Cursor's own normal TUI shutdown instead, so submit
+        # its supported `/exit` command through the managed Helm socket and
+        # reserve the terminate operation for the process-loss variant.
+        control_result = _control_send(spec, args, state, process, "/exit")
+        control_returncode = int(control_result["returncode"])
+        method = "cursor_native_exit"
     elif spec.provider == "opencode":
         control_result = subprocess.run(
             [str(args.engine), "opencode-bridge", "stop", "--session-id", state["session_id"]],
