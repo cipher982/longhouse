@@ -22,6 +22,7 @@ use chrono::{DateTime, Utc};
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::codex_source::parse_codex_subagent_source_str;
@@ -152,6 +153,9 @@ pub struct ParseResult {
 #[derive(Deserialize)]
 struct RawLine {
     r#type: Option<String>,
+    /// Cursor's current agent-transcript JSONL format uses a top-level role
+    /// alongside the same `{message:{content:...}}` envelope as Claude.
+    role: Option<String>,
     /// Antigravity transcript format.
     step_index: Option<u64>,
     source: Option<String>,
@@ -1682,10 +1686,30 @@ fn extract_events(
 
     let msg_uuid = obj.uuid.as_deref().unwrap_or("").to_string();
     let msg_uuid = if msg_uuid.is_empty() {
-        Uuid::new_v4().to_string()
+        if obj.role.is_some() {
+            // Cursor agent transcripts do not emit a UUID per record. The
+            // byte offset is stable across incremental parses and therefore
+            // keeps render event identities deterministic.
+            format!("cursor-line-{line_offset}")
+        } else {
+            Uuid::new_v4().to_string()
+        }
     } else {
         msg_uuid
     };
+
+    if obj.role.is_some() {
+        extract_cursor_events(
+            obj,
+            session_id,
+            &msg_uuid,
+            timestamp,
+            line_offset,
+            raw_line,
+            events,
+        );
+        return;
+    }
 
     // Codex lifecycle/control event: {type: "event_msg", payload: {...}}
     if event_type == "event_msg" {
@@ -1754,6 +1778,238 @@ fn extract_events(
         }
         _ => {
             // Unknown type — skip
+        }
+    }
+}
+
+fn cursor_user_text(text: &str) -> (String, Role) {
+    if let Some(start) = text.find("<user_query>") {
+        let body_start = start + "<user_query>".len();
+        if let Some(end) = text[body_start..].find("</user_query>") {
+            return (
+                text[body_start..body_start + end].trim().to_string(),
+                Role::User,
+            );
+        }
+    }
+    const INJECTION_MARKERS: [&str; 6] = [
+        "<user_info>",
+        "<agent_transcripts>",
+        "<rules>",
+        "<system_reminder>",
+        "<attached_files>",
+        "<system_notification>",
+    ];
+    if INJECTION_MARKERS.iter().any(|marker| text.contains(marker)) {
+        return (text.to_string(), Role::System);
+    }
+    (text.to_string(), Role::User)
+}
+
+fn cursor_value_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => {
+            let parts = items
+                .iter()
+                .filter_map(|item| {
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| item.get("content").and_then(cursor_value_text))
+                })
+                .collect::<Vec<_>>();
+            (!parts.is_empty()).then(|| parts.join(""))
+        }
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| object.get("content").and_then(cursor_value_text))
+            .or_else(|| object.get("result").and_then(cursor_value_text)),
+        _ => None,
+    }
+}
+
+fn cursor_event(
+    uuid: String,
+    session_id: &str,
+    timestamp: DateTime<Utc>,
+    role: Role,
+    content_text: Option<String>,
+    tool_name: Option<String>,
+    tool_input_json: Option<Box<RawValue>>,
+    tool_output_text: Option<String>,
+    tool_call_id: Option<String>,
+    line_offset: u64,
+    raw_type: &str,
+    raw_line: &str,
+) -> ParsedEvent {
+    ParsedEvent {
+        uuid,
+        session_id: session_id.to_string(),
+        timestamp,
+        role,
+        content_text,
+        tool_name,
+        tool_input_json,
+        tool_output_text,
+        tool_call_id,
+        source_offset: line_offset,
+        raw_type: raw_type.to_string(),
+        raw_line: Some(raw_line.to_string()),
+    }
+}
+
+fn extract_cursor_events(
+    obj: &RawLine,
+    session_id: &str,
+    msg_uuid: &str,
+    timestamp: DateTime<Utc>,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let Some(message) = obj.message.as_ref() else {
+        return;
+    };
+    let Ok(content) = serde_json::from_str::<Value>(message.content.get()) else {
+        return;
+    };
+    let blocks = match content.clone() {
+        Value::Array(items) => items,
+        Value::String(text) => vec![json!({"type":"text", "text":text})],
+        other => vec![json!({"type":"text", "text":other.to_string()})],
+    };
+    let source_role = obj.role.as_deref().unwrap_or("assistant");
+    let mut emitted = false;
+    for (index, block) in blocks.iter().enumerate() {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
+        let event_uuid = format!("{msg_uuid}-cursor-{index}");
+        match kind {
+            "text" | "reasoning" | "redacted-reasoning" => {
+                let Some(text) = block.get("text").and_then(Value::as_str) else {
+                    continue;
+                };
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let (text, role) = if source_role == "user" {
+                    cursor_user_text(text)
+                } else {
+                    (
+                        text.to_string(),
+                        match source_role {
+                            "tool" => Role::Tool,
+                            "system" => Role::System,
+                            _ => Role::Assistant,
+                        },
+                    )
+                };
+                events.push(cursor_event(
+                    event_uuid,
+                    session_id,
+                    timestamp,
+                    role,
+                    Some(text),
+                    None,
+                    None,
+                    None,
+                    None,
+                    line_offset,
+                    "cursor_text",
+                    raw_line,
+                ));
+                emitted = true;
+            }
+            "tool-call" | "tool_call" | "tool-use" | "tool_use" => {
+                let tool_name = block
+                    .get("toolName")
+                    .or_else(|| block.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let tool_call_id = block
+                    .get("toolCallId")
+                    .or_else(|| block.get("tool_call_id"))
+                    .or_else(|| block.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let input = block
+                    .get("args")
+                    .or_else(|| block.get("input"))
+                    .or_else(|| block.get("arguments"))
+                    .and_then(|value| RawValue::from_string(value.to_string()).ok());
+                events.push(cursor_event(
+                    event_uuid,
+                    session_id,
+                    timestamp,
+                    Role::Assistant,
+                    None,
+                    tool_name,
+                    input,
+                    None,
+                    tool_call_id,
+                    line_offset,
+                    "cursor_tool_call",
+                    raw_line,
+                ));
+                emitted = true;
+            }
+            "tool-result" | "tool_result" => {
+                let tool_call_id = block
+                    .get("toolCallId")
+                    .or_else(|| block.get("tool_call_id"))
+                    .or_else(|| block.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let tool_name = block
+                    .get("toolName")
+                    .or_else(|| block.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let output = block
+                    .get("result")
+                    .or_else(|| block.get("content"))
+                    .and_then(cursor_value_text)
+                    .or_else(|| block.get("output").and_then(cursor_value_text));
+                events.push(cursor_event(
+                    event_uuid,
+                    session_id,
+                    timestamp,
+                    Role::Tool,
+                    None,
+                    tool_name,
+                    None,
+                    output.or_else(|| Some(EMPTY_TOOL_RESULT_PLACEHOLDER.to_string())),
+                    tool_call_id,
+                    line_offset,
+                    "cursor_tool_result",
+                    raw_line,
+                ));
+                emitted = true;
+            }
+            _ => {}
+        }
+    }
+    if !emitted && source_role == "user" {
+        if let Some(text) = cursor_value_text(&content) {
+            let (text, role) = cursor_user_text(&text);
+            if !text.trim().is_empty() {
+                events.push(cursor_event(
+                    format!("{msg_uuid}-cursor-fallback"),
+                    session_id,
+                    timestamp,
+                    role,
+                    Some(text),
+                    None,
+                    None,
+                    None,
+                    None,
+                    line_offset,
+                    "cursor_text",
+                    raw_line,
+                ));
+            }
         }
     }
 }
@@ -2875,6 +3131,39 @@ mod tests {
         assert_eq!(result.metadata.cwd.as_deref(), Some("/home/user/project"));
         assert_eq!(result.metadata.git_branch.as_deref(), Some("main"));
         assert_eq!(result.metadata.project.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn test_parse_cursor_agent_transcript_messages_and_injections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000099.jsonl",
+            &[
+                r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Reply with exactly LH_CURSOR_SEED_abc123 and no other text.</user_query>"}]}}"#,
+                r#"{"role":"assistant","message":{"content":[{"type":"text","text":"LH_CURSOR_SEED_abc123"}]}}"#,
+                r#"{"role":"user","message":{"content":[{"type":"text","text":"<agent_transcripts>context injected by Cursor</agent_transcripts>"}]}}"#,
+                r#"{"type":"turn_ended","status":"success"}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Reply with exactly LH_CURSOR_SEED_abc123 and no other text.")
+        );
+        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("LH_CURSOR_SEED_abc123")
+        );
+        assert_eq!(result.events[2].role, Role::System);
+        assert_eq!(
+            result.metadata.session_id,
+            "019c638d-0000-0000-0000-000000000099"
+        );
     }
 
     #[test]
