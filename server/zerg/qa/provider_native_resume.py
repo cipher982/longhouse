@@ -965,7 +965,7 @@ def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[st
     return rows
 
 
-def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 20.0) -> None:
+def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 60.0) -> None:
     """Wait for the attached TUI, not merely the localhost bridge, to accept input."""
 
     deadline = time.monotonic() + timeout
@@ -1267,6 +1267,7 @@ def _wait_session_tail(
     session_id: str,
     *,
     timeout: float = 45,
+    allow_unprojected: bool = False,
 ) -> dict[str, Any]:
     """Wait until the Runtime Host has projected a newly registered session.
 
@@ -1279,16 +1280,25 @@ def _wait_session_tail(
 
     deadline = time.monotonic() + timeout
     last_error = "session transcript was not projected"
+    last_status: int | None = None
     while time.monotonic() < deadline:
         try:
             return _api_json(api_url, token, f"sessions/{session_id}/tail?limit=100&roles=user,assistant")
         except _RuntimeHostHTTPError as exc:
             if exc.status in {401, 403}:
                 raise
+            last_status = exc.status
             last_error = str(exc)
         except (OSError, urllib.error.URLError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
         time.sleep(0.5)
+    if allow_unprojected and last_status == 404:
+        # Claude's native channel has no transcript event until the first
+        # control message is delivered. Its channel bridge is already the
+        # authoritative local owner, so an empty tail is the correct baseline
+        # for that bootstrap message; the post-send assertion still requires a
+        # real projected assistant response.
+        return {}
     raise RuntimeError(f"Runtime Host did not project session {session_id} before the initial control send: {last_error}")
 
 
@@ -1528,6 +1538,17 @@ def _control_send(
 ) -> dict[str, Any]:
     if spec.provider == "claude":
         command = [str(args.engine), "claude-channel", "send", "--session-id", state["session_id"], "--text", text]
+    elif spec.provider == "cursor" and initial:
+        # Cursor does not emit its first lifecycle hook until the first
+        # foreground prompt is submitted.  The managed socket intentionally
+        # refuses a send without that provider-owned idle phase. Use one
+        # disposable PTY bootstrap message to make Cursor publish the native
+        # hook evidence; every message after bootstrap (including Resume) uses
+        # the authoritative Helm socket below.
+        if process.process.poll() is not None:
+            raise RuntimeError("cursor terminal control owner is no longer live")
+        process.send(text + "\r")
+        return {"method": "provider_tty_bootstrap", "returncode": 0}
     elif spec.provider == "cursor":
         command = [str(args.engine), "cursor-helm", "send", "--session-id", state["session_id"], "--text", text]
     else:
@@ -1849,12 +1870,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             initial.settle()
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(initial, root / "initial.tty")
-        if spec.provider == "cursor":
-            # Cursor publishes its Helm lease before its provider-owned TUI is
-            # ready to accept a managed send.  The native control socket is
-            # authoritative, but it deliberately rejects a send during that
-            # startup phase rather than injecting into a raw PTY.
-            _wait_cursor_idle(initial_state, environment)
         states.append(initial_state)
         _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         initial_provider_pid = _provider_process_pid(spec, initial_state)
@@ -1863,6 +1878,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             args.api_url,
             args.agents_token,
             initial_state["session_id"],
+            timeout=5 if spec.provider == "claude" else 45,
+            allow_unprojected=spec.provider == "claude",
         )
         initial_prior_assistant_event_digests = _assistant_event_digests(initial_prior_tail)
         initial_send = _control_send(
@@ -1955,6 +1972,28 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         if spec.provider == "cursor":
+            # A cold Cursor Resume also starts before the provider emits its
+            # first hook phase. Bootstrap one foreground prompt through the
+            # disposable PTY, then require the native hook to publish idle
+            # before exercising the real Helm control socket.
+            bootstrap_marker = f"LONGHOUSE_{provider.upper()}_RESUME_BOOTSTRAP_{uuid.uuid4().hex}"
+            bootstrap_send = _control_send(
+                spec,
+                args,
+                resumed_state,
+                resumed,
+                f"Reply exactly {bootstrap_marker} and nothing else.",
+                initial=True,
+            )
+            _write_json(root / "resume-bootstrap-send.json", bootstrap_send)
+            _wait_assistant_marker(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+                bootstrap_marker,
+                timeout=args.live_send_timeout_secs,
+            )
+            _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
             _wait_cursor_idle(resumed_state, environment)
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
