@@ -381,9 +381,13 @@ def _start_transcript_shipper(
     agent_dir = longhouse_home / "agent"
     machine_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     agent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    capabilities = _api_json(args.api_url, args.agents_token, "storage/v2/capabilities")
+    machine_id = str(capabilities.get("machine_id") or "").strip()
+    if not machine_id:
+        raise RuntimeError("Runtime Host storage capabilities did not return the authenticated machine identity")
     _write_json(
         machine_dir / "state.json",
-        {"runtime_url": args.api_url, "machine_name": "provider-factory"},
+        {"runtime_url": args.api_url, "machine_name": machine_id},
     )
     token_path = machine_dir / "device-token"
     token_path.write_text(args.agents_token.strip() + "\n", encoding="utf-8")
@@ -409,7 +413,7 @@ def _start_transcript_shipper(
         "--db",
         str(db_path),
         "--machine-name",
-        "provider-factory",
+        machine_id,
         "--fallback-scan-secs",
         "1",
         "--spool-replay-secs",
@@ -435,7 +439,7 @@ def _start_transcript_shipper(
                 "provider": provider,
                 "engine_path": str(args.engine),
                 "pid": process.pid,
-                "machine_name": "provider-factory",
+                "machine_name": machine_id,
                 "socket_path": str(socket_path),
                 "db_path": str(db_path),
                 "ready": True,
