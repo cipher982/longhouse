@@ -529,6 +529,8 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
         raise ValueError("dogfood.provenance.sampled_binary is required")
     binary_path_value = sampled_binary.get("path")
     binary_sha = sampled_binary.get("sha256")
+    engine_path_value = sampled_binary.get("engine_path")
+    engine_sha = sampled_binary.get("engine_sha256")
     build_identity = sampled_binary.get("build_identity")
     if not isinstance(binary_path_value, str) or not binary_path_value:
         raise ValueError("dogfood sampled binary path is required")
@@ -538,6 +540,14 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
         or any(character not in "0123456789abcdefABCDEF" for character in binary_sha)
     ):
         raise ValueError("dogfood sampled binary sha256 is invalid")
+    if not isinstance(engine_path_value, str) or not engine_path_value:
+        raise ValueError("dogfood paired engine path is required")
+    if (
+        not isinstance(engine_sha, str)
+        or len(engine_sha) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in engine_sha)
+    ):
+        raise ValueError("dogfood paired engine sha256 is invalid")
     if not isinstance(build_identity, dict):
         raise ValueError(
             "dogfood sampled binary build identity must be structured JSON"
@@ -547,6 +557,11 @@ def _validate_dogfood_provenance(provenance: dict[str, Any]) -> None:
         raise ValueError("dogfood sampled binary no longer exists")
     if _sha256(binary_path) != binary_sha:
         raise ValueError("dogfood sampled binary changed after collection")
+    engine_path = Path(engine_path_value).expanduser().resolve()
+    if not engine_path.is_file():
+        raise ValueError("dogfood paired engine no longer exists")
+    if _sha256(engine_path) != engine_sha:
+        raise ValueError("dogfood paired engine changed after collection")
     if build_identity.get("facade_path") != str(binary_path):
         raise ValueError(
             "dogfood sampled binary identity path does not match the sampled path"

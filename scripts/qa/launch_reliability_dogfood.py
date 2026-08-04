@@ -38,6 +38,7 @@ CONSERVATION_FIELDS = (
 CHALLENGE_ARTIFACT_KIND = "launch_reliability_dogfood_challenge"
 CHALLENGE_SCHEMA_VERSION = 1
 CHALLENGE_ISSUER = "scripts/qa/launch-reliability-measurements.py"
+LOCAL_HEALTH_SCHEMA_VERSION = 1
 
 
 def _utc_now() -> str:
@@ -140,9 +141,17 @@ def _binary_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
             return None, f"longhouse {label} build identity has invalid dirty flag"
     if facade["commit"] != engine["commit"]:
         return None, "longhouse facade and engine build identities disagree"
+    engine_path_value = identity.get("engine_path")
+    if not isinstance(engine_path_value, str) or not engine_path_value:
+        return None, "longhouse build identity has no engine_path"
+    engine_path = Path(engine_path_value).expanduser().resolve()
+    if not engine_path.is_file():
+        return None, "paired longhouse-engine does not exist"
     identity["facade_path"] = str(path)
     return {
         "build_identity": identity,
+        "engine_path": str(engine_path),
+        "engine_sha256": _sha256(engine_path),
         "path": str(path),
         "sha256": _sha256(path),
     }, None
@@ -248,6 +257,8 @@ def collect_snapshot(
     if result.returncode != 0:
         detail = (result.stderr or "non-zero exit").strip()[-500:]
         return payload, f"local-health exited {result.returncode}: {detail}"
+    if payload.get("schema_version") != LOCAL_HEALTH_SCHEMA_VERSION:
+        return payload, "local-health payload has an unsupported schema_version"
     missing = [
         field for field in ("health_state", "engine_status") if field not in payload
     ]

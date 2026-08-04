@@ -56,6 +56,8 @@ def _dogfood_provenance() -> dict[str, object]:
                     "dirty": False,
                 },
             },
+            "engine_path": str(DOGFOOD_GENERATOR),
+            "engine_sha256": MODULE._sha256(DOGFOOD_GENERATOR),
             "path": str(DOGFOOD_GENERATOR),
             "sha256": MODULE._sha256(DOGFOOD_GENERATOR),
         },
@@ -942,6 +944,18 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
         "status": "operator_self_attested",
         "qualification": "diagnostic_only",
     }
+    for metric_name in (
+        "automatic_recovery_time",
+        "false_red_rate",
+        "hidden_failure_rate",
+        "action_coverage",
+        "unresolved_event_bearing_issue_age",
+        "duplicate_replayed_discarded_evidence",
+    ):
+        assert report["measures"][metric_name]["attestation"] == {
+            "status": "operator_self_attested",
+            "qualification": "diagnostic_only",
+        }
     assert report["measures"]["hidden_failure_rate"]["rate"] == 0.0
     assert report["measures"]["action_coverage"]["rate"] == 1.0
     assert report["measures"]["unresolved_event_bearing_issue_age"]["max_age_seconds"] == 3630.0
@@ -1006,17 +1020,22 @@ def test_duplicate_dogfood_path_is_counted_once(tmp_path: Path):
     series = tmp_path / "dogfood.json"
     _dogfood_series(series)
     paths, challenges = _split_dogfood_series(series)
+    content_copy = tmp_path / "dogfood-copy.json"
+    content_copy.write_bytes(paths[0].read_bytes())
 
     report = MODULE.build_report(
         [],
-        dogfood_paths=[paths[0], paths[0], paths[1], paths[2]],
+        dogfood_paths=[paths[0], paths[0], content_copy, paths[1], paths[2]],
         dogfood_challenge_paths=challenges,
     )
 
     assert report["report_status"] == "ok"
     assert report["dogfood_series"]["episode_count"] == 3
     assert report["dogfood_series"]["input_status"] == "valid"
-    assert report["dogfood_series"]["deduplicated_inputs"] == [{"path": str(paths[0]), "reason": "duplicate_path"}]
+    assert report["dogfood_series"]["deduplicated_inputs"] == [
+        {"path": str(paths[0]), "reason": "duplicate_path"},
+        {"path": str(content_copy), "reason": "duplicate_content"},
+    ]
     assert report["measures"]["automatic_recovery_time"]["sample_count"] == 3
 
 

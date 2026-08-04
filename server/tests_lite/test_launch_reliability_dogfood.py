@@ -64,6 +64,7 @@ def test_collects_explicit_truth_and_native_action_ids(tmp_path: Path):
     binary = _fake_binary(
         tmp_path,
         {
+            "schema_version": 1,
             "collected_at": "2026-08-05T00:00:00Z",
             "health_state": "degraded",
             "suggested_action_ids": ["inspect_storage_source"],
@@ -105,6 +106,12 @@ def test_command_failure_is_recorded_as_unknown_not_green(tmp_path: Path):
             "suggested_action_ids": [],
             "engine_status": {"exists": "yes", "fresh": True},
         },
+        {
+            "schema_version": 999,
+            "health_state": "healthy",
+            "suggested_action_ids": [],
+            "engine_status": {"exists": True, "fresh": True},
+        },
     ],
 )
 def test_malformed_native_payload_is_recorded_as_observation_error(tmp_path: Path, payload: dict[str, object]):
@@ -121,6 +128,7 @@ def test_conservation_and_issue_require_valid_explicit_inputs(tmp_path: Path):
     binary = _fake_binary(
         tmp_path,
         {
+            "schema_version": 1,
             "collected_at": "2026-08-05T00:00:00Z",
             "health_state": "healthy",
             "suggested_action_ids": [],
@@ -176,6 +184,7 @@ def test_dirty_repository_is_marked_and_never_hidden(tmp_path: Path):
     binary = _fake_binary(
         tmp_path,
         {
+            "schema_version": 1,
             "collected_at": "2026-08-05T00:00:00Z",
             "health_state": "healthy",
             "engine_status": {"exists": True, "fresh": True},
