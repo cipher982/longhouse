@@ -3137,6 +3137,13 @@ class CatalogStore:
         observed_at = launch["started_at"]
         thread_id = primary_thread_id_for_session(session_id)
         run_id = managed_local_run_id_for_session(session_id)
+        replay_contract = {
+            "owner_id": launch["owner_id"],
+            "git_repo": launch.get("git_repo"),
+            "git_branch": launch.get("git_branch"),
+            "plan": {**plan_payload, "session_id": str(session_id)},
+        }
+        launch_fingerprint = hashlib.sha256(json.dumps(replay_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
@@ -3175,6 +3182,11 @@ class CatalogStore:
                         and str(catalog.loop_mode or "") == plan.loop_mode
                         and str(catalog.permission_mode or "") == plan.permission_mode
                         and (not provider_session_id or provider_alias is not None)
+                        # Rows created before launch_fingerprint existed retain
+                        # the persisted-field fallback above. New rows compare
+                        # the complete request contract without depending on a
+                        # consumable archive outbox record.
+                        and (existing.launch_fingerprint is None or hmac.compare_digest(existing.launch_fingerprint, launch_fingerprint))
                     )
                     result = live_launch_result(existing) if exact_replay else None
                     orm.rollback()
@@ -3204,6 +3216,7 @@ class CatalogStore:
                     execution_lifetime="live_control",
                     client_request_id=None,
                     command_id=command_id,
+                    launch_fingerprint=launch_fingerprint,
                     started_at=observed_at,
                     expires_at=launch["expires_at"],
                     launch_actor=plan.launch_actor,

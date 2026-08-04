@@ -99,9 +99,7 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
     ("terminal_state", "terminal_reason"),
     [("process_gone", "provider_exit"), ("session_ended", "user_closed")],
 )
-async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(
-    daemon_paths, terminal_state, terminal_reason
-):
+async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_paths, terminal_state, terminal_reason):
     database_path, socket_path = daemon_paths
     session_id = uuid4()
     provider_thread_id = str(uuid4())
@@ -531,6 +529,21 @@ async def test_catalogd_local_launch_replays_after_archive_drains_outbox(daemon_
         assert replay["exact_replay"] is True
         assert replay["idempotency_conflict"] is False
         assert replay["launch"]["session_id"] == str(session_id)
+
+        # Plan fields that only ever lived in the consumed outbox payload must
+        # still conflict once the durable fingerprint is the replay contract.
+        for field, value in (
+            ("attach_command", "longhouse claude --resume other-thread"),
+            ("managed_transport", "claude_hook_inbox"),
+            ("managed_session_name", "claude-managed-2"),
+            ("launch_actor", "scheduler"),
+            ("launch_surface", "web"),
+            ("source_runner_id", 9),
+        ):
+            divergent = {**launch, "plan": {**launch["plan"], field: value}}
+            with pytest.raises(CatalogRemoteError) as exc_info:
+                await client.call("session.launch.local.create.v2", {"launch": divergent})
+            assert exc_info.value.code == "conflict", field
     finally:
         await client.close()
         await daemon.close()

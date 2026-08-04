@@ -338,6 +338,10 @@ async def _write_hot_managed_local_launch_readiness(
                 execution_lifetime="live_control",
                 client_request_id=None,
                 command_id=command_id,
+                # This direct-write path has no idempotent replay predicate, so
+                # there is no request contract to fingerprint. Catalogd's
+                # create_local_launch owns the retry path and computes its own.
+                launch_fingerprint=None,
                 started_at=now,
                 expires_at=expires_at,
                 launch_actor=plan.launch_actor,
