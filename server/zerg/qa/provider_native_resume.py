@@ -929,8 +929,13 @@ def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
         # channel server never initializes.
         _accept_claude_permission_prompt(process)
         _accept_claude_development_channel_prompt(process)
-        terminal = _terminal_text(process.recording)
-        if re.search(r"[❯>]\s*Try\b", terminal):
+        terminal = _terminal_text(process.recording).replace("\u00a0", " ")
+        # Claude 2.1.221 renders a bare `❯` after the first turn, while older
+        # builds include the `Try ...` placeholder. Both are the same
+        # provider-owned input boundary. Keep the historical placeholder
+        # match for redraws where the marker shares a line with screen text;
+        # the bare form is line-anchored so transcript text cannot satisfy it.
+        if re.search(r"[❯>]\s*Try\b", terminal) or re.search(r"(?m)^[ \t]*[❯>][ \t]*$", terminal):
             process.settle()
             return
         time.sleep(0.1)
@@ -965,7 +970,7 @@ def _state_candidate_diagnostics(spec: ProviderSpec, home: Path) -> list[dict[st
     return rows
 
 
-def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 60.0) -> None:
+def _wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 120.0) -> None:
     """Wait for the attached TUI, not merely the localhost bridge, to accept input."""
 
     deadline = time.monotonic() + timeout
@@ -1547,7 +1552,15 @@ def _control_send(
         # the authoritative Helm socket below.
         if process.process.poll() is not None:
             raise RuntimeError("cursor terminal control owner is no longer live")
-        process.send(text + "\r")
+        # Keep this byte sequence aligned with the native Cursor Helm socket:
+        # text, an escape to dismiss its completion overlay, then Enter. A
+        # single `text\\r` write can leave the text visible in the input box
+        # without submitting the foreground prompt.
+        process.send(text)
+        time.sleep(0.3)
+        process.send("\x1b")
+        time.sleep(0.1)
+        process.send("\r")
         return {"method": "provider_tty_bootstrap", "returncode": 0}
     elif spec.provider == "cursor":
         command = [str(args.engine), "cursor-helm", "send", "--session-id", state["session_id"], "--text", text]

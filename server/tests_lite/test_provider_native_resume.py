@@ -381,6 +381,29 @@ def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path
     assert process.settled is True
 
 
+def test_claude_tui_readiness_accepts_the_bare_prompt_after_a_turn(tmp_path: Path) -> None:
+    recording = tmp_path / "claude.tty"
+    recording.write_text("\n❯\u00a0\n", encoding="utf-8")
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.recording = recording
+            self.process = SimpleNamespace(poll=lambda: None)
+            self.settled = False
+
+        def drain(self) -> bytes:
+            return b""
+
+        def settle(self) -> bytes:
+            self.settled = True
+            return b""
+
+    process = FakeProcess()
+    _wait_claude_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
+
+    assert process.settled is True
+
+
 def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> None:
     assert _opencode_tui_is_connected("OpenCode event monitor disconnected; retrying") is False
     assert _opencode_tui_is_connected("OpenCode connection lost; retrying") is False
@@ -909,7 +932,7 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
 
     assert result["method"] == "provider_tty_bootstrap"
     assert result["returncode"] == 0
-    assert process.sent == ["seed\r"]
+    assert process.sent == ["seed", "\x1b", "\r"]
 
 
 def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, monkeypatch) -> None:
