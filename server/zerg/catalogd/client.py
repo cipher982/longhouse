@@ -110,6 +110,8 @@ _SAFE_RETRY_METHODS = {
     "projector.state.complete.v2",
     "projector.state.fail.v2",
     "projector.state.list_lag.v2",
+    "projector.coverage.read.v2",
+    "projector.coverage.certify.v2",
     "projector.state.requeue.v2",
     "projector.store.bind.v2",
     "migration.run.create.v2",

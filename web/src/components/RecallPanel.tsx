@@ -132,6 +132,11 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
   const { data, isLoading, error } = useRecall(filters);
   const matches = data?.matches ?? [];
   const total = data?.total ?? 0;
+  const coverageSummary = data?.coverage
+    ? data.coverage.catalog_lag_count > 0 || data.coverage.resident_stale
+      ? `Corpus snapshot: ${data.coverage.expected_episodes.toLocaleString()} episodes · ${data.coverage.catalog_lag_count} session${data.coverage.catalog_lag_count === 1 ? "" : "s"} updating`
+      : `Current corpus: ${data.coverage.expected_episodes.toLocaleString()} episodes`
+    : null;
 
   return (
     <div className="recall-panel" data-testid="recall-panel">
@@ -200,7 +205,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
             <div className="recall-results-header" role="status">
               {total} match{total !== 1 ? "es" : ""}
               {project && ` in ${project}`}
-              {data?.coverage && ` · Complete corpus: ${data.coverage.expected_episodes.toLocaleString()} episodes`}
+              {coverageSummary && ` · ${coverageSummary}`}
             </div>
             <div className="recall-results-list" data-testid="recall-results">
               {matches.map((match) => (

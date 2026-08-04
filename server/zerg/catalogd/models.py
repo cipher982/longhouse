@@ -471,6 +471,7 @@ class ProjectorState(CatalogBase):
     projector = Column(String(64), primary_key=True)
     session_id = Column(String(36), primary_key=True)
     desired_revision = Column(BigInteger, nullable=False, server_default=text("0"))
+    desired_at = Column(DateTime(timezone=True), nullable=True)
     completed_revision = Column(BigInteger, nullable=False, server_default=text("0"))
     claimed_revision = Column(BigInteger, nullable=True)
     claim_token = Column(String(64), nullable=True, index=True)
@@ -488,6 +489,16 @@ class ProjectorState(CatalogBase):
     updated_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),)
+
+
+class ProjectorCutoverCertificate(CatalogBase):
+    """Durable proof that one projector identity reached zero backlog."""
+
+    __tablename__ = "projector_cutover_certificates"
+
+    projector = Column(String(64), primary_key=True)
+    certified_commit_seq = Column(BigInteger, nullable=False)
+    certified_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class ProjectorStoreBinding(CatalogBase):
@@ -560,6 +571,7 @@ __all__ = [
     "LegacyMigrationRun",
     "LegacyMigrationSession",
     "MediaObject",
+    "ProjectorCutoverCertificate",
     "ProjectorState",
     "ProjectorStoreBinding",
     "RawObject",

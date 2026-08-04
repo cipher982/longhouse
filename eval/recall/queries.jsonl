@@ -2,10 +2,10 @@
 // read to confirm the topic is really there, then the query was rewritten to omit
 // that term. This is 89 queries across three mining passes; see README.md.
 //
-// 5595c356 excluded: it surfaced as a top match for nearly every unrelated mining
-// query during this expansion pass (the retrieval-work session discussing recall
-// itself, same self-contamination the README already calls out).
-{"excluded_sessions": ["5595c356"]}
+// These sessions quote this query file or its generated evaluation output. They
+// are benchmark artifacts rather than recall evidence and are excluded before
+// scoring.
+{"excluded_sessions": ["53015091", "5595c356", "88508eb7", "9d01399c", "b8072aff", "b8aa7617", "d96e3976", "da05e9dd"]}
 
 // --- exact: identifiers, flags, env vars, error strings. Lexical should ace
 // these, so they are the regression guard against dense retrieval replacing it.

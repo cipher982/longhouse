@@ -69,6 +69,7 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert created["created"] is True
+        assert created["provider_session_id"] == "claude-thread-1"
         replay = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert replay["exact_replay"] is True
         conflicting = {**launch, "plan": {**launch["plan"], "cwd": "/different"}}
@@ -486,6 +487,7 @@ async def test_catalogd_local_launch_replays_when_retry_timestamps_differ(daemon
         assert replay["exact_replay"] is True
         assert replay["idempotency_conflict"] is False
         assert replay["launch"]["session_id"] == str(session_id)
+        assert replay["provider_session_id"] is None
     finally:
         await client.close()
         await daemon.close()
@@ -508,6 +510,7 @@ async def test_catalogd_local_launch_replays_after_archive_drains_outbox(daemon_
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert created["created"] is True
+        assert created["provider_session_id"] == "claude-thread-retry"
     finally:
         await client.close()
         await daemon.close()
@@ -529,6 +532,7 @@ async def test_catalogd_local_launch_replays_after_archive_drains_outbox(daemon_
         assert replay["exact_replay"] is True
         assert replay["idempotency_conflict"] is False
         assert replay["launch"]["session_id"] == str(session_id)
+        assert replay["provider_session_id"] == "claude-thread-retry"
 
         # Plan fields that only ever lived in the consumed outbox payload must
         # still conflict once the durable fingerprint is the replay contract.

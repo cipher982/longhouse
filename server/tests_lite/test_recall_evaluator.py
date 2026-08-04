@@ -14,10 +14,15 @@ def _coverage() -> dict[str, object]:
     return {
         "ready": True,
         "projector": "embeddings-5090578d9565-256d-p2",
+        "cutover_certified_commit_seq": "9",
+        "cutover_certified_at": "2026-08-02T00:00:00+00:00",
         "catalog_lag_count": 0,
         "catalog_indexed_through": "10",
+        "catalog_oldest_lag_at": None,
+        "catalog_oldest_lag_seconds": None,
         "catalog_commit_seq": "10",
         "catalog_observed_at": "2026-08-02T00:00:10+00:00",
+        "resident_stale": False,
         "expected_sessions": 1,
         "published_sessions": 1,
         "expected_episodes": 1,
@@ -43,7 +48,8 @@ def _module():
 def test_default_false_negative_gate_matches_full_corpus_qwen_baseline():
     evaluator = _module()
 
-    assert evaluator.DEFAULT_MAX_FALSE_NEGATIVE_RATE == 0.474
+    assert evaluator.DEFAULT_MAX_FALSE_NEGATIVE_RATE == 36 / 76
+    assert evaluator.DEFAULT_MIN_RECALL_AT_5 == 25 / 76
 
 
 def test_all_error_run_fails_every_quality_signal_and_the_gate():
@@ -125,6 +131,26 @@ def test_coverage_metadata_reports_observed_defects_instead_of_inventing_zeroes(
     assert metadata["resident_defects"]["invalid_vectors"] == {"min": 2, "max": 2}
 
 
+def test_coverage_metadata_distinguishes_bounded_live_head_from_current():
+    evaluator = _module()
+    coverage = _coverage()
+    coverage.update(
+        {
+            "catalog_lag_count": 1,
+            "catalog_indexed_through": "9",
+            "catalog_oldest_lag_at": "2026-08-02T00:00:09+00:00",
+            "catalog_oldest_lag_seconds": 1.0,
+            "resident_stale": True,
+        }
+    )
+    report = evaluator.Report(
+        strategy="semantic",
+        results=[evaluator.Result(evaluator.Query("q", "exact", "q", ["gold"]), ["gold"], 0.1, coverage=coverage)],
+    )
+
+    assert report.corpus_coverage_metadata()["status"] == "bounded_head"
+
+
 def test_category_regression_fails_the_release_gate_at_25():
     evaluator = _module()
     query = evaluator.Query("answer", "causal", "why", ["gold"])
@@ -147,6 +173,37 @@ def test_category_regression_fails_the_release_gate_at_25():
         min_recall_at_5=0.0,
         min_category_hits_at_25={"causal": 2},
     ) == ["causal_hits_at_25 1/1 is below 2"]
+
+
+def test_frozen_qwen_counts_pass_their_exact_release_boundaries():
+    module = _module()
+    queries = [
+        module.Query(id=str(index), category="exact", query=f"q{index}", gold_sessions=[f"gold-{index}"])
+        for index in range(76)
+    ]
+    report = module.Report(
+        strategy="lexical",
+        results=[
+            module.Result(
+                query=query,
+                returned=(
+                    [query.gold_sessions[0]]
+                    if index < 25
+                    else ([f"miss-{index}-{rank}" for rank in range(24)] + [query.gold_sessions[0]] if index < 40 else [])
+                ),
+                latency_s=0.01,
+                server_commit="a" * 40,
+            )
+            for index, query in enumerate(queries)
+        ],
+    )
+
+    assert report.recall_at(5) == 25 / 76
+    assert report.false_negative_rate() == 36 / 76
+    assert report.gate_failures(
+        max_false_negative_rate=module.DEFAULT_MAX_FALSE_NEGATIVE_RATE,
+        min_recall_at_5=module.DEFAULT_MIN_RECALL_AT_5,
+    ) == []
 
 
 def test_http_error_preserves_typed_response_detail():

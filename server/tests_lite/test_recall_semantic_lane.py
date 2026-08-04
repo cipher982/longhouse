@@ -17,19 +17,36 @@ from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch
 
 _REAL_COVERAGE_CHECK = agents_search._require_complete_projection_coverage
+_STORE_ID = "00000000-0000-4000-8000-000000000001"
+_SCHEMA_GENERATION = "searchd-test-v1"
+
+
+def _catalog_coverage(*, lag_count: int = 0, oldest_lag_seconds: float | None = None):
+    return agents_search._ProjectorCoveragePayload(
+        projector="test-projector",
+        certificate=agents_search._CutoverCertificatePayload(
+            certified_commit_seq="9",
+            certified_at="2026-08-02T00:00:00+00:00",
+        ),
+        store_binding=agents_search._ProjectorStoreBindingPayload(
+            store_id=_STORE_ID,
+            schema_generation=_SCHEMA_GENERATION,
+            commit_seq="1",
+        ),
+        lag_count=lag_count,
+        indexed_through="9" if lag_count else "10",
+        oldest_lag_at="2026-08-02T00:00:01+00:00" if lag_count else None,
+        oldest_lag_seconds=oldest_lag_seconds if lag_count else None,
+        commit_seq="10",
+        observed_at="2026-08-02T00:00:02+00:00",
+    )
 
 
 @pytest.fixture(autouse=True)
 def _complete_catalog_projection(monkeypatch):
     async def complete(*, timeout_seconds):
         assert timeout_seconds > 0
-        return agents_search._ProjectorLagPayload(
-            states=[],
-            lag_count=0,
-            indexed_through="10",
-            commit_seq="10",
-            observed_at="2026-08-02T00:00:00+00:00",
-        )
+        return _catalog_coverage()
 
     monkeypatch.setattr(agents_search, "_require_complete_projection_coverage", complete)
 
@@ -38,7 +55,7 @@ def _match(session_id: str, score: float) -> RecallMatch:
     return RecallMatch(session_id=session_id, chunk_index=0, score=score)
 
 
-def _resident_coverage() -> agents_search._EmbeddingCoveragePayload:
+def _resident_coverage(*, stale: bool = False) -> agents_search._EmbeddingCoveragePayload:
     return agents_search._EmbeddingCoveragePayload(
         ready=True,
         expected_sessions=1,
@@ -50,7 +67,15 @@ def _resident_coverage() -> agents_search._EmbeddingCoveragePayload:
         unlocatable_episodes=0,
         episode_count_mismatches=0,
         missing_session_ids=[],
+        stale=stale,
     )
+
+
+def test_cutover_certificate_cannot_predate_active_store_binding():
+    payload = _catalog_coverage().model_dump()
+    payload["certificate"]["certified_commit_seq"] = "0"
+    with pytest.raises(ValueError, match="cannot predate"):
+        agents_search._ProjectorCoveragePayload.model_validate(payload)
 
 
 def test_rrf_merge_credits_both_lanes_for_agreeing_session():
@@ -132,13 +157,21 @@ async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(m
 
     class FakeCatalog:
         async def call(self, method, params, *, timeout_seconds):
-            assert method == "projector.state.list_lag.v2"
+            assert method == "projector.coverage.read.v2"
             assert timeout_seconds == 1.0
             seen.append(params["projector"])
             return {
-                "states": [],
+                "projector": params["projector"],
+                "certificate": None,
+                "store_binding": {
+                    "store_id": _STORE_ID,
+                    "schema_generation": _SCHEMA_GENERATION,
+                    "commit_seq": "1",
+                },
                 "lag_count": 1,
                 "indexed_through": "9",
+                "oldest_lag_at": "2026-08-02T00:00:00+00:00",
+                "oldest_lag_seconds": 10.0,
                 "commit_seq": "10",
                 "observed_at": "2026-08-02T00:00:00+00:00",
             }
@@ -155,6 +188,7 @@ async def test_current_embedding_projection_lag_closes_the_outer_coverage_gate(m
 
     assert incomplete.value.status_code == 503
     assert incomplete.value.detail["code"] == "embedding_coverage_incomplete"
+    assert incomplete.value.detail["reason"] == "cutover_not_certified"
     assert seen == [EMBEDDING_PROJECTOR_ID]
 
 
@@ -163,12 +197,24 @@ async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkey
     from zerg.services import catalogd_supervisor
 
     class FakeCatalog:
-        async def call(self, _method, _params, *, timeout_seconds):
+        async def call(self, method, params, *, timeout_seconds):
+            assert method == "projector.coverage.read.v2"
             assert timeout_seconds == 1.0
             return {
-                "states": [],
+                "projector": params["projector"],
+                "certificate": {
+                    "certified_commit_seq": "9",
+                    "certified_at": "2026-08-02T00:00:00+00:00",
+                },
+                "store_binding": {
+                    "store_id": _STORE_ID,
+                    "schema_generation": _SCHEMA_GENERATION,
+                    "commit_seq": "1",
+                },
                 "lag_count": 0,
                 "indexed_through": "10",
+                "oldest_lag_at": None,
+                "oldest_lag_seconds": None,
                 "commit_seq": "10",
                 "observed_at": "2026-08-02T00:00:00+00:00",
             }
@@ -181,6 +227,42 @@ async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkey
     )
 
     await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lag_count", "oldest_lag_seconds"),
+    [
+        (agents_search.RECALL_LIVE_HEAD_MAX_SESSIONS + 1, 1.0),
+        (1, agents_search.RECALL_LIVE_HEAD_MAX_AGE_SECONDS + 0.1),
+    ],
+)
+async def test_live_head_must_stay_inside_explicit_bounds(
+    monkeypatch,
+    lag_count,
+    oldest_lag_seconds,
+):
+    from zerg.services import catalogd_supervisor
+
+    class FakeCatalog:
+        async def call(self, _method, params, *, timeout_seconds):
+            assert timeout_seconds == 1.0
+            payload = _catalog_coverage(
+                lag_count=lag_count,
+                oldest_lag_seconds=oldest_lag_seconds,
+            ).model_dump()
+            payload["projector"] = params["projector"]
+            return payload
+
+    monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: FakeCatalog())
+    monkeypatch.setattr(
+        agents_search,
+        "_require_complete_projection_coverage",
+        _REAL_COVERAGE_CHECK,
+    )
+    with pytest.raises(agents_search.HTTPException) as incomplete:
+        await agents_search._require_complete_projection_coverage(timeout_seconds=1.0)
+    assert incomplete.value.detail["reason"] == "live_head_exceeds_bounds"
 
 
 @pytest.mark.asyncio
@@ -299,6 +381,8 @@ async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch
                 }
             ],
             coverage=_resident_coverage(),
+            store_id=_STORE_ID,
+            schema_generation=_SCHEMA_GENERATION,
         )
 
     import zerg.services.local_embedder as local_embedder_module
@@ -319,9 +403,53 @@ async def test_semantic_recall_carries_live_rpc_coverage_certificate(monkeypatch
     assert [match.chunk_index for match in result.matches] == [3]
     assert result.coverage.ready is True
     assert result.coverage.catalog_commit_seq == "10"
+    assert result.coverage.cutover_certified_commit_seq == "9"
+    assert result.coverage.search_store_id == _STORE_ID
+    assert result.coverage.search_schema_generation == _SCHEMA_GENERATION
+    assert result.coverage.resident_stale is False
     assert result.coverage.expected_episodes == 1
     assert seen["model"] == "test-model"
     assert seen["owner_id"] == 42
     assert seen["environment"] is None
     assert seen["exclude_environments"] == ["test", "e2e", "automation"]
     assert seen["since_iso"] is not None
+
+
+@pytest.mark.asyncio
+async def test_semantic_recall_rejects_resident_from_an_uncertified_store(monkeypatch):
+    """An old catalog certificate cannot bless a newly replaced empty store."""
+
+    fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: fake_config)
+
+    async def fake_generate_embedding(_text):
+        return np.array([1, 0], dtype=np.float32)
+
+    async def fake_query(**_kwargs):
+        return agents_search._DenseQueryPayload(
+            results=[],
+            coverage=_resident_coverage(),
+            store_id=str(uuid4()),
+            schema_generation=_SCHEMA_GENERATION,
+        )
+
+    import zerg.services.local_embedder as local_embedder_module
+
+    monkeypatch.setattr(local_embedder_module, "embed_query", fake_generate_embedding)
+    monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
+
+    with pytest.raises(agents_search.HTTPException) as incomplete:
+        await agents_search._semantic_recall(
+            query="important answer",
+            project=None,
+            provider=None,
+            since_days=90,
+            include_test=False,
+            include_automation=False,
+            max_results=5,
+            timeout_seconds=5.0,
+            owner_id=42,
+        )
+    assert incomplete.value.status_code == 503
+    assert incomplete.value.detail["code"] == "embedding_coverage_incomplete"
+    assert incomplete.value.detail["reason"] == "store_binding_mismatch"

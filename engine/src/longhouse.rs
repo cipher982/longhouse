@@ -1043,6 +1043,22 @@ fn spawn_claude_registration_retry(
     }
 }
 
+fn claude_registration_issue(
+    response: &ManagedLaunchResponse,
+    expected_provider_session_id: Option<&str>,
+) -> Option<String> {
+    if let Err(error) = response.validate_transport("Claude", "claude_channel_bridge") {
+        return Some(format!("{error:#}"));
+    }
+    if response.provider_session_id.as_deref() != expected_provider_session_id {
+        return Some("Runtime Host returned a different Claude provider session".to_string());
+    }
+    if let Err(error) = response.require_authority("Claude", "claude_channel_bridge") {
+        return Some(format!("{error:#}"));
+    }
+    None
+}
+
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
@@ -1145,31 +1161,47 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             Duration::from_millis(2000),
         )
     };
-    let response: Option<ManagedLaunchResponse> = match registration {
+    let mut response: Option<ManagedLaunchResponse> = match registration {
         Ok(response) => Some(response),
-        Err(error) if resume_target.is_none() && !args.remote_approve => {
-            // The local provider is still a valid Helm owner when the remote
-            // plane is unavailable. Mint both identities once, persist them
-            // through the local channel, and retry registration asynchronously
-            // so a transient Runtime Host outage cannot strand the TUI.
-            let session_id = payload
-                .get("session_id")
-                .and_then(serde_json::Value::as_str)
-                .context("Claude degraded launch lost its client-minted session identity")?;
-            degraded_registration = Some(spawn_claude_registration_retry(
-                &url,
-                &token,
-                payload.clone(),
-                session_id,
-                deferred_notices.clone(),
-            ));
+        Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Claude in degraded Helm mode; durable upload will catch up if the Runtime Host recovers, while remote control is unavailable until registration recovers ({error:#})"
+                "Longhouse warning: starting Claude without Longhouse control because registration failed ({error:#})"
             );
             None
         }
-        Err(error) => return Err(error),
     };
+    let expected_provider_session_id = resume_target
+        .as_ref()
+        .map(|target| target.provider_session_id.as_str())
+        .or_else(|| {
+            payload
+                .get("provider_session_id")
+                .and_then(|value| value.as_str())
+        });
+    if let Some(issue) = response
+        .as_ref()
+        .and_then(|response| claude_registration_issue(response, expected_provider_session_id))
+    {
+        response = None;
+        eprintln!(
+            "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
+        );
+    }
+    if response.is_none() && resume_target.is_none() {
+        // The provider remains usable while registration retries. Logging and
+        // control recovery must never delay or prevent the provider TUI.
+        let session_id = payload
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .context("Claude degraded launch lost its client-minted session identity")?;
+        degraded_registration = Some(spawn_claude_registration_retry(
+            &url,
+            &token,
+            payload.clone(),
+            session_id,
+            deferred_notices.clone(),
+        ));
+    }
     let session_id = response
         .as_ref()
         .map(|response| response.session_id.clone())
@@ -1193,22 +1225,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut launch_transaction = response.as_ref().map(|response| {
         ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
     });
-    if let Some(response) = response.as_ref() {
-        response.validate_transport("Claude", "claude_channel_bridge")?;
-        let expected_provider_session_id = resume_target
-            .as_ref()
-            .map(|target| target.provider_session_id.as_str())
-            .or_else(|| payload.get("provider_session_id").and_then(|value| value.as_str()));
-        if response.provider_session_id.as_deref() != expected_provider_session_id {
-            drop(launch_transaction);
-            anyhow::bail!("Claude registration returned a different provider session; the new run was aborted");
-        }
-    }
     let permission_mode = response
         .as_ref()
         .and_then(|response| response.permission_mode.as_deref())
         .unwrap_or(if args.remote_approve {
-            "remote_approve"
+            "provider_local"
         } else {
             "bypass"
         });
@@ -1216,17 +1237,17 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|response| response.hook_token.as_deref())
         .unwrap_or(&token);
-    let coordination_token = match response.as_ref() {
-        Some(response) => Some(response.require_authority("Claude", "claude_channel_bridge")?.to_owned()),
-        None => None,
-    };
+    let coordination_token = response
+        .as_ref()
+        .and_then(|response| response.coordination_token())
+        .map(str::to_owned);
     let mcp_config = if let Some(coordination_token) = coordination_token.as_deref() {
         write_claude_mcp_config(&session_id, coordination_token)?
     } else {
         write_claude_degraded_mcp_config(&session_id)?
     };
     let mut command = Command::new(&binary);
-    if permission_mode != "remote_approve" {
+    if permission_mode == "bypass" {
         command.arg("--dangerously-skip-permissions");
     }
     if resume_target.is_some() {
@@ -3593,6 +3614,46 @@ mod tests {
         notices.push("second".to_string());
         assert_eq!(notices.drain(), vec!["first".to_string(), "second".to_string()]);
         assert!(notices.drain().is_empty());
+    }
+
+    fn claude_registration(provider_session_id: &str) -> ManagedLaunchResponse {
+        ManagedLaunchResponse {
+            session_id: "managed-session".to_string(),
+            run_id: "run-id".to_string(),
+            provider_session_id: Some(provider_session_id.to_string()),
+            permission_mode: Some("bypass".to_string()),
+            hook_token: Some("hook-token".to_string()),
+            managed_transport: Some("claude_channel_bridge".to_string()),
+            coordination_token: Some("coordination-token".to_string()),
+        }
+    }
+
+    #[test]
+    fn claude_registration_accepts_the_client_minted_provider_identity() {
+        let response = claude_registration("provider-session");
+        assert_eq!(
+            claude_registration_issue(&response, Some("provider-session")),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_registration_mismatch_degrades_instead_of_owning_the_provider_identity() {
+        let response = claude_registration("wrong-provider-session");
+        assert!(
+            claude_registration_issue(&response, Some("provider-session"))
+                .is_some_and(|issue| issue.contains("different Claude provider session"))
+        );
+    }
+
+    #[test]
+    fn claude_registration_without_coordination_authority_degrades() {
+        let mut response = claude_registration("provider-session");
+        response.coordination_token = None;
+        assert!(
+            claude_registration_issue(&response, Some("provider-session"))
+                .is_some_and(|issue| issue.contains("coordination authority"))
+        );
     }
 
     #[test]
