@@ -34,6 +34,7 @@ from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
+from zerg.qa.provider_native_resume import _wait_session_tail
 from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import registration_for
 
@@ -234,6 +235,37 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
     assert run_commands[0][run_commands[0].index("--db") + 1] == str(tmp_path / "longhouse-home/agent/longhouse-shipper.db")
     assert len(commands) == 2
     assert shipper.stop()["process_dead"] is True
+
+
+def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter([{"session_id": "session-1", "messages": []}])
+    calls = 0
+
+    def projected_tail(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise provider_native_resume._RuntimeHostHTTPError(404, "session not found")
+        return next(responses)
+
+    monkeypatch.setattr(provider_native_resume, "_api_json", projected_tail)
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+
+    assert _wait_session_tail("https://runtime.example", "device-token", "session-1") == {
+        "session_id": "session-1",
+        "messages": [],
+    }
+    assert calls == 2
+
+    auth_error = provider_native_resume._RuntimeHostHTTPError(401, "unauthorized")
+    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(auth_error))
+    with pytest.raises(provider_native_resume._RuntimeHostHTTPError):
+        _wait_session_tail("https://runtime.example", "device-token", "session-1")
+
+    with pytest.raises(RuntimeError, match="did not project session"):
+        _wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
 
 
 def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:

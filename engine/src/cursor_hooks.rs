@@ -84,7 +84,7 @@ fn input() -> anyhow::Result<Value> {
     std::io::stdin().read_to_end(&mut raw)?;
     Ok(serde_json::from_slice(&raw)?)
 }
-fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| std::io::Error::other("path has no parent"))?;

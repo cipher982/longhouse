@@ -1260,6 +1260,37 @@ def _wait_resume_intent(
     raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
 
 
+def _wait_session_tail(
+    api_url: str,
+    token: str,
+    session_id: str,
+    *,
+    timeout: float = 45,
+) -> dict[str, Any]:
+    """Wait until the Runtime Host has projected a newly registered session.
+
+    The managed launch transaction and transcript/runtime projection are
+    separate writes.  A native provider can be ready before the catalog has
+    created its first served session row, so an immediate tail request may
+    legitimately return 404.  Treat application-level projection errors as
+    transient here; authentication errors remain fatal.
+    """
+
+    deadline = time.monotonic() + timeout
+    last_error = "session transcript was not projected"
+    while time.monotonic() < deadline:
+        try:
+            return _api_json(api_url, token, f"sessions/{session_id}/tail?limit=100&roles=user,assistant")
+        except _RuntimeHostHTTPError as exc:
+            if exc.status in {401, 403}:
+                raise
+            last_error = str(exc)
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        time.sleep(0.5)
+    raise RuntimeError(f"Runtime Host did not project session {session_id} before the initial control send: {last_error}")
+
+
 def _command_from_resume_intent(
     spec: ProviderSpec,
     args: argparse.Namespace,
@@ -1790,10 +1821,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         initial_provider_pid = _provider_process_pid(spec, initial_state)
         seed_marker = f"LONGHOUSE_{provider.upper()}_RESUME_SEED_{uuid.uuid4().hex}"
-        initial_prior_tail = _api_json(
+        initial_prior_tail = _wait_session_tail(
             args.api_url,
             args.agents_token,
-            f"sessions/{initial_state['session_id']}/tail?limit=100&roles=user,assistant",
+            initial_state["session_id"],
         )
         initial_prior_assistant_event_digests = _assistant_event_digests(initial_prior_tail)
         initial_send = _control_send(
@@ -1840,6 +1871,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if args.variant == "process_loss" and spec.provider == "opencode":
             transition["terminal_reconciliation"] = _reconcile_opencode_process_loss(args, initial_state, environment)
         _write_json(root / "process-transition-receipt.json", transition)
+        # A provider stop commits the terminal runtime event locally.  Flush
+        # that exact enrolled shipper DB before asking the host for Resume;
+        # otherwise the catalog can still report run_active/contract_missing
+        # even though the provider owner is already dead.
+        _write_json(root / "post-stop-transcript-ship-receipt.json", shipper.flush("post-stop"))
         stale_marker = f"LONGHOUSE_{provider.upper()}_STALE_{uuid.uuid4().hex}"
         try:
             _control_send(spec, args, initial_state, initial, f"Reply exactly {stale_marker} and nothing else.")
@@ -1885,10 +1921,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
         post_marker = f"LONGHOUSE_{provider.upper()}_RESUME_POST_{uuid.uuid4().hex}"
-        prior_tail = _api_json(
+        prior_tail = _wait_session_tail(
             args.api_url,
             args.agents_token,
-            f"sessions/{resumed_state['session_id']}/tail?limit=100&roles=user,assistant",
+            resumed_state["session_id"],
         )
         prior_assistant_event_digests = _assistant_event_digests(prior_tail)
         post_send = _control_send(spec, args, resumed_state, resumed, f"Reply exactly {post_marker} and nothing else.")

@@ -451,6 +451,161 @@ struct CursorMcpConfig {
     session_id: String,
 }
 
+/// Cursor reads lifecycle hooks from the workspace's `.cursor/hooks.json`.
+/// Keep the project hook mutation scoped to the lifetime of the managed Helm
+/// owner, just like the coordination MCP config, and restore the user's file
+/// after the last owner exits.
+struct CursorProjectHooks {
+    path: PathBuf,
+    state_path: PathBuf,
+    session_id: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CursorProjectHooksOwner {
+    pid: libc::pid_t,
+    process_start_time: String,
+}
+
+impl CursorProjectHooksOwner {
+    fn is_live(&self) -> bool {
+        process_start_time(self.pid).as_deref() == Some(&self.process_start_time)
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CursorProjectHooksState {
+    original: Option<String>,
+    sessions: BTreeMap<String, CursorProjectHooksOwner>,
+}
+
+impl Drop for CursorProjectHooks {
+    fn drop(&mut self) {
+        let Ok(lock) = mcp_config_lock(&self.state_path) else {
+            return;
+        };
+        let _lock = lock;
+        let Ok(mut state) = read_cursor_project_hooks_state(&self.state_path) else {
+            return;
+        };
+        state.sessions.remove(&self.session_id);
+        state.sessions.retain(|_, owner| owner.is_live());
+        if state.sessions.is_empty() {
+            let _ = restore_cursor_project_hooks(&self.path, state.original.as_deref());
+            let _ = fs::remove_file(&self.state_path);
+        } else {
+            let _ = write_json(
+                &self.state_path,
+                &serde_json::to_value(state).unwrap_or_default(),
+            );
+        }
+    }
+}
+
+fn read_cursor_project_hooks_state(path: &Path) -> std::io::Result<CursorProjectHooksState> {
+    serde_json::from_slice(&fs::read(path)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn restore_cursor_project_hooks(path: &Path, original: Option<&str>) -> std::io::Result<()> {
+    match original {
+        Some(original) => crate::cursor_hooks::atomic_write(path, original.as_bytes()),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+fn capture_cursor_project_hooks_original(path: &Path) -> Option<String> {
+    let original = fs::read_to_string(path).ok()?;
+    let mut config = match serde_json::from_str::<Value>(&original) {
+        Ok(config) => config,
+        Err(_) => return Some(original),
+    };
+    let Some(hooks) = config.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return Some(original);
+    };
+    let mut changed = false;
+    for entries in hooks.values_mut() {
+        let Some(entries) = entries.as_array_mut() else {
+            continue;
+        };
+        let before = entries.len();
+        entries.retain(|entry| {
+            let command = entry.to_string();
+            ![
+                "longhouse-cursor-hook.py",
+                "longhouse-cursor-permission-hook.py",
+                "cursor-lifecycle-hook",
+                "cursor-permission-hook",
+            ]
+            .iter()
+            .any(|marker| command.contains(marker))
+        });
+        changed |= entries.len() != before;
+    }
+    if !changed {
+        return Some(original);
+    }
+    let mut cleaned = serde_json::to_string_pretty(&config).ok()?;
+    cleaned.push('\n');
+    Some(cleaned)
+}
+
+fn new_cursor_project_hooks_state(path: &Path) -> CursorProjectHooksState {
+    CursorProjectHooksState {
+        original: capture_cursor_project_hooks_original(path),
+        sessions: BTreeMap::new(),
+    }
+}
+
+fn configure_cursor_project_hooks(
+    state_root: &Path,
+    cwd: &Path,
+    session_id: &str,
+) -> anyhow::Result<CursorProjectHooks> {
+    let path = cwd.join(".cursor/hooks.json");
+    let state_path = state_root.join("hook-configs").join(format!(
+        "{:x}.json",
+        sha2::Sha256::digest(cwd.as_os_str().as_bytes())
+    ));
+    let lock = mcp_config_lock(&state_path)?;
+    let _lock = lock;
+    let mut state = match read_cursor_project_hooks_state(&state_path) {
+        Ok(mut state) => {
+            state.sessions.retain(|_, owner| owner.is_live());
+            if state.sessions.is_empty() {
+                restore_cursor_project_hooks(&path, state.original.as_deref())?;
+                let _ = fs::remove_file(&state_path);
+                new_cursor_project_hooks_state(&path)
+            } else {
+                state
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            new_cursor_project_hooks_state(&path)
+        }
+        Err(_) => new_cursor_project_hooks_state(&path),
+    };
+    crate::cursor_hooks::configure(path.parent().map(Path::to_path_buf))?;
+    state.sessions.insert(
+        session_id.to_owned(),
+        CursorProjectHooksOwner {
+            pid: std::process::id() as libc::pid_t,
+            process_start_time: process_start_time(std::process::id() as libc::pid_t)
+                .context("could not capture Cursor project hook owner identity")?,
+        },
+    );
+    write_json(&state_path, &serde_json::to_value(&state)?)?;
+    Ok(CursorProjectHooks {
+        path,
+        state_path,
+        session_id: session_id.to_owned(),
+    })
+}
+
 impl Drop for CursorMcpConfig {
     fn drop(&mut self) {
         let Ok(lock) = mcp_config_lock(&self.state_path) else {
@@ -1092,6 +1247,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
     }
     let coordination_token = coordination_token(&config, Some(&registered), &session_id)?;
+    // Cursor's native hook loader is workspace-scoped.  Install Longhouse's
+    // lifecycle/permission hooks in this project for the managed lifetime and
+    // restore the user's original configuration when the last Helm owner
+    // exits.  Installing only in $HOME/.cursor is not observed by the stock
+    // Cursor binary used by Helm.
+    let _project_hooks = configure_cursor_project_hooks(&dir, &cwd, &session_id)?;
     let _mcp_config = write_cursor_mcp_config(&dir, &cwd, &session_id)?;
     write_pending_claim(
         &dir,
@@ -1628,6 +1789,89 @@ mod tests {
             !path.exists(),
             "the injected config must be removed after both sessions exit"
         );
+    }
+
+    #[test]
+    fn project_hooks_restore_original_configuration_after_last_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let hooks = root.path().join(".cursor/hooks.json");
+        fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        let original = br#"{"version":1,"hooks":{"sessionStart":[{"command":"user-hook"}]}}"#;
+        fs::write(&hooks, original).unwrap();
+
+        let configured = configure_cursor_project_hooks(
+            &state_root,
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let injected = fs::read_to_string(&hooks).unwrap();
+        assert!(injected.contains("cursor-lifecycle-hook"));
+
+        drop(configured);
+        assert_eq!(fs::read(&hooks).unwrap(), original);
+    }
+
+    #[test]
+    fn concurrent_project_hooks_keep_injection_until_last_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let hooks = root.path().join(".cursor/hooks.json");
+        fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        let original = br#"{"version":1,"hooks":{}}"#;
+        fs::write(&hooks, original).unwrap();
+
+        let first = configure_cursor_project_hooks(
+            &state_root,
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let second = configure_cursor_project_hooks(
+            &state_root,
+            root.path(),
+            "22222222-2222-4222-8222-222222222222",
+        )
+        .unwrap();
+
+        drop(first);
+        assert!(fs::read_to_string(&hooks).unwrap().contains("cursor-lifecycle-hook"));
+        drop(second);
+        assert_eq!(fs::read(&hooks).unwrap(), original);
+    }
+
+    #[test]
+    fn project_hooks_do_not_retain_longhouse_entries_after_lost_state() {
+        let root = tempfile::tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let hooks = root.path().join(".cursor/hooks.json");
+        fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        let original = br#"{"version":1,"hooks":{"sessionStart":[{"command":"user-hook"}]}}"#;
+        fs::write(&hooks, original).unwrap();
+
+        let first = configure_cursor_project_hooks(
+            &state_root,
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let state_path = first.state_path.clone();
+        std::mem::forget(first);
+        fs::write(&state_path, b"{\n").unwrap();
+
+        let second = configure_cursor_project_hooks(
+            &state_root,
+            root.path(),
+            "22222222-2222-4222-8222-222222222222",
+        )
+        .unwrap();
+        drop(second);
+
+        let restored = fs::read_to_string(&hooks).unwrap();
+        assert!(restored.contains("user-hook"));
+        assert!(!restored.contains("cursor-lifecycle-hook"));
+        assert!(!restored.contains("cursor-permission-hook"));
     }
 
     #[test]
