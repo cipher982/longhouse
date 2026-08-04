@@ -129,14 +129,6 @@ def call_llm(diff: str, doc_pages: dict[str, str], api_key: str) -> dict:
 def format_pr_comment(result: dict, doc_count: int) -> str:
     """Format LLM findings as a GitHub PR comment."""
     findings = result.get("findings", [])
-    summary = result.get("summary", "")
-
-    if not findings:
-        return (
-            "### Docs Drift Check\n\n"
-            f"**{summary or 'No documentation drift detected.'}**\n\n"
-            f"Checked {doc_count} doc page(s) against this PR's changes."
-        )
 
     lines = [
         "### Docs Drift Check\n",
@@ -159,14 +151,8 @@ def format_pr_comment(result: dict, doc_count: int) -> str:
     return "\n".join(lines)
 
 
-def post_pr_comment(body: str) -> None:
-    """Post or update a PR comment via gh CLI."""
-    pr_number = os.environ.get("PR_NUMBER")
-    if not pr_number:
-        print("  No PR_NUMBER set (local run?), skipping comment.")
-        return
-
-    # Find existing comment to update (avoid spam)
+def find_existing_comment_ids(pr_number: str) -> list[str]:
+    """IDs of drift comments this script previously posted on the PR."""
     result = subprocess.run(
         [
             "gh", "pr", "view", pr_number,
@@ -175,7 +161,37 @@ def post_pr_comment(body: str) -> None:
         ],
         capture_output=True, text=True, cwd=REPO_ROOT,
     )
-    existing_ids = [cid.strip() for cid in result.stdout.strip().split("\n") if cid.strip()]
+    return [cid.strip() for cid in result.stdout.strip().split("\n") if cid.strip()]
+
+
+def clear_pr_comment() -> None:
+    """Remove any stale drift comment once the PR is clean."""
+    pr_number = os.environ.get("PR_NUMBER")
+    if not pr_number:
+        return
+
+    for comment_id in find_existing_comment_ids(pr_number):
+        delete = subprocess.run(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/issues/comments/{comment_id}",
+             "--method", "DELETE"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        if delete.returncode == 0:
+            print(f"  Deleted stale PR comment {comment_id}")
+        else:
+            detail = (delete.stderr or delete.stdout).strip()
+            print(f"  Warning: failed to delete docs drift comment {comment_id}: {detail}", file=sys.stderr)
+
+
+def post_pr_comment(body: str) -> None:
+    """Post or update a PR comment via gh CLI."""
+    pr_number = os.environ.get("PR_NUMBER")
+    if not pr_number:
+        print("  No PR_NUMBER set (local run?), skipping comment.")
+        return
+
+    # Update an existing comment rather than stacking new ones
+    existing_ids = find_existing_comment_ids(pr_number)
 
     if existing_ids:
         update = subprocess.run(
@@ -257,6 +273,12 @@ def main():
 
     for f in findings:
         print(f"  [{f.get('confidence', '?')}] {f['doc_page']}: {f['issue']}")
+
+    if not findings:
+        print("  No drift — not commenting.")
+        if not args.dry_run:
+            clear_pr_comment()
+        sys.exit(0)
 
     comment = format_pr_comment(result, len(doc_pages))
 
