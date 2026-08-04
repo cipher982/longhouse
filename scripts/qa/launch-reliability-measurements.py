@@ -657,6 +657,7 @@ def _health_measurements(
     references: list[dict[str, str]] = []
     seen_paths: set[Path] = set()
     seen_hashes: set[str] = set()
+    seen_identities: set[tuple[str, str, tuple[str, ...]]] = set()
     total = 0
     broken_cases = 0
     false_red_cases = 0
@@ -683,6 +684,8 @@ def _health_measurements(
                 raise ValueError(f"health artifact_kind must be {HEALTH_ARTIFACT_KIND}")
             if artifact.get("schema_version") != HEALTH_SCHEMA_VERSION:
                 raise ValueError(f"health schema_version must be {HEALTH_SCHEMA_VERSION}")
+            if artifact.get("verdict") != "green":
+                raise ValueError("health verdict must be green")
             generated_at = _timestamp(artifact.get("generated_at"), label="health.generated_at")
             if generated_at > as_of:
                 raise ValueError("health.generated_at is after report generation time")
@@ -694,15 +697,30 @@ def _health_measurements(
                 character not in "0123456789abcdefABCDEF" for character in implementation_sha
             ):
                 raise ValueError("health implementation.sha256 must be a 64-character SHA-256")
+            if len(set(implementation_sha.lower())) == 1:
+                raise ValueError("health implementation.sha256 must identify a concrete binary")
             if implementation.get("returncode") != 0:
                 raise ValueError("health implementation.returncode must be zero")
+            scenarios = artifact.get("scenarios")
+            if not isinstance(scenarios, list) or not scenarios or not all(
+                isinstance(value, str) and value for value in scenarios
+            ) or len(set(scenarios)) != len(scenarios):
+                raise ValueError("health scenarios must be a non-empty unique string list")
+            identity = (generated_at.isoformat(), implementation_sha.lower(), tuple(scenarios))
             results = artifact.get("results")
             if not isinstance(results, list):
                 raise ValueError("health artifact has no results list")
-            validated_results: list[tuple[str, str, str, set[str]]] = []
+            validated_results: list[tuple[str, str, str, str, set[str]]] = []
+            seen_cases: set[str] = set()
             for index, result in enumerate(results):
                 if not isinstance(result, dict):
                     raise ValueError(f"health result {index} must be an object")
+                case = result.get("case")
+                if not isinstance(case, str) or not case or case in seen_cases:
+                    raise ValueError(f"health result {index}.case must be a unique non-empty string")
+                if case not in scenarios:
+                    raise ValueError(f"health result {index}.case is not listed in health scenarios")
+                seen_cases.add(case)
                 expected = result.get("expected")
                 observed = result.get("observed")
                 if not isinstance(expected, dict) or not isinstance(observed, dict):
@@ -722,18 +740,19 @@ def _health_measurements(
                 ):
                     raise ValueError(f"health result {index}.observed.suggested_action_ids must be a string list")
                 collected_at = observed.get("collected_at")
-                if collected_at is not None and _timestamp(
-                    collected_at, label=f"health result {index}.observed.collected_at"
-                ) > generated_at:
+                if _timestamp(collected_at, label=f"health result {index}.observed.collected_at") > generated_at:
                     raise ValueError(f"health result {index}.observed.collected_at is after health.generated_at")
                 validated_results.append(
-                    (expected_state, observed_state, expected_action, set(suggested_actions))
+                    (case, expected_state, observed_state, expected_action, set(suggested_actions))
                 )
         except ValueError as exc:
             invalid.append({"path": str(path), "error": str(exc)})
             continue
+        if identity in seen_identities:
+            continue
+        seen_identities.add(identity)
         references.append(_input_reference(path))
-        for expected_state, observed_state, expected_action, suggested in validated_results:
+        for _, expected_state, observed_state, expected_action, suggested in validated_results:
             total += 1
             if observed_state == "broken":
                 broken_cases += 1
@@ -785,6 +804,19 @@ def _health_measurements(
         },
     }
     return references, {"case_count": total, "measurements": measurements}
+
+
+def _invalidate_health_summary(summary: dict[str, Any]) -> None:
+    """Remove usable numeric claims when any health artifact is invalid."""
+
+    summary["case_count"] = 0
+    for metric in summary["measurements"].values():
+        metric["status"] = "not_observed"
+        metric["reason"] = "one or more health artifacts failed validation"
+        metric["source"] = []
+        metric["numerator"] = None
+        metric["denominator"] = None
+        metric["rate"] = None
 
 
 def build_report(
@@ -911,11 +943,14 @@ def build_report(
                     harness_levels[level] += 1
 
     report_generated_at = datetime.now(UTC)
+    invalid_before_health = len(invalid)
     health_inputs, health_summary = _health_measurements(
         health_paths,
         invalid,
         as_of=report_generated_at,
     )
+    if len(invalid) > invalid_before_health:
+        _invalidate_health_summary(health_summary)
     invalid_before_dogfood = len(invalid)
     dogfood_inputs, dogfood_episodes = _load_dogfood_series(
         dogfood_paths,

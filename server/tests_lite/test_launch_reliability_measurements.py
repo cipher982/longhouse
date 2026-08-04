@@ -99,12 +99,22 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
 
 
 def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
+    normalized_results = []
+    for index, result in enumerate(results):
+        normalized = dict(result)
+        normalized["case"] = normalized.get("case") or f"case-{index}"
+        observed = dict(normalized["observed"])
+        observed["collected_at"] = observed.get("collected_at") or "2026-08-04T13:00:00Z"
+        normalized["observed"] = observed
+        normalized_results.append(normalized)
     return {
         "artifact_kind": "installed_native_health_fault_matrix",
         "schema_version": 1,
         "generated_at": "2026-08-04T13:00:30Z",
-        "implementation": {"sha256": "0" * 64, "returncode": 0},
-        "results": results,
+        "verdict": "green",
+        "implementation": {"sha256": ("abcdef" * 10) + "abcd", "returncode": 0},
+        "scenarios": [result["case"] for result in normalized_results],
+        "results": normalized_results,
     }
 
 
@@ -368,6 +378,33 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
     assert report["measures"]["false_red_rate"]["denominator"] == 1
 
 
+def test_reserialized_health_artifact_is_counted_once(tmp_path: Path):
+    matrix = tmp_path / "health.json"
+    matrix.write_text(
+        json.dumps(
+            _health_artifact(
+                [
+                    {
+                        "case": "missing_engine_status",
+                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "observed": {
+                            "health_state": "broken",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
+                    }
+                ]
+            )
+        )
+    )
+    matrix_copy = tmp_path / "health-reformatted.json"
+    matrix_copy.write_text(json.dumps(json.loads(matrix.read_text()), indent=2))
+
+    report = MODULE.build_report([], health_paths=[matrix, matrix_copy])
+
+    assert report["health_fault_matrix"]["case_count"] == 1
+    assert report["measures"]["false_red_rate"]["denominator"] == 1
+
+
 def test_malformed_health_label_invalidates_the_entire_artifact(tmp_path: Path):
     matrix = tmp_path / "health.json"
     matrix.write_text(
@@ -399,6 +436,51 @@ def test_malformed_health_label_invalidates_the_entire_artifact(tmp_path: Path):
     assert report["inputs"]["invalid_artifacts"] == [
         {"path": str(matrix), "error": "health result 0.expected.state is invalid"}
     ]
+
+
+def test_invalid_health_sibling_scrubs_valid_health_measures(tmp_path: Path):
+    valid = tmp_path / "valid-health.json"
+    valid.write_text(
+        json.dumps(
+            _health_artifact(
+                [
+                    {
+                        "case": "missing_engine_status",
+                        "expected": {"state": "broken", "action": "inspect_local_health"},
+                        "observed": {
+                            "health_state": "broken",
+                            "suggested_action_ids": ["inspect_local_health"],
+                        },
+                    }
+                ]
+            )
+        )
+    )
+    invalid = tmp_path / "invalid-health.json"
+    invalid.write_text(
+        json.dumps(
+            _health_artifact(
+                [
+                    {
+                        "case": "missing_engine_status",
+                        "expected": {"state": "invalid", "action": "none"},
+                        "observed": {"health_state": "healthy", "suggested_action_ids": []},
+                    }
+                ]
+            )
+        )
+    )
+
+    report = MODULE.build_report([], health_paths=[valid, invalid])
+
+    assert report["report_status"] == "invalid"
+    assert report["health_fault_matrix"]["case_count"] == 0
+    for metric in report["health_fault_matrix"]["measurements"].values():
+        assert metric["status"] == "not_observed"
+        assert metric["source"] == []
+        assert metric["numerator"] is None
+        assert metric["denominator"] is None
+        assert metric["rate"] is None
 
 
 def test_repeated_matrix_content_is_counted_once(tmp_path: Path):
