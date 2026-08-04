@@ -99,6 +99,10 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
             return 0
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.Popen", FakeProcess)
+    monkeypatch.setattr(
+        "zerg.qa.provider_native_resume._api_json",
+        lambda *_args, **_kwargs: {"machine_id": "sauron-clifford"},
+    )
     monkeypatch.setattr("zerg.qa.provider_native_resume.os.killpg", lambda *_args: None)
     monkeypatch.setattr("zerg.qa.provider_native_resume._wait_process_group_dead", lambda _pid: True)
 
@@ -112,6 +116,7 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
     argv = [str(value) for value in captured["argv"]]
     assert "--token" not in argv
     assert (home / ".longhouse/machine/device-token").read_text().strip() == "device-token"
+    assert (home / ".longhouse/machine/state.json").read_text().find("sauron-clifford") >= 0
     assert shipper.stop()["process_dead"] is True
 
 
