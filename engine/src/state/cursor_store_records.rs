@@ -351,9 +351,14 @@ mod tests {
             conn.execute(
                 "INSERT INTO source_epoch_registry (
                     source_epoch, provider, opaque_source_id, file_incarnation,
-                    start_reason, max_observed_len, created_at, updated_at
-                 ) VALUES (?1, 'cursor', 'shared-source', 'fixture', 'initial', 1, ?2, ?3)",
-                params![epoch.to_string(), created_at, now],
+                    start_reason, max_observed_len, created_at, updated_at, ended_at
+                 ) VALUES (?1, 'cursor', 'shared-source', 'fixture', 'initial', 1, ?2, ?3, ?4)",
+                params![
+                    epoch.to_string(),
+                    created_at,
+                    now,
+                    (epoch == first).then_some("2026-07-21T00:02:00Z"),
+                ],
             )
             .unwrap();
             conn.execute(

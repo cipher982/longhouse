@@ -1589,8 +1589,12 @@ async fn run_runtime_event_pump(
     loop {
         let first = tokio::select! {
             biased;
-            event = critical_receiver.recv(), if !critical_receiver.is_closed() => event,
-            event = receiver.recv(), if !receiver.is_closed() => event,
+            // `recv()` drains buffered messages even after the sender closes.
+            // Keep a closed channel branch enabled while it still has data,
+            // otherwise the final batch is lost; disable an empty closed
+            // critical lane so its ready `None` cannot starve the normal lane.
+            event = critical_receiver.recv(), if !critical_receiver.is_closed() || !critical_receiver.is_empty() => event,
+            event = receiver.recv(), if !receiver.is_closed() || !receiver.is_empty() => event,
             else => None,
         };
         let Some(first) = first else {

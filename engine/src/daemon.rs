@@ -6562,7 +6562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_failed_shipment_retries_suppress_huge_under_host_pressure() {
+    fn test_queue_failed_shipment_retries_keep_huge_opt_in() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         Spool::new(&conn)
@@ -6588,7 +6588,7 @@ mod tests {
         for _ in 0..4 {
             limiter.observe(1_000.0);
         }
-        assert!(!limiter.huge_range_eligible());
+        assert!(limiter.huge_range_eligible());
 
         let mut scheduler = PathScheduler::new(4);
         let queued = queue_failed_shipment_retries_if_idle(
@@ -6602,12 +6602,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(queued, 1);
+        assert_eq!(queued, 2);
         let job = scheduler
             .pop_launchable()
             .expect("small failed-shipment retry job queued");
         assert_eq!(job.path, PathBuf::from("/tmp/small-ready.jsonl"));
         assert_eq!(job.priority, WorkPriority::Retry);
+        assert_eq!(scheduler.snapshot().ready_backlog, 1);
         assert!(scheduler.pop_launchable().is_none());
     }
 
@@ -6951,8 +6952,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_spawn_caffeinate_uses_correct_args() {
+    #[tokio::test]
+    async fn test_spawn_caffeinate_uses_correct_args() {
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let id = child.id().expect("child should have a PID");
@@ -6985,8 +6986,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_caffeinate_child_exits_when_dropped() {
+    #[tokio::test]
+    async fn test_caffeinate_child_exits_when_dropped() {
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let caffeinate_pid = child.id().expect("child should have a PID");

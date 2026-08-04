@@ -9882,7 +9882,10 @@ mod tests {
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::Subscribed.as_str())
         );
-        assert_eq!(context.state.thread_subscription_attempts, 2);
+        // Redirecting from the rejected subagent to its parent resets the
+        // per-thread attempt counter; the parent begins a fresh subscription
+        // identity rather than inheriting the child attempt history.
+        assert_eq!(context.state.thread_subscription_attempts, 0);
         assert_eq!(context.state.thread_subscription_last_error, None);
         assert!(context.rejected_thread_ids.contains("thr-child"));
 

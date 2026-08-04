@@ -898,7 +898,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_device_remap_preserves_epoch_lane_and_upgrades_identity() {
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = crate::state::db::open_db(Some(db.path())).unwrap();
         let initial = observe_source(
             &mut conn,
             "codex",
