@@ -11,13 +11,12 @@ from typing import Mapping
 
 SCHEMA_VERSION = 2
 KIND = "provider_qualification"
-EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token", "observed_install"})
+EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
 AUTH_MODES = frozenset({"none", "isolated_profile", "factory_token"})
 EVIDENCE_PRIORITY = {
     "hermetic": 0,
-    "observed_install": 1,
-    "live_no_token": 2,
-    "live_token": 3,
+    "live_no_token": 1,
+    "live_token": 2,
 }
 SEMANTIC_KEYS = (
     "auth_mode",

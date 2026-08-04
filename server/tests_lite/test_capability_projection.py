@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 
@@ -7,6 +8,7 @@ from zerg.services.provider_capability_projection import NEVER_PROVEN
 from zerg.services.provider_capability_projection import STALE
 from zerg.services.provider_capability_projection import UNACCEPTABLE_EVIDENCE
 from zerg.services.provider_capability_projection import project_capabilities
+from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -53,6 +55,20 @@ def _record(
         producer_class="release_factory",
         producer_version="1",
         invocation_id="test-invocation",
+        factory_source_sha="f" * 40,
+        accepted_epoch_id="factory-v3-test",
+        accepted_epoch_digest="sha256:epoch",
+        verifier_bundle_digest="sha256:verifier",
+        compile_report_digest="sha256:compile",
+        plan_digest="sha256:plan",
+        sandbox_receipt_digest="sha256:sandbox",
+        cleanup_receipt_digest="sha256:cleanup",
+        worker_id="factory-worker-1",
+        worker_census_digest="sha256:census",
+        acquisition_provenance={"method": "staged_release"},
+        auth_mechanism="factory_token_v1",
+        observed_activity=("provider_activity",),
+        credential_binding_facts={"provider_token": "admitted"},
     )
 
 
@@ -71,6 +87,19 @@ def test_fresh_passing_proof_is_attached():
     assert projections[0].proof_status == "pass"
     assert projections[0].generated_at == "2026-07-29T00:30:00+00:00"
     assert projections[0].evidence_class == "live_token"
+
+
+def test_legacy_proof_is_historical_for_non_variant_assertion():
+    now = datetime(2026, 7, 29, 1, 0, 0, tzinfo=UTC)
+    legacy = replace(
+        _record(generated_at="2026-07-29T00:30:00+00:00"),
+        schema_version=LEGACY_PROOF_SCHEMA_VERSION,
+    )
+
+    projection = project_capabilities((_assertion(),), [legacy], now=now)[0]
+
+    assert projection.proof_status == UNACCEPTABLE_EVIDENCE
+    assert "proof_schema_legacy" in projection.admissibility_reasons
 
 
 def test_proof_older_than_max_age_is_stale_not_silently_pass():
@@ -156,7 +185,7 @@ def test_every_declared_assertion_produces_exactly_one_row():
     assert len(projections) == 3
 
 
-def test_pre_v3_record_cannot_prove_a_variant_requirement():
+def test_non_variant_record_cannot_prove_a_variant_requirement():
     assertion = _assertion(assertion_id="native_provider_resume_proven", variant="clean_exit")
     record = _record(assertion_id="native_provider_resume_proven", evidence_class=EvidenceClass.LIVE_TOKEN)
 

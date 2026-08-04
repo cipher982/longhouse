@@ -22,6 +22,8 @@ import subprocess
 import tempfile
 import termios
 import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -30,6 +32,7 @@ from typing import Any
 from typing import Callable
 from typing import Mapping
 
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.repo_root import default_repo_root
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
@@ -96,12 +99,13 @@ def _redact_argv(argv: Any, secrets: list[str] | None = None) -> Any:
     redacted: list[Any] = []
     redact_next = False
     for item in argv:
+        item_text = str(item)
         if redact_next:
             redacted.append("<redacted>")
             redact_next = False
             continue
-        redacted.append("<redacted>" if item in secrets else item)
-        if item == "--agents-token":
+        redacted.append("<redacted>" if item_text in secrets else item_text)
+        if item_text == "--agents-token":
             redact_next = True
     return redacted
 
@@ -127,6 +131,113 @@ def _status(status: str, **fields: Any) -> dict[str, Any]:
     data = {"status": status}
     data.update(fields)
     return data
+
+
+def _post_runtime_json(
+    api_url: str,
+    agents_token: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    method: str = "POST",
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/{path.lstrip('/')}",
+        headers={
+            "X-Agents-Token": agents_token,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "LonghouseProviderFactory/1.0",
+        },
+        data=json.dumps(payload or {}, separators=(",", ":")).encode("utf-8") if method == "POST" else None,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read(4096).decode("utf-8", "replace")[:1000]
+        except OSError:
+            detail = ""
+        raise RuntimeError(f"Runtime Host {method} {path} failed with HTTP {exc.code}: {detail}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Runtime Host {method} {path} returned a non-object")
+    return result
+
+
+def _register_managed_codex_launch(
+    args: argparse.Namespace,
+    *,
+    cwd: Path,
+    session_id: str | None = None,
+    provider_thread_id: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    capabilities = _post_runtime_json(
+        args.api_url,
+        args.agents_token,
+        "api/agents/storage/v2/capabilities",
+        method="GET",
+    )
+    machine_name = str(capabilities.get("machine_id") or "").strip()
+    if not machine_name:
+        raise RuntimeError("Runtime Host storage capabilities did not return the authenticated machine identity")
+    payload: dict[str, Any] = {
+        "cwd": str(cwd),
+        "provider": "codex",
+        "project": "provider-factory",
+        "display_name": "Longhouse provider qualification",
+        "loop_mode": "assist",
+        "machine_name": machine_name,
+        "permission_mode": "provider_local",
+    }
+    if session_id is not None:
+        payload.update(
+            {
+                "session_id": session_id,
+                "resume_attempt_id": str(uuid.uuid4()),
+                "provider_thread_id": provider_thread_id,
+            }
+        )
+    response = _post_runtime_json(
+        args.api_url,
+        args.agents_token,
+        "api/sessions/managed-local/this-device",
+        payload,
+    )
+    returned_session_id = str(response.get("session_id") or "").strip()
+    returned_run_id = str(response.get("run_id") or "").strip()
+    coordination_token = str(response.get("coordination_token") or "").strip()
+    if not returned_session_id:
+        raise RuntimeError("Runtime Host returned no managed Codex session identity")
+    if not returned_run_id:
+        raise RuntimeError("Runtime Host returned no managed Codex run identity")
+    if session_id is not None and returned_session_id != session_id:
+        raise RuntimeError("Runtime Host returned a different Codex session during Resume registration")
+    if not coordination_token:
+        raise RuntimeError("Runtime Host returned no Codex coordination authority")
+    return response, machine_name
+
+
+def _report_managed_codex_launch_outcome(
+    args: argparse.Namespace,
+    *,
+    session_id: str,
+    run_id: str,
+    outcome: str,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    return _post_runtime_json(
+        args.api_url,
+        args.agents_token,
+        f"api/agents/sessions/{session_id}/launch-outcome",
+        {
+            "run_id": run_id,
+            "outcome": outcome,
+            "error_code": "provider_launch_failed" if outcome == "aborted" else None,
+            "error_message": error_message[:2000] if error_message else None,
+        },
+    )
 
 
 def _fail(code: str, message: str, **fields: Any) -> dict[str, Any]:
@@ -821,7 +932,60 @@ def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bi
 
 
 def _bridge_state_root(isolation_root: Path) -> Path:
-    return isolation_root / "codex-bridge"
+    # The direct bridge must publish into the same managed-local tree that the
+    # disposable Machine Agent watches. Keeping this under a sibling
+    # `isolation_root/codex-bridge` directory lets the bridge work locally but
+    # leaves the agent blind to the stopped observation; its orphan janitor can
+    # then remove the retained Resume contract before the hosted assertion.
+    return isolation_root / "longhouse" / "managed-local" / "codex-bridge"
+
+
+def _provider_runtime_environment(
+    base_environment: Mapping[str, str],
+    isolation_root: Path,
+) -> dict[str, str]:
+    """Give every Codex child the same disposable profile and XDG roots.
+
+    The Resume producer itself runs inside the qualification bubble, but the
+    Rust engine starts Codex as a second process. Passing the bubble's
+    environment through that boundary is part of the provider contract: a
+    child that falls back to the worker's HOME can read or mutate a normal
+    profile, and recent Codex versions fail outright when that profile is
+    inaccessible. Keep the profile beside the bridge state so both the
+    engine and the stock TUI use exactly the same provider home.
+    """
+
+    provider_home = isolation_root / "provider-home"
+    codex_home = provider_home / ".codex"
+    xdg_config_home = provider_home / ".config"
+    xdg_data_home = provider_home / ".local" / "share"
+    xdg_cache_home = provider_home / ".cache"
+    for path in (provider_home, codex_home, xdg_config_home, xdg_data_home, xdg_cache_home):
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    environment = dict(base_environment)
+    # CODEX_API_KEY is the factory's named binding, not a stock Codex
+    # environment variable. Authenticate through codex_auth into this
+    # disposable CODEX_HOME before starting the provider, and remove both
+    # possible ambient inputs from every provider child.
+    environment.pop("CODEX_API_KEY", None)
+    environment.pop("OPENAI_API_KEY", None)
+    environment.update(
+        {
+            "HOME": str(provider_home),
+            "CODEX_HOME": str(codex_home),
+            "XDG_CONFIG_HOME": str(xdg_config_home),
+            "XDG_DATA_HOME": str(xdg_data_home),
+            "XDG_CACHE_HOME": str(xdg_cache_home),
+            # The bridge and the qualification's Machine Agent must share the
+            # same Longhouse home.  Without this explicit binding the bridge
+            # falls back to provider_home/.longhouse while the shipper watches
+            # isolation_root/longhouse, so its durable terminal event never
+            # reaches the Runtime Host and Resume remains run_active.
+            "LONGHOUSE_HOME": str(isolation_root / "longhouse"),
+        }
+    )
+    return environment
 
 
 def _start_bridge(
@@ -834,18 +998,31 @@ def _start_bridge(
     isolation_root: Path | None = None,
     resume_thread_id: str | None = None,
     resume_thread_path: str | None = None,
+    register_managed: bool = False,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str], Path]:
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
         raise RuntimeError("longhouse-engine binary was not found")
 
-    session_id = session_id or str(uuid.uuid4())
     isolation_root = isolation_root or Path(tempfile.mkdtemp(prefix=f"lhx-{launch_mode[:1]}-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
 
     create_initial_thread = launch_mode == "detached_ui" and not resume_thread_id
+    managed_response: dict[str, Any] | None = None
+    machine_name: str | None = None
+    launch_confirmed = False
+    if register_managed:
+        managed_response, machine_name = _register_managed_codex_launch(
+            args,
+            cwd=workspace,
+            session_id=None if create_initial_thread else session_id,
+            provider_thread_id=resume_thread_id,
+        )
+        session_id = str(managed_response["session_id"])
+    else:
+        session_id = session_id or str(uuid.uuid4())
+    log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
     command = [
         engine,
         "codex-bridge",
@@ -871,6 +1048,9 @@ def _start_bridge(
         str(args.bridge_start_timeout_secs),
         "--json",
     ]
+    if managed_response is not None:
+        command.extend(["--run-id", str(managed_response["run_id"])])
+        command.extend(["--machine-name", machine_name or "provider-factory"])
     if create_initial_thread:
         command.append("--create-initial-thread")
     if resume_thread_id:
@@ -882,23 +1062,67 @@ def _start_bridge(
     if args.model:
         command.extend(["--model", args.model])
 
-    env = os.environ.copy()
+    env = _provider_runtime_environment(os.environ, isolation_root)
+    provider_key = os.environ.get("CODEX_API_KEY", "").strip()
+    if provider_key and Path(codex_bin).is_file() and os.access(codex_bin, os.X_OK):
+        auth_receipt = login_with_api_key(
+            Path(codex_bin),
+            api_key=provider_key,
+            environment=env,
+            cwd=workspace,
+        )
+        _write_json(evidence_root / "codex-auth-receipt.json", auth_receipt)
     env["LONGHOUSE_CODEX_BRIDGE_TOKEN"] = args.agents_token
-    result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
-    if result.returncode != 0:
-        raise RuntimeError(json.dumps(_command_evidence(result, secrets=[args.agents_token])))
+    if managed_response is not None:
+        env["LONGHOUSE_COORDINATION_TOKEN"] = str(managed_response["coordination_token"])
     try:
-        summary = _load_json_stdout(result)
-    except ValueError as exc:
-        raise RuntimeError(
-            json.dumps(
-                {
-                    "error": str(exc),
-                    "evidence": _command_evidence(result, secrets=[args.agents_token]),
-                }
+        result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
+        if result.returncode != 0:
+            raise RuntimeError(json.dumps(_command_evidence(result, secrets=[args.agents_token])))
+        try:
+            summary = _load_json_stdout(result)
+        except ValueError as exc:
+            raise RuntimeError(
+                json.dumps(
+                    {
+                        "error": str(exc),
+                        "evidence": _command_evidence(result, secrets=[args.agents_token]),
+                    }
+                )
+            ) from exc
+        if managed_response is not None:
+            _report_managed_codex_launch_outcome(
+                args,
+                session_id=session_id,
+                run_id=str(managed_response["run_id"]),
+                outcome="confirmed",
             )
-        ) from exc
-    return summary, result, isolation_root
+            launch_confirmed = True
+            _write_json(
+                evidence_root / f"managed-launch-{launch_mode.replace('_', '-')}.json",
+                {
+                    "provider": "codex",
+                    "session_id": session_id,
+                    "run_id": managed_response["run_id"],
+                    "machine_name": machine_name,
+                    "launch_mode": launch_mode,
+                    "outcome": "confirmed",
+                },
+            )
+        return summary, result, isolation_root
+    except Exception as exc:
+        if managed_response is not None and not launch_confirmed:
+            try:
+                _report_managed_codex_launch_outcome(
+                    args,
+                    session_id=session_id,
+                    run_id=str(managed_response["run_id"]),
+                    outcome="aborted",
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+        raise
 
 
 def _managed_bridge_credentials_gap(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -954,6 +1178,14 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
     if not engine:
         return {"attempted": False, "error": "engine_not_found"}
     state_file = _bridge_state_root(isolation_root) / f"{session_id}.json"
+    # The stop RPC is a separate Longhouse process from the bridge that owns
+    # the session.  It commits the terminal state and enqueues the durable
+    # terminal event, so it must resolve the same runtime-event outbox as the
+    # bridge and transcript shipper.  In the factory the provider parent has
+    # no stable LONGHOUSE_HOME of its own; bind this control call explicitly
+    # to the disposable isolation root.
+    stop_environment = dict(os.environ)
+    stop_environment["LONGHOUSE_HOME"] = str(isolation_root / "longhouse")
     result = _run(
         [
             engine,
@@ -963,11 +1195,17 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
             session_id,
             "--state-root",
             str(_bridge_state_root(isolation_root)),
+            # `bridge_stop` is one of the provider terminal reasons that
+            # retains the native Codex continuation contract. The canary is
+            # deliberately testing cold Resume after a clean owner shutdown;
+            # a synthetic reason would correctly be treated as non-resumable
+            # and delete the contract before the hosted assertion.
             "--reason",
-            "provider_release_canary",
+            "bridge_stop",
             "--force",
         ],
         cwd=args.repo_root,
+        env=stop_environment,
         timeout=30,
     )
     verification = _verify_bridge_stopped(state_file) if result.returncode == 0 else None
@@ -982,6 +1220,8 @@ def _record_terminal_session(
     args: argparse.Namespace,
     command: list[str],
     recording_path: Path,
+    *,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     script_bin = _resolve_executable(args.script_bin, "script")
     timeout_bin = _resolve_executable(args.timeout_bin, "timeout") or shutil.which("gtimeout")
@@ -998,7 +1238,7 @@ def _record_terminal_session(
         str(recording_path),
         *command,
     ]
-    return _run(wrapped, cwd=args.repo_root, timeout=args.tui_record_secs + 10)
+    return _run(wrapped, cwd=args.repo_root, env=env, timeout=args.tui_record_secs + 10)
 
 
 def _record_pty_session(
@@ -1193,7 +1433,7 @@ def run_managed_cold_resume(args: argparse.Namespace, evidence_root: Path, codex
             ws_url,
             "--no-alt-screen",
         ]
-        tui_env = os.environ.copy()
+        tui_env = _provider_runtime_environment(os.environ, isolation_root)
         tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
         subscribed_state: dict[str, Any] | None = None
 
@@ -1322,7 +1562,9 @@ def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_
             ws_url,
             "--no-alt-screen",
         ]
-        tui_result = _record_terminal_session(args, terminal_command, recording)
+        tui_env = _provider_runtime_environment(os.environ, isolation_root)
+        tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+        tui_result = _record_terminal_session(args, terminal_command, recording, env=tui_env)
         recording_text = recording.read_text(encoding="utf-8", errors="replace") if recording.exists() else ""
         if tui_result.returncode not in (0, 124):
             return _fail(

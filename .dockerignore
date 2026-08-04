@@ -29,11 +29,18 @@ engine/*
 !engine/src/
 engine/src/*
 !engine/src/codex_bridge.rs
+!engine/src/claude_channel_control.rs
+!engine/src/claude_channel_server.rs
 !engine/src/config.rs
+!engine/src/cursor_helm_launcher.rs
 !engine/src/longhouse.rs
 !engine/src/main.rs
+!engine/src/managed_launch_lifecycle.rs
+!engine/src/managed_launch_payload.rs
 !engine/src/managed_bridge_scan.rs
 !engine/src/managed_resume_scan.rs
+!engine/src/opencode_bridge.rs
+!engine/src/opencode_control.rs
 
 !docker/
 docker/*

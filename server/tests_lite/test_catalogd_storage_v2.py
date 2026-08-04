@@ -32,6 +32,9 @@ from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
+from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderRecord
+from zerg.storage_v2.render_objects import aggregate_render_object
 
 
 @pytest.fixture
@@ -852,6 +855,152 @@ async def test_claude_title_candidates_wait_for_semantic_repair(daemon_paths):
         )
         ready = await client.call("storage.session.title.candidates.v2", {"limit": 10})
         assert [row["session_id"] for row in ready["sessions"]] == [str(session_id)]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_claude_effort_then_real_prompt_reaches_title_generation(daemon_paths):
+    """A native /effort record stays raw while the following prompt titles the session."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    command_output = "<local-command-stdout>Set effort level to high</local-command-stdout>"
+    prompt = "Recover the missing final message from the overnight session"
+    render_spec = RenderObjectSpec(
+        session_id=session_id,
+        render_generation=generation_id,
+        parser_revision="engine-parser-v2",
+        ordering_revision="semantic-order-v2",
+        machine_id="cinder",
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=epoch,
+        source_envelope_id="a" * 64,
+        records=(
+            RenderRecord(
+                event_id="effort-command",
+                order_time_us=1_700_000_000_000_000,
+                source_position=0,
+                event_subordinal=0,
+                role="user",
+                content_text=command,
+                interaction_kind="local_control",
+            ),
+            RenderRecord(
+                event_id="effort-output",
+                order_time_us=1_700_000_000_000_001,
+                source_position=1,
+                event_subordinal=0,
+                role="user",
+                content_text=command_output,
+                interaction_kind="local_control_output",
+            ),
+            RenderRecord(
+                event_id="real-prompt",
+                order_time_us=1_700_000_000_000_002,
+                source_position=2,
+                event_subordinal=0,
+                role="user",
+                content_text=prompt,
+                interaction_kind="durable_user_message",
+            ),
+        ),
+    )
+    aggregate = aggregate_render_object(render_spec)
+    render = _render_manifest(generation_id, source_epoch=epoch, provider="claude")
+    render.update(
+        event_count=len(render_spec.records),
+        user_messages=aggregate["user_messages"],
+        assistant_messages=aggregate["assistant_messages"],
+        tool_calls=aggregate["tool_calls"],
+        first_order_key=aggregate["first_order_key"],
+        last_order_key=aggregate["last_order_key"],
+        first_user_message_preview=aggregate["first_user_message_preview"],
+        last_visible_text_preview=aggregate["last_visible_text_preview"],
+        semantic_projection_version=1,
+    )
+    raw_records = tuple(
+        (
+            json.dumps(
+                {"type": "user", "message": {"role": "user", "content": content}},
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
+        for content in (command, command_output, prompt)
+    )
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=sum(len(record) for record in raw_records),
+            records=raw_records,
+            sealed_at=now,
+            provider="claude",
+        )
+        raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        assert (await client.call("storage.session.title.candidates.v2", {"limit": 10}))[
+            "sessions"
+        ] == []
+
+        await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": render["object_id"],
+                        "event_count": len(render_spec.records),
+                        "user_messages": aggregate["user_messages"],
+                        "assistant_messages": aggregate["assistant_messages"],
+                        "tool_calls": aggregate["tool_calls"],
+                        "first_user_message_preview": aggregate["first_user_message_preview"],
+                        "last_visible_text_preview": aggregate["last_visible_text_preview"],
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        candidates = await client.call("storage.session.title.candidates.v2", {"limit": 10})
+        assert candidates["sessions"] == [
+            {
+                "session_id": str(session_id),
+                "first_user_message": prompt,
+                "provider": "claude",
+                "project": "longhouse",
+                "git_branch": "main",
+                "attempt_count": 0,
+            }
+        ]
+        assert candidates["sessions"][0]["first_user_message"] != "Effort level settings"
+
+        completed = await client.call(
+            "storage.session.title.complete.v2",
+            {
+                "session_id": str(session_id),
+                "title": "Recover the missing final message",
+                "completed_at": (now + timedelta(seconds=2)).isoformat(),
+            },
+        )
+        assert completed["changed"] is True
+        stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert stored["session"]["anchor_title"] == "Recover the missing final message"
+        assert stored["session"]["summary_title"] == "Recover the missing final message"
     finally:
         await client.close()
         await daemon.close()

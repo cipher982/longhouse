@@ -25,6 +25,124 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     )
 
 
+def test_command_evidence_normalizes_pathlike_argv_values() -> None:
+    result = subprocess.CompletedProcess(
+        [Path("/tmp/longhouse-engine"), "codex-bridge", "--agents-token", "test-agents-token"],
+        1,
+        "",
+        "listener failed",
+    )
+
+    evidence = canary._command_evidence(result, secrets=["test-agents-token"])
+
+    assert evidence["argv"] == ["/tmp/longhouse-engine", "codex-bridge", "--agents-token", "<redacted>"]
+
+
+def test_provider_runtime_environment_isolated_from_worker_profile(tmp_path: Path) -> None:
+    environment = canary._provider_runtime_environment(
+        {
+            "HOME": "/root",
+            "CODEX_HOME": "/root/.codex",
+            "CODEX_API_KEY": "factory-key",
+            "OPENAI_API_KEY": "ambient-key",
+            "PROBE_VALUE": "preserved",
+        },
+        tmp_path / "isolation",
+    )
+
+    provider_home = tmp_path / "isolation" / "provider-home"
+    assert environment["HOME"] == str(provider_home)
+    assert environment["CODEX_HOME"] == str(provider_home / ".codex")
+    assert environment["XDG_CONFIG_HOME"] == str(provider_home / ".config")
+    assert environment["XDG_DATA_HOME"] == str(provider_home / ".local" / "share")
+    assert environment["XDG_CACHE_HOME"] == str(provider_home / ".cache")
+    assert environment["LONGHOUSE_HOME"] == str(tmp_path / "isolation" / "longhouse")
+    assert environment["PROBE_VALUE"] == "preserved"
+    assert "CODEX_API_KEY" not in environment
+    assert "OPENAI_API_KEY" not in environment
+    assert (provider_home / ".codex").is_dir()
+
+
+def test_start_bridge_passes_isolated_environment_to_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    seen: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, '{"state_file":"state.json"}\n', "")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+    isolation_root = tmp_path / "isolation"
+    canary._start_bridge(
+        args,
+        evidence_root=tmp_path / "evidence",
+        codex_bin="/bin/codex",
+        launch_mode="tui",
+        isolation_root=isolation_root,
+    )
+
+    environment = seen["env"]
+    assert isinstance(environment, dict)
+    assert environment["HOME"] == str(isolation_root / "provider-home")
+    assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
+    assert environment["LONGHOUSE_HOME"] == str(isolation_root / "longhouse")
+    assert environment["LONGHOUSE_CODEX_BRIDGE_TOKEN"] == "test-agents-token"
+
+
+def test_start_bridge_registers_and_confirms_managed_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    seen: dict[str, object] = {}
+    outcomes: list[dict[str, object]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["argv"] = argv
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, '{"state_file":"state.json"}\n', "")
+
+    monkeypatch.setattr(
+        canary,
+        "_register_managed_codex_launch",
+        lambda *args, **kwargs: (
+            {
+                "session_id": "session-1",
+                "run_id": "run-1",
+                "coordination_token": "coordination-secret",
+            },
+            "machine-1",
+        ),
+    )
+    monkeypatch.setattr(
+        canary,
+        "_report_managed_codex_launch_outcome",
+        lambda args, **kwargs: outcomes.append(dict(kwargs)) or {"recorded": True},
+    )
+    monkeypatch.setattr(canary, "_run", fake_run)
+
+    canary._start_bridge(
+        args,
+        evidence_root=tmp_path / "evidence",
+        codex_bin="/bin/codex",
+        launch_mode="detached_ui",
+        isolation_root=tmp_path / "isolation",
+        register_managed=True,
+    )
+
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert "--run-id" in argv and argv[argv.index("--run-id") + 1] == "run-1"
+    assert "--machine-name" in argv and argv[argv.index("--machine-name") + 1] == "machine-1"
+    environment = seen["env"]
+    assert isinstance(environment, dict)
+    assert environment["LONGHOUSE_COORDINATION_TOKEN"] == "coordination-secret"
+    assert outcomes == [{"session_id": "session-1", "run_id": "run-1", "outcome": "confirmed"}]
+
+
 def test_fake_app_server_binary_proves_installed_engine_permission_protocol(tmp_path: Path) -> None:
     engine = tmp_path / "longhouse-engine"
     engine.write_text(
@@ -85,7 +203,7 @@ print(json.dumps({{
 def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(tmp_path: Path, monkeypatch) -> None:
     args = _args(tmp_path)
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     socket_file = state_file.with_suffix(".sock")
@@ -95,9 +213,11 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
     )
     socket_file.touch()
     commands: list[list[str]] = []
+    environments: list[dict[str, str] | None] = []
 
-    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+    def fake_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
+        environments.append(kwargs.get("env"))
         state_file.write_text(
             json.dumps({"status": "stopped", "active_turn_id": None}),
             encoding="utf-8",
@@ -118,7 +238,7 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
             "--state-root",
             str(state_root),
             "--reason",
-            "provider_release_canary",
+            "bridge_stop",
             "--force",
         ]
     ]
@@ -126,6 +246,7 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
     assert result["verification"]["verified"] is True
     assert result["verification"]["terminal_state"] is True
     assert result["verification"]["socket_absent"] is True
+    assert environments[0]["LONGHOUSE_HOME"] == str(isolation_root / "longhouse")
 
 
 def test_stop_verification_rejects_zero_exit_shape_without_terminal_cleanup(tmp_path: Path) -> None:
@@ -168,7 +289,7 @@ def test_managed_cold_resume_keeps_thread_and_replaces_run_and_connection(tmp_pa
     args = _args(tmp_path)
     args.tui_record_secs = 1
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     thread_path = isolation_root / "rollout.jsonl"
@@ -249,7 +370,7 @@ def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_p
     args = _args(tmp_path)
     evidence_root = tmp_path / "evidence"
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     state = {"active_turn_id": None, "last_turn_status": "completed"}
@@ -312,7 +433,7 @@ def test_live_interrupt_rejects_state_for_a_different_turn(tmp_path: Path, monke
     args = _args(tmp_path)
     evidence_root = tmp_path / "evidence"
     isolation_root = tmp_path / "isolation"
-    state_root = isolation_root / "codex-bridge"
+    state_root = canary._bridge_state_root(isolation_root)
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     state_file.write_text(

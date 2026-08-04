@@ -1440,9 +1440,17 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
                 continue
             database_session_id = str(database_session_id or "").strip()
             record_session_id = str(record.get("sessionID") or "").strip()
-            if not database_session_id or not record_session_id or database_session_id != record_session_id:
+            # OpenCode's assistant message payloads can omit sessionID even
+            # though the native message row binds the record to a session.
+            # The SQLite column is the authoritative binding; reject an
+            # explicitly conflicting payload value, but do not discard a
+            # valid native model record merely because the payload is sparse.
+            if not database_session_id or (
+                record_session_id and database_session_id != record_session_id
+            ):
                 continue
-            if session_ids and record_session_id not in session_ids:
+            bound_session_id = database_session_id
+            if session_ids and bound_session_id not in session_ids:
                 continue
             model_record = record.get("model") if isinstance(record.get("model"), dict) else record
             model = _opencode_model_identity(
@@ -1456,7 +1464,7 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
             candidates.append(
                 {
                     "message_id": str(message_id or record.get("id") or ""),
-                    "session_id": record_session_id,
+                    "session_id": bound_session_id,
                     "database_session_id": database_session_id,
                     "model": model,
                     "record_sha256": _native_event_digest(record),
@@ -1465,9 +1473,12 @@ def _opencode_native_model_evidence(runtime_root: Path, *, session_ids: list[str
         if not candidates:
             continue
         selected = candidates[-1]
-        relative_path = database.resolve().relative_to(runtime_root.resolve()).as_posix()
         return {
-            "path": str((Path("opencode-runtime") / relative_path).as_posix()),
+            # The release verifier resolves source artifacts relative to the
+            # qualification bundle root, not this canary's runtime root.
+            # Emit the absolute path here, matching the other provider
+            # adapters; the verifier later relativizes it into the bundle.
+            "path": str(database.resolve()),
             "sha256": _sha256_file(database),
             **selected,
         }

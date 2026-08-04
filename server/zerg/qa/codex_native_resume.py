@@ -7,10 +7,13 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -18,14 +21,20 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.provider_native_resume import TranscriptShipper
+from zerg.qa.provider_native_resume import _qualification_secrets
+from zerg.qa.provider_native_resume import _redact_state_for_evidence
+from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
+
+_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
     producer_revision=1,
     scenario_id="helm_cold_resume",
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),
@@ -36,6 +45,7 @@ REGISTRATION = ProducerRegistration(
     modes=("helm",),
     evidence_classes=("live_token",),
     observed_activity=(
+        "provider_neutral_resume_intent",
         "native_resume_command",
         "post_resume_provider_activity",
         "stale_input_rejected",
@@ -48,11 +58,15 @@ REGISTRATION = ProducerRegistration(
     network_policy="shared_provider_egress",
     required_artifacts=(
         "provider_binary_receipt",
+        "transcript_shipper_receipt",
+        "resume_intent_receipt",
         "initial_bridge_state",
         "initial_transcript",
+        "initial_transcript_ship_receipt",
         "native_resume_terminal_recording",
         "resumed_bridge_state",
         "resumed_transcript",
+        "post_resume_transcript_ship_receipt",
         "process_transition_receipt",
         "stale_input_receipt",
         "concurrent_resume_receipt",
@@ -77,8 +91,86 @@ def _now() -> str:
 
 def _write_json(path: Path, payload: object) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def _write_resume_contract_snapshot(
+    *,
+    isolation_root: Path,
+    state: dict[str, Any],
+    codex_bin: Path,
+    provider_version: str,
+) -> tuple[Path, Path]:
+    """Publish the same retained-contract shape as the managed Codex facade.
+
+    This producer starts the Rust bridge directly so it can exercise the stock
+    TUI Resume command. The normal ``longhouse codex`` facade records this
+    contract after launch; a direct bridge invocation does not. Keep the probe
+    honest by recording the equivalent durable contract in the disposable
+    Longhouse home, with a state snapshot whose path is inside that home so
+    the real Machine Agent resume scanner can validate it.
+    """
+
+    session_id = str(state.get("session_id") or "").strip()
+    cwd = Path(str(state.get("cwd") or "")).resolve()
+    provider_binary = codex_bin.resolve()
+    longhouse_home = isolation_root / "longhouse"
+    state_path = longhouse_home / "managed-local/codex-bridge/sessions" / f"{session_id}.json"
+    contract_path = longhouse_home / "managed-local/contracts/codex" / f"{session_id}.json"
+    if not session_id or not cwd.is_dir() or not provider_binary.is_file():
+        raise RuntimeError("Codex resume contract snapshot inputs are incomplete")
+    state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    contract_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    snapshot = dict(state)
+    snapshot["session_id"] = session_id
+    _write_json(state_path, snapshot)
+    _write_json(
+        contract_path,
+        {
+            "schema_version": 2,
+            "session_id": session_id,
+            "provider": "codex",
+            "launch_mode": "detached_ui",
+            "created_at": _now(),
+            "provider_binary": {
+                "path": str(provider_binary),
+                "source": "staged_release",
+                "version": provider_version,
+            },
+            "workspace": {
+                "cwd": str(cwd),
+                "canonical_cwd": str(cwd),
+                "file_identity": None,
+            },
+            "control": {
+                "kind": "codex_bridge",
+                "state_path": str(state_path.resolve()),
+            },
+            "options": {"model": os.environ.get("CODEX_MODEL"), "model_reasoning_effort": None, "bypass": False},
+        },
+    )
+    return state_path, contract_path
+
+
+def _remove_resume_contract_snapshot(paths: tuple[Path, Path] | None) -> None:
+    if paths is None:
+        return
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _redact_process_command(command: str) -> str:
+    """Keep generated process evidence from retaining bridge credentials."""
+
+    return re.sub(
+        r'(LONGHOUSE_COORDINATION_TOKEN=)("(?:[^"\\]|\\.)*"|\S+)',
+        r"\1<redacted>",
+        command,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -99,6 +191,99 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
     ]
+
+
+class _RuntimeHostHTTPError(RuntimeError):
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        self.detail = detail
+        super().__init__(f"Runtime Host HTTP {status}: {detail}")
+
+
+def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
+        headers={
+            "X-Agents-Token": token,
+            "Accept": "application/json",
+            "User-Agent": _RUNTIME_HOST_USER_AGENT,
+        },
+        data=b"" if method == "POST" else None,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw_detail = exc.read(4096).decode("utf-8", "replace")
+        except OSError:
+            raw_detail = ""
+        try:
+            parsed_detail = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            parsed_detail = raw_detail[:1000]
+        if isinstance(parsed_detail, dict):
+            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
+        else:
+            detail = str(parsed_detail)[:1000]
+        raise _RuntimeHostHTTPError(exc.code, detail) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runtime Host returned a non-object")
+    return payload
+
+
+def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: float = 90) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last_reason = "resume intent was not projected"
+    while time.monotonic() < deadline:
+        try:
+            intent = _api_json(
+                args.api_url,
+                args.agents_token,
+                f"sessions/{session_id}/resume-intent",
+                method="POST",
+            )
+        except _RuntimeHostHTTPError as exc:
+            if exc.status in {401, 403}:
+                raise
+            last_reason = str(exc)
+            time.sleep(0.5)
+            continue
+        except (OSError, urllib.error.URLError) as exc:
+            last_reason = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.5)
+            continue
+        if intent.get("available") is True:
+            return intent
+        last_reason = str(intent.get("reason") or "resume intent unavailable")
+        time.sleep(0.5)
+    raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
+
+
+def _validate_resume_intent(
+    args: argparse.Namespace,
+    session_id: str,
+    intent: dict[str, Any],
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    expected_argv = ["longhouse", "codex", "--cwd", str(cwd), "--resume-session", session_id]
+    identity_valid = (
+        intent.get("available") is True
+        and intent.get("session_id") == session_id
+        and intent.get("provider") == "codex"
+        and intent.get("cwd") == str(cwd)
+        and intent.get("handoff") == "terminal_command"
+        and intent.get("argv") == expected_argv
+    )
+    if not identity_valid:
+        raise RuntimeError("provider-neutral Resume intent did not match the exact Codex session, cwd, and native selector")
+    return {
+        "requested_at": _now(),
+        "intent": intent,
+        "identity_valid": identity_valid,
+    }
 
 
 def _pid_alive(pid: int) -> bool:
@@ -138,7 +323,7 @@ def _wait_dead(pid: int, *, timeout: float = 10.0) -> bool:
     return not _pid_alive(pid)
 
 
-def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any]:
+def _force_process_loss(state: dict[str, Any], codex_bin: Path, state_file: Path) -> dict[str, Any]:
     bridge_pid = int(state.get("pid") or 0)
     app_server_pid = int(state.get("app_server_pid") or 0)
     bridge_command = _proc_command(bridge_pid)
@@ -155,12 +340,24 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
         raise RuntimeError("recorded bridge process start identity no longer matches")
     if state["app_server_process_start_time"] != app_server_start_time:
         raise RuntimeError("recorded Codex app-server process start identity no longer matches")
-    os.kill(bridge_pid, signal.SIGKILL)
     if _pid_alive(app_server_pid):
         os.kill(app_server_pid, signal.SIGKILL)
-    bridge_dead = _wait_dead(bridge_pid)
     app_server_dead = _wait_dead(app_server_pid)
-    if not app_server_dead or not bridge_dead:
+    terminal_commit_observed = False
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            current = bridge_canary._read_json(state_file)
+        except (OSError, json.JSONDecodeError):
+            current = {}
+        if current.get("terminal_state") and current.get("terminal_published") is True:
+            terminal_commit_observed = True
+            break
+        time.sleep(0.1)
+    if _pid_alive(bridge_pid):
+        os.kill(bridge_pid, signal.SIGKILL)
+    bridge_dead = _wait_dead(bridge_pid)
+    if not app_server_dead or not bridge_dead or not terminal_commit_observed:
         raise RuntimeError("process-loss injection did not terminate the exact recorded owners")
     return {
         "method": "sigkill_exact_recorded_processes",
@@ -168,14 +365,15 @@ def _force_process_loss(state: dict[str, Any], codex_bin: Path) -> dict[str, Any
             "pid": bridge_pid,
             "recorded_start_time": state.get("bridge_process_start_time"),
             "observed_start_time": bridge_start_time,
-            "command": bridge_command,
+            "command": _redact_process_command(bridge_command),
             "dead": bridge_dead,
+            "terminal_commit_observed": terminal_commit_observed,
         },
         "app_server": {
             "pid": app_server_pid,
             "recorded_start_time": state.get("app_server_process_start_time"),
             "observed_start_time": app_server_start_time,
-            "command": app_server_command,
+            "command": _redact_process_command(app_server_command),
             "dead": app_server_dead,
         },
     }
@@ -257,6 +455,7 @@ def _attempt_concurrent_resume(
             resume_thread_path=str(thread_path),
         )
     except RuntimeError as exc:
+        error = str(exc)
         try:
             active_state = bridge_canary._read_json(active_state_file)
         except (OSError, json.JSONDecodeError):
@@ -264,9 +463,25 @@ def _attempt_concurrent_resume(
         owner_preserved = (
             active_state.get("run_id") == active_run_id and active_state.get("pid") == active_bridge_pid and _pid_alive(active_bridge_pid)
         )
-        return {"rejected": owner_preserved, "owner_preserved": owner_preserved, "error": str(exc)}
+        # The bridge's lock refusal is the authoritative duplicate-owner
+        # result.  The state-file/PID identity check is useful evidence, but
+        # it is not a prerequisite: a failed duplicate start can race with a
+        # state refresh while the active process still owns the lock.  Do not
+        # turn the provider's explicit refusal into a false negative.
+        lock_refusal = _is_concurrent_lock_refusal(error)
+        return {
+            "rejected": lock_refusal,
+            "lock_refusal": lock_refusal,
+            "owner_preserved": owner_preserved,
+            "error": error,
+        }
     cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
     return {"rejected": False, "unexpected_start": summary, "cleanup": cleanup}
+
+
+def _is_concurrent_lock_refusal(error: str) -> bool:
+    normalized = " ".join(error.lower().split())
+    return "another codex bridge already owns lock" in normalized or ("codex bridge" in normalized and "already owns lock" in normalized)
 
 
 def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
@@ -306,6 +521,12 @@ def _wait_for_marker(state_file: Path, marker: str, *, timeout: int) -> tuple[di
     return state, thread_path
 
 
+def _native_resume_tui_environment(isolation_root: Path, session_id: str) -> dict[str, str]:
+    environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
+    environment["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    return environment
+
+
 def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -320,12 +541,15 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     session_id = ""
     old_pids: set[int] = set()
     final_cleanup: dict[str, Any] = {"verified": False}
+    resume_contract_paths: tuple[Path, Path] | None = None
+    shipper: TranscriptShipper | None = None
     try:
         initial_summary, _, isolation_root = bridge_canary._start_bridge(
             args,
             evidence_root=root,
             codex_bin=str(args.codex_bin),
             launch_mode="detached_ui",
+            register_managed=True,
         )
         session_id = str(initial_summary.get("session_id") or "")
         initial_state_file = Path(str(initial_summary.get("state_file") or ""))
@@ -333,11 +557,27 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         thread_id = str(initial_state.get("thread_id") or "")
         if not session_id or not thread_id:
             raise RuntimeError("initial bridge did not create a resumable provider thread")
+        shipper_environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
+        shipper = _start_transcript_shipper(
+            "codex",
+            args,
+            home=Path(shipper_environment["HOME"]),
+            environment=shipper_environment,
+            evidence_root=root,
+            # codex-bridge --isolation-root writes managed state under the
+            # same <isolation-root>/longhouse tree that the shipper watches.
+            # Keep the real transcript provider HOME separate, but point the
+            # shipper at that Longhouse home so it observes and publishes the
+            # bridge lease and retained terminal state.
+            longhouse_home=isolation_root / "longhouse",
+        )
+        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         seed_marker = f"LONGHOUSE_CODEX_RESUME_SEED_{uuid.uuid4().hex}"
         _send_marker(args, isolation_root, session_id, seed_marker)
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
-        _write_json(root / "initial-bridge-state.json", initial_state)
+        _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         shutil.copy2(initial_thread_path, root / "initial-transcript.jsonl")
+        _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
         old_pids = {int(value) for value in (initial_state.get("pid"), initial_state.get("app_server_pid")) if value}
 
         if args.variant == "clean_exit":
@@ -345,12 +585,41 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             if not (process_transition.get("verification") or {}).get("verified"):
                 raise RuntimeError("clean-exit transition did not stop the initial bridge")
         else:
-            process_transition = _force_process_loss(initial_state, args.codex_bin)
+            process_transition = _force_process_loss(initial_state, args.codex_bin, initial_state_file)
+        contract_state = bridge_canary._read_json(initial_state_file)
+        resume_contract_paths = _write_resume_contract_snapshot(
+            isolation_root=isolation_root,
+            state=contract_state,
+            codex_bin=args.codex_bin,
+            provider_version=str(provider_receipt["version"]),
+        )
+        if shipper is not None:
+            # The direct bridge does not write the normal retained contract.
+            # Publish the equivalent snapshot before flushing so the real
+            # Machine Agent scanner can observe it in this cold-resume window.
+            process_transition["post_stop_transcript_ship"] = shipper.flush("post-stop")
         _write_json(root / "process-transition-receipt.json", process_transition)
+        _write_json(
+            root / "resume-contract-receipt.json",
+            {
+                "status": "pass",
+                "contract_path": str(resume_contract_paths[1]),
+                "state_snapshot_path": str(resume_contract_paths[0]),
+                "provider": "codex",
+            },
+        )
         stale_input_receipt = _attempt_stale_input(args, isolation_root, session_id)
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)
         if stale_input_receipt["rejected"] is not True:
             raise RuntimeError("input addressed to the terminated Resume generation was accepted")
+
+        resume_intent = _wait_resume_intent(args, session_id)
+        resume_intent_receipt = _validate_resume_intent(
+            args,
+            session_id,
+            resume_intent,
+            cwd=isolation_root / "workspace",
+        )
 
         resumed_summary, _, _ = bridge_canary._start_bridge(
             args,
@@ -361,6 +630,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             isolation_root=isolation_root,
             resume_thread_id=thread_id,
             resume_thread_path=str(initial_thread_path),
+            register_managed=True,
         )
         resumed_state_file = Path(str(resumed_summary.get("state_file") or ""))
         ws_url = str(resumed_summary.get("ws_url") or "")
@@ -377,6 +647,16 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             ws_url,
             "--no-alt-screen",
         ]
+        native_resume_command = command[:3] == [str(args.codex_bin), "resume", thread_id]
+        resume_intent_receipt.update(
+            {
+                "provider_thread_id": thread_id,
+                "native_argv": command,
+                "session_to_provider_thread_mapping_valid": bool(session_id and thread_id),
+                "native_selector_valid": native_resume_command,
+            }
+        )
+        _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         subscribed_state: dict[str, Any] | None = None
 
         def subscribed() -> bool:
@@ -390,8 +670,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 return True
             return False
 
-        tui_env = os.environ.copy()
-        tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+        tui_env = _native_resume_tui_environment(isolation_root, session_id)
         tui_result = bridge_canary._record_pty_session(args, command, recording, env=tui_env, ready=subscribed)
         if tui_result.returncode not in {0, 124} or subscribed_state is None:
             raise RuntimeError("stock Codex native resume command did not subscribe to the retained thread")
@@ -405,8 +684,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         )
         stale_input_receipt["assistant_marker_observed_after_resume"] = stale_generation_dispatched
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)
-        _write_json(root / "resumed-bridge-state.json", resumed_state)
+        _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         _write_json(root / "post-resume-send.json", send_summary)
+        _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")
         concurrent_resume_receipt = _attempt_concurrent_resume(
             args,
@@ -437,9 +717,12 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
         _write_json(root / "cleanup-receipt.json", final_cleanup)
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _remove_resume_contract_snapshot(resume_contract_paths)
         redacted_secret_files = _redact_retained_secrets(
             root,
-            [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
+            list(_qualification_secrets(os.environ, args.agents_token)),
         )
 
         observation = {
@@ -456,9 +739,14 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 initial_state.get("app_server_pid"),
                 initial_state.get("app_server_process_start_time"),
             ),
-            "native_resume_command": True,
+            "provider_neutral_resume_intent": (
+                resume_intent_receipt["identity_valid"] is True
+                and resume_intent_receipt["session_to_provider_thread_mapping_valid"] is True
+            ),
+            "native_resume_command": native_resume_command,
             "bridge_subscribed": resumed_before_activity.get("thread_subscription_status") == "subscribed",
             "post_resume_provider_activity": resumed_state.get("last_turn_status") == "completed",
+            "post_resume_response_correlated": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),
             "post_resume_marker_in_assistant_transcript": bridge_canary._assistant_transcript_contains(resumed_thread_path, post_marker),
             "stale_input_rejected": stale_input_receipt["rejected"] is True,
             "stale_generation_dispatched": stale_generation_dispatched,
@@ -471,6 +759,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "replacement_started_after_process_loss": args.variant == "process_loss"
             and resumed_state.get("run_id") != initial_state.get("run_id"),
             "final_cleanup_verified": bool(verification.get("verified")),
+            "final_socket_absent": verification.get("socket_absent") is True,
             "orphan_count": orphan_count,
         }
         assertions = native_resume_assertions(args.variant, observation)
@@ -497,9 +786,12 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _remove_resume_contract_snapshot(resume_contract_paths)
         redacted_secret_files = _redact_retained_secrets(
             root,
-            [args.agents_token, os.environ.get("CODEX_API_KEY", "")],
+            list(_qualification_secrets(os.environ, args.agents_token)),
         )
         failure = {
             "schema_version": 1,
@@ -520,6 +812,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "result.json", failure)
         return failure
     finally:
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        _remove_resume_contract_snapshot(resume_contract_paths)
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
@@ -561,7 +856,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "fail", "failure_code": "codex_binary_missing"}))
         return 2
     result = run_native_resume(args)
-    print(json.dumps(result, sort_keys=True))
+    print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 
 

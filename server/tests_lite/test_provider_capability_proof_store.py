@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -10,6 +11,7 @@ import pytest
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.services.provider_capability_proof_store import ProofPublication
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
@@ -85,6 +87,98 @@ def test_store_rejects_tampered_record(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="artifact_id does not match"):
         store.records("claude")
+
+
+def test_trusted_store_requires_publication_and_detects_missing_blob(tmp_path: Path) -> None:
+    content = b"retained evidence"
+    digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    epoch = b"accepted epoch"
+    epoch_digest = f"sha256:{hashlib.sha256(epoch).hexdigest()}"
+    census = b"worker census"
+    census_digest = f"sha256:{hashlib.sha256(census).hexdigest()}"
+    record = _record(
+        raw_reference_digests=(digest,),
+        assertion_variant="clean_exit",
+        accepted_epoch_id="epoch-1",
+        accepted_epoch_digest=epoch_digest,
+        worker_id="worker-1",
+        worker_census_digest=census_digest,
+        auth_mechanism="factory_token_v1",
+    )
+    store = ProviderCapabilityProofStore(tmp_path, require_authenticated_publication=True)
+    with pytest.raises(ValueError, match="requires authenticated"):
+        store.write(record)
+    store.write_blob(content, expected_digest=digest)
+    store.write_blob(epoch, expected_digest=epoch_digest)
+    store.write_blob(census, expected_digest=census_digest)
+    store.write(
+        record,
+        publication=ProofPublication(
+            worker_id="worker-1",
+            worker_census_digest=record.worker_census_digest or "",
+            auth_mechanism="factory_token_v1",
+            published_at="2026-08-03T00:00:00Z",
+            bundle_digest="sha256:" + "c" * 64,
+        ),
+    )
+    assert store.integrity_report("claude").admissible_artifact_ids == {record.artifact_id}
+
+    (tmp_path / "_blobs" / "sha256" / digest.removeprefix("sha256:")).unlink()
+
+    report = store.integrity_report("claude")
+    assert not report.admissible_artifact_ids
+    assert report.artifacts[0].reason_codes == ("proof_referenced_content_missing",)
+
+
+def test_trusted_store_accepts_many_proofs_for_one_epoch_and_rejects_tampered_event(tmp_path: Path) -> None:
+    epoch = b"accepted epoch"
+    epoch_digest = f"sha256:{hashlib.sha256(epoch).hexdigest()}"
+    census = b"worker census"
+    census_digest = f"sha256:{hashlib.sha256(census).hexdigest()}"
+    record = _record(
+        assertion_variant="clean_exit",
+        accepted_epoch_id="epoch-1",
+        accepted_epoch_digest=epoch_digest,
+        worker_id="worker-1",
+        worker_census_digest=census_digest,
+        auth_mechanism="factory_token_v1",
+    )
+    second = replace(record, assertion_variant="process_loss", invocation_id="run-456")
+    publication = ProofPublication(
+        worker_id="worker-1",
+        worker_census_digest=record.worker_census_digest or "",
+        auth_mechanism="factory_token_v1",
+        published_at="2026-08-03T00:00:00Z",
+        bundle_digest="sha256:" + "c" * 64,
+    )
+    store = ProviderCapabilityProofStore(tmp_path, require_authenticated_publication=True)
+    store.write_blob(epoch, expected_digest=epoch_digest)
+    store.write_blob(census, expected_digest=census_digest)
+
+    store.write(record, publication=publication)
+    store.write(second, publication=publication)
+
+    assert store.integrity_report("claude").admissible_artifact_ids == {
+        record.artifact_id,
+        second.artifact_id,
+    }
+    event_path = next((tmp_path / "_events" / "claude").glob("*.json"))
+    event = json.loads(event_path.read_text())
+    event["bundle_digest"] = "tampered"
+    event_path.write_text(json.dumps(event))
+    report = store.integrity_report("claude")
+    by_id = {item.artifact_id: item for item in report.artifacts}
+    assert "proof_authenticated_publication_missing" in by_id[event["artifact_id"]].reason_codes
+
+
+def test_orphan_scan_is_global_instead_of_mislabeling_another_provider_blob(tmp_path: Path) -> None:
+    store = ProviderCapabilityProofStore(tmp_path)
+    content = b"cursor evidence"
+    digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    store.write_blob(content, expected_digest=digest)
+    store.write(_record(provider="cursor", raw_reference_digests=(digest,)))
+
+    assert store.integrity_report("claude").orphan_blob_digests == ()
 
 
 @pytest.mark.parametrize("provider", ["../claude", "Claude", "", "a/b"])

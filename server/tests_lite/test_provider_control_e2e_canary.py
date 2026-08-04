@@ -58,7 +58,7 @@ def test_opencode_native_model_evidence_reads_the_selected_native_message(tmp_pa
     assert evidence is not None
     assert evidence["model"] == "openrouter/deepseek/deepseek-v4-flash"
     assert evidence["session_id"] == "session-1"
-    assert evidence["path"] == "opencode-runtime/data/opencode/opencode.db"
+    assert evidence["path"] == str(database.resolve())
     assert len(evidence["sha256"]) == 64
     assert len(evidence["record_sha256"]) == 64
 
@@ -85,6 +85,31 @@ def test_opencode_native_model_evidence_rejects_conflicting_sqlite_session_bindi
     evidence = canary._opencode_native_model_evidence(runtime, session_ids=["payload-session"])  # noqa: SLF001
 
     assert evidence is None
+
+
+def test_opencode_native_model_evidence_uses_database_binding_when_payload_omits_session(tmp_path) -> None:
+    canary = _load_canary()
+    runtime = tmp_path / "opencode-runtime"
+    database = runtime / "data" / "opencode" / "opencode.db"
+    database.parent.mkdir(parents=True)
+    record = {
+        "id": "message-1",
+        "role": "assistant",
+        "providerID": "openrouter",
+        "modelID": "deepseek/deepseek-v4-flash",
+    }
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)")
+        connection.execute(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            ("message-1", "database-session", 1, json.dumps(record)),
+        )
+
+    evidence = canary._opencode_native_model_evidence(runtime, session_ids=["database-session"])  # noqa: SLF001
+
+    assert evidence is not None
+    assert evidence["model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert evidence["session_id"] == "database-session"
 
 
 def test_opencode_qualification_model_is_stable_and_overridable(monkeypatch) -> None:
