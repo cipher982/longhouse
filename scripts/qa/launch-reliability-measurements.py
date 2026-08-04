@@ -43,6 +43,59 @@ PRODUCER_FRESHNESS_STATES = frozenset({"fresh", "stale", "unknown"})
 HEALTH_ARTIFACT_KIND = "installed_native_health_fault_matrix"
 HEALTH_SCHEMA_VERSION = 1
 MAX_HEALTH_OBSERVATION_AGE_SECONDS = 300.0
+HEALTH_EXPECTATIONS = {
+    "missing_engine_status": {
+        "state": "broken",
+        "reason": "engine_status_missing",
+        "action": "inspect_local_health",
+    },
+    "unreadable_engine_status": {
+        "state": "broken",
+        "reason": "engine_status_unreadable",
+        "action": "inspect_local_health",
+    },
+    "permission_denied_engine_status": {
+        "state": "broken",
+        "reason": "engine_status_unreadable",
+        "action": "inspect_local_health",
+    },
+    "stale_projection": {
+        "state": "degraded",
+        "reason": "engine_status_stale",
+        "action": "inspect_local_health",
+    },
+    "safe_source_conflict": {
+        "state": "degraded",
+        "reason": "storage_v2_sources_blocked",
+        "action": "inspect_storage_source",
+    },
+    "unresolved_source_conflict": {
+        "state": "broken",
+        "reason": "storage_v2_sources_unresolved",
+        "action": "inspect_storage_source",
+    },
+    "payload_rejected": {
+        "state": "broken",
+        "reason": "payload_rejected",
+        "action": "inspect_shipping",
+    },
+    "managed_launch_recovery_active": {
+        "state": "degraded",
+        "reason": "managed_launch_recovery_active",
+        "action": "inspect_managed_session",
+    },
+    "managed_launch_recovery_exhausted": {
+        "state": "broken",
+        "reason": "managed_launch_recovery_exhausted",
+        "action": "inspect_managed_session",
+    },
+    "managed_launch_recovery_resolved": {
+        "state": "healthy",
+        "reason": "resolved",
+        "action": "none",
+    },
+}
+EXPECTED_HEALTH_SCENARIOS = frozenset(HEALTH_EXPECTATIONS)
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -708,7 +761,9 @@ def _health_measurements(
                 isinstance(value, str) and value for value in scenarios
             ) or len(set(scenarios)) != len(scenarios):
                 raise ValueError("health scenarios must be a non-empty unique string list")
-            identity = (generated_at.isoformat(), implementation_sha.lower(), tuple(scenarios))
+            if set(scenarios) != EXPECTED_HEALTH_SCENARIOS:
+                raise ValueError("health scenarios do not match the canonical fault matrix")
+            identity = (generated_at.isoformat(), implementation_sha.lower(), tuple(sorted(scenarios)))
             results = artifact.get("results")
             if not isinstance(results, list):
                 raise ValueError("health artifact has no results list")
@@ -720,7 +775,7 @@ def _health_measurements(
                 case = result.get("case")
                 if not isinstance(case, str) or not case or case in seen_cases:
                     raise ValueError(f"health result {index}.case must be a unique non-empty string")
-                if case not in scenarios:
+                if case not in EXPECTED_HEALTH_SCENARIOS:
                     raise ValueError(f"health result {index}.case is not listed in health scenarios")
                 seen_cases.add(case)
                 expected = result.get("expected")
@@ -730,6 +785,9 @@ def _health_measurements(
                 expected_state = expected.get("state")
                 if expected_state not in HEALTH_STATES:
                     raise ValueError(f"health result {index}.expected.state is invalid")
+                contract = HEALTH_EXPECTATIONS[case]
+                if any(expected.get(field) != value for field, value in contract.items()):
+                    raise ValueError(f"health result {index}.expected does not match the canonical fault matrix")
                 observed_state = observed.get("health_state")
                 if observed_state not in HEALTH_STATES:
                     raise ValueError(f"health result {index}.observed.health_state is invalid")
@@ -742,11 +800,11 @@ def _health_measurements(
                 ):
                     raise ValueError(f"health result {index}.observed.suggested_action_ids must be a string list")
                 collected_at = observed.get("collected_at")
-                if _timestamp(collected_at, label=f"health result {index}.observed.collected_at") > generated_at:
-                    raise ValueError(f"health result {index}.observed.collected_at is after health.generated_at")
                 collected_at_value = _timestamp(
                     collected_at, label=f"health result {index}.observed.collected_at"
                 )
+                if collected_at_value > generated_at:
+                    raise ValueError(f"health result {index}.observed.collected_at is after health.generated_at")
                 if (generated_at - collected_at_value).total_seconds() > MAX_HEALTH_OBSERVATION_AGE_SECONDS:
                     raise ValueError(
                         f"health result {index}.observed.collected_at is older than "
@@ -755,11 +813,12 @@ def _health_measurements(
                 validated_results.append(
                     (case, expected_state, observed_state, expected_action, set(suggested_actions))
                 )
-            if seen_cases != set(scenarios):
+            if seen_cases != EXPECTED_HEALTH_SCENARIOS:
                 raise ValueError("health results must cover every declared scenario exactly once")
+            canonical_results = sorted(results, key=lambda value: value["case"])
             fingerprint = hashlib.sha256(
                 json.dumps(
-                    {"scenarios": scenarios, "results": results},
+                    {"scenarios": sorted(scenarios), "results": canonical_results},
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode()

@@ -9,6 +9,7 @@ SPEC = importlib.util.spec_from_file_location("launch_reliability_measurements",
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+HEALTH_CASES = tuple(MODULE.HEALTH_EXPECTATIONS)
 
 
 def _matrix(
@@ -99,21 +100,43 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
 
 
 def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
+    overrides = {}
     normalized_results = []
     for index, result in enumerate(results):
         normalized = dict(result)
-        normalized["case"] = normalized.get("case") or f"case-{index}"
+        normalized["case"] = normalized.get("case") or HEALTH_CASES[index]
+        case = normalized["case"]
+        contract = MODULE.HEALTH_EXPECTATIONS[case]
+        expected = dict(normalized["expected"])
+        for field, value in contract.items():
+            expected.setdefault(field, value)
+        normalized["expected"] = expected
         observed = dict(normalized["observed"])
         observed["collected_at"] = observed.get("collected_at") or "2026-08-04T13:00:00Z"
         normalized["observed"] = observed
-        normalized_results.append(normalized)
+        overrides[case] = normalized
+    for case, contract in MODULE.HEALTH_EXPECTATIONS.items():
+        if case in overrides:
+            normalized_results.append(overrides[case])
+            continue
+        normalized_results.append(
+            {
+                "case": case,
+                "expected": dict(contract),
+                "observed": {
+                    "collected_at": "2026-08-04T13:00:00Z",
+                    "health_state": contract["state"],
+                    "suggested_action_ids": [] if contract["action"] == "none" else [contract["action"]],
+                },
+            }
+        )
     return {
         "artifact_kind": "installed_native_health_fault_matrix",
         "schema_version": 1,
         "generated_at": "2026-08-04T13:00:30Z",
         "verdict": "green",
         "implementation": {"sha256": ("abcdef" * 10) + "abcd", "returncode": 0},
-        "scenarios": [result["case"] for result in normalized_results],
+        "scenarios": list(HEALTH_CASES),
         "results": normalized_results,
     }
 
@@ -288,14 +311,17 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
             _health_artifact(
                 [
                     {
+                        "case": "missing_engine_status",
                         "expected": {"state": "broken", "action": "inspect_local_health"},
                         "observed": {"health_state": "broken", "suggested_action_ids": ["inspect_local_health"]},
                     },
                     {
-                        "expected": {"state": "degraded", "action": "inspect_storage_source"},
-                        "observed": {"health_state": "healthy", "suggested_action_ids": []},
+                        "case": "stale_projection",
+                        "expected": {"state": "degraded", "action": "inspect_local_health"},
+                        "observed": {"health_state": "healthy", "suggested_action_ids": ["inspect_local_health"]},
                     },
                     {
+                        "case": "managed_launch_recovery_resolved",
                         "expected": {"state": "healthy", "action": "none"},
                         "observed": {"health_state": "broken", "suggested_action_ids": []},
                     },
@@ -306,50 +332,53 @@ def test_health_fault_matrix_measures_controlled_false_red_and_action_coverage(t
 
     report = MODULE.build_report([], health_paths=[matrix])
 
-    assert report["health_fault_matrix"]["case_count"] == 3
+    assert report["health_fault_matrix"]["case_count"] == 10
     assert report["measures"]["false_red_rate"] == {
         "status": "observed",
         "scope": "installed_health_fault_matrix",
         "basis": "fault_matrix_expected_state",
         "numerator": 1,
-        "denominator": 2,
+        "denominator": 7,
         "numerator_definition": "observed_broken_cases_expected_not_broken",
         "denominator_definition": "observed_broken_cases",
-        "rate": 0.5,
+        "rate": 1 / 7,
         "source": [{"path": str(matrix), "sha256": MODULE._sha256(matrix)}],
     }
     assert report["measures"]["hidden_failure_rate"]["numerator"] == 1
-    assert report["measures"]["hidden_failure_rate"]["denominator"] == 2
+    assert report["measures"]["hidden_failure_rate"]["denominator"] == 9
     assert report["measures"]["hidden_failure_rate"]["numerator_definition"] == "observed_healthy_expected_broken_or_degraded"
     assert report["measures"]["hidden_failure_rate"]["denominator_definition"] == "expected_broken_or_degraded_cases"
-    assert report["measures"]["action_coverage"]["numerator"] == 1
-    assert report["measures"]["action_coverage"]["denominator"] == 2
+    assert report["measures"]["action_coverage"]["numerator"] == 9
+    assert report["measures"]["action_coverage"]["denominator"] == 9
     assert report["measures"]["action_coverage"]["denominator_definition"] == "cases_with_a_non_none_expected_action"
 
 
-def test_health_fault_matrix_marks_zero_eligible_measures_not_observed(tmp_path: Path):
+def test_health_fault_matrix_marks_zero_observed_broken_cases_not_observed(tmp_path: Path):
     matrix = tmp_path / "health.json"
-    matrix.write_text(
-        json.dumps(
-            _health_artifact(
-                [
-                    {
-                        "expected": {"state": "healthy", "action": "none"},
-                        "observed": {"health_state": "healthy", "suggested_action_ids": []},
-                    }
-                ]
-            )
-        )
+    payload = _health_artifact(
+        [
+            {
+                "case": "managed_launch_recovery_resolved",
+                "expected": {"state": "healthy", "action": "none"},
+                "observed": {"health_state": "healthy", "suggested_action_ids": []},
+            }
+        ]
     )
+    for result in payload["results"]:
+        result["observed"]["health_state"] = "healthy"
+        result["observed"]["suggested_action_ids"] = []
+    matrix.write_text(json.dumps(payload))
 
     report = MODULE.build_report([], health_paths=[matrix])
 
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
     assert report["measures"]["false_red_rate"]["reason"] == "no observed broken cases in supplied health fault matrix"
-    assert report["measures"]["hidden_failure_rate"]["status"] == "not_observed"
-    assert report["measures"]["hidden_failure_rate"]["reason"] == "no expected broken/degraded cases in supplied health fault matrix"
-    assert report["measures"]["action_coverage"]["status"] == "not_observed"
-    assert report["measures"]["action_coverage"]["reason"] == "no cases with an expected action in supplied health fault matrix"
+    assert report["measures"]["hidden_failure_rate"]["status"] == "observed"
+    assert report["measures"]["hidden_failure_rate"]["numerator"] == 9
+    assert report["measures"]["hidden_failure_rate"]["denominator"] == 9
+    assert report["measures"]["action_coverage"]["status"] == "observed"
+    assert report["measures"]["action_coverage"]["numerator"] == 0
+    assert report["measures"]["action_coverage"]["denominator"] == 9
 
 
 def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
@@ -374,8 +403,8 @@ def test_repeated_health_artifact_is_counted_once(tmp_path: Path):
 
     report = MODULE.build_report([], health_paths=[matrix, matrix_copy, matrix])
 
-    assert report["health_fault_matrix"]["case_count"] == 1
-    assert report["measures"]["false_red_rate"]["denominator"] == 1
+    assert report["health_fault_matrix"]["case_count"] == 10
+    assert report["measures"]["false_red_rate"]["denominator"] == 6
 
 
 def test_reserialized_health_artifact_is_counted_once(tmp_path: Path):
@@ -397,12 +426,15 @@ def test_reserialized_health_artifact_is_counted_once(tmp_path: Path):
         )
     )
     matrix_copy = tmp_path / "health-reformatted.json"
-    matrix_copy.write_text(json.dumps(json.loads(matrix.read_text()), indent=2))
+    reformatted = json.loads(matrix.read_text())
+    reformatted["results"] = list(reversed(reformatted["results"]))
+    reformatted["scenarios"] = list(reversed(reformatted["scenarios"]))
+    matrix_copy.write_text(json.dumps(reformatted, indent=2))
 
     report = MODULE.build_report([], health_paths=[matrix, matrix_copy])
 
-    assert report["health_fault_matrix"]["case_count"] == 1
-    assert report["measures"]["false_red_rate"]["denominator"] == 1
+    assert report["health_fault_matrix"]["case_count"] == 10
+    assert report["measures"]["false_red_rate"]["denominator"] == 6
 
 
 def test_health_artifact_requires_every_declared_scenario(tmp_path: Path):
@@ -431,6 +463,31 @@ def test_health_artifact_requires_every_declared_scenario(tmp_path: Path):
 
     assert report["report_status"] == "invalid"
     assert "cover every declared scenario" in report["inputs"]["invalid_artifacts"][0]["error"]
+    assert report["health_fault_matrix"]["case_count"] == 0
+
+
+def test_health_artifact_rejects_subset_scenario_manifest(tmp_path: Path):
+    matrix = tmp_path / "subset-health.json"
+    payload = _health_artifact(
+        [
+            {
+                "case": "missing_engine_status",
+                "expected": {"state": "broken", "action": "inspect_local_health"},
+                "observed": {
+                    "health_state": "broken",
+                    "suggested_action_ids": ["inspect_local_health"],
+                },
+            }
+        ]
+    )
+    payload["scenarios"] = ["missing_engine_status"]
+    payload["results"] = payload["results"][:1]
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[matrix])
+
+    assert report["report_status"] == "invalid"
+    assert "canonical fault matrix" in report["inputs"]["invalid_artifacts"][0]["error"]
     assert report["health_fault_matrix"]["case_count"] == 0
 
 
