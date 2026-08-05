@@ -1204,6 +1204,16 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
     keyring = _write_attestation_keyring(tmp_path, signing_key)
     private_key_path = _write_attestation_private_key(tmp_path, signing_key)
     receipt_path = tmp_path / "receipt.json"
+    with pytest.raises(ValueError, match="expected source SHA"):
+        attestation.create_receipt_from_report(
+            report_path,
+            private_key_path,
+            tmp_path / "wrong-receipt.json",
+            tmp_path / "wrong-subject.json",
+            key_id="test-key",
+            keys_path=keyring,
+            expected_source_sha="b" * 40,
+        )
     attestation.create_receipt_from_report(
         report_path,
         private_key_path,

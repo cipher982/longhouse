@@ -142,14 +142,19 @@ layout before dispatching the `Launch reliability attestation` workflow:
   dogfood/challenges/*.json
 ```
 
-Dispatch the workflow with the report's full source SHA. It checks out that
-SHA and rebuilds the report from this fixed evidence root before the signing
-secret is exposed. It then runs `create-from-report`, which re-derives and
-validates the subject before signing, and verifies the receipt against the
-committed public key. A missing evidence set, missing secret, dirty subject,
-source mismatch, or key mismatch fails the job. The fixed root is writable by
-the qualification collector and readable by the signer; it is not a path
-selected by the operator at dispatch time.
+Dispatch the workflow from protected `main` with the report's full source SHA.
+The measurement job runs on the qualification runner, rejects symlinks, checks
+that a sorted SHA-256 manifest is unchanged before and after the copy, and
+rebuilds the report from the resulting temporary snapshot before the signing
+secret is exposed. The separate signer job checks out the workflow commit on
+the protected signer runner and receives only the measured report artifact; it
+does not read the retained evidence root. It then runs `create-from-report`,
+which re-derives and validates the subject before signing, and verifies the
+receipt against the committed public key. A missing evidence set, mutable
+snapshot, missing secret, dirty subject, source mismatch, unprotected branch,
+or key mismatch fails the job. Configure the `longhouse-release-attestation`
+environment with required reviewers and keep the signing runner restricted to
+that environment.
 
 After the workflow uploads the receipt, regenerate the final report from the
 same clean qualification checkout and retained inputs, adding:

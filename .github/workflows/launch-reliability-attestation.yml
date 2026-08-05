@@ -43,6 +43,10 @@ jobs:
         id: measure
         shell: bash
         run: |
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Launch reliability attestation must be dispatched from protected main." >&2
+            exit 1
+          }
           measured_root="$GITHUB_WORKSPACE/measured-source"
           test "$(git -C "$measured_root" rev-parse HEAD)" = "$SOURCE_SHA" || {
             echo "Measured checkout does not match the requested source SHA." >&2
@@ -50,15 +54,53 @@ jobs:
           }
           run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
           snapshot_root="$RUNNER_TEMP/launch-reliability-evidence"
+          sha256_file() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1"
+            else
+              shasum -a 256 "$1"
+            fi
+          }
+          manifest_tree() {
+            local base="$1"
+            local rel path file digest
+            for rel in matrix native-health provider-harness dogfood/episodes dogfood/challenges; do
+              path="$base/$rel"
+              test -d "$path" || { echo "Missing retained evidence tree: $path" >&2; return 1; }
+              if find "$path" -type l -print -quit | grep -q .; then
+                echo "Symlinks are not allowed in retained evidence: $path" >&2
+                return 1
+              fi
+              while IFS= read -r file; do
+                digest="$(sha256_file "$file" | awk '{print $1}')"
+                printf '%s  %s\n' "$digest" "${file#"$base"/}"
+              done < <(find "$path" -type f -print | LC_ALL=C sort)
+            done
+          }
+          test -d "$run_root" || { echo "No retained evidence exists for $SOURCE_SHA." >&2; exit 1; }
+          before_manifest="$RUNNER_TEMP/launch-reliability-evidence.before.manifest"
+          after_manifest="$RUNNER_TEMP/launch-reliability-evidence.after.manifest"
+          snapshot_manifest="$RUNNER_TEMP/launch-reliability-evidence.snapshot.manifest"
           rm -rf -- "$snapshot_root"
           mkdir -p "$snapshot_root/matrix" "$snapshot_root/native-health" \
             "$snapshot_root/provider-harness" "$snapshot_root/dogfood/episodes" \
             "$snapshot_root/dogfood/challenges"
+          manifest_tree "$run_root" > "$before_manifest"
           cp -R "$run_root/matrix/." "$snapshot_root/matrix/"
           cp -R "$run_root/native-health/." "$snapshot_root/native-health/"
           cp -R "$run_root/provider-harness/." "$snapshot_root/provider-harness/"
           cp -R "$run_root/dogfood/episodes/." "$snapshot_root/dogfood/episodes/"
           cp -R "$run_root/dogfood/challenges/." "$snapshot_root/dogfood/challenges/"
+          manifest_tree "$run_root" > "$after_manifest"
+          manifest_tree "$snapshot_root" > "$snapshot_manifest"
+          cmp "$before_manifest" "$after_manifest" || {
+            echo "Retained evidence changed while it was being snapshotted." >&2
+            exit 1
+          }
+          cmp "$after_manifest" "$snapshot_manifest" || {
+            echo "Evidence snapshot does not match the retained source." >&2
+            exit 1
+          }
           matrix_root="$snapshot_root/matrix"
           health_root="$snapshot_root/native-health"
           harness_root="$snapshot_root/provider-harness"
@@ -88,9 +130,14 @@ jobs:
           cd "$measured_root"
           uv run --project "$measured_root/server" python \
             "$measured_root/scripts/qa/launch-reliability-measurements.py" "${args[@]}"
+          manifest_tree "$snapshot_root" > "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest"
+          cmp "$snapshot_manifest" "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest" || {
+            echo "Evidence snapshot changed while the report was being built." >&2
+            exit 1
+          }
           test -s "$report_path" || { echo "Report generation produced no report." >&2; exit 1; }
           test -s "$subject_path" || { echo "No qualifying attestation subject was produced." >&2; exit 1; }
-          sha256sum "$report_path" > "$RUNNER_TEMP/report.sha256"
+          sha256_file "$report_path" > "$RUNNER_TEMP/report.sha256"
 
       - name: Upload measured report for the isolated signer
         uses: actions/upload-artifact@v7
@@ -139,6 +186,10 @@ jobs:
           KEY_PATH: ${{ runner.temp }}/longhouse-attestation-private-key.pem
           PRIVATE_KEY_PEM: ${{ secrets.LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM }}
         run: |
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Launch reliability attestation must be dispatched from protected main." >&2
+            exit 1
+          }
           trusted_root="$GITHUB_WORKSPACE/trusted-source"
           input_root="$RUNNER_TEMP/launch-reliability-measurement"
           report_path="$input_root/launch-reliability-measurements.json"
@@ -149,7 +200,12 @@ jobs:
             echo "Trusted checkout does not match the workflow commit." >&2
             exit 1
           }
-          test "$(sha256sum "$report_path" | cut -d' ' -f1)" = "$(cut -d' ' -f1 "$input_root/report.sha256")" || {
+          if command -v sha256sum >/dev/null 2>&1; then
+            report_sha="$(sha256sum "$report_path" | cut -d' ' -f1)"
+          else
+            report_sha="$(shasum -a 256 "$report_path" | cut -d' ' -f1)"
+          fi
+          test "$report_sha" = "$(cut -d' ' -f1 "$input_root/report.sha256")" || {
             echo "The measured report changed during artifact transfer." >&2
             exit 1
           }
