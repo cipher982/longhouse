@@ -20,7 +20,7 @@ jobs:
     name: Measure retained launch evidence
     # This runner may access the retained evidence and the measured source,
     # but it never receives the release signing secret.
-    runs-on: [self-hosted, longhouse-release-qualification]
+    runs-on: longhouse-release-qualification
     timeout-minutes: 15
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
@@ -266,9 +266,9 @@ jobs:
   sign:
     name: Sign the measured report
     needs: measure
-    # This is a separate protected runner. The measured checkout and its
-    # dependencies are never present in the key-bearing job.
-    runs-on: [self-hosted, longhouse-release-signer]
+    # Keep the key-bearing job off the shared self-hosted cube node. The
+    # measured checkout and its dependencies are never present in this job.
+    runs-on: ubuntu-24.04
     environment: longhouse-release-attestation
     timeout-minutes: 10
     env:
