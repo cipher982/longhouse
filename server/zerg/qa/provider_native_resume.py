@@ -1724,7 +1724,13 @@ def _resume_marker_prompt(provider: str, marker: str) -> str:
     """Return wording that makes the marker response deterministic."""
 
     if provider == "cursor":
-        return f"Reply with exactly {marker} and no other text."
+        # Cursor's native product canary uses this shorter provider-facing
+        # instruction.  The extra ``and no other text`` clause can leave the
+        # stock Cursor TUI in its Working state without committing an
+        # afterAgentResponse hook, even though the managed send returned 0.
+        # Keep the marker itself exact while matching the proven product
+        # interaction wording.
+        return f"Reply with exactly {marker}"
     return f"Reply exactly {marker} and nothing else."
 
 

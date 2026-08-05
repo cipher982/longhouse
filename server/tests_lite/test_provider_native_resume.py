@@ -385,7 +385,7 @@ def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> Non
     assert marker.startswith("LH_CURSOR_SEED_")
     assert len(marker.rsplit("_", 1)[-1]) == 10
     assert len(marker) < 32
-    assert _resume_marker_prompt("cursor", marker) == f"Reply with exactly {marker} and no other text."
+    assert _resume_marker_prompt("cursor", marker) == f"Reply with exactly {marker}"
 
 
 def test_other_provider_resume_markers_keep_the_long_form() -> None:
