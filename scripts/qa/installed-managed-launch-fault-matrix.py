@@ -823,6 +823,29 @@ def wait_status(pid: int, timeout: float) -> int | None:
         time.sleep(0.1)
 
 
+def drain_pty_after_exit(master: int, output: bytearray) -> None:
+    """Drain bytes already queued after a fast child exit without blocking."""
+
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            readable, _, _ = select.select([master], [], [], min(0.05, remaining))
+        except (OSError, ValueError):
+            return
+        if not readable:
+            return
+        try:
+            chunk = os.read(master, 8192)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                return
+            return
+        if not chunk:
+            return
+        output.extend(chunk)
+
+
 def run_tty_command(
     command: list[str],
     env: dict[str, str],
@@ -877,6 +900,11 @@ def run_tty_command(
         if timed_out:
             kill_group(pid, grace=0.2)
             returncode = wait_status(pid, 5)
+        elif not pty_closed:
+            drain_pty_after_exit(master, output)
+            decoded = output.decode("utf-8", errors="replace")
+            if marker in decoded:
+                marker_seen = True
         return CommandEvidence(
             returncode=returncode,
             output=output.decode("utf-8", errors="replace"),
@@ -1240,6 +1268,7 @@ def finish_live_command(
 
     provider_kill_status = "not_observed"
     provider_cleanup_pid: int | None = None
+    provider_natural_cleanup_verified = False
     if provider_pid is not None and (
         provider_process_start_time is None
         or process_start_identity(provider_pid) == provider_process_start_time
@@ -1299,7 +1328,11 @@ def finish_live_command(
             kill_group(provider_cleanup_pid, grace=0.2)
             provider_kill_status = "attempted"
         else:
-            provider_kill_status = "natural"
+            if process_start_identity(provider_cleanup_pid) is None:
+                provider_kill_status = "natural"
+                provider_natural_cleanup_verified = True
+            else:
+                provider_kill_status = "natural_unverified"
 
     if cleanup_scope is not None:
         # Re-scan after the normal signals. Detached provider bridges are
@@ -1366,7 +1399,12 @@ def finish_live_command(
         "forced_cleanup"
         if forced_cleanup
         else "pass"
-        if launcher_absent_after_cleanup and not remaining and provider_pid is not None
+        if (
+            launcher_absent_after_cleanup
+            and not remaining
+            and provider_pid is not None
+            and provider_natural_cleanup_verified
+        )
         else "not_started"
         if (
             launcher_absent_after_cleanup
@@ -2575,6 +2613,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 try:
                     cold_engine.wait(timeout=2)
                 except subprocess.TimeoutExpired as final_error:
+                    cold_handle.close()
                     raise ProcessScanFailure(
                         "cold-start Machine Agent could not be reaped before restart"
                     ) from final_error

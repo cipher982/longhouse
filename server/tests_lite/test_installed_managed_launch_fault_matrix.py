@@ -173,6 +173,7 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    provider_identities = iter(("start-1", None))
 
     class NaturalProcess:
         pid = 123
@@ -183,7 +184,11 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
             events.append("poll")
             return 0
 
-    monkeypatch.setattr(_MODULE, "process_start_identity", lambda pid: "start-1")
+    monkeypatch.setattr(
+        _MODULE,
+        "process_start_identity",
+        lambda pid: next(provider_identities, None),
+    )
     monkeypatch.setattr(
         _MODULE,
         "kill_group",
@@ -208,6 +213,38 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
     assert result["natural_cleanup_observed"] is True
     assert result["provider_process_group_cleanup"] == "natural"
     assert "kill" not in events
+
+
+def test_finish_live_command_rejects_unverified_natural_provider_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NaturalProcess:
+        pid = 123
+        returncode = 0
+        stdout = None
+
+        def poll(self) -> int:
+            return 0
+
+    monkeypatch.setattr(_MODULE, "process_start_identity", lambda pid: "start-1")
+    monkeypatch.setattr(_MODULE.os, "write", lambda *args: None)
+    monkeypatch.setattr(_MODULE.os, "close", lambda *args: None)
+
+    result = _MODULE.finish_live_command(
+        _MODULE.LiveCommand(
+            process=NaturalProcess(),
+            output_fd=-1,
+            output=bytearray(),
+            is_tty=True,
+            provider_ready_observed=True,
+        ),
+        provider_pid=456,
+        provider_process_start_time="start-1",
+    )
+
+    assert result["natural_cleanup_observed"] is True
+    assert result["provider_process_group_cleanup"] == "natural_unverified"
+    assert result["status"] == "fail"
 
 
 def test_run_tty_command_uses_pty_interrupt_without_direct_group_signal(
@@ -276,6 +313,23 @@ def test_run_tty_command_reaps_child_after_pty_eio(
 
     assert evidence.marker_seen is True
     assert evidence.timed_out is False
+
+
+def test_run_tty_command_drains_output_after_fast_exit() -> None:
+    evidence = _MODULE.run_tty_command(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('x' * 20000 + 'READY\\n'); sys.stdout.flush()",
+        ],
+        {},
+        marker="READY",
+        timeout=5,
+    )
+
+    assert evidence.marker_seen is True
+    assert evidence.timed_out is False
+    assert evidence.output.replace("\r\n", "\n").endswith("READY\n")
 
 
 def test_run_matrix_records_completion_after_teardown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

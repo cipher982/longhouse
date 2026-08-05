@@ -666,6 +666,18 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             leased_at,
         )
         .await;
+        // Preserve an exit code observed while the turn was failing before
+        // ownership moves into the bounded shutdown path. The error itself
+        // remains authoritative when the child has not exited yet.
+        let observed_error_exit_code = if run_result.is_err() {
+            worker_child
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|status| status.code())
+        } else {
+            None
+        };
         if let Err(kill_error) = shutdown_worker_process_group(worker_child, worker_pgid).await {
             run_result = match run_result {
                 Err(original) => Err(original.context(format!(
@@ -695,7 +707,11 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 exit_code,
                 Some(format!("Codex app-server exited with code {exit_code:?}")),
             ),
-            Err(err) => ("run_failed", None, Some(err.to_string())),
+            Err(err) => (
+                "run_failed",
+                observed_error_exit_code,
+                Some(err.to_string()),
+            ),
         };
         monitor_sink
             .post_terminal(terminal_state, exit_code, detail)

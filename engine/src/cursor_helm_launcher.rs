@@ -1692,7 +1692,7 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufRead;
+    use std::io::{BufRead, Read};
     use std::os::fd::FromRawFd;
 
     fn read_response_line(stream: UnixStream) -> String {
@@ -2104,9 +2104,9 @@ mod tests {
         assert_eq!(sent["ok"], true);
         unsafe { libc::close(pipe[1]) };
         let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
-        let mut relayed = Vec::new();
-        reader.read_to_end(&mut relayed).unwrap();
-        assert_eq!(relayed, b"hello\x1b\r");
+        let mut relayed = [0u8; 7];
+        reader.read_exact(&mut relayed).unwrap();
+        assert_eq!(&relayed, b"hello\x1b\r");
     }
 
     #[test]
@@ -2135,9 +2135,9 @@ mod tests {
         assert_eq!(interrupted["ok"], true);
         unsafe { libc::close(pipe[1]) };
         let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
-        let mut relayed = Vec::new();
-        reader.read_to_end(&mut relayed).unwrap();
-        assert_eq!(relayed, b"\x03");
+        let mut relayed = [0u8; 1];
+        reader.read_exact(&mut relayed).unwrap();
+        assert_eq!(&relayed, b"\x03");
 
         let child = unsafe { libc::fork() };
         assert!(child >= 0);
