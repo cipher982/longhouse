@@ -485,7 +485,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "588aa5ba7e00b256c7fac5246f01c035c4cb9be6fa6e5e1d7b4cabbfb124c1a7"
+      "adapter_digest": "180967924cf5aab0c19470a12734048bfb0a8d91bc442b393799bdf482c5bbbf"
     },
     {
       "provider": "claude",

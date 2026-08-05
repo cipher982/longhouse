@@ -1765,6 +1765,10 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             headless_launch: config.launch_mode != BridgeLaunchMode::Tui,
                             terminal_attached,
                             owner_recorded: context.state.owner_pid.is_some(),
+                            // Only consulted when no owner was recorded. A
+                            // bridge that never obtained a thread is not
+                            // serving a conversation anyone can return to.
+                            thread_present: context.state.thread_id.is_some(),
                             owner_alive,
                         })
                     }

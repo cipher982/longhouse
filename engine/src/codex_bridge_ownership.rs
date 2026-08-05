@@ -29,11 +29,17 @@
 //!
 //! ## Deliberately conservative cases
 //!
-//! A bridge with no recorded owner identity — started by a CLI predating this
-//! flag — is treated as owned forever. We cannot prove such a wrapper died, and
-//! killing a session on missing evidence is worse than leaking one. Those are
-//! reaped by hand once; every bridge started after this change records an
-//! owner.
+//! A bridge with no recorded owner identity is treated as owned **while it
+//! holds a thread**. We cannot prove such a wrapper died, and killing a live
+//! session on missing evidence is worse than leaking one. If it never obtained
+//! a thread, there is no session to kill and it is debris.
+//!
+//! This note previously claimed "every bridge started after this change records
+//! an owner". That was false for two months. `--owner-pid` was defined, parsed,
+//! and forwarded to the daemon, and was passed by no caller anywhere in the
+//! repository, so the ownerless branch governed every `tui` bridge rather than
+//! none of them, and the leak this module exists to stop continued unabated.
+//! The launch sites in `longhouse.rs` now pass it.
 //!
 //! Loss of ownership must also be observed on consecutive checks before acting.
 //! A single missed process scan is a transient, not a death, and the penalty
@@ -66,6 +72,12 @@ pub struct OwnershipInputs {
     /// True when the recorded owner is still running with a matching start
     /// time. Meaningless when `owner_recorded` is false.
     pub owner_alive: bool,
+    /// True when this bridge has obtained a provider thread.
+    ///
+    /// Only consulted for the ownerless case. A bridge that never got a thread
+    /// has no conversation to preserve, which is what makes it safe to reap
+    /// without owner evidence.
+    pub thread_present: bool,
 }
 
 /// Decide who owns this bridge, or `None` when it is debris.
@@ -77,7 +89,20 @@ pub fn evaluate(inputs: OwnershipInputs) -> Option<BridgeOwner> {
         return Some(BridgeOwner::Terminal);
     }
     if !inputs.owner_recorded {
-        return Some(BridgeOwner::Unprovable);
+        // A bridge with no recorded owner cannot be proven dead by ownership
+        // alone, so it stays owned — but only while it holds something worth
+        // preserving. With no terminal attached *and* no thread ever obtained,
+        // there is no conversation behind it and no user who could return to
+        // one: it is a launch that failed before it began.
+        //
+        // This is what makes the pre-flag debris reapable. Two such bridges ran
+        // for two days on a dogfood laptop, both stuck at
+        // `waiting_for_thread` with `thread_id: null`, holding a `codex
+        // app-server` child each and reporting "control path degraded" forever.
+        // Reaping on age alone would have been wrong — age never proves death —
+        // but the absence of a thread is a positive observation about what the
+        // bridge is capable of serving, which is nothing.
+        return inputs.thread_present.then_some(BridgeOwner::Unprovable);
     }
     if inputs.owner_alive {
         return Some(BridgeOwner::Wrapper);
@@ -152,6 +177,18 @@ mod tests {
             terminal_attached,
             owner_recorded: true,
             owner_alive,
+            thread_present: true,
+        }
+    }
+
+    /// A bridge started before `--owner-pid` was passed by anyone.
+    fn ownerless(terminal_attached: bool, thread_present: bool) -> OwnershipInputs {
+        OwnershipInputs {
+            headless_launch: false,
+            terminal_attached,
+            owner_recorded: false,
+            owner_alive: false,
+            thread_present,
         }
     }
 
@@ -162,6 +199,7 @@ mod tests {
             terminal_attached: false,
             owner_recorded: false,
             owner_alive: false,
+            thread_present: false,
         };
         assert_eq!(evaluate(inputs), Some(BridgeOwner::Headless));
     }
@@ -185,14 +223,42 @@ mod tests {
     }
 
     #[test]
-    fn unrecorded_owner_is_never_declared_debris() {
-        let inputs = OwnershipInputs {
-            headless_launch: false,
-            terminal_attached: false,
-            owner_recorded: false,
-            owner_alive: false,
-        };
-        assert_eq!(evaluate(inputs), Some(BridgeOwner::Unprovable));
+    fn an_ownerless_bridge_holding_a_thread_is_never_declared_debris() {
+        // A detached user may still return to that conversation, and we cannot
+        // prove their wrapper died. Leaking beats killing live work.
+        assert_eq!(
+            evaluate(ownerless(false, true)),
+            Some(BridgeOwner::Unprovable)
+        );
+    }
+
+    #[test]
+    fn an_ownerless_bridge_that_never_got_a_thread_is_debris() {
+        // The observed incident: two bridges ran for two days at
+        // `waiting_for_thread`, each holding a codex app-server child and
+        // reporting "control path degraded" forever. No terminal, no owner, no
+        // thread — nothing that could be serving anyone.
+        assert_eq!(evaluate(ownerless(false, false)), None);
+    }
+
+    #[test]
+    fn an_ownerless_threadless_bridge_with_a_terminal_is_still_owned() {
+        // A terminal is present-tense evidence of a user; it outranks the
+        // absence of a thread, which may simply not have been created yet.
+        assert_eq!(
+            evaluate(ownerless(true, false)),
+            Some(BridgeOwner::Terminal)
+        );
+    }
+
+    #[test]
+    fn reaping_a_threadless_ownerless_bridge_still_needs_consecutive_observations() {
+        // Debouncing is what separates "no thread" from "we failed to look".
+        let mut watch = OwnershipWatch::new();
+        for _ in 1..UNOWNED_OBSERVATIONS_BEFORE_EXIT {
+            assert!(!watch.observe(ownerless(false, false)));
+        }
+        assert!(watch.observe(ownerless(false, false)));
     }
 
     #[test]
@@ -250,6 +316,7 @@ mod tests {
             terminal_attached: false,
             owner_recorded: true,
             owner_alive: false,
+            thread_present: false,
         };
         for _ in 0..(UNOWNED_OBSERVATIONS_BEFORE_EXIT * 3) {
             assert!(!watch.observe(inputs));

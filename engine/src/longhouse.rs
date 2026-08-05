@@ -2016,7 +2016,15 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             launch_mode,
             "--json",
         ])
-        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token)
+        // Ownership must be recorded before the daemon outlives this process.
+        // codex_bridge_ownership treats a bridge with no recorded owner as
+        // `Unprovable` — owned forever — and until now no caller anywhere
+        // passed this flag, so every `tui` bridge leaked if its wrapper died
+        // before sending an explicit stop. Attaching a terminal later replaces
+        // this owner; it does not substitute for recording one at spawn,
+        // because the gap between spawn and attach is exactly where a closed
+        // pane or a crash produces debris nothing can reap.
+        .args(["--owner-pid", &std::process::id().to_string()])
         .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token);
     // Never let an inherited token stand in for authority this launch does not
     // hold: the bridge treats an absent variable as "no coordination".
@@ -2204,6 +2212,9 @@ fn launch_managed_codex_resume(
             &target.thread_path,
             "--json",
         ])
+        // Same ownership contract as a fresh launch: this process runs the TUI
+        // in the foreground and is the bridge's owner until a terminal attaches.
+        .args(["--owner-pid", &std::process::id().to_string()])
         .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", token)
         .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
     if let Some(model) = &target.model {
