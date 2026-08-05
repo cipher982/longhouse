@@ -2188,19 +2188,19 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "cursor":
             # Do not put the bootstrap prompt in Cursor's resume argv. Cursor
             # can render that prompt before its conversation restore is
-            # complete, leaving it in Working forever. Wait for the restored
-            # TUI/idle boundary, send through the managed socket, and require
-            # a new hook event before sending the post-resume marker.
-            _wait_cursor_idle(
-                resumed_state,
-                environment,
-            )
+            # complete, leaving it in Working forever. The resumed claim is
+            # pending until Cursor handles its first foreground turn, so an
+            # idle-hook wait here would deadlock. The TUI readiness wait gives
+            # restoration a bounded settling window; submit exactly one
+            # bootstrap through the provider PTY, then require the fresh hook
+            # event before using the authoritative managed socket.
             bootstrap_send = _control_send(
                 spec,
                 args,
                 resumed_state,
                 resumed,
                 _cursor_bootstrap_prompt(),
+                initial=True,
             )
             _write_json(
                 root / "resume-bootstrap-send.json",
