@@ -1147,8 +1147,30 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                     continue;
                 }
                 None if pre_ready_expired(&intent, now) => {
-                    tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Removing stale managed launch intent with no readiness owner identity");
-                    let _ = remove_unready_retry_intent_if_present(&path);
+                    // An expired recovery window with an unavailable process
+                    // probe is not proof that the launcher exited. Preserve
+                    // the durable evidence and make the unresolved state
+                    // explicit instead of deleting it and reporting health
+                    // as if no launch had occurred.
+                    match exhaust_unready_retry_intent_if_present(
+                        &path,
+                        "managed launch recovery window expired while launcher identity was unavailable; inspect the managed session",
+                    ) {
+                        Ok(true) => tracing::warn!(
+                            path = %path.display(),
+                            action_id = "inspect_managed_session",
+                            "Managed launch recovery window expired while launcher identity was unavailable; retaining exhausted evidence"
+                        ),
+                        Ok(false) => tracing::debug!(
+                            path = %path.display(),
+                            "Managed launch became ready while unavailable-owner expiry was being evaluated"
+                        ),
+                        Err(error) => tracing::warn!(
+                            path = %path.display(),
+                            error = %error,
+                            "Could not persist unavailable-owner managed launch recovery evidence"
+                        ),
+                    }
                     continue;
                 }
                 None => continue,
@@ -1568,6 +1590,48 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn unavailable_pre_ready_owner_is_exhausted_without_deleting_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("managed-local").join("retry.json");
+        let intent = ManagedLaunchRetryIntent {
+            schema_version: RETRY_SCHEMA_VERSION,
+            provider_name: "Codex".to_string(),
+            url: "http://127.0.0.1:1".to_string(),
+            token: "device-token".to_string(),
+            payload: serde_json::json!({"session_id": "session-1"}),
+            expected_session_id: "session-1".to_string(),
+            expected_transport: "codex_app_server".to_string(),
+            provider_ready: false,
+            attempts: 0,
+            next_attempt_at: None,
+            last_error: None,
+            created_at: "2026-08-03T00:00:00Z".to_string(),
+            recovery_exhausted: false,
+            exhausted_at: None,
+            provider_pid: Some(u32::MAX),
+            provider_process_start_time: Some("unavailable".to_string()),
+            provider_exited: false,
+            launcher_pid: Some(u32::MAX),
+            launcher_process_start_time: Some("unavailable".to_string()),
+        };
+
+        persist_retry_intent_at(&path, &intent).unwrap();
+        assert!(
+            exhaust_unready_retry_intent_if_present(&path, "launcher identity unavailable",)
+                .unwrap()
+        );
+
+        let stored: ManagedLaunchRetryIntent =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(path.exists());
+        assert!(stored.recovery_exhausted);
+        assert_eq!(
+            stored.last_error.as_deref(),
+            Some("launcher identity unavailable")
+        );
     }
 
     #[test]

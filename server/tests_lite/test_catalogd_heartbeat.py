@@ -366,6 +366,25 @@ def test_machine_health_projection_preserves_critical_evidence_after_size_fallba
     }
 
 
+def test_machine_health_projection_preserves_malformed_recovery_presence_after_size_fallback():
+    row = _heartbeat(
+        device_id="cinder",
+        received_at=datetime.now(UTC),
+        digest="digest",
+    )
+    row["raw_json"] = json.dumps(
+        {
+            "archive_backlog": {"padding": "x" * (200 * 1024)},
+            "storage_v2_outbox": {"error": "x" * (200 * 1024)},
+            "managed_launch_recovery": [],
+        }
+    )
+
+    projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
+
+    assert projected["managed_launch_recovery"] == {}
+
+
 def test_machine_health_projection_sanitizes_nonfinite_json_numbers():
     row = _heartbeat(
         device_id="cinder",

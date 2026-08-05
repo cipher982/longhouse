@@ -10737,6 +10737,7 @@ def _bounded_machine_health_critical_raw(raw: dict[str, Any]) -> dict[str, Any]:
         if bounded_storage:
             projected["storage_v2_outbox"] = bounded_storage
 
+    recovery_present = "managed_launch_recovery" in raw
     recovery = raw.get("managed_launch_recovery")
     if isinstance(recovery, dict):
         bounded_recovery: dict[str, Any] = {}
@@ -10746,8 +10747,13 @@ def _bounded_machine_health_critical_raw(raw: dict[str, Any]) -> dict[str, Any]:
                 bounded_recovery[key] = value
         if isinstance(recovery.get("scan_error"), bool):
             bounded_recovery["scan_error"] = recovery["scan_error"]
-        if bounded_recovery:
+        if bounded_recovery or recovery_present:
+            # Presence is evidence. Keep an empty sentinel for malformed or
+            # incomplete recovery data so the health reducer fails closed
+            # instead of interpreting projection loss as legacy absence.
             projected["managed_launch_recovery"] = bounded_recovery
+    elif recovery_present:
+        projected["managed_launch_recovery"] = {}
 
     history = raw.get("history_import")
     if isinstance(history, dict) and isinstance(history.get("state"), str):
