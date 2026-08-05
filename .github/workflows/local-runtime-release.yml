@@ -312,10 +312,12 @@ jobs:
               echo "Packaged app is missing resource bundle: $packaged_bundle" >&2
               exit 1
             }
-            find "$packaged_bundle" -type f -print -quit | grep -q . || {
-              echo "Packaged resource bundle is empty: $packaged_bundle" >&2
-              exit 1
-            }
+            for required_file in LonghouseMenuIcon.png desktop-app-setup.sh; do
+              test -f "$packaged_bundle/$required_file" || {
+                echo "Packaged resource bundle is missing $required_file: $packaged_bundle" >&2
+                exit 1
+              }
+            done
           done
 
       - name: Sign macOS desktop app bundle
@@ -348,12 +350,15 @@ jobs:
           executable = app_path / "Contents" / "MacOS" / "Longhouse"
           if not executable.exists():
               raise SystemExit(f"Missing packaged executable: {executable}")
-          completed = subprocess.run(
-              [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
-              capture_output=True,
-              text=True,
-              timeout=10,
-          )
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Signed macOS app launch smoke timed out: {exc}") from exc
           if completed.returncode != 0:
               raise SystemExit(
                   "Signed macOS app launch smoke failed:\n"
@@ -566,12 +571,15 @@ jobs:
           executable = app_path / "Contents" / "MacOS" / "Longhouse"
           if not executable.exists():
               raise SystemExit(f"Missing DMG executable: {executable}")
-          completed = subprocess.run(
-              [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
-              capture_output=True,
-              text=True,
-              timeout=10,
-          )
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Packaged DMG launch smoke timed out: {exc}") from exc
           if completed.returncode != 0:
               raise SystemExit(
                   "Packaged DMG launch smoke failed:\n"
@@ -633,6 +641,91 @@ jobs:
           payload = json.loads(manifest_path.read_text(encoding="utf-8"))
           payload["public_download_notarization_status"] = "notarized"
           manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Validate final macOS release artifacts
+        env:
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
+        run: |
+          APP_PATH="$RUNNER_TEMP/macos-app-bundles/Longhouse.app"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          if [[ "$RELEASE_TIER" == "stable" ]]; then
+            spctl --assess --type execute --verbose=4 "$APP_PATH"
+            xcrun stapler validate "$APP_PATH"
+            xcrun stapler validate binaries/Longhouse-macos-arm64.dmg
+          fi
+          python3 - "$APP_PATH" "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Final macOS app launch smoke timed out: {exc}") from exc
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Final macOS app launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
+          PY
+
+          MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist binaries/Longhouse-macos-arm64.dmg)"
+          MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              mount_point = entity.get("mount-point")
+              if mount_point:
+                  print(mount_point)
+                  break
+          else:
+              raise SystemExit("Unable to determine mounted final DMG path")
+          PY
+          )"
+          cleanup() {
+            test -z "$MOUNT_POINT" || hdiutil detach "$MOUNT_POINT"
+          }
+          trap cleanup EXIT
+          if [[ "$RELEASE_TIER" == "stable" ]]; then
+            spctl --assess --type execute --verbose=4 "$MOUNT_POINT/Longhouse.app"
+          fi
+          python3 - "$MOUNT_POINT/Longhouse.app" "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Final DMG launch smoke timed out: {exc}") from exc
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Final DMG launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
           PY
 
       - name: Mark macOS disk image notarization pending
