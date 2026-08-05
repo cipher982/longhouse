@@ -14,10 +14,41 @@ import termios
 import time
 
 
-def _write_all(fd: int, data: bytes) -> None:
-    while data:
-        written = os.write(fd, data)
-        data = data[written:]
+def _write_all(fd: int, data: bytes, *, deadline: float | None = None) -> bool:
+    """Write without letting a stalled pipe defeat the command timeout."""
+
+    try:
+        original_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    except OSError:
+        original_flags = None
+    if original_flags is not None:
+        fcntl.fcntl(fd, fcntl.F_SETFL, original_flags | os.O_NONBLOCK)
+    try:
+        while data:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                wait_for = min(0.05, remaining)
+            else:
+                wait_for = 0.05
+            try:
+                written = os.write(fd, data)
+            except BlockingIOError:
+                try:
+                    select.select([], [fd], [], wait_for)
+                except OSError:
+                    return False
+                continue
+            except OSError:
+                return False
+            if written <= 0:
+                return False
+            data = data[written:]
+        return True
+    finally:
+        if original_flags is not None:
+            fcntl.fcntl(fd, fcntl.F_SETFL, original_flags)
 
 
 def _drain(
@@ -45,12 +76,13 @@ def _drain(
             return
         if not data:
             return
-        _write_all(1, data)
+        if not _write_all(1, data, deadline=drain_deadline):
+            return
         quiet_deadline = time.monotonic() + quiet_for
 
 
 def _kill_owned_process_group(
-    process: subprocess.Popen[bytes], *, wait_for: float = 0.5
+    process: subprocess.Popen[bytes], *, wait_for: float = 0.5, reap: bool = True
 ) -> None:
     """Kill the PTY child and every descendant without waiting forever."""
 
@@ -64,18 +96,15 @@ def _kill_owned_process_group(
             process.kill()
         except OSError:
             pass
-    except PermissionError as error:
-        print(f"warning: process-group cleanup fell back to leader kill: {error}", file=sys.stderr)
-        try:
-            process.kill()
-        except OSError:
-            pass
     except OSError as error:
         print(f"warning: process-group cleanup fell back to leader kill: {error}", file=sys.stderr)
         try:
             process.kill()
         except OSError:
             pass
+
+    if not reap:
+        return
 
     deadline = time.monotonic() + wait_for
     while process.poll() is None and time.monotonic() < deadline:
@@ -103,6 +132,17 @@ def _attach_controlling_tty(slave: int) -> None:
 
     os.setsid()
     fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+
+def _child_exited_without_reaping(pid: int) -> bool:
+    """Peek at child completion while keeping its PID/PGID reserved."""
+
+    result = os.waitid(
+        os.P_PID,
+        pid,
+        os.WEXITED | os.WNOHANG | os.WNOWAIT,
+    )
+    return result is not None and result.si_pid == pid
 
 
 def main() -> int:
@@ -158,23 +198,25 @@ def main() -> int:
                     pty_closed = True
                     data = b""
                 if data:
-                    _write_all(1, data)
+                    output_deadline = deadline or time.monotonic() + 0.5
+                    _write_all(1, data, deadline=output_deadline)
                 else:
                     pty_closed = True
             if stdin_open and 0 in ready:
                 data = os.read(0, 8192)
                 if data:
                     try:
-                        _write_all(master, data)
+                        input_deadline = deadline or time.monotonic() + 0.5
+                        _write_all(master, data, deadline=input_deadline)
                     except OSError:
                         pty_closed = True
                 else:
                     stdin_open = False
-            exit_code = process.poll()
-            if exit_code is not None:
+            if _child_exited_without_reaping(process.pid):
                 if not pty_closed:
                     _drain(master, max_duration=0.5)
-                _kill_owned_process_group(process, wait_for=0.1)
+                _kill_owned_process_group(process, wait_for=0.1, reap=False)
+                exit_code = process.wait(timeout=0.1)
                 return exit_code if exit_code >= 0 else 128 - exit_code
     finally:
         os.close(master)

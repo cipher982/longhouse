@@ -92,6 +92,66 @@ def test_success_measurements_include_post_teardown_completion() -> None:
     assert result["measurements"]["run_duration_seconds"] == 4.0
 
 
+def test_retry_backoff_cadence_requires_two_scheduled_transitions() -> None:
+    observations = [
+        {
+            "session_id": "session-1",
+            "attempts": 1,
+            "observed_monotonic_seconds": 0.0,
+        },
+        {
+            "session_id": "session-1",
+            "attempts": 2,
+            "observed_monotonic_seconds": 2.2,
+        },
+        {
+            "session_id": "session-1",
+            "attempts": 3,
+            "observed_monotonic_seconds": 6.5,
+        },
+    ]
+
+    _MODULE.validate_retry_backoff_cadence(
+        observations, expected_session_ids={"session-1"}
+    )
+
+
+def test_retry_backoff_cadence_rejects_missing_or_tight_evidence() -> None:
+    with pytest.raises(RuntimeError, match="incomplete"):
+        _MODULE.validate_retry_backoff_cadence(
+            [
+                {
+                    "session_id": "session-1",
+                    "attempts": 1,
+                    "observed_monotonic_seconds": 0.0,
+                }
+            ],
+            expected_session_ids={"session-1"},
+        )
+
+    with pytest.raises(RuntimeError, match="too tight"):
+        _MODULE.validate_retry_backoff_cadence(
+            [
+                {
+                    "session_id": "session-1",
+                    "attempts": 1,
+                    "observed_monotonic_seconds": 0.0,
+                },
+                {
+                    "session_id": "session-1",
+                    "attempts": 2,
+                    "observed_monotonic_seconds": 0.5,
+                },
+                {
+                    "session_id": "session-1",
+                    "attempts": 3,
+                    "observed_monotonic_seconds": 5.2,
+                },
+            ],
+            expected_session_ids={"session-1"},
+        )
+
+
 def test_temporary_root_deletion_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     temporary_root = tmp_path / "temporary-root"
     temporary_root.mkdir()

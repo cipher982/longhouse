@@ -450,6 +450,79 @@ def wait_for(predicate: Any, timeout: float, description: str) -> None:
     raise RuntimeError(f"timed out waiting for {description}")
 
 
+def retry_delay_floor_seconds(attempts: int) -> float:
+    """Return the no-jitter floor used by managed-launch retry scheduling."""
+
+    return float(min(300, 2 ** min(max(attempts, 0), 8)))
+
+
+def record_retry_transitions(
+    intents: list[dict[str, Any]],
+    *,
+    last_attempts: dict[str, int],
+    observations: list[dict[str, Any]],
+    started_monotonic: float,
+) -> None:
+    """Record each observed one-step retry transition for cadence evidence."""
+
+    observed_at = utc_now()
+    observed_monotonic = round(time.monotonic() - started_monotonic, 3)
+    for intent in intents:
+        session_id = str(intent.get("expected_session_id"))
+        attempts = int(intent.get("attempts") or 0)
+        previous = last_attempts.get(session_id, attempts)
+        if attempts <= previous:
+            continue
+        if attempts != previous + 1:
+            raise RuntimeError(
+                "retry-attempt observation skipped a transition for "
+                f"{session_id}: {previous} -> {attempts}"
+            )
+        observations.append(
+            {
+                "session_id": session_id,
+                "attempts": attempts,
+                "observed_at": observed_at,
+                "observed_monotonic_seconds": observed_monotonic,
+                "next_attempt_at": intent.get("next_attempt_at"),
+            }
+        )
+        last_attempts[session_id] = attempts
+
+
+def validate_retry_backoff_cadence(
+    observations: list[dict[str, Any]], *, expected_session_ids: set[str]
+) -> None:
+    """Fail qualification unless every ready retry intent shows real backoff."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {
+        session_id: [] for session_id in expected_session_ids
+    }
+    for observation in observations:
+        session_id = str(observation["session_id"])
+        if session_id in grouped:
+            grouped[session_id].append(observation)
+    for session_id, session_observations in grouped.items():
+        if len(session_observations) < 2:
+            raise RuntimeError(
+                "retry-backoff evidence is incomplete for "
+                f"{session_id}: observed {len(session_observations)} transitions, need 2"
+            )
+        for previous, current in zip(
+            session_observations, session_observations[1:]
+        ):
+            elapsed = float(current["observed_monotonic_seconds"]) - float(
+                previous["observed_monotonic_seconds"]
+            )
+            minimum = retry_delay_floor_seconds(int(previous["attempts"]))
+            if elapsed + 1.0 < minimum:
+                raise RuntimeError(
+                    "retry-backoff evidence was too tight for "
+                    f"{session_id} after attempt {previous['attempts']}: "
+                    f"{elapsed:.3f}s observed, need at least {minimum:.3f}s"
+                )
+
+
 def http_json(
     url: str,
     *,
@@ -2637,15 +2710,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             engine_handle = None
 
             restart_handle = cold_log.open("ab")
+            restart_started_monotonic = time.monotonic()
             restarted_engine = spawn_cold_agent(restart_handle)
-            time.sleep(2)
-            second_start_returncode = restarted_engine.poll()
-            if second_start_returncode is not None:
-                restart_handle.close()
-                raise RuntimeError(
-                    "Machine Agent did not survive its cold restart during outage: "
-                    f"{second_start_returncode}"
-                )
             engine = restarted_engine
             engine_handle = restart_handle
             current_retry_intents = read_retry_intents(temp_root)
@@ -2659,11 +2725,40 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     "during the outage"
                 )
             preserved_retry_count = len(current_retry_intents)
+            retry_observations: list[dict[str, Any]] = []
+            observed_attempts = dict(attempts_before_agent_restart)
+
+            def observe_restarted_retry_state() -> list[dict[str, Any]]:
+                current = read_retry_intents(temp_root)
+                record_retry_transitions(
+                    [
+                        intent
+                        for intent in current
+                        if str(intent.get("expected_session_id")) in ready_ids
+                    ],
+                    last_attempts=observed_attempts,
+                    observations=retry_observations,
+                    started_monotonic=restart_started_monotonic,
+                )
+                return current
+
+            survival_deadline = time.monotonic() + 2
+            while time.monotonic() < survival_deadline:
+                second_start_returncode = restarted_engine.poll()
+                if second_start_returncode is not None:
+                    restart_handle.close()
+                    raise RuntimeError(
+                        "Machine Agent did not survive its cold restart during outage: "
+                        f"{second_start_returncode}"
+                    )
+                observe_restarted_retry_state()
+                time.sleep(0.2)
 
             def cold_retry_progress_after_restart() -> bool:
+                current = observe_restarted_retry_state()
                 relevant_intents = [
                     intent
-                    for intent in read_retry_intents(temp_root)
+                    for intent in current
                     if str(intent.get("expected_session_id")) in ready_ids
                 ]
                 return bool(relevant_intents) and all(
@@ -2672,25 +2767,37 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                         str(intent.get("expected_session_id")), 0
                     )
                     for intent in relevant_intents
-                ) and any(
-                    int(intent.get("attempts") or 0)
-                    > attempts_before_agent_restart.get(
-                        str(intent.get("expected_session_id")), 0
+                ) and all(
+                    sum(
+                        1
+                        for observation in retry_observations
+                        if observation["session_id"]
+                        == str(intent.get("expected_session_id"))
                     )
+                    >= 2
                     for intent in relevant_intents
                 )
 
             max_attempts_before_restart = max(
                 attempts_before_agent_restart.values(), default=0
             )
+            first_retry_floor = retry_delay_floor_seconds(
+                max_attempts_before_restart
+            )
+            second_retry_floor = retry_delay_floor_seconds(
+                max_attempts_before_restart + 1
+            )
             retry_progress_timeout = max(
                 15,
-                2 ** min(max_attempts_before_restart, 8) * 2,
+                int((first_retry_floor + second_retry_floor) * 1.5 + 2),
             )
             wait_for(
                 cold_retry_progress_after_restart,
                 retry_progress_timeout,
                 "restarted Machine Agent to preserve durable retry progress while Runtime Host is unavailable",
+            )
+            validate_retry_backoff_cadence(
+                retry_observations, expected_session_ids=ready_ids
             )
             retry_attempts_after_restart = {
                 str(intent.get("expected_session_id")): int(intent.get("attempts") or 0)
@@ -2705,6 +2812,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "retry_attempts_before_agent_restart": attempts_before_agent_restart,
                 "retry_attempts_after_agent_restart": retry_attempts_after_restart,
                 "retry_attempts_observed": max(retry_attempts_after_restart.values()),
+                "retry_backoff_observations": retry_observations,
+                "retry_backoff_cadence_valid": True,
                 "retry_intents_after_cold_start": preserved_retry_count,
                 "pre_ready_intents_garbage_collected": None,
                 "log": str(cold_log),

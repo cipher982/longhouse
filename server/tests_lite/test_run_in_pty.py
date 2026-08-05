@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "run-in-pty.py"
 _SPEC = importlib.util.spec_from_file_location("run_in_pty", SCRIPT)
@@ -35,9 +37,12 @@ def test_drain_has_an_absolute_bound() -> None:
         os.dup2(saved_stdout, 1)
         os.close(devnull)
         stop.set()
+        # Closing the read end makes the blocked writer observe EPIPE before
+        # the write end is closed and its fd can be reused.
         os.close(read_fd)
         os.close(write_fd)
         writer.join(timeout=1)
+    assert not writer.is_alive()
     assert elapsed < 0.5
 
 
@@ -47,6 +52,51 @@ def _write_forever(fd: int, stop: threading.Event) -> None:
             os.write(fd, b"x" * 4096)
         except OSError:
             return
+
+
+def test_timeout_returns_when_stdout_consumer_stalls(tmp_path: Path) -> None:
+    leader_pid_path = tmp_path / "leader.pid"
+    leader_code = (
+        "import os, pathlib, sys, time\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+        "while True:\n"
+        "    os.write(1, b'x' * 65536)\n"
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--timeout",
+            "0.2",
+            sys.executable,
+            "-c",
+            leader_code,
+            str(leader_pid_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        try:
+            exit_code = process.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+            pytest.fail("run-in-pty blocked on an unread stdout pipe")
+        assert exit_code == 124
+    finally:
+        process.communicate(timeout=1)
+        try:
+            leader_pid = int(leader_pid_path.read_text())
+        except (FileNotFoundError, ValueError):
+            leader_pid = None
+        if leader_pid is not None:
+            try:
+                os.killpg(leader_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                os.kill(leader_pid, signal.SIGKILL)
 
 
 def test_timeout_kills_owned_process_group_descendants(tmp_path: Path) -> None:
@@ -148,32 +198,54 @@ def test_timeout_drain_has_an_absolute_bound(tmp_path: Path) -> None:
 
 
 def test_natural_exit_kills_owned_process_group_descendants(tmp_path: Path) -> None:
+    started = tmp_path / "natural-descendant-started"
     marker = tmp_path / "natural-descendant-survived"
+    pid_path = tmp_path / "natural-descendant.pid"
     descendant_code = (
-        "import pathlib, signal, sys, time; "
-        "signal.signal(signal.SIGHUP, signal.SIG_IGN); "
-        "time.sleep(1); pathlib.Path(sys.argv[1]).write_text('alive')"
+        "import os, pathlib, signal, sys, time\n"
+        "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+        "pathlib.Path(sys.argv[1]).write_text('started')\n"
+        "pathlib.Path(sys.argv[3]).write_text(str(os.getpid()))\n"
+        "time.sleep(1)\n"
+        "pathlib.Path(sys.argv[2]).write_text('alive')\n"
     )
     leader_code = (
-        "import subprocess, sys; "
-        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])"
+        "import pathlib, subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]])\n"
+        "deadline = time.time() + 2\n"
+        "while time.time() < deadline and not pathlib.Path(sys.argv[2]).exists():\n"
+        "    time.sleep(0.01)\n"
     )
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            sys.executable,
-            "-c",
-            leader_code,
-            descendant_code,
-            str(marker),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=3,
-    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                sys.executable,
+                "-c",
+                leader_code,
+                descendant_code,
+                str(started),
+                str(marker),
+                str(pid_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
 
-    assert result.returncode == 0, result.stderr
-    time.sleep(1.2)
-    assert not marker.exists(), result.stdout
+        assert result.returncode == 0, result.stderr
+        assert started.exists(), "descendant did not start before the leader exited"
+        time.sleep(1.2)
+        assert not marker.exists(), result.stdout
+    finally:
+        try:
+            descendant_pid = int(pid_path.read_text())
+        except (FileNotFoundError, ValueError):
+            descendant_pid = None
+        if descendant_pid is not None:
+            try:
+                os.kill(descendant_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
