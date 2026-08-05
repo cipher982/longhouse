@@ -298,6 +298,26 @@ jobs:
             --build-identity .build/build-identity.json \
             --lsuielement true
 
+      - name: Verify packaged macOS resources
+        run: |
+          shopt -s nullglob
+          staged_bundles=("$RUNNER_TEMP"/*.bundle)
+          test "${#staged_bundles[@]}" -gt 0 || {
+            echo "No staged Swift resource bundles were found." >&2
+            exit 1
+          }
+          for staged_bundle in "${staged_bundles[@]}"; do
+            packaged_bundle="$RUNNER_TEMP/macos-app-bundles/Longhouse.app/Contents/Resources/$(basename "$staged_bundle")"
+            test -d "$packaged_bundle" || {
+              echo "Packaged app is missing resource bundle: $packaged_bundle" >&2
+              exit 1
+            }
+            find "$packaged_bundle" -type f -print -quit | grep -q . || {
+              echo "Packaged resource bundle is empty: $packaged_bundle" >&2
+              exit 1
+            }
+          done
+
       - name: Sign macOS desktop app bundle
         env:
           RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
@@ -313,6 +333,35 @@ jobs:
             --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
             --identity "$CODESIGN_IDENTITY" \
             --mode "$SIGNING_MODE"
+
+      - name: Launch-test signed macOS app bundle
+        run: |
+          python3 - \
+            "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
+            "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          if not executable.exists():
+              raise SystemExit(f"Missing packaged executable: {executable}")
+          completed = subprocess.run(
+              [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+              capture_output=True,
+              text=True,
+              timeout=10,
+          )
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Signed macOS app launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
+          PY
 
       - name: Initialize macOS packaging manifest
         env:
@@ -482,6 +531,54 @@ jobs:
           if payload.get("public_download_notarization_status") == "awaiting-build":
               payload["public_download_notarization_status"] = "awaiting-submission"
           manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Launch-test packaged macOS disk image
+        run: |
+          MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist binaries/Longhouse-macos-arm64.dmg)"
+          MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              mount_point = entity.get("mount-point")
+              if mount_point:
+                  print(mount_point)
+                  break
+          else:
+              raise SystemExit("Unable to determine mounted DMG path")
+          PY
+          )"
+          cleanup() {
+            hdiutil detach "$MOUNT_POINT" >/dev/null || true
+          }
+          trap cleanup EXIT
+          python3 - \
+            "$MOUNT_POINT/Longhouse.app" \
+            "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          if not executable.exists():
+              raise SystemExit(f"Missing DMG executable: {executable}")
+          completed = subprocess.run(
+              [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+              capture_output=True,
+              text=True,
+              timeout=10,
+          )
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Packaged DMG launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
           PY
 
       - name: Submit macOS disk image for notarization
