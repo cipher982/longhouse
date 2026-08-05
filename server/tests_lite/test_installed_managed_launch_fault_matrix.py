@@ -111,9 +111,10 @@ def test_retry_backoff_cadence_requires_two_scheduled_transitions() -> None:
         },
     ]
 
-    _MODULE.validate_retry_backoff_cadence(
+    cadence = _MODULE.validate_retry_backoff_cadence(
         observations, expected_session_ids={"session-1"}
     )
+    assert cadence["session-1"][0]["minimum_seconds"] == 2.0
 
 
 def test_retry_backoff_cadence_rejects_missing_or_tight_evidence() -> None:

@@ -492,12 +492,13 @@ def record_retry_transitions(
 
 def validate_retry_backoff_cadence(
     observations: list[dict[str, Any]], *, expected_session_ids: set[str]
-) -> None:
+) -> dict[str, list[dict[str, float | int]]]:
     """Fail qualification unless every ready retry intent shows real backoff."""
 
     grouped: dict[str, list[dict[str, Any]]] = {
         session_id: [] for session_id in expected_session_ids
     }
+    cadence: dict[str, list[dict[str, float | int]]] = {}
     for observation in observations:
         session_id = str(observation["session_id"])
         if session_id in grouped:
@@ -515,12 +516,21 @@ def validate_retry_backoff_cadence(
                 previous["observed_monotonic_seconds"]
             )
             minimum = retry_delay_floor_seconds(int(previous["attempts"]))
-            if elapsed + 1.0 < minimum:
+            tolerance = max(0.25, minimum * 0.25)
+            if elapsed + tolerance < minimum:
                 raise RuntimeError(
                     "retry-backoff evidence was too tight for "
                     f"{session_id} after attempt {previous['attempts']}: "
                     f"{elapsed:.3f}s observed, need at least {minimum:.3f}s"
                 )
+            cadence.setdefault(session_id, []).append(
+                {
+                    "from_attempt": int(previous["attempts"]),
+                    "elapsed_seconds": round(elapsed, 3),
+                    "minimum_seconds": minimum,
+                }
+            )
+    return cadence
 
 
 def http_json(
@@ -2796,7 +2806,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 retry_progress_timeout,
                 "restarted Machine Agent to preserve durable retry progress while Runtime Host is unavailable",
             )
-            validate_retry_backoff_cadence(
+            retry_backoff_cadence = validate_retry_backoff_cadence(
                 retry_observations, expected_session_ids=ready_ids
             )
             retry_attempts_after_restart = {
@@ -2813,7 +2823,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "retry_attempts_after_agent_restart": retry_attempts_after_restart,
                 "retry_attempts_observed": max(retry_attempts_after_restart.values()),
                 "retry_backoff_observations": retry_observations,
-                "retry_backoff_cadence_valid": True,
+                "retry_backoff_cadence": retry_backoff_cadence,
                 "retry_intents_after_cold_start": preserved_retry_count,
                 "pre_ready_intents_garbage_collected": None,
                 "log": str(cold_log),

@@ -53,7 +53,7 @@ def _write_all(fd: int, data: bytes, *, deadline: float | None = None) -> bool:
 
 def _drain(
     master: int, *, quiet_for: float = 0.1, max_duration: float = 0.5
-) -> None:
+) -> bool:
     drain_deadline = time.monotonic() + max_duration
     quiet_deadline = time.monotonic() + quiet_for
     while time.monotonic() < drain_deadline:
@@ -66,23 +66,36 @@ def _drain(
             ),
         )
         if wait_for == 0:
-            return
+            return True
         ready, _, _ = select.select([master], [], [], wait_for)
         if not ready:
             continue
         try:
             data = os.read(master, 65536)
         except OSError:
-            return
+            return True
         if not data:
-            return
+            return True
         if not _write_all(1, data, deadline=drain_deadline):
-            return
+            return False
         quiet_deadline = time.monotonic() + quiet_for
+    return True
+
+
+def _warn_output_failure() -> None:
+    _write_all(
+        2,
+        b"run-in-pty: could not forward all PTY output before the deadline\n",
+        deadline=time.monotonic() + 0.1,
+    )
 
 
 def _kill_owned_process_group(
-    process: subprocess.Popen[bytes], *, wait_for: float = 0.5, reap: bool = True
+    process: subprocess.Popen[bytes],
+    *,
+    wait_for: float = 0.5,
+    reap: bool = True,
+    warn_on_fallback: bool = True,
 ) -> None:
     """Kill the PTY child and every descendant without waiting forever."""
 
@@ -97,7 +110,11 @@ def _kill_owned_process_group(
         except OSError:
             pass
     except OSError as error:
-        print(f"warning: process-group cleanup fell back to leader kill: {error}", file=sys.stderr)
+        if warn_on_fallback:
+            print(
+                f"warning: process-group cleanup fell back to leader kill: {error}",
+                file=sys.stderr,
+            )
         try:
             process.kill()
         except OSError:
@@ -184,7 +201,8 @@ def main() -> int:
             if deadline is not None and time.monotonic() >= deadline:
                 _kill_owned_process_group(process)
                 if not pty_closed:
-                    _drain(master, max_duration=0.5)
+                    if not _drain(master, max_duration=0.5):
+                        _warn_output_failure()
                 return 124
 
             watched = [] if pty_closed else [master]
@@ -198,8 +216,10 @@ def main() -> int:
                     pty_closed = True
                     data = b""
                 if data:
-                    output_deadline = deadline or time.monotonic() + 0.5
-                    _write_all(1, data, deadline=output_deadline)
+                    if not _write_all(1, data, deadline=deadline):
+                        _kill_owned_process_group(process)
+                        _warn_output_failure()
+                        return 124 if deadline is not None else 125
                 else:
                     pty_closed = True
             if stdin_open and 0 in ready:
@@ -207,16 +227,23 @@ def main() -> int:
                 if data:
                     try:
                         input_deadline = deadline or time.monotonic() + 0.5
-                        _write_all(master, data, deadline=input_deadline)
+                        if not _write_all(master, data, deadline=input_deadline):
+                            _kill_owned_process_group(process)
+                            _warn_output_failure()
+                            return 125
                     except OSError:
                         pty_closed = True
                 else:
                     stdin_open = False
             if _child_exited_without_reaping(process.pid):
-                if not pty_closed:
-                    _drain(master, max_duration=0.5)
-                _kill_owned_process_group(process, wait_for=0.1, reap=False)
+                drain_succeeded = pty_closed or _drain(master, max_duration=0.5)
+                _kill_owned_process_group(
+                    process, wait_for=0.1, reap=False, warn_on_fallback=False
+                )
                 exit_code = process.wait(timeout=0.1)
+                if not drain_succeeded:
+                    _warn_output_failure()
+                    return 125
                 return exit_code if exit_code >= 0 else 128 - exit_code
     finally:
         os.close(master)

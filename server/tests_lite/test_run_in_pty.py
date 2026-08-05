@@ -76,6 +76,7 @@ def test_timeout_returns_when_stdout_consumer_stalls(tmp_path: Path) -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    exit_code: int | None = None
     try:
         try:
             exit_code = process.wait(timeout=1.5)
@@ -85,7 +86,8 @@ def test_timeout_returns_when_stdout_consumer_stalls(tmp_path: Path) -> None:
             pytest.fail("run-in-pty blocked on an unread stdout pipe")
         assert exit_code == 124
     finally:
-        process.communicate(timeout=1)
+        _, stderr = process.communicate(timeout=1)
+        assert b"could not forward all PTY output" in stderr
         try:
             leader_pid = int(leader_pid_path.read_text())
         except (FileNotFoundError, ValueError):
@@ -97,6 +99,38 @@ def test_timeout_returns_when_stdout_consumer_stalls(tmp_path: Path) -> None:
                 pass
             except PermissionError:
                 os.kill(leader_pid, signal.SIGKILL)
+
+
+def test_no_timeout_preserves_output_with_slow_reader() -> None:
+    payload = b"x" * 8192
+    leader_code = "import os; os.write(1, b'x' * 8192)"
+    process = subprocess.Popen(
+        [sys.executable, str(SCRIPT), sys.executable, "-c", leader_code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdout is not None
+    collected = bytearray()
+
+    def read_slowly() -> None:
+        while True:
+            chunk = process.stdout.read(128)
+            if not chunk:
+                return
+            collected.extend(chunk)
+            time.sleep(0.002)
+
+    reader = threading.Thread(target=read_slowly)
+    reader.start()
+    try:
+        assert process.wait(timeout=5) == 0
+        reader.join(timeout=1)
+        assert not reader.is_alive()
+        assert bytes(collected) == payload
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=1)
 
 
 def test_timeout_kills_owned_process_group_descendants(tmp_path: Path) -> None:
@@ -236,6 +270,7 @@ def test_natural_exit_kills_owned_process_group_descendants(tmp_path: Path) -> N
         )
 
         assert result.returncode == 0, result.stderr
+        assert result.stderr == ""
         assert started.exists(), "descendant did not start before the leader exited"
         time.sleep(1.2)
         assert not marker.exists(), result.stdout
