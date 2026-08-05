@@ -153,8 +153,15 @@ which re-derives and validates the subject before signing, and verifies the
 receipt against the committed public key. A missing evidence set, mutable
 snapshot, missing secret, dirty subject, source mismatch, unprotected branch,
 or key mismatch fails the job. Configure the `longhouse-release-attestation`
-environment with required reviewers and keep the signing runner restricted to
-that environment.
+environment with required reviewers. The environment approval does not itself
+restrict runner selection: use an ephemeral one-job signer runner in a runner
+group restricted to this repository and workflow. Confirm the protected-main
+branch rules, environment reviewers, runner-group restriction, and
+single-job runner behavior before treating a receipt as release evidence.
+
+The `report.sha256` file is a transport-corruption check for the uploaded
+report. The trusted subject re-derivation and receipt signature are the release
+trust boundary.
 
 After the workflow uploads the receipt, regenerate the final report from the
 same clean qualification checkout and retained inputs, adding:

@@ -36,6 +36,7 @@ DOGFOOD_ARTIFACT_KIND = "launch_reliability_dogfood_series"
 DOGFOOD_SCHEMA_VERSION = 1
 DOGFOOD_GENERATOR_RELATIVE = Path("scripts/qa/launch_reliability_dogfood.py")
 REPORT_REPOSITORY = Path(__file__).resolve().parents[2]
+REPORT_REPOSITORY_IDENTITY = "cipher982/longhouse"
 DOGFOOD_CHALLENGE_ARTIFACT_KIND = "launch_reliability_dogfood_challenge"
 DOGFOOD_CHALLENGE_SCHEMA_VERSION = 1
 DOGFOOD_CHALLENGE_ISSUER = "scripts/qa/launch-reliability-measurements.py"
@@ -216,6 +217,7 @@ def report_provenance() -> dict[str, Any]:
         "harness_file_dirty": bool(file_status),
         "path": str(path),
         "repository": str(repository),
+        "repository_identity": REPORT_REPOSITORY_IDENTITY,
         "repository_dirty": bool(status_lines),
         "sha256": _sha256(path),
     }

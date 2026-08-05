@@ -151,7 +151,7 @@ def build_subject(
         raise ValueError("report has no dogfood series subject")
     required_provenance = {
         "git_sha": provenance.get("git_sha"),
-        "repository": REPOSITORY_IDENTITY,
+        "repository": provenance.get("repository_identity"),
         "repository_dirty": provenance.get("repository_dirty"),
         "harness_file_dirty": provenance.get("harness_file_dirty"),
         "sha256": provenance.get("sha256"),
@@ -160,6 +160,8 @@ def build_subject(
         raise ValueError("report provenance has no full source SHA")
     if expected_source_sha is not None and required_provenance["git_sha"] != expected_source_sha:
         raise ValueError("report source SHA does not match the expected source SHA")
+    if required_provenance["repository"] != REPOSITORY_IDENTITY:
+        raise ValueError("report provenance has an untrusted repository identity")
     if required_provenance["repository_dirty"] is not False or required_provenance["harness_file_dirty"] is not False:
         raise ValueError("report provenance is dirty")
     matrix = report.get("matrix")
