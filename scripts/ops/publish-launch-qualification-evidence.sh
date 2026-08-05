@@ -96,6 +96,7 @@ ssh "$REMOTE_HOST" "
     test ! -e '$target'
     sudo mv -- '$staging' '$target'
 "
+ssh "$REMOTE_HOST" "sudo rmdir -- '$lock'"
 staging=""
 trap - EXIT
 

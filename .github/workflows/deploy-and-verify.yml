@@ -86,40 +86,52 @@ jobs:
 
       - name: Resolve target commit
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA_INPUT: ${{ github.sha }}
+          HEAD_BRANCH_INPUT: ${{ github.ref_name }}
+          PREDECESSOR_SHA_INPUT: ${{ github.event.before || '' }}
+          RUNTIME_IMAGE_CHANGED: ${{ needs.changes.outputs.runtime_image }}
+          RUNTIME_IMAGE_TAG_INPUT: ${{ github.event.inputs.runtime_image_tag || '' }}
         run: |
-          HEAD_SHA="${{ github.sha }}"
-          HEAD_BRANCH="${{ github.ref_name }}"
+          HEAD_SHA="$HEAD_SHA_INPUT"
+          HEAD_BRANCH="$HEAD_BRANCH_INPUT"
           PREDECESSOR_SHA=""
           IMAGE_TAG=""
 
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-          PREDECESSOR_SHA="${{ github.event.before }}"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+          PREDECESSOR_SHA="$PREDECESSOR_SHA_INPUT"
           if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
             PREDECESSOR_SHA=""
           fi
           else
-            IMAGE_TAG="${{ github.event.inputs.runtime_image_tag || '' }}"
+            IMAGE_TAG="$RUNTIME_IMAGE_TAG_INPUT"
           fi
 
           if [[ -z "$IMAGE_TAG" ]]; then
-            if [[ "${{ needs.changes.outputs.runtime_image }}" == "true" ]]; then
+            if [[ "$RUNTIME_IMAGE_CHANGED" == "true" ]]; then
               IMAGE_TAG="$HEAD_SHA"
             else
               IMAGE_TAG="latest"
             fi
           fi
 
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "runtime_image_tag must be a valid Docker tag (1-128 letters, numbers, _, ., or -)" >&2
+            exit 1
+          fi
+
           {
-            echo "predecessor_sha=$PREDECESSOR_SHA"
-            echo "head_sha=$HEAD_SHA"
-            echo "head_branch=$HEAD_BRANCH"
-            echo "runtime_image_name=ghcr.io/${{ github.repository_owner }}/longhouse-runtime"
-            echo "runtime_image_tag=$IMAGE_TAG"
-            echo "runtime_image_ref=ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG"
+            printf 'predecessor_sha=%s\n' "$PREDECESSOR_SHA"
+            printf 'head_sha=%s\n' "$HEAD_SHA"
+            printf 'head_branch=%s\n' "$HEAD_BRANCH"
+            printf 'runtime_image_name=ghcr.io/cipher982/longhouse-runtime\n'
+            printf 'runtime_image_tag=%s\n' "$IMAGE_TAG"
+            printf 'runtime_image_ref=ghcr.io/cipher982/longhouse-runtime:%s\n' "$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
 
-          if [[ "${{ needs.changes.outputs.runtime_image }}" != "true" ]]; then
-            echo "::notice::No runtime image changes detected; reusing ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG for deploy/QA."
+          if [[ "$RUNTIME_IMAGE_CHANGED" != "true" ]]; then
+            echo "::notice::No runtime image changes detected; reusing ghcr.io/cipher982/longhouse-runtime:$IMAGE_TAG for deploy/QA."
           fi
 
       - name: Wait for core E2E gate
