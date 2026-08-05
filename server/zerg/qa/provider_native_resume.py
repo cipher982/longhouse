@@ -545,6 +545,12 @@ def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None
         home / ".codex" / "sessions",
         home / ".local" / "share" / "opencode",
         home / ".cursor" / "chats",
+        # Cursor's durable project store is the authoritative source for
+        # resumed conversations.  Create the discovery root before the
+        # Machine Agent starts so the initial launch and the resumed launch
+        # use one enrolled storage-v2 source instead of switching from the
+        # JSONL mirror to a newly discovered store on restart.
+        home / ".cursor" / "projects",
         home / ".longhouse" / "agent" / "cursor-acp-source",
     ]
     configured_claude_dir = str(environment.get("CLAUDE_CONFIG_DIR") or "").strip()
