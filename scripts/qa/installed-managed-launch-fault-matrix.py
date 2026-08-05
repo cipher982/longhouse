@@ -1269,13 +1269,18 @@ def finish_live_command(
     provider_kill_status = "not_observed"
     provider_cleanup_pid: int | None = None
     provider_natural_cleanup_verified = False
-    if provider_pid is not None and (
-        provider_process_start_time is None
-        or process_start_identity(provider_pid) == provider_process_start_time
+    if (
+        provider_pid is not None
+        and provider_process_start_time is not None
+        and process_start_identity(provider_pid) == provider_process_start_time
     ):
         provider_cleanup_pid = provider_pid
     elif provider_pid is not None:
-        provider_kill_status = "identity_mismatch"
+        provider_kill_status = (
+            "identity_missing"
+            if provider_process_start_time is None
+            else "identity_mismatch"
+        )
     elif (
         cleanup_scope is not None
         and cleanup_scope.get("provider_process_observed") is False
@@ -1328,11 +1333,21 @@ def finish_live_command(
             kill_group(provider_cleanup_pid, grace=0.2)
             provider_kill_status = "attempted"
         else:
-            if process_start_identity(provider_cleanup_pid) is None:
+            provider_group_proof_available = bool(
+                cleanup_scope is not None and cleanup_scope.get("provider_pgid")
+            )
+            if (
+                provider_group_proof_available
+                and process_start_identity(provider_cleanup_pid) is None
+            ):
                 provider_kill_status = "natural"
                 provider_natural_cleanup_verified = True
             else:
-                provider_kill_status = "natural_unverified"
+                provider_kill_status = (
+                    "natural_unscoped"
+                    if not provider_group_proof_available
+                    else "natural_unverified"
+                )
 
     if cleanup_scope is not None:
         # Re-scan after the normal signals. Detached provider bridges are
@@ -2646,13 +2661,23 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             preserved_retry_count = len(current_retry_intents)
 
             def cold_retry_progress_after_restart() -> bool:
-                return all(
+                relevant_intents = [
+                    intent
+                    for intent in read_retry_intents(temp_root)
+                    if str(intent.get("expected_session_id")) in ready_ids
+                ]
+                return bool(relevant_intents) and all(
                     int(intent.get("attempts") or 0)
                     >= attempts_before_agent_restart.get(
                         str(intent.get("expected_session_id")), 0
                     )
-                    for intent in read_retry_intents(temp_root)
-                    if str(intent.get("expected_session_id")) in ready_ids
+                    for intent in relevant_intents
+                ) and any(
+                    int(intent.get("attempts") or 0)
+                    > attempts_before_agent_restart.get(
+                        str(intent.get("expected_session_id")), 0
+                    )
+                    for intent in relevant_intents
                 )
 
             wait_for(

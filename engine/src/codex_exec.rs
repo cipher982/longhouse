@@ -678,20 +678,26 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         } else {
             None
         };
-        if let Err(kill_error) = shutdown_worker_process_group(worker_child, worker_pgid).await {
-            run_result = match run_result {
-                Err(original) => Err(original.context(format!(
-                    "also failed to stop Codex app-server process group: {kill_error}"
-                ))),
-                Ok(value) => {
-                    eprintln!(
-                        "[codex-exec] worker process-group cleanup failed pid={} error={kill_error}",
-                        worker_pid.unwrap_or(0)
-                    );
-                    Ok(value)
-                }
-            };
-        }
+        let shutdown_exit_code = match shutdown_worker_process_group(worker_child, worker_pgid)
+            .await
+        {
+            Ok(exit_code) => exit_code,
+            Err(kill_error) => {
+                run_result = match run_result {
+                    Err(original) => Err(original.context(format!(
+                        "also failed to stop Codex app-server process group: {kill_error}"
+                    ))),
+                    Ok(value) => {
+                        eprintln!(
+                            "[codex-exec] worker process-group cleanup failed pid={} error={kill_error}",
+                            worker_pid.unwrap_or(0)
+                        );
+                        Ok(value)
+                    }
+                };
+                None
+            }
+        };
         unregister_active_worker(worker_pid).await;
         if let Some(task) = worker_stderr_task {
             finish_stderr_task(task, "Codex worker run").await;
@@ -709,7 +715,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             ),
             Err(err) => (
                 "run_failed",
-                observed_error_exit_code,
+                observed_error_exit_code.or(shutdown_exit_code),
                 Some(err.to_string()),
             ),
         };
@@ -883,7 +889,7 @@ fn defer_child_reap(child: Child) {
 #[cfg(not(unix))]
 fn defer_child_reap(_child: Child) {}
 
-async fn shutdown_worker_process_group(child: Child, pgid: Option<i32>) -> Result<()> {
+async fn shutdown_worker_process_group(child: Child, pgid: Option<i32>) -> Result<Option<i32>> {
     shutdown_worker_process_group_until(child, pgid, Instant::now() + Duration::from_millis(350))
         .await
 }
@@ -892,12 +898,12 @@ async fn shutdown_worker_process_group_until(
     mut child: Child,
     pgid: Option<i32>,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<Option<i32>> {
     if let Some(pgid) = pgid {
         shutdown_process_group_until(pgid, deadline).await;
     }
     match child.try_wait() {
-        Ok(Some(_)) => return Ok(()),
+        Ok(Some(status)) => return Ok(status.code()),
         Ok(None) => {
             if let Err(error) = child.start_kill() {
                 defer_child_reap(child);
@@ -916,7 +922,7 @@ async fn shutdown_worker_process_group_until(
         anyhow::bail!("Codex worker shutdown deadline exceeded; reaping deferred");
     }
     match tokio::time::timeout(remaining.min(Duration::from_millis(250)), child.wait()).await {
-        Ok(Ok(_)) => {}
+        Ok(Ok(status)) => return Ok(status.code()),
         Ok(Err(error)) => {
             defer_child_reap(child);
             return Err(error.into());
@@ -926,7 +932,6 @@ async fn shutdown_worker_process_group_until(
             anyhow::bail!("Codex worker did not exit after kill; reaping deferred");
         }
     }
-    Ok(())
 }
 
 async fn shutdown_process_group_until(pgid: i32, deadline: Instant) {
@@ -1878,6 +1883,23 @@ mod tests {
         finish_stderr_task(task, "test").await;
 
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn worker_shutdown_preserves_observed_exit_code() {
+        let mut child = Command::new("sh").args(["-c", "exit 17"]).spawn().unwrap();
+        let mut observed = None;
+        for _ in 0..100 {
+            observed = child.try_wait().unwrap();
+            if observed.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(observed.and_then(|status| status.code()), Some(17));
+
+        let exit_code = shutdown_worker_process_group(child, None).await.unwrap();
+        assert_eq!(exit_code, Some(17));
     }
 
     #[tokio::test]

@@ -189,6 +189,7 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
         "process_start_identity",
         lambda pid: next(provider_identities, None),
     )
+    monkeypatch.setattr(_MODULE, "scoped_process_table", lambda scope: {})
     monkeypatch.setattr(
         _MODULE,
         "kill_group",
@@ -207,6 +208,7 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
         ),
         provider_pid=456,
         provider_process_start_time="start-1",
+        cleanup_scope={"provider_pgid": 456, "provider_process_observed": True},
     )
 
     assert result["status"] == "pass"
@@ -229,6 +231,7 @@ def test_finish_live_command_rejects_unverified_natural_provider_cleanup(
     monkeypatch.setattr(_MODULE, "process_start_identity", lambda pid: "start-1")
     monkeypatch.setattr(_MODULE.os, "write", lambda *args: None)
     monkeypatch.setattr(_MODULE.os, "close", lambda *args: None)
+    monkeypatch.setattr(_MODULE, "scoped_process_table", lambda scope: {})
 
     result = _MODULE.finish_live_command(
         _MODULE.LiveCommand(
@@ -240,10 +243,83 @@ def test_finish_live_command_rejects_unverified_natural_provider_cleanup(
         ),
         provider_pid=456,
         provider_process_start_time="start-1",
+        cleanup_scope={"provider_pgid": None, "provider_process_observed": True},
     )
 
     assert result["natural_cleanup_observed"] is True
-    assert result["provider_process_group_cleanup"] == "natural_unverified"
+    assert result["provider_process_group_cleanup"] == "natural_unscoped"
+    assert result["status"] == "fail"
+
+
+def test_finish_live_command_accepts_natural_cleanup_after_provider_group_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NaturalProcess:
+        pid = 123
+        returncode = 0
+        stdout = None
+
+        def poll(self) -> int:
+            return 0
+
+    identities = iter(("start-1", None))
+    monkeypatch.setattr(
+        _MODULE,
+        "process_start_identity",
+        lambda pid: next(identities, None),
+    )
+    monkeypatch.setattr(_MODULE.os, "write", lambda *args: None)
+    monkeypatch.setattr(_MODULE.os, "close", lambda *args: None)
+    monkeypatch.setattr(_MODULE, "scoped_process_table", lambda scope: {})
+
+    result = _MODULE.finish_live_command(
+        _MODULE.LiveCommand(
+            process=NaturalProcess(),
+            output_fd=-1,
+            output=bytearray(),
+            is_tty=True,
+            provider_ready_observed=True,
+        ),
+        provider_pid=456,
+        provider_process_start_time="start-1",
+        cleanup_scope={"provider_pgid": 456, "provider_process_observed": True},
+    )
+
+    assert result["natural_cleanup_observed"] is True
+    assert result["provider_process_group_cleanup"] == "natural"
+    assert result["status"] == "pass"
+
+
+def test_finish_live_command_rejects_provider_cleanup_without_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NaturalProcess:
+        pid = 123
+        returncode = 0
+        stdout = None
+
+        def poll(self) -> int:
+            return 0
+
+    monkeypatch.setattr(_MODULE, "process_start_identity", lambda pid: "start-1")
+    monkeypatch.setattr(_MODULE.os, "write", lambda *args: None)
+    monkeypatch.setattr(_MODULE.os, "close", lambda *args: None)
+    monkeypatch.setattr(_MODULE, "scoped_process_table", lambda scope: {})
+
+    result = _MODULE.finish_live_command(
+        _MODULE.LiveCommand(
+            process=NaturalProcess(),
+            output_fd=-1,
+            output=bytearray(),
+            is_tty=True,
+            provider_ready_observed=True,
+        ),
+        provider_pid=456,
+        provider_process_start_time=None,
+        cleanup_scope={"provider_pgid": 456, "provider_process_observed": True},
+    )
+
+    assert result["provider_process_group_cleanup"] == "identity_missing"
     assert result["status"] == "fail"
 
 

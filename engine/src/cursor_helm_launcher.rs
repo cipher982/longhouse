@@ -1693,7 +1693,7 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::io::{BufRead, Read};
-    use std::os::fd::FromRawFd;
+    use std::os::fd::{AsRawFd, FromRawFd};
 
     fn read_response_line(stream: UnixStream) -> String {
         let mut response = String::new();
@@ -1701,6 +1701,47 @@ mod tests {
             .read_line(&mut response)
             .unwrap();
         response
+    }
+
+    fn read_exact_with_timeout(file: &mut fs::File, length: usize) -> Vec<u8> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut output = vec![0; length];
+        let mut offset = 0;
+        while offset < output.len() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for relayed PTY bytes"
+            );
+            let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+            let mut pollfd = libc::pollfd {
+                fd: file.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(unsafe { libc::poll(&mut pollfd, 1, timeout_ms) }, 1);
+            let read = file.read(&mut output[offset..]).unwrap();
+            assert!(read > 0, "relay closed before the expected payload arrived");
+            offset += read;
+        }
+        output
+    }
+
+    fn assert_no_immediate_extra_bytes(file: &fs::File) {
+        let fd = file.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        let mut extra = [0u8; 1];
+        match (&*file).read(&mut extra) {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(_) => panic!("relay produced bytes beyond the expected payload"),
+            Err(error) => panic!("reading for extra relay bytes failed: {error}"),
+        }
     }
 
     fn serve_request(
@@ -2104,9 +2145,8 @@ mod tests {
         assert_eq!(sent["ok"], true);
         unsafe { libc::close(pipe[1]) };
         let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
-        let mut relayed = [0u8; 7];
-        reader.read_exact(&mut relayed).unwrap();
-        assert_eq!(&relayed, b"hello\x1b\r");
+        assert_eq!(read_exact_with_timeout(&mut reader, 7), b"hello\x1b\r");
+        assert_no_immediate_extra_bytes(&reader);
     }
 
     #[test]
@@ -2135,9 +2175,8 @@ mod tests {
         assert_eq!(interrupted["ok"], true);
         unsafe { libc::close(pipe[1]) };
         let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
-        let mut relayed = [0u8; 1];
-        reader.read_exact(&mut relayed).unwrap();
-        assert_eq!(&relayed, b"\x03");
+        assert_eq!(read_exact_with_timeout(&mut reader, 1), b"\x03");
+        assert_no_immediate_extra_bytes(&reader);
 
         let child = unsafe { libc::fork() };
         assert!(child >= 0);
