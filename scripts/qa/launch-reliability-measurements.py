@@ -726,12 +726,19 @@ def _successful_recovery(
     before = artifact.get("retry_intents_before_recovery")
     after = artifact.get("retry_intents_after_recovery")
     cleanup = _cleanup_statuses(artifact)
+    startup_failures = _startup_failure_counts(artifact)
     return bool(
         _measured_run(
             artifact,
             report_source_sha=report_source_sha,
             as_of=as_of,
         )
+        and artifact.get("verdict") == "green"
+        and startup_failures == {
+            "provider_owned": 0,
+            "harness_precondition": 0,
+            "unknown": 0,
+        }
         and isinstance(before, int)
         and isinstance(after, int)
         and before > 0

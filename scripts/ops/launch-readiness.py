@@ -214,7 +214,7 @@ def check_live_surface(name: str, url: str, sha: str) -> Check:
         return Check(f"live:{name}", "pending", f"{url} response missing build object")
     commit = str(build.get("commit") or "")
     status = str(payload.get("status") or "")
-    ok = commit_matches(commit, sha) and status in {"ok", "healthy", "degraded"}
+    ok = commit_matches(commit, sha) and status in {"ok", "healthy"}
     return Check(
         f"live:{name}",
         "succeeded" if ok else "pending",

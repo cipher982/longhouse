@@ -1767,15 +1767,11 @@ def retry_owner_ready(
 
 
 def provider_failure_qualification(provider: str, output: str) -> str:
-    # These provider-native probes can fail before Longhouse gets a readiness
-    # signal when an isolated qualification profile lacks the provider's own
-    # account/session state. Do not mislabel that harness precondition failure
-    # as a Longhouse startup defect.
-    if provider == "claude" and (
-        "auth status" in output.lower()
-        or "native channels unavailable" in output.lower()
-    ):
-        return "harness_precondition_unmet"
+    # Generic provider output is not a sufficient attribution boundary. A
+    # provider error may mention auth or native channels even when the failure
+    # is in Longhouse's launch path. Harness gaps are assigned only by the
+    # structured provider-specific probes below (currently Cursor's account
+    # status plus bounded no-output timeout evidence).
     return "provider_owned_start_failure"
 
 

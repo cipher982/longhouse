@@ -81,6 +81,22 @@ def test_live_surface_rejects_truncated_build_commit(monkeypatch):
     assert check.ok is False
 
 
+def test_live_surface_does_not_treat_degraded_as_release_ready(monkeypatch):
+    mod = _load_module()
+    sha = "3b40315871558fe77984c90423851d0194337923"
+
+    monkeypatch.setattr(
+        mod,
+        "fetch_json_url",
+        lambda url: {"status": "degraded", "build": {"commit": sha}},
+    )
+
+    check = mod.check_live_surface("demo", "https://example.test/api/health", sha)
+
+    assert check.ok is False
+    assert "status=degraded" in check.detail
+
+
 def test_required_workflow_must_succeed(monkeypatch):
     mod = _load_module()
     sha = "3b40315871558fe77984c90423851d0194337923"

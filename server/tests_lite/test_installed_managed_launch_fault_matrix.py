@@ -188,6 +188,15 @@ def test_harness_provenance_verification_fails_closed_on_git_error(
         _MODULE.verified_harness_provenance()
 
 
+def test_provider_text_does_not_create_harness_attribution() -> None:
+    assert (
+        _MODULE.provider_failure_qualification(
+            "claude", "Error: claude auth status timed out"
+        )
+        == "provider_owned_start_failure"
+    )
+
+
 def test_source_provenance_uses_identity_compiled_into_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     binary = tmp_path / "longhouse"
     binary.write_bytes(b"stale binary")

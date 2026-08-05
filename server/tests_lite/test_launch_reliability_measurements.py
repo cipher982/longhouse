@@ -149,7 +149,7 @@ def _clean_report_provenance(monkeypatch):
 def _matrix(
     *,
     path: Path,
-    verdict: str = "yellow",
+    verdict: str | None = None,
     auth_gap: bool = True,
     provider_failure: bool = False,
     retry_after: int = 0,
@@ -182,6 +182,8 @@ def _matrix(
         startup_failures.append({"provider": "cursor", "qualification": "harness_precondition_unmet"})
     if provider_failure:
         startup_failures.append({"provider": "claude", "qualification": "provider_owned_start_failure"})
+    if verdict is None:
+        verdict = "yellow" if auth_gap or provider_failure else "green"
     payload = {
         "artifact_kind": "installed_managed_launch_fault_matrix",
         "schema_version": 1,
@@ -459,29 +461,31 @@ def test_partial_installed_health_matrix_cannot_qualify(monkeypatch) -> None:
 def test_report_separates_recovery_from_setup_and_provider_failures(tmp_path: Path):
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
-    _matrix(path=first)
-    _matrix(path=second, auth_gap=False, provider_failure=True)
+    third = tmp_path / "third.json"
+    _matrix(path=first, auth_gap=False)
+    _matrix(path=second)
+    _matrix(path=third, auth_gap=False, provider_failure=True)
 
-    report = MODULE.build_report([first, second])
+    report = MODULE.build_report([first, second, third])
 
     matrix = report["matrix"]
-    assert matrix["full_run_count"] == 2
-    assert matrix["measured_clean_run_count"] == 2
-    assert matrix["successful_recovery_count"] == 2
-    assert matrix["retry_drain_rate"] == 1.0
-    assert matrix["retry_drain_sample_count"] == 2
+    assert matrix["full_run_count"] == 3
+    assert matrix["measured_clean_run_count"] == 3
+    assert matrix["successful_recovery_count"] == 1
+    assert matrix["retry_drain_rate"] == 1 / 3
+    assert matrix["retry_drain_sample_count"] == 3
     assert matrix["retry_drain_denominator"] == "measured_clean_runs"
     assert matrix["cleanup_pass_rate"] == 1.0
-    assert matrix["cleanup_pass_count"] == 16
-    assert matrix["cleanup_scope_count"] == 16
+    assert matrix["cleanup_pass_count"] == 24
+    assert matrix["cleanup_scope_count"] == 24
     assert matrix["cleanup_rate_denominator"] == "measured_cleanup_scopes"
     attribution = matrix["startup_failure_attribution"]
     assert attribution["scope"] == "measured_clean_runs"
     assert len(attribution["auth_precondition_runs"]) == 1
     assert len(attribution["provider_owned_failure_runs"]) == 1
     assert attribution["totals"] == {"harness_precondition": 1, "provider_owned": 1, "unknown": 0}
-    assert matrix["history"][0]["startup_failures"]["harness_precondition"] == 1
-    assert matrix["history"][1]["startup_failures"]["provider_owned"] == 1
+    assert matrix["history"][1]["startup_failures"]["harness_precondition"] == 1
+    assert matrix["history"][2]["startup_failures"]["provider_owned"] == 1
     assert report["measures"]["false_red_rate"]["status"] == "not_observed"
 
 
@@ -1702,6 +1706,17 @@ def test_attestation_rejects_report_without_successful_recovery(tmp_path: Path):
 
     with pytest.raises(ValueError, match="no successful recovery evidence"):
         attestation.build_subject(report)
+
+
+def test_yellow_provider_failure_cannot_count_as_successful_recovery(tmp_path: Path):
+    matrix_path = tmp_path / "matrix.json"
+    _matrix(path=matrix_path, auth_gap=False, provider_failure=True)
+
+    report = MODULE.build_report([matrix_path])
+
+    assert report["matrix"]["measured_clean_run_count"] == 1
+    assert report["matrix"]["successful_recovery_count"] == 0
+    assert report["qualification"]["status"] != "qualified"
 
 
 def test_attestation_manifest_binds_all_report_inputs(tmp_path: Path):
