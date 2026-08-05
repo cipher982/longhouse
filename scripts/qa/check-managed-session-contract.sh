@@ -44,7 +44,7 @@ def require_contains(relative: str, label: str, pattern: str) -> None:
 require_contains(
     "engine/src/managed_launch_lifecycle.rs",
     "managed launch transaction confirms readiness",
-    r"pub\s+fn\s+confirm\(",
+    r"pub\s+fn\s+confirm(?:_in_background)?\(",
 )
 require_contains(
     "engine/src/managed_launch_lifecycle.rs",
@@ -64,7 +64,7 @@ require_contains(
 require_contains(
     "engine/src/cursor_helm_launcher.rs",
     "native Cursor uses shared registration",
-    r"managed_launch_lifecycle::register_managed_launch",
+    r"(?:managed_launch_lifecycle::)?register_managed_launch(?:_with_timeout)?\s*\(",
 )
 require_contains(
     "engine/src/cursor_helm_launcher.rs",
