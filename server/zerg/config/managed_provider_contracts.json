@@ -485,7 +485,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "acb567e560bd8966d1ab4b15d01e3f8c915f246fa306b709b70b1e74b71ce11b"
+      "adapter_digest": "aa59b539fc3c03d11ec69468ae05f39d3c8722a326483ea12367ab4b09a9f70d"
     },
     {
       "provider": "claude",
@@ -2210,7 +2210,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "53a923d11a43222df27b6b7603dc9411a1b1b4a998b21342ed89fc9da48c06be"
+      "adapter_digest": "95b4913ebddfa4b46102e73d94692caf4a1b5f0df9f40d1f0716287d1a398ef0"
     }
   ]
 }
