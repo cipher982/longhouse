@@ -2680,9 +2680,16 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     for intent in relevant_intents
                 )
 
+            max_attempts_before_restart = max(
+                attempts_before_agent_restart.values(), default=0
+            )
+            retry_progress_timeout = max(
+                15,
+                2 ** min(max_attempts_before_restart, 8) * 2,
+            )
             wait_for(
                 cold_retry_progress_after_restart,
-                15,
+                retry_progress_timeout,
                 "restarted Machine Agent to preserve durable retry progress while Runtime Host is unavailable",
             )
             retry_attempts_after_restart = {

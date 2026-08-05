@@ -7,6 +7,7 @@ import fcntl
 import os
 import pty
 import select
+import signal
 import subprocess
 import sys
 import termios
@@ -19,10 +20,22 @@ def _write_all(fd: int, data: bytes) -> None:
         data = data[written:]
 
 
-def _drain(master: int, *, quiet_for: float = 0.1) -> None:
-    deadline = time.monotonic() + quiet_for
-    while time.monotonic() < deadline:
-        wait_for = max(0.0, min(0.05, deadline - time.monotonic()))
+def _drain(
+    master: int, *, quiet_for: float = 0.1, max_duration: float = 0.5
+) -> None:
+    drain_deadline = time.monotonic() + max_duration
+    quiet_deadline = time.monotonic() + quiet_for
+    while time.monotonic() < drain_deadline:
+        wait_for = max(
+            0.0,
+            min(
+                0.05,
+                drain_deadline - time.monotonic(),
+                quiet_deadline - time.monotonic(),
+            ),
+        )
+        if wait_for == 0:
+            return
         ready, _, _ = select.select([master], [], [], wait_for)
         if not ready:
             continue
@@ -33,7 +46,44 @@ def _drain(master: int, *, quiet_for: float = 0.1) -> None:
         if not data:
             return
         _write_all(1, data)
-        deadline = time.monotonic() + quiet_for
+        quiet_deadline = time.monotonic() + quiet_for
+
+
+def _kill_owned_process_group(
+    process: subprocess.Popen[bytes], *, wait_for: float = 0.5
+) -> None:
+    """Kill the PTY child and every descendant without waiting forever."""
+
+    try:
+        # _attach_controlling_tty calls setsid(), so the child PID is also the
+        # private process-group ID. This is the ownership boundary for the
+        # command under test; killing only the direct child leaks descendants.
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+    deadline = time.monotonic() + wait_for
+    while process.poll() is None and time.monotonic() < deadline:
+        try:
+            process.wait(timeout=min(0.05, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            continue
+
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            # The wrapper must return even if the kernel has not made the
+            # leader waitable yet. The owned process group was already sent
+            # SIGKILL, and launchd/container cleanup can reap the remainder.
+            pass
 
 
 def _attach_controlling_tty(slave: int) -> None:
@@ -80,10 +130,9 @@ def main() -> int:
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
-                process.kill()
-                process.wait()
+                _kill_owned_process_group(process)
                 if not pty_closed:
-                    _drain(master)
+                    _drain(master, max_duration=0.5)
                 return 124
 
             watched = [] if pty_closed else [master]
@@ -112,7 +161,7 @@ def main() -> int:
             exit_code = process.poll()
             if exit_code is not None:
                 if not pty_closed:
-                    _drain(master)
+                    _drain(master, max_duration=0.5)
                 return exit_code if exit_code >= 0 else 128 - exit_code
     finally:
         os.close(master)

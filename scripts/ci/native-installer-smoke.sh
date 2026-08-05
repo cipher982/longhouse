@@ -14,6 +14,7 @@ RUNTIME_PID=""
 REMOTE_RELEASE="${LONGHOUSE_NATIVE_SMOKE_REMOTE:-0}"
 EXPECTED_COMMIT="${LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT:-}"
 EXPECTED_VERSION="${LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION:-}"
+NATIVE_PTY_TIMEOUT="${LONGHOUSE_NATIVE_PTY_TIMEOUT:-30}"
 
 cleanup() {
   if [[ -n "$RUNTIME_PID" ]]; then
@@ -186,7 +187,7 @@ exit "${LONGHOUSE_FAKE_CURSOR_EXIT:-0}"
 EOF
 chmod 755 "$HOME_DIR/traps/cursor-agent"
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout "$NATIVE_PTY_TIMEOUT" \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
   >"$HOME_DIR/cursor-pty.out" 2>"$HOME_DIR/cursor-pty.err" || {
     echo "native cursor PTY launch failed:" >&2
@@ -197,7 +198,7 @@ HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/s
 grep -q 'CURSOR_NATIVE_PTY_OK' "$HOME_DIR/cursor-pty.out"
 set +e
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-  LONGHOUSE_FAKE_CURSOR_EXIT=7 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
+  LONGHOUSE_FAKE_CURSOR_EXIT=7 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout "$NATIVE_PTY_TIMEOUT" \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
   >/dev/null
 cursor_exit=$?

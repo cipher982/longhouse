@@ -1719,8 +1719,23 @@ mod tests {
                 events: libc::POLLIN,
                 revents: 0,
             };
-            assert_eq!(unsafe { libc::poll(&mut pollfd, 1, timeout_ms) }, 1);
-            let read = file.read(&mut output[offset..]).unwrap();
+            loop {
+                let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+                if result < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                {
+                    continue;
+                }
+                assert_eq!(result, 1);
+                break;
+            }
+            let read = loop {
+                match file.read(&mut output[offset..]) {
+                    Ok(read) => break read,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => panic!("reading relayed PTY bytes failed: {error}"),
+                }
+            };
             assert!(read > 0, "relay closed before the expected payload arrived");
             offset += read;
         }
