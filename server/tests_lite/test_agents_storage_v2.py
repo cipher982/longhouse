@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -160,6 +161,131 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
         "records": [{"source_position": 0, "data_b64": base64.b64encode(data).decode("ascii")}],
         "expected_envelope_id": envelope_id(identity),
     }
+
+
+def _claude_effort_payload(*, tenant_id: str, machine_id: str, epoch: UUID) -> dict:
+    payload = _payload(tenant_id=tenant_id, machine_id=machine_id, epoch=epoch)
+    payload["provider"] = "claude"
+    payload["session_id"] = str(uuid4())
+    raw_values = (
+        {
+            "type": "user",
+            "isMeta": True,
+            "promptId": "prompt-effort-1",
+            "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+        },
+        {
+            "type": "user",
+            "promptId": "prompt-effort-1",
+            "message": {
+                "role": "user",
+                "content": "<command-name>/effort</command-name>\n<command-args>high</command-args>",
+            },
+        },
+        {
+            "type": "user",
+            "promptId": "prompt-effort-1",
+            "message": {
+                "role": "user",
+                "content": "<local-command-stdout>Set effort level to high</local-command-stdout>",
+            },
+        },
+        {
+            "type": "user",
+            "promptId": "prompt-real-1",
+            "message": {"role": "user", "content": "Build the real feature after the effort command."},
+        },
+        {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": "Done."},
+        },
+    )
+    raw_records: list[tuple[int, bytes]] = []
+    position = 0
+    for value in raw_values:
+        data = json.dumps(value, separators=(",", ":")).encode("utf-8") + b"\n"
+        raw_records.append((position, data))
+        position += len(data)
+    payload["range_end"] = position
+    payload["records"] = [
+        {"source_position": source_position, "data_b64": base64.b64encode(data).decode("ascii")}
+        for source_position, data in raw_records
+    ]
+    payload["render"]["records"] = [
+        {
+            "event_id": "command",
+            "order_time_us": 1_720_780_400_000_001,
+            "source_position": raw_records[1][0],
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": raw_values[1]["message"]["content"],
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 1,
+        },
+        {
+            "event_id": "stdout",
+            "order_time_us": 1_720_780_400_000_002,
+            "source_position": raw_records[2][0],
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": raw_values[2]["message"]["content"],
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 2,
+        },
+        {
+            "event_id": "real-user",
+            "order_time_us": 1_720_780_400_000_003,
+            "source_position": raw_records[3][0],
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": raw_values[3]["message"]["content"],
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 3,
+        },
+        {
+            "event_id": "assistant",
+            "order_time_us": 1_720_780_400_000_004,
+            "source_position": raw_records[4][0],
+            "event_subordinal": 0,
+            "role": "assistant",
+            "content_text": raw_values[4]["message"]["content"],
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 4,
+        },
+    ]
+    identity = EnvelopeIdentity(
+        tenant_id=tenant_id,
+        machine_id=machine_id,
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=epoch,
+        range_kind="byte_offset",
+        range_start=0,
+        range_end=position,
+        record_hashes=hash_records(tuple(data for _source_position, data in raw_records)),
+    )
+    payload["expected_envelope_id"] = envelope_id(identity)
+    return payload
 
 
 def test_storage_v2_session_facts_accept_provider_conversation_identity():
@@ -521,6 +647,83 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
         assert decoded.envelope_id == payload["expected_envelope_id"]
     finally:
         reset_pubsub_for_test()
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_first_claude_effort_envelope_is_admitted(monkeypatch):
+    tempdir = TemporaryDirectory(prefix="lh2-claude-effort-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(root / "objects")
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    tenant_id = get_settings().archive_primary_tenant_id
+    payload = _claude_effort_payload(
+        tenant_id=tenant_id,
+        machine_id="cinder",
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+    )
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert response.status_code == 200, response.text
+            receipt = response.json()
+            assert receipt["raw_state"] == "durable"
+            assert receipt["render_state"] == "ready"
+
+            detail = await client.get(f"/agents/storage/v2/sessions/{payload['session_id']}/events?limit=20")
+            assert detail.status_code == 200, detail.text
+            events = {event["event_id"]: event for event in detail.json()["events"]}
+            assert set(events) == {"real-user", "assistant"}
+            assert events["assistant"]["role"] == "assistant"
+
+        render_manifest = await catalog.call(
+            "storage.session.render_manifest.v2",
+            {
+                "session_id": payload["session_id"],
+                "owner_id": "1",
+                "generation_id": None,
+                "after_order_key": None,
+                "before_order_key": None,
+                "limit": 20,
+            },
+        )
+        render_item = render_manifest["objects"][0]
+        rendered = read_render_object(
+            root / "objects",
+            render_item["object_path"],
+            expected_object_hash=render_item["object_hash"],
+        )
+        kinds = {record.event_id: record.interaction_kind for record in rendered.spec.records}
+        assert kinds["command"] == "local_control"
+        assert kinds["stdout"] == "local_control_output"
+        assert kinds["real-user"] == "durable_user_message"
+
+        session = await catalog.call("storage.session.read.v2", {"session_id": payload["session_id"]})
+        assert session["session"]["owner_id"] == "1"
+        assert session["session"]["user_messages"] == 1
+        assert session["session"]["assistant_messages"] == 1
+        assert session["session"]["first_user_message_preview"] == "Build the real feature after the effort command."
+    finally:
         await workers.close()
         await catalog.close()
         await daemon.close()

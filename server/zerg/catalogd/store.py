@@ -5528,6 +5528,22 @@ class CatalogStore:
                 )
             ):
                 return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if (
+                existing_session is not None
+                and existing_session["owner_id"] is not None
+                and owner_id is not None
+                and str(existing_session["owner_id"]) != str(owner_id)
+            ):
+                # The ingest path may optimistically classify a first
+                # envelope when the owner-scoped manifest lookup says the
+                # session is absent. Make the ownership boundary authoritative
+                # inside this transaction so that an owner-mismatched session
+                # can never be claimed or rewritten by that relaxation.
+                return {
+                    "source_epoch_conflict": True,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "conflict_details": {"reason": "session_owner_conflict"},
+                }
 
             existing_generation = None
             if render_manifest is not None:

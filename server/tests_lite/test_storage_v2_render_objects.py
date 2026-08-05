@@ -504,7 +504,98 @@ async def test_storage_semantics_seed_from_prior_raw_envelope(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_storage_semantic_recovery_reloads_manifest_after_transient_absence(tmp_path):
+@pytest.mark.parametrize("deleted", (False, True))
+async def test_storage_semantics_allows_missing_manifest_only_for_new_ingest(tmp_path, deleted):
+    session_id = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    source_epoch = UUID("018f0c3a-7b2d-7f10-8a11-323456789abc")
+    caveat = (
+        b'{"type":"user","isMeta":true,"promptId":"prompt-effort-1",'
+        b'"message":{"role":"user","content":"<local-command-caveat>native</local-command-caveat>"}}'
+    )
+    command = (
+        b'{"type":"user","promptId":"prompt-effort-1",'
+        b'"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
+    )
+    current_raw = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=session_id,
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=source_epoch,
+        range_kind="record_ordinal",
+        range_start=0,
+        range_end=2,
+        records=(RawRecord(source_position=0, data=caveat), RawRecord(source_position=1, data=command)),
+    )
+    sealed = seal_raw_object(tmp_path, current_raw)
+    render = RenderObjectSpec(
+        session_id=session_id,
+        render_generation=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"),
+        parser_revision="engine-parser-v2",
+        ordering_revision="semantic-order-v2",
+        machine_id="cinder",
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=source_epoch,
+        source_envelope_id=sealed.envelope_id,
+        records=(
+            RenderRecord(
+                event_id="command",
+                order_time_us=2,
+                source_position=1,
+                event_subordinal=0,
+                role="user",
+                content_text="<command-name>/effort</command-name>",
+                raw_record_ordinal=1,
+            ),
+        ),
+    )
+
+    class Catalog:
+        async def call(self, method, _params):
+            assert method == "storage.session.raw_manifest.v2"
+            return {
+                "found": False,
+                "deleted": deleted,
+                "objects": [],
+                "objects_truncated": False,
+            }
+
+    if deleted:
+        with pytest.raises(StorageV2SemanticRecoveryError, match="raw manifest"):
+            await enrich_render_interaction_kinds(
+                catalog=Catalog(),
+                raw_workers=SimpleNamespace(),
+                session_id=str(session_id),
+                owner_id="42",
+                raw_spec=current_raw,
+                render_spec=render,
+                manifest_cache={},
+            )
+    else:
+        enriched = await enrich_render_interaction_kinds(
+            catalog=Catalog(),
+            raw_workers=SimpleNamespace(),
+            session_id=str(session_id),
+            owner_id="42",
+            raw_spec=current_raw,
+            render_spec=render,
+            manifest_cache={},
+        )
+        assert enriched.records[0].interaction_kind == "local_control"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "missing_page",
+    (
+        {"found": True, "deleted": False, "objects": [], "objects_truncated": False},
+        {"found": False, "deleted": False, "objects": [], "objects_truncated": False},
+    ),
+    ids=("empty_manifest", "missing_session"),
+)
+async def test_storage_semantic_recovery_reloads_manifest_after_transient_absence(tmp_path, missing_page):
     session_id = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
     source_epoch = UUID("018f0c3a-7b2d-7f10-8a11-323456789abc")
     caveat = b'{"type":"user","isMeta":true,"uuid":"caveat-1","message":{"role":"user","content":"<local-command-caveat>native</local-command-caveat>"}}'
@@ -553,7 +644,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
             assert method == "storage.session.raw_manifest.v2"
             self.calls += 1
             if self.calls == 1:
-                return {"found": True, "objects": [], "objects_truncated": False}
+                return missing_page
             return {
                 "found": True,
                 "objects": [
@@ -578,7 +669,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     catalog = Catalog()
-    with pytest.raises(StorageV2SemanticRecoveryError, match="raw companion"):
+    with pytest.raises(StorageV2SemanticRecoveryError, match="raw (manifest|companion)"):
         await recover_render_interaction_kinds(
             catalog=catalog,
             raw_workers=RawReader(),

@@ -190,7 +190,16 @@ async def enrich_render_interaction_kinds(
 
     manifests = manifest_cache.get(session_id)
     if manifests is None:
-        manifests = await _load_raw_manifests(catalog, session_id=session_id, owner_id=owner_id) if owner_id is not None else {}
+        manifests = (
+            await _load_raw_manifests(
+                catalog,
+                session_id=session_id,
+                owner_id=owner_id,
+                allow_missing_session=True,
+            )
+            if owner_id is not None
+            else {}
+        )
         manifest_cache[session_id] = manifests
     sequence_context = await _seed_sequence_context_from_prior_raw(
         catalog=catalog,
@@ -487,6 +496,7 @@ async def _load_raw_manifests(
     *,
     session_id: str,
     owner_id: str,
+    allow_missing_session: bool = False,
 ) -> dict[str, dict[str, object]]:
     manifests: dict[str, dict[str, object]] = {}
     after_source_key: str | None = None
@@ -502,6 +512,14 @@ async def _load_raw_manifests(
             },
         )
         if page.get("found") is not True:
+            if allow_missing_session and page.get("deleted") is not True:
+                # Ingest enrichment runs before the current raw envelope is
+                # committed. A genuinely new session therefore has no catalog
+                # manifest yet; its current raw window is still authoritative
+                # for classification. Keep deleted sessions and all recovery
+                # callers fail-closed by making this relaxation explicit at
+                # the ingest call site.
+                return {}
             raise StorageV2SemanticRecoveryError("storage session raw manifest is unavailable")
         objects = page.get("objects")
         if not isinstance(objects, list):

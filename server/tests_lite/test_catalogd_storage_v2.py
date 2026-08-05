@@ -275,7 +275,53 @@ async def test_first_durable_content_reveals_hidden_console_shell(daemon_paths):
         assert db.get(StorageSession, str(session_id)).hidden_from_default_timeline == 0
         assert db.get(LiveSessionCatalog, str(session_id)).hidden_from_default_timeline == 0
         assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 0
-    engine.dispose()
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_storage_commit_rejects_existing_session_owner_mismatch(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = uuid4()
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"a",),
+            sealed_at=now,
+        )
+        await client.call("storage.raw_object.commit.v2", first)
+
+        second = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=1,
+            end=2,
+            records=(b"b",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        second["owner_id"] = "7"
+        with pytest.raises(CatalogRemoteError) as conflict:
+            await client.call("storage.raw_object.commit.v2", second)
+        assert conflict.value.code == "source_epoch_conflict"
+        assert conflict.value.details["reason"] == "session_owner_conflict"
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["owner_id"] == "42"
+        manifest = await client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 100},
+        )
+        assert [row["envelope_id"] for row in manifest["objects"]] == [first["envelope_id"]]
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 @pytest.mark.asyncio
