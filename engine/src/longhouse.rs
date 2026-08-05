@@ -1334,14 +1334,19 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
             .context("Claude degraded launch lost its client-minted session identity")?;
-        degraded_registration = Some(spawn_managed_launch_registration_retry(
+        match spawn_managed_launch_registration_retry(
             &url,
             &token,
             "Claude",
             payload.clone(),
             session_id,
             "claude_channel_bridge",
-        )?);
+        ) {
+            Ok(retry) => degraded_registration = Some(retry),
+            Err(retry_error) => eprintln!(
+                "Longhouse warning: Claude degraded launch could not persist local recovery: {retry_error:#}"
+            ),
+        }
     }
     let session_id = response
         .as_ref()
@@ -1353,9 +1358,21 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 .map(str::to_owned)
         })
         .context("degraded Claude launch has no session identity")?;
+    let degraded_run_id = response
+        .is_none()
+        .then(|| {
+            ManagedLaunchResponse::degraded_from_payload(
+                &payload,
+                "Claude",
+                "claude_channel_bridge",
+            )
+        })
+        .transpose()?
+        .map(|response| response.run_id);
     let run_id = response
         .as_ref()
         .map(|response| response.run_id.clone())
+        .or(degraded_run_id)
         .unwrap_or_else(|| {
             Uuid::new_v5(
                 &Uuid::NAMESPACE_URL,
@@ -1394,7 +1411,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let hook_token = response
         .as_ref()
         .and_then(|response| response.hook_token.as_deref())
-        .unwrap_or(&token);
+        .map(str::to_owned);
     let coordination_token = response
         .as_ref()
         .and_then(|response| response.coordination_token())
@@ -1427,7 +1444,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
         .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
-        .env("LONGHOUSE_HOOK_TOKEN", hook_token)
+        .env_remove("LONGHOUSE_HOOK_TOKEN")
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env(
             "LONGHOUSE_PERMISSION_HOOK_ENABLED",
@@ -1437,6 +1454,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 "0"
             },
         );
+    if let Some(hook_token) = hook_token.as_deref() {
+        command.env("LONGHOUSE_HOOK_TOKEN", hook_token);
+    }
     let contract_path = claude_contract_path(&session_id)?;
     let retained_contract_existed = contract_path.is_file();
     let connection_id = Uuid::new_v4().to_string();
@@ -2211,14 +2231,19 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
                 "Codex",
                 "codex_app_server",
             )?;
-            degraded_registration = Some(spawn_managed_launch_registration_retry(
+            match spawn_managed_launch_registration_retry(
                 &url,
                 &token,
                 "Codex",
                 payload.clone(),
                 expected_session_id,
                 "codex_app_server",
-            )?);
+            ) {
+                Ok(retry) => degraded_registration = Some(retry),
+                Err(retry_error) => eprintln!(
+                    "Longhouse warning: Codex degraded launch could not persist local recovery: {retry_error:#}"
+                ),
+            }
             eprintln!(
                 "Longhouse warning: starting Codex in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration after this wrapper returns ({error:#})"
             );

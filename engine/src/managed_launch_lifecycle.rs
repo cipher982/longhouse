@@ -275,6 +275,8 @@ struct ManagedLaunchRetryIntent {
     launcher_process_start_time: Option<String>,
     #[serde(default)]
     provider_exited: bool,
+    #[serde(default)]
+    registration_confirmed: bool,
 }
 
 /// A durable owner-local receipt for the second half of a managed launch.
@@ -415,6 +417,7 @@ pub fn spawn_managed_launch_registration_retry(
         launcher_pid: Some(std::process::id()),
         launcher_process_start_time: process_start_identity(std::process::id()),
         provider_exited: false,
+        registration_confirmed: false,
     };
     let intent_path = persist_retry_intent(&intent)?;
     let recovery_path = managed_launch_recovery_path(expected_session_id)?;
@@ -1254,6 +1257,9 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
         };
         let now = Utc::now();
         if intent.recovery_exhausted {
+            if let Ok(recovery_path) = managed_launch_recovery_path(&intent.expected_session_id) {
+                let _ = remove_managed_launch_recovery(&recovery_path);
+            }
             if intent.exhausted_at.is_none() {
                 intent.exhausted_at = Some(now.to_rfc3339());
                 if let Err(error) = persist_retry_intent_at(&path, &intent) {
@@ -1309,6 +1315,29 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
                 None => continue,
             }
         }
+        if intent.registration_confirmed {
+            if let Err(error) = merge_current_retry_owner_state(&path, &mut intent) {
+                tracing::warn!(path = %path.display(), error = %error, "Could not refresh confirmed managed launch owner state");
+                continue;
+            }
+            let provider_exited = if intent.provider_exited {
+                true
+            } else {
+                match provider_owner_alive(&intent) {
+                    Some(true) => false,
+                    Some(false) => true,
+                    None => false,
+                }
+            };
+            if !provider_exited {
+                continue;
+            }
+            if let Ok(recovery_path) = managed_launch_recovery_path(&intent.expected_session_id) {
+                let _ = remove_managed_launch_recovery(&recovery_path);
+            }
+            let _ = remove_retry_intent_if_present(&path);
+            continue;
+        }
         if retry_exhausted(&intent, now) {
             exhaust_retry_intent(
                 &mut intent,
@@ -1316,6 +1345,9 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             );
             if let Err(error) = persist_retry_intent_with_owner_merge(&path, &mut intent) {
                 tracing::warn!(path = %path.display(), error = %error, "Could not persist exhausted managed launch retry intent");
+            }
+            if let Ok(recovery_path) = managed_launch_recovery_path(&intent.expected_session_id) {
+                let _ = remove_managed_launch_recovery(&recovery_path);
             }
             tracing::warn!(path = %path.display(), action_id = "inspect_managed_session", "Managed launch registration recovery exhausted");
             continue;
@@ -1483,9 +1515,20 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
             continue;
         }
-        if let Err(error) = remove_retry_intent_if_present(&path).map(|_| ()) {
-            tracing::warn!(path = %path.display(), error = %error, "Could not remove resolved managed launch retry intent");
-            continue;
+        if post_hoc_exit {
+            if let Err(error) = remove_retry_intent_if_present(&path).map(|_| ()) {
+                tracing::warn!(path = %path.display(), error = %error, "Could not remove resolved managed launch retry intent");
+                continue;
+            }
+        } else {
+            intent.registration_confirmed = true;
+            intent.token.clear();
+            intent.next_attempt_at = None;
+            intent.last_error = None;
+            if let Err(error) = persist_retry_intent_with_owner_merge(&path, &mut intent) {
+                tracing::warn!(path = %path.display(), error = %error, "Could not retain confirmed managed launch owner");
+                continue;
+            }
         }
         resolved = resolved.saturating_add(1);
         tracing::info!(provider = %intent.provider_name, session_id = %intent.expected_session_id, "Recovered managed launch registration");
@@ -1751,6 +1794,7 @@ mod tests {
                 launcher_pid: None,
                 launcher_process_start_time: None,
                 provider_exited: false,
+                registration_confirmed: false,
             };
             let mut response = response("session-1", "run-1");
             response.provider_session_id = Some("provider-1".to_string());
@@ -1800,6 +1844,7 @@ mod tests {
             launcher_pid: None,
             launcher_process_start_time: None,
             provider_exited: false,
+            registration_confirmed: false,
         };
 
         assert_eq!(persist_retry_intent_at(&path, &intent).unwrap(), path);
@@ -1845,6 +1890,7 @@ mod tests {
             provider_pid: None,
             provider_process_start_time: None,
             provider_exited: false,
+            registration_confirmed: false,
             launcher_pid: Some(std::process::id()),
             launcher_process_start_time: process_start_identity(std::process::id()),
         };
@@ -1900,6 +1946,7 @@ mod tests {
             launcher_pid: None,
             launcher_process_start_time: None,
             provider_exited: false,
+            registration_confirmed: false,
         };
         assert!(retry_exhausted(&intent, Utc::now()));
         intent.attempts = 0;
@@ -1955,6 +2002,7 @@ mod tests {
             launcher_pid: None,
             launcher_process_start_time: None,
             provider_exited: false,
+            registration_confirmed: false,
         };
         exhaust_retry_intent(&mut registration, "test");
         assert!(registration.token.is_empty());

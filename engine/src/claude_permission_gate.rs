@@ -48,9 +48,10 @@ pub fn run() -> anyhow::Result<()> {
     let (Some(session_id), Some(tool_use_id)) = (session_id, tool_use_id) else {
         return Ok(());
     };
+    let hook_token = effective_hook_token(&session_id);
     let decision = permission_decision(
         base_url.trim_end_matches('/'),
-        &std::env::var("LONGHOUSE_HOOK_TOKEN").unwrap_or_default(),
+        &hook_token,
         &session_id,
         &tool_use_id,
         &tool_name,
@@ -64,6 +65,17 @@ pub fn run() -> anyhow::Result<()> {
         )
     }));
     Ok(())
+}
+
+fn effective_hook_token(session_id: &str) -> String {
+    std::env::var("LONGHOUSE_HOOK_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            crate::managed_launch_lifecycle::read_managed_launch_recovery(session_id)
+                .and_then(|recovery| recovery.hook_token)
+        })
+        .unwrap_or_default()
 }
 
 fn trimmed_value_string(value: &Value) -> Option<String> {
@@ -187,5 +199,32 @@ mod tests {
             Some("id")
         );
         assert_eq!(trimmed_value_string(&json!("   ")), None);
+    }
+
+    #[test]
+    fn recovered_hook_authority_is_used_after_degraded_start() {
+        let home = tempfile::tempdir().unwrap();
+        let recovery_dir = home.path().join("managed-local/registration-recovery");
+        std::fs::create_dir_all(&recovery_dir).unwrap();
+        std::fs::write(
+            recovery_dir.join("session-1.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "provider_name": "Claude",
+                "session_id": "session-1",
+                "run_id": "run-1",
+                "hook_token": "recovered-hook-token",
+                "coordination_token": null,
+                "recovered_at": "2026-08-05T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        temp_env::with_vars(
+            [("LONGHOUSE_HOME", Some(home.path().display().to_string())),
+                ("LONGHOUSE_HOOK_TOKEN", None)],
+            || assert_eq!(effective_hook_token("session-1"), "recovered-hook-token"),
+        );
     }
 }

@@ -36,6 +36,7 @@ use crate::managed_launch_lifecycle::{
 };
 
 const STATE_DIR: &str = "managed-local/cursor-helm";
+const MCP_CONFIG_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct LaunchConfig {
     pub cwd: PathBuf,
@@ -934,8 +935,16 @@ fn write_cursor_mcp_config(
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .context("Cursor MCP servers must be an object")?;
+    let server_name = if servers
+        .get("longhouse-coordination")
+        .is_some_and(|value| !is_longhouse_coordination_server(value))
+    {
+        format!("longhouse-coordination-{session_id}")
+    } else {
+        "longhouse-coordination".to_string()
+    };
     servers.insert(
-        "longhouse-coordination".into(),
+        server_name,
         json!({
             "command": std::env::current_exe()?,
             "args": ["cursor-helm", "coordination-mcp"],
@@ -979,7 +988,7 @@ fn mcp_config_lock(state_path: &Path) -> anyhow::Result<fs::File> {
         .write(true)
         .create(true)
         .open(lock_path)?;
-    fs2_lock(&lock)?;
+    bounded_fs2_lock(&lock)?;
     Ok(lock)
 }
 
@@ -1027,12 +1036,7 @@ fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()
         return Ok(());
     };
     if let Some(servers) = config.get_mut("mcpServers").and_then(Value::as_object_mut) {
-        if servers
-            .get("longhouse-coordination")
-            .is_some_and(is_longhouse_coordination_server)
-        {
-            servers.remove("longhouse-coordination");
-        }
+        servers.retain(|_, value| !is_longhouse_coordination_server(value));
     }
     let original_value = original.and_then(|value| serde_json::from_str::<Value>(value).ok());
     if original_value.as_ref() == Some(&config) {
@@ -1972,6 +1976,24 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
     }
 }
 
+fn bounded_fs2_lock(file: &fs::File) -> std::io::Result<()> {
+    let deadline = Instant::now() + MCP_CONFIG_LOCK_TIMEOUT;
+    loop {
+        match try_fs2_lock(file) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+                ) && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn try_fs2_lock(file: &fs::File) -> std::io::Result<()> {
     unsafe {
         if libc::flock(
@@ -2214,6 +2236,51 @@ mod tests {
         assert!(restored["mcpServers"]
             .get("user-added-during-helm")
             .is_some());
+    }
+
+    #[test]
+    fn concurrent_mcp_config_preserves_user_replacement_of_managed_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let first = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let path = root.path().join(".cursor/mcp.json");
+        let mut current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        current["mcpServers"]["longhouse-coordination"] =
+            json!({"command":"user-owned-coordination"});
+        fs::write(&path, serde_json::to_vec_pretty(&current).unwrap()).unwrap();
+
+        let second = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "22222222-2222-4222-8222-222222222222",
+        )
+        .unwrap();
+        let during: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            during["mcpServers"]["longhouse-coordination"]["command"],
+            "user-owned-coordination"
+        );
+        assert!(during["mcpServers"].as_object().unwrap().iter().any(
+            |(name, value)| name != "longhouse-coordination"
+                && is_longhouse_coordination_server(value)
+        ));
+
+        drop(first);
+        drop(second);
+        let restored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            restored["mcpServers"]["longhouse-coordination"]["command"],
+            "user-owned-coordination"
+        );
+        assert!(!restored["mcpServers"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(is_longhouse_coordination_server));
     }
 
     #[test]
@@ -2592,9 +2659,9 @@ mod tests {
         assert_eq!(sent["ok"], true);
         unsafe { libc::close(pipe[1]) };
         let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
-        let mut relayed = Vec::new();
-        reader.read_to_end(&mut relayed).unwrap();
-        assert_eq!(relayed, b"hello\x1b\r");
+        let mut relayed = [0; 7];
+        reader.read_exact(&mut relayed).unwrap();
+        assert_eq!(&relayed, b"hello\x1b\r");
     }
 
     #[test]
@@ -2623,9 +2690,9 @@ mod tests {
         assert_eq!(interrupted["ok"], true);
         unsafe { libc::close(pipe[1]) };
         let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
-        let mut relayed = Vec::new();
-        reader.read_to_end(&mut relayed).unwrap();
-        assert_eq!(relayed, b"\x03");
+        let mut relayed = [0; 1];
+        reader.read_exact(&mut relayed).unwrap();
+        assert_eq!(&relayed, b"\x03");
 
         let child = unsafe { libc::fork() };
         assert!(child >= 0);

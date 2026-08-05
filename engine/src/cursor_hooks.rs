@@ -430,7 +430,7 @@ pub fn permission(event: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     let base = std::env::var("LONGHOUSE_HOOK_URL").unwrap_or_default();
-    let token = std::env::var("LONGHOUSE_HOOK_TOKEN").unwrap_or_default();
+    let token = effective_hook_token(&session_id);
     if base.trim().is_empty() || token.trim().is_empty() {
         deny("Longhouse approval service is not configured; command blocked");
         return Ok(());
@@ -494,6 +494,17 @@ pub fn permission(event: &str) -> anyhow::Result<()> {
         _ => deny("No human approval was received before the Longhouse deadline; command blocked"),
     }
     Ok(())
+}
+
+fn effective_hook_token(session_id: &str) -> String {
+    std::env::var("LONGHOUSE_HOOK_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            crate::managed_launch_lifecycle::read_managed_launch_recovery(session_id)
+                .and_then(|recovery| recovery.hook_token)
+        })
+        .unwrap_or_default()
 }
 
 fn remote_decision(
@@ -675,5 +686,32 @@ mod tests {
             "afterAgentThought",
             &json!({})
         ));
+    }
+
+    #[test]
+    fn recovered_hook_authority_is_used_after_degraded_start() {
+        let home = tempfile::tempdir().unwrap();
+        let recovery_dir = home.path().join("managed-local/registration-recovery");
+        std::fs::create_dir_all(&recovery_dir).unwrap();
+        std::fs::write(
+            recovery_dir.join("session-1.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "provider_name": "Cursor",
+                "session_id": "session-1",
+                "run_id": "run-1",
+                "hook_token": "recovered-hook-token",
+                "coordination_token": null,
+                "recovered_at": "2026-08-05T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        temp_env::with_vars(
+            [("LONGHOUSE_HOME", Some(home.path().display().to_string())),
+                ("LONGHOUSE_HOOK_TOKEN", None)],
+            || assert_eq!(effective_hook_token("session-1"), "recovered-hook-token"),
+        );
     }
 }
