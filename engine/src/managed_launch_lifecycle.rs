@@ -18,6 +18,7 @@ use std::sync::{
     Arc,
 };
 use std::thread;
+use std::time::Instant;
 
 #[allow(dead_code)] // Used by the provider facade binary.
 const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -109,6 +110,7 @@ const RETRY_MAX_ATTEMPTS: u32 = 288;
 const RETRY_TTL: ChronoDuration = ChronoDuration::hours(24);
 const PRE_READY_TTL: ChronoDuration = ChronoDuration::minutes(10);
 const EXHAUSTED_RETENTION: ChronoDuration = ChronoDuration::days(7);
+const RETRY_INTENT_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A durable owner-local recovery intent for an initially unreachable Runtime
 /// Host. It never owns the provider process and only confirms the exact
@@ -195,15 +197,17 @@ impl Drop for ManagedLaunchRegistrationRetry {
 }
 
 impl ManagedLaunchRegistrationRetry {
-    pub fn mark_provider_ready(&self) {
-        self.state.provider_alive.store(true, Ordering::Release);
-        if let Err(error) = update_retry_intent(&self.state.intent_path, |intent| {
+    pub fn mark_provider_ready(&self) -> anyhow::Result<()> {
+        // Persist readiness before publishing the in-memory fact. If this
+        // fails, the caller stops the provider instead of leaving a live
+        // process whose durable intent still looks pre-ready.
+        update_retry_intent(&self.state.intent_path, |intent| {
             intent.provider_ready = true;
             intent.provider_exited = false;
             intent.next_attempt_at = None;
-        }) {
-            eprintln!("Longhouse warning: could not persist managed launch readiness: {error:#}");
-        }
+        })?;
+        self.state.provider_alive.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Mark a launch that failed before readiness. If an owner was already
@@ -240,13 +244,15 @@ impl ManagedLaunchRegistrationRetry {
 
     /// Record the long-lived provider-owned process for detached Helm. The
     /// daemon can then reject a retry after PID reuse or provider exit.
-    pub fn record_provider_owner(&self, pid: u32, process_start_time: Option<String>) {
-        if let Err(error) = update_retry_intent(&self.state.intent_path, |intent| {
+    pub fn record_provider_owner(
+        &self,
+        pid: u32,
+        process_start_time: Option<String>,
+    ) -> anyhow::Result<()> {
+        update_retry_intent(&self.state.intent_path, |intent| {
             intent.provider_pid = Some(pid);
             intent.provider_process_start_time = process_start_time;
-        }) {
-            eprintln!("Longhouse warning: could not persist managed provider ownership: {error:#}");
-        }
+        })
     }
 }
 
@@ -611,13 +617,21 @@ impl RetryIntentLock {
                 .with_context(|| {
                     format!("open managed launch retry lock {}", lock_path.display())
                 })?;
-            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-            if result != 0 {
-                return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("lock managed launch retry intent {}", path.display())
-                });
+            let deadline = Instant::now() + RETRY_INTENT_LOCK_TIMEOUT;
+            loop {
+                let result =
+                    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                if result == 0 {
+                    return Ok(Self { file });
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::WouldBlock || Instant::now() >= deadline {
+                    return Err(error).with_context(|| {
+                        format!("lock managed launch retry intent {}", path.display())
+                    });
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
             }
-            return Ok(Self { file });
         }
         #[cfg(not(unix))]
         {
@@ -1590,6 +1604,21 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn readiness_requires_durable_intent_before_publishing_live_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let registration = ManagedLaunchRegistrationRetry {
+            state: Arc::new(ManagedLaunchRetryState {
+                provider_alive: Arc::new(AtomicBool::new(false)),
+                keep_intent: Arc::new(AtomicBool::new(false)),
+                intent_path: directory.path().join("missing-retry.json"),
+            }),
+        };
+
+        assert!(registration.mark_provider_ready().is_err());
+        assert!(!registration.state.provider_alive.load(Ordering::Acquire));
     }
 
     #[test]

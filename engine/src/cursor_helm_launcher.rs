@@ -15,7 +15,10 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use chrono::Utc;
@@ -388,6 +391,52 @@ fn write_all(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
             continue;
         } else {
             return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn write_all_with_timeout(fd: RawFd, mut bytes: &[u8], timeout: Duration) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while !bytes.is_empty() {
+        let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+        if written > 0 {
+            bytes = &bytes[written as usize..];
+            continue;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if error.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(error);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "PTY write deadline expired",
+            ));
+        }
+        let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if result == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "PTY write deadline expired",
+            ));
+        }
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
         }
     }
     Ok(())
@@ -951,7 +1000,7 @@ fn serve(
             }
             let _hold = pty_lock.lock().unwrap();
             let text = request["text"].as_str().unwrap().as_bytes();
-            if let Err(error) = write_all(master, text) {
+            if let Err(error) = write_all_with_timeout(master, text, Duration::from_secs(2)) {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
@@ -963,7 +1012,7 @@ fn serve(
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(300),
             ));
-            if let Err(error) = write_all(master, b"\x1b") {
+            if let Err(error) = write_all_with_timeout(master, b"\x1b", Duration::from_secs(2)) {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
@@ -975,7 +1024,7 @@ fn serve(
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(100),
             ));
-            if let Err(error) = write_all(master, b"\r") {
+            if let Err(error) = write_all_with_timeout(master, b"\r", Duration::from_secs(2)) {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
@@ -1003,7 +1052,7 @@ fn serve(
                 );
             }
             let _hold = pty_lock.lock().unwrap();
-            if let Err(error) = write_all(master, b"\x03") {
+            if let Err(error) = write_all_with_timeout(master, b"\x03", Duration::from_secs(2)) {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
@@ -1121,14 +1170,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 }
             },
             Err(error) => {
-                eprintln!(
-                    "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and registration is unavailable ({error:#})"
-                );
-                ManagedLaunchResponse::degraded_from_payload(
-                    &payload,
-                    "Cursor",
-                    crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
-                )?
+                return Err(error.context(
+                    "Cursor Helm cannot start without Longhouse registration credentials",
+                ));
             }
         }
     };
@@ -1328,6 +1372,18 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             libc::_exit(127)
         }
     }
+    let master_flags = unsafe { libc::fcntl(master, libc::F_GETFL) };
+    if master_flags < 0
+        || unsafe { libc::fcntl(master, libc::F_SETFL, master_flags | libc::O_NONBLOCK) } < 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::close(master);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        return Err(error).context("set Cursor Helm PTY nonblocking");
+    }
     // XNU can discard queued PTY output or hold a session-leader child in the
     // exiting state until the master reads it. Keeping the slave open in the
     // parent makes POLLIN observable; the relay loop drains it and reaps with
@@ -1386,8 +1442,22 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         }
     };
     if let Some(registration) = &degraded_registration {
-        registration.record_provider_owner(pid as u32, Some(cursor_start.clone()));
-        registration.mark_provider_ready();
+        if let Err(error) = registration
+            .record_provider_owner(pid as u32, Some(cursor_start.clone()))
+            .and_then(|()| registration.mark_provider_ready())
+        {
+            registration.mark_provider_failed();
+            drop(terminal);
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                if slave_hold >= 0 {
+                    libc::close(slave_hold);
+                }
+                libc::close(master);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
+            }
+            return Err(error.context("persist managed Cursor readiness"));
+        }
     }
     if let Some(transaction) = launch_transaction.as_mut() {
         transaction.confirm_in_background();
@@ -1459,7 +1529,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             let count = unsafe { libc::read(0, input.as_mut_ptr().cast(), input.len()) };
             if count > 0 {
                 let _hold = guard.lock().unwrap();
-                if write_all(master, &input[..count as usize]).is_err() {
+                if write_all_with_timeout(master, &input[..count as usize], Duration::from_secs(2))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -1470,6 +1542,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 if write_all(1, &output[..count as usize]).is_err() {
                     break;
                 }
+            } else if count < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
+            {
+                continue;
             } else {
                 break;
             }
@@ -1482,7 +1558,6 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             break;
         }
     }
-    let launcher_requested_stop = stop.load(Ordering::Relaxed);
     drop(terminal);
     stop.store(true, Ordering::Relaxed);
     let _ = server.join();
@@ -1494,20 +1569,20 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let exit_code = unsafe {
         let mut status = reaped_status.unwrap_or(0);
         if reaped_status.is_none() {
-            if launcher_requested_stop {
-                let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-                for _ in 0..25 {
-                    if observed != 0 {
-                        break;
-                    }
-                    thread::sleep(std::time::Duration::from_millis(10));
-                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            // A relay error can leave the provider alive. Never wait
+            // forever for a child whose PTY relay has already stopped;
+            // terminate it through the same bounded ladder as an explicit
+            // user stop.
+            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            for _ in 0..25 {
+                if observed != 0 {
+                    break;
                 }
-                if observed == 0 {
-                    libc::kill(pid, libc::SIGKILL);
-                    libc::waitpid(pid, &mut status, 0);
-                }
-            } else {
+                thread::sleep(std::time::Duration::from_millis(10));
+                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            }
+            if observed == 0 {
+                libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, &mut status, 0);
             }
         }
@@ -1650,6 +1725,38 @@ mod tests {
         assert_eq!(event["dedupe_key"], "cursor-helm-terminal:session-1:run-1");
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
         assert_eq!(event["payload"]["terminal_reason"], "remote_terminate");
+    }
+
+    #[test]
+    fn pty_writes_have_a_deadline_when_the_provider_stops_reading() {
+        let mut fds = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let flags = unsafe { libc::fcntl(fds[1], libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert!(unsafe { libc::fcntl(fds[1], libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0);
+
+        let filler = [0_u8; 8192];
+        loop {
+            let result = unsafe { libc::write(fds[1], filler.as_ptr().cast(), filler.len()) };
+            if result >= 0 {
+                continue;
+            }
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            break;
+        }
+
+        let started = Instant::now();
+        let error = write_all_with_timeout(fds[1], b"input", Duration::from_millis(50))
+            .expect_err("a full provider pipe must not accept an unbounded write");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
     }
 
     #[test]

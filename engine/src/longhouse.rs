@@ -12,6 +12,8 @@ mod managed_launch_lifecycle;
 mod managed_launch_payload;
 #[path = "managed_terminal.rs"]
 mod managed_terminal;
+#[path = "process_identity.rs"]
+mod process_identity;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
@@ -1364,8 +1366,8 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             registration.record_provider_owner(
                 provider_pid,
                 crate::managed_launch_lifecycle::process_start_identity(provider_pid),
-            );
-            registration.mark_provider_ready();
+            )?;
+            registration.mark_provider_ready()?;
         }
         match launch_transaction.as_mut() {
             Some(transaction) => {
@@ -1589,9 +1591,19 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     if let Some(registration) = &degraded_registration {
         if let Some(pid) = bridge_response.pid {
-            registration.record_provider_owner(pid, bridge_response.process_start_time.clone());
+            if let Err(error) =
+                registration.record_provider_owner(pid, bridge_response.process_start_time.clone())
+            {
+                registration.mark_provider_failed();
+                let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+                return Err(error.context("persist managed OpenCode provider ownership"));
+            }
         }
-        registration.mark_provider_ready();
+        if let Err(error) = registration.mark_provider_ready() {
+            registration.mark_provider_failed();
+            let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+            return Err(error.context("persist managed OpenCode readiness"));
+        }
     }
     if let Some(transaction) = launch_transaction.as_mut() {
         transaction.confirm_in_background();
@@ -2201,9 +2213,27 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     }
     if let Some(registration) = &degraded_registration {
         if let Some(pid) = bridge.pid {
-            registration.record_provider_owner(pid, bridge.process_start_time.clone());
+            if let Err(error) =
+                registration.record_provider_owner(pid, bridge.process_start_time.clone())
+            {
+                registration.mark_provider_failed();
+                let _ = stop_codex_bridge(
+                    &response.session_id,
+                    Some(response.run_id.as_str()),
+                    "managed_readiness_persistence_failed",
+                );
+                return Err(error.context("persist managed Codex provider ownership"));
+            }
         }
-        registration.mark_provider_ready();
+        if let Err(error) = registration.mark_provider_ready() {
+            registration.mark_provider_failed();
+            let _ = stop_codex_bridge(
+                &response.session_id,
+                Some(response.run_id.as_str()),
+                "managed_readiness_persistence_failed",
+            );
+            return Err(error.context("persist managed Codex readiness"));
+        }
     }
     if let Some(transaction) = launch_transaction.as_mut() {
         transaction.confirm_in_background();
