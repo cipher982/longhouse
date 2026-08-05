@@ -155,7 +155,9 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _binary_build_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+def _binary_build_identity(
+    path: Path, *, environment: dict[str, str] | None = None
+) -> tuple[dict[str, Any] | None, str | None]:
     try:
         result = subprocess.run(
             [str(path), "build-identity", "--json"],
@@ -163,6 +165,7 @@ def _binary_build_identity(path: Path) -> tuple[dict[str, Any] | None, str | Non
             text=True,
             timeout=15,
             check=False,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         return None, f"build identity probe failed: {type(error).__name__}: {error}"
@@ -175,7 +178,9 @@ def _binary_build_identity(path: Path) -> tuple[dict[str, Any] | None, str | Non
         return None, f"build identity probe returned invalid JSON: {error}"
     if not isinstance(payload, dict):
         return None, "build identity probe returned a non-object JSON value"
-    identity = payload.get("facade") if isinstance(payload.get("facade"), dict) else payload
+    identity = (
+        payload.get("facade") if isinstance(payload.get("facade"), dict) else payload
+    )
     commit = identity.get("commit")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         return None, "build identity probe returned an invalid commit"
@@ -184,11 +189,13 @@ def _binary_build_identity(path: Path) -> tuple[dict[str, Any] | None, str | Non
     return payload, None
 
 
-def source_provenance(path: Path) -> dict[str, Any]:
+def source_provenance(
+    path: Path, *, environment: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Bind an installed binary to the identity compiled into that binary."""
 
     path = path.resolve()
-    identity, identity_error = _binary_build_identity(path)
+    identity, identity_error = _binary_build_identity(path, environment=environment)
     reported_identity = (
         identity.get("facade")
         if isinstance(identity, dict) and isinstance(identity.get("facade"), dict)
@@ -211,6 +218,77 @@ def source_provenance(path: Path) -> dict[str, Any]:
         "build_identity": identity,
         "build_identity_error": identity_error,
     }
+
+
+def implementation_snapshot(
+    longhouse_bin: Path, engine_bin: Path
+) -> dict[str, dict[str, Any]]:
+    probe_env = os.environ.copy()
+    probe_env["LONGHOUSE_ENGINE_BIN"] = str(engine_bin)
+    return {
+        "longhouse": source_provenance(longhouse_bin, environment=probe_env),
+        "longhouse_engine": source_provenance(engine_bin),
+    }
+
+
+def validated_implementation_snapshot(
+    longhouse_bin: Path, engine_bin: Path
+) -> dict[str, dict[str, Any]]:
+    snapshot = implementation_snapshot(longhouse_bin, engine_bin)
+    for label in ("longhouse", "longhouse_engine"):
+        value = snapshot[label]
+        if value.get("build_identity_error") is not None:
+            raise RuntimeError(
+                f"{label} build identity could not be verified: "
+                f"{value['build_identity_error']}"
+            )
+        if value.get("source_dirty") is not False:
+            raise RuntimeError(f"{label} build identity is dirty")
+        if not isinstance(value.get("source_git_sha"), str):
+            raise RuntimeError(f"{label} build identity has no source commit")
+        if not re.fullmatch(r"[0-9a-f]{40}", value["source_git_sha"]):
+            raise RuntimeError(f"{label} build identity has an invalid source commit")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))):
+            raise RuntimeError(f"{label} executable hash is invalid")
+
+    longhouse_identity = snapshot["longhouse"].get("build_identity")
+    engine_identity = snapshot["longhouse_engine"].get("build_identity")
+    if not isinstance(longhouse_identity, dict) or not isinstance(
+        longhouse_identity.get("engine"), dict
+    ):
+        raise RuntimeError("longhouse build identity has no paired engine record")
+    paired_engine_path = longhouse_identity.get("engine_path")
+    if not isinstance(paired_engine_path, str) or not paired_engine_path:
+        raise RuntimeError("longhouse build identity has no paired engine path")
+    if Path(paired_engine_path).expanduser().resolve() != engine_bin.resolve():
+        raise RuntimeError(
+            "longhouse build identity paired engine path does not match the tested engine"
+        )
+    paired_engine = longhouse_identity["engine"]
+    if (
+        paired_engine.get("commit") != snapshot["longhouse_engine"]["source_git_sha"]
+        or paired_engine.get("dirty") is not False
+        or not isinstance(engine_identity, dict)
+        or engine_identity.get("commit") != paired_engine.get("commit")
+        or engine_identity.get("dirty") is not False
+    ):
+        raise RuntimeError("longhouse facade and engine build identities disagree")
+    if (
+        snapshot["longhouse"]["source_git_sha"]
+        != snapshot["longhouse_engine"]["source_git_sha"]
+    ):
+        raise RuntimeError("longhouse facade and engine source commits disagree")
+    return snapshot
+
+
+def assert_implementation_stable(
+    before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
+) -> None:
+    for label in ("longhouse", "longhouse_engine"):
+        if before[label].get("sha256") != after[label].get("sha256"):
+            raise RuntimeError(
+                f"{label} executable changed during the qualification run"
+            )
 
 
 def harness_provenance() -> dict[str, Any]:
@@ -238,9 +316,7 @@ def harness_provenance() -> dict[str, Any]:
         check=False,
     )
     repository_git_sha = revision.stdout.strip() if revision.returncode == 0 else None
-    harness_file_dirty = (
-        bool(dirty.stdout.strip()) if dirty.returncode == 0 else None
-    )
+    harness_file_dirty = bool(dirty.stdout.strip()) if dirty.returncode == 0 else None
     repository_dirty = (
         bool(repository_status.stdout.strip())
         if repository_status.returncode == 0
@@ -588,8 +664,7 @@ def stop_processes_for_root(root: Path) -> None:
     remaining = matching_processes()
     if remaining:
         raise ProcessScanFailure(
-            "detached Runtime Host workers remain after cleanup: "
-            f"{sorted(remaining)}"
+            f"detached Runtime Host workers remain after cleanup: {sorted(remaining)}"
         )
 
 
@@ -665,8 +740,7 @@ def verified_session_groups(groups: dict[int, dict[int, str]]) -> set[int]:
     verified: set[int] = set()
     for pgid, members in groups.items():
         if any(
-            process_start_identity(pid) == identity
-            for pid, identity in members.items()
+            process_start_identity(pid) == identity for pid, identity in members.items()
         ):
             verified.add(pgid)
     return verified
@@ -1062,9 +1136,7 @@ def scoped_process_table(scope: dict[str, Any]) -> dict[int, dict[str, Any]]:
             selected.add(pid)
 
     process_groups = {
-        int(scope[key])
-        for key in ("launcher_pgid", "provider_pgid")
-        if scope.get(key)
+        int(scope[key]) for key in ("launcher_pgid", "provider_pgid") if scope.get(key)
     }
     # A provider can be reparented after the facade returns, but its process
     # group remains the exact ownership boundary. Read only those groups and
@@ -1091,10 +1163,7 @@ def scoped_process_table(scope: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 def public_process_records(records: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {
-            key: record[key]
-            for key in ("pid", "ppid", "pgid", "stat")
-        }
+        {key: record[key] for key in ("pid", "ppid", "pgid", "stat")}
         for record in records.values()
     ]
 
@@ -1117,7 +1186,12 @@ def verified_cleanup_groups(
         pid = scope.get(pid_key)
         start_identity = scope.get(start_key)
         pgid = scope.get(group_key)
-        if not pid or not start_identity or not pgid or int(pgid) not in candidate_groups:
+        if (
+            not pid
+            or not start_identity
+            or not pgid
+            or int(pgid) not in candidate_groups
+        ):
             continue
         if process_start_identity(int(pid)) == start_identity:
             verified.add(int(pgid))
@@ -1149,7 +1223,10 @@ def finish_live_command(
         provider_kill_status = "attempted"
     elif provider_pid is not None:
         provider_kill_status = "identity_mismatch"
-    elif cleanup_scope is not None and cleanup_scope.get("provider_process_observed") is False:
+    elif (
+        cleanup_scope is not None
+        and cleanup_scope.get("provider_process_observed") is False
+    ):
         provider_kill_status = "not_started"
 
     if command.is_tty:
@@ -1241,8 +1318,7 @@ def finish_live_command(
         {
             int(record["pgid"])
             for record in remaining.values()
-            if int(record["pgid"]) > 0
-            and int(record["pgid"]) != os.getpgrp()
+            if int(record["pgid"]) > 0 and int(record["pgid"]) != os.getpgrp()
         }
     )
     cleanup_status = (
@@ -1509,9 +1585,7 @@ def bootstrap_provider_auth(
                     if status_payload.get("status") is not None
                     else None
                 )
-                account_authenticated = (
-                    status_payload.get("isAuthenticated") is True
-                )
+                account_authenticated = status_payload.get("isAuthenticated") is True
         except subprocess.TimeoutExpired:
             status_probe_timed_out = True
         return {
@@ -1578,7 +1652,9 @@ def bootstrap_provider_auth(
         timeout=30,
         check=False,
     )
-    detail = (result.stderr or result.stdout or "").replace(api_key, "[REDACTED]").strip()
+    detail = (
+        (result.stderr or result.stdout or "").replace(api_key, "[REDACTED]").strip()
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"Codex isolated login failed ({result.returncode}): {detail[:240]}"
@@ -1631,7 +1707,11 @@ def run_provider_live(
         codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
         source_auth = root / "provider-config" / "codex" / "auth.json"
         target_auth = codex_home / "auth.json"
-        if profile_name != provider and source_auth.is_file() and not target_auth.exists():
+        if (
+            profile_name != provider
+            and source_auth.is_file()
+            and not target_auth.exists()
+        ):
             shutil.copyfile(source_auth, target_auth)
             target_auth.chmod(0o600)
     command = provider_command(
@@ -1688,13 +1768,9 @@ def run_provider_live(
         if owner is not None:
             launch_intent_created = True
         provider_pid = owner.get("provider_pid") if owner else None
-        provider_start = (
-            owner.get("provider_process_start_time") if owner else None
-        )
+        provider_start = owner.get("provider_process_start_time") if owner else None
         launcher_start = (
-            process_start_identity(launcher_pid)
-            if launcher_pid is not None
-            else None
+            process_start_identity(launcher_pid) if launcher_pid is not None else None
         )
         cleanup_scope = provider_cleanup_scope(
             profile_root=provider_config_root,
@@ -1707,7 +1783,9 @@ def run_provider_live(
             session_id=(
                 str(owner.get("expected_session_id"))
                 if owner and owner.get("expected_session_id")
-                else session_match.group(0) if session_match else None
+                else session_match.group(0)
+                if session_match
+                else None
             ),
         )
         observed = None
@@ -1727,7 +1805,9 @@ def run_provider_live(
                     session_id=(
                         str(owner.get("expected_session_id"))
                         if owner and owner.get("expected_session_id")
-                        else session_match.group(0) if session_match else None
+                        else session_match.group(0)
+                        if session_match
+                        else None
                     ),
                 )
         cleanup_scope["provider_process_observed"] = (
@@ -1754,7 +1834,9 @@ def run_provider_live(
                 "provider_config_root": str(provider_config_root),
                 "provider_home": str(provider_home),
                 "provider_cwd": str(cwd),
-                "session_id_observed": session_match.group(0) if session_match else None,
+                "session_id_observed": session_match.group(0)
+                if session_match
+                else None,
                 "launch_intent_created": launch_intent_created,
                 "startup_failure": str(error),
                 "qualification": provider_failure_qualification(provider, output),
@@ -1820,9 +1902,7 @@ def run_provider_live(
     )
     if owner is not None:
         result["provider_pid"] = owner.get("provider_pid")
-        result["provider_process_start_time"] = owner.get(
-            "provider_process_start_time"
-        )
+        result["provider_process_start_time"] = owner.get("provider_process_start_time")
     result["cleanup_scope"] = provider_cleanup_scope(
         profile_root=provider_config_root,
         provider_home=provider_home,
@@ -1834,7 +1914,9 @@ def run_provider_live(
         session_id=(
             str(owner.get("expected_session_id"))
             if owner and owner.get("expected_session_id")
-            else session_match.group(0) if session_match else None
+            else session_match.group(0)
+            if session_match
+            else None
         ),
     )
     if result.get("provider_pid") is None:
@@ -1851,13 +1933,13 @@ def run_provider_live(
                 launcher_pid=live.process.pid,
                 launcher_start_identity=result.get("launcher_start_identity"),
                 provider_pid=result["provider_pid"],
-                provider_process_start_time=result.get(
-                    "provider_process_start_time"
-                ),
+                provider_process_start_time=result.get("provider_process_start_time"),
                 session_id=(
                     str(owner.get("expected_session_id"))
                     if owner and owner.get("expected_session_id")
-                    else session_match.group(0) if session_match else None
+                    else session_match.group(0)
+                    if session_match
+                    else None
                 ),
             )
     result["provider_process_observed"] = result.get("provider_pid") is not None
@@ -1989,9 +2071,7 @@ def launch_attempt_states(
     database: Path, session_ids: list[str]
 ) -> dict[str, str | None]:
     if not database.is_file():
-        raise RuntimeError(
-            f"Runtime Host launch-state database is missing: {database}"
-        )
+        raise RuntimeError(f"Runtime Host launch-state database is missing: {database}")
     try:
         with sqlite3.connect(database, timeout=0.5) as connection:
             rows = connection.execute(
@@ -2095,6 +2175,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             args.engine_bin or os.environ.get("LONGHOUSE_FAULT_ENGINE_BIN"),
             "longhouse-engine",
         )
+        implementation_before = validated_implementation_snapshot(
+            longhouse_bin, engine_bin
+        )
+        args._implementation_before = implementation_before
         provider_bins: dict[str, Path] = {}
         provider_evidence: dict[str, Any] = {}
         for provider in selected_providers:
@@ -2154,9 +2238,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         cursor_auth = provider_auth.get("cursor")
         if cursor_auth and cursor_auth.get("status") == "missing":
             for result in results:
-                if result.get("provider") == "cursor" and result.get(
-                    "startup_failure"
-                ):
+                if result.get("provider") == "cursor" and result.get("startup_failure"):
                     attributable_timeout = (
                         result.get("timed_out") is True
                         and result.get("degraded_marker_seen") is True
@@ -2178,9 +2260,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                             "cursor_status_probe_missing_and_no_provider_output"
                         )
         provider_failures = [
-            result
-            for result in results
-            if result.get("startup_failure") is not None
+            result for result in results if result.get("startup_failure") is not None
         ]
         if provider_failures and not args.allow_unqualified_recovery:
             failed_providers = ", ".join(
@@ -2227,8 +2307,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             if result.get("launch_intent_created")
         )
         intent_provider_counts = Counter(
-            str(intent.get("provider_name", "")).lower()
-            for intent in retry_intents
+            str(intent.get("provider_name", "")).lower() for intent in retry_intents
         )
         if intent_provider_counts != launch_intent_provider_counts:
             raise RuntimeError(
@@ -2264,7 +2343,9 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         if any(not intent.get("launcher_pid") for intent in retry_intents):
-            raise RuntimeError("installed retry intents contained no launcher ownership identity")
+            raise RuntimeError(
+                "installed retry intents contained no launcher ownership identity"
+            )
         for result in results:
             matches = [
                 intent
@@ -2294,7 +2375,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         ]
         if unready_intents and not args.allow_unqualified_recovery:
             providers = ", ".join(
-                str(intent.get("provider_name") or "unknown") for intent in unready_intents
+                str(intent.get("provider_name") or "unknown")
+                for intent in unready_intents
             )
             raise RuntimeError(
                 "installed provider launch did not reach provider readiness for "
@@ -2408,7 +2490,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             engine_log = cold_log
             current_retry_intents = read_retry_intents(temp_root)
             current_retry_ids = {
-                str(intent.get("expected_session_id")) for intent in current_retry_intents
+                str(intent.get("expected_session_id"))
+                for intent in current_retry_intents
             }
             if not ready_ids.issubset(current_retry_ids):
                 raise RuntimeError(
@@ -2457,7 +2540,8 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             engine_handle = restart_handle
             current_retry_intents = read_retry_intents(temp_root)
             current_retry_ids = {
-                str(intent.get("expected_session_id")) for intent in current_retry_intents
+                str(intent.get("expected_session_id"))
+                for intent in current_retry_intents
             }
             if not ready_ids.issubset(current_retry_ids):
                 raise RuntimeError(
@@ -2614,9 +2698,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             cleanup = finish_live_command(
                 live,
                 provider_pid=result.get("provider_pid"),
-                provider_process_start_time=result.get(
-                    "provider_process_start_time"
-                ),
+                provider_process_start_time=result.get("provider_process_start_time"),
                 cleanup_scope=result.get("cleanup_scope"),
             )
             if cleanup["status"] != "pass":
@@ -2629,13 +2711,15 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         if engine_handle is not None:
             engine_handle.close()
             engine_handle = None
+        implementation_after = validated_implementation_snapshot(
+            longhouse_bin, engine_bin
+        )
+        assert_implementation_stable(implementation_before, implementation_after)
         success_artifact = {
             "schema_version": 1,
             "artifact_kind": "installed_managed_launch_fault_matrix",
             "generated_at": None,
-            "verdict": "yellow"
-            if unready_intents or provider_failures
-            else "green",
+            "verdict": "yellow" if unready_intents or provider_failures else "green",
             "recovery_qualification": (
                 "mixed_provider_degraded_start_with_harness_precondition_gap"
                 if unready_intents and harness_precondition_failures
@@ -2650,9 +2734,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 else "installed_provider_owner_and_host_adoption"
             ),
             "implementation": {
-                "longhouse": source_provenance(longhouse_bin),
-                "longhouse_engine": source_provenance(engine_bin),
+                "longhouse": implementation_after["longhouse"],
+                "longhouse_engine": implementation_after["longhouse_engine"],
             },
+            "implementation_before": implementation_before,
             "harness": verified_harness_provenance(),
             "provider_binaries": provider_evidence,
             "scenarios": [
@@ -2725,7 +2810,9 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         try:
             stop_host(host)
         except Exception as error:  # noqa: BLE001 - cleanup must be reported.
-            cleanup_errors.append(f"Runtime Host cleanup {type(error).__name__}: {error}")
+            cleanup_errors.append(
+                f"Runtime Host cleanup {type(error).__name__}: {error}"
+            )
         try:
             stop_processes_for_root(temp_root)
         except Exception as error:  # noqa: BLE001 - cleanup must be reported.
@@ -2863,9 +2950,12 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 artifact.get("error", "installed fault matrix failed"), file=sys.stderr
             )
-    return 0 if artifact["verdict"] == "green" or (
-        artifact["verdict"] == "yellow" and args.allow_unqualified_recovery
-    ) else 1
+    return (
+        0
+        if artifact["verdict"] == "green"
+        or (artifact["verdict"] == "yellow" and args.allow_unqualified_recovery)
+        else 1
+    )
 
 
 if __name__ == "__main__":

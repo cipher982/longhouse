@@ -18,6 +18,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import secrets
 import statistics
 import subprocess
@@ -413,7 +414,42 @@ def _startup_failure_counts(artifact: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
-def _measured_run(artifact: dict[str, Any]) -> bool:
+def _implementation_exclusion_reason(
+    artifact: dict[str, Any], *, report_source_sha: str | None
+) -> str | None:
+    implementation = artifact.get("implementation")
+    if not isinstance(implementation, dict):
+        return "unbound_or_dirty_implementation_binary"
+    for label in ("longhouse", "longhouse_engine"):
+        value = implementation.get(label)
+        if not isinstance(value, dict):
+            return "unbound_or_dirty_implementation_binary"
+        if (
+            "build_identity" not in value
+            or "build_identity_error" not in value
+            or value.get("build_identity_error") is not None
+        ):
+            return "unbound_or_dirty_implementation_binary"
+        source_sha = value.get("source_git_sha")
+        if (
+            not isinstance(source_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", source_sha)
+            or (report_source_sha is not None and source_sha != report_source_sha)
+        ):
+            return "unbound_or_dirty_implementation_binary"
+        if value.get("source_dirty") is not False:
+            return "unbound_or_dirty_implementation_binary"
+        binary_sha = value.get("sha256")
+        if not isinstance(binary_sha, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", binary_sha
+        ):
+            return "unbound_or_dirty_implementation_binary"
+    return None
+
+
+def _measured_run(
+    artifact: dict[str, Any], *, report_source_sha: str | None = None
+) -> bool:
     measurements = artifact.get("measurements") or {}
     return bool(
         _is_full_run(artifact)
@@ -422,10 +458,16 @@ def _measured_run(artifact: dict[str, Any]) -> bool:
         and measurements.get("run_duration_seconds") is not None
         and artifact.get("harness", {}).get("repository_dirty") is False
         and artifact.get("harness", {}).get("harness_file_dirty") is False
+        and _implementation_exclusion_reason(
+            artifact, report_source_sha=report_source_sha
+        )
+        is None
     )
 
 
-def _excluded_run_reason(artifact: dict[str, Any]) -> str | None:
+def _excluded_run_reason(
+    artifact: dict[str, Any], *, report_source_sha: str | None = None
+) -> str | None:
     if not _is_full_run(artifact):
         return "not_exact_four_provider_eight_launch_run"
     measurements = artifact.get("measurements") or {}
@@ -445,6 +487,11 @@ def _excluded_run_reason(artifact: dict[str, Any]) -> str | None:
         or harness.get("harness_file_dirty") is not False
     ):
         return "dirty_harness_or_repository"
+    implementation_reason = _implementation_exclusion_reason(
+        artifact, report_source_sha=report_source_sha
+    )
+    if implementation_reason is not None:
+        return implementation_reason
     return None
 
 
@@ -1222,7 +1269,9 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
 
 def _validate_provider_harness_artifact(artifact: dict[str, Any]) -> None:
     if artifact.get("artifact_kind") != HARNESS_ARTIFACT_KIND:
-        raise ValueError(f"provider harness artifact_kind must be {HARNESS_ARTIFACT_KIND}")
+        raise ValueError(
+            f"provider harness artifact_kind must be {HARNESS_ARTIFACT_KIND}"
+        )
     if artifact.get("schema_version") != HARNESS_SCHEMA_VERSION:
         raise ValueError(
             f"provider harness schema_version must be {HARNESS_SCHEMA_VERSION}"
@@ -1235,14 +1284,18 @@ def _validate_provider_harness_artifact(artifact: dict[str, Any]) -> None:
         or not all(isinstance(value, str) and value for value in providers)
         or len(set(providers)) != len(providers)
     ):
-        raise ValueError("provider harness providers must be a non-empty unique string list")
+        raise ValueError(
+            "provider harness providers must be a non-empty unique string list"
+        )
     if (
         not isinstance(scenarios, list)
         or not scenarios
         or not all(isinstance(value, str) and value for value in scenarios)
         or len(set(scenarios)) != len(scenarios)
     ):
-        raise ValueError("provider harness scenarios must be a non-empty unique string list")
+        raise ValueError(
+            "provider harness scenarios must be a non-empty unique string list"
+        )
     results = artifact.get("results")
     if not isinstance(results, list) or not results:
         raise ValueError("provider harness results must be non-empty")
@@ -1261,7 +1314,9 @@ def _validate_provider_harness_artifact(artifact: dict[str, Any]) -> None:
             )
         pair = (provider, scenario)
         if pair in actual_pairs:
-            raise ValueError(f"provider harness result {index} duplicates provider/scenario")
+            raise ValueError(
+                f"provider harness result {index} duplicates provider/scenario"
+            )
         actual_pairs.add(pair)
     if actual_pairs != expected_pairs:
         raise ValueError(
@@ -1605,11 +1660,20 @@ def build_report(
         for path, artifact in matrix_artifacts
         if _is_full_run(artifact)
     ]
-    measured = [(path, artifact) for path, artifact in full if _measured_run(artifact)]
+    measured = [
+        (path, artifact)
+        for path, artifact in full
+        if _measured_run(artifact, report_source_sha=report_source_sha)
+    ]
     excluded = [
         {"path": str(path), "reason": reason}
         for path, artifact in full
-        if (reason := _excluded_run_reason(artifact)) is not None
+        if (
+            reason := _excluded_run_reason(
+                artifact, report_source_sha=report_source_sha
+            )
+        )
+        is not None
     ]
     successful = [
         (path, artifact)

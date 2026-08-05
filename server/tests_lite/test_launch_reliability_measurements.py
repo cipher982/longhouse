@@ -182,11 +182,18 @@ def _matrix(
                 "source_git_sha": source_sha,
                 "sha256": "a" * 64,
                 "source_dirty": False,
+                "build_identity": {
+                    "facade": {"commit": source_sha, "dirty": False},
+                    "engine": {"commit": source_sha, "dirty": False},
+                },
+                "build_identity_error": None,
             },
             "longhouse_engine": {
                 "source_git_sha": source_sha,
                 "sha256": "b" * 64,
                 "source_dirty": False,
+                "build_identity": {"commit": source_sha, "dirty": False},
+                "build_identity_error": None,
             },
         },
         "recovery_qualification": "mixed_provider_degraded_start_with_harness_precondition_gap",
@@ -413,7 +420,7 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
                             }
                         },
                     }
-                ]
+                ],
             }
         )
     )
@@ -454,6 +461,24 @@ def test_dirty_provider_harness_is_invalid(tmp_path: Path):
     ]
 
 
+def test_unbound_implementation_binary_is_not_measured(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["implementation"]["longhouse"]["build_identity_error"] = "build identity probe exited 127"
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
+        {
+            "path": str(matrix),
+            "reason": "unbound_or_dirty_implementation_binary",
+        }
+    ]
+
+
 def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False)
@@ -477,7 +502,7 @@ def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
                             }
                         },
                     }
-                ]
+                ],
             }
         )
     )
@@ -1070,9 +1095,7 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     assert conservation["conservation_status"] == "complete"
 
 
-def _write_attestation_keyring(
-    tmp_path: Path, material: Ed25519PrivateKey
-) -> Path:
+def _write_attestation_keyring(tmp_path: Path, material: Ed25519PrivateKey) -> Path:
     public_key = material.public_key().public_bytes(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
@@ -1095,9 +1118,7 @@ def _write_attestation_keyring(
     return keyring
 
 
-def _write_attestation_private_key(
-    tmp_path: Path, material: Ed25519PrivateKey
-) -> Path:
+def _write_attestation_private_key(tmp_path: Path, material: Ed25519PrivateKey) -> Path:
     path = tmp_path / "attestation-private-key.pem"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(
@@ -1145,10 +1166,7 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
             "observation_window": {"status": "eligible"},
             "attestation_subjects": [{"episode_id": "episode-1"}],
         },
-        "measures": {
-            name: {"status": "observed"}
-            for name in attestation.MEASURE_NAMES
-        },
+        "measures": {name: {"status": "observed"} for name in attestation.MEASURE_NAMES},
     }
 
 
