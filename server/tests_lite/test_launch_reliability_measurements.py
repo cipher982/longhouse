@@ -717,6 +717,43 @@ def test_retry_observation_booleans_are_not_numeric(
     ]
 
 
+def test_retry_cadence_from_attempt_booleans_are_not_numeric(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["machine_agent_cold_restart"]["retry_backoff_cadence"]["session-1"][0][
+        "from_attempt"
+    ] = True
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
+        {"path": str(matrix), "reason": "retry_backoff_cadence_mismatch"}
+    ]
+
+
+def test_signed_subject_rejects_boolean_from_attempt(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    subject = _minimal_attestation_subject(attestation)
+    subject["matrix"]["retry_backoff_evidence"][0]["cadence"]["session-1"][0][
+        "from_attempt"
+    ] = True
+    subject_path = tmp_path / "subject.json"
+    subject_path.write_text(json.dumps(subject))
+    signing_key = Ed25519PrivateKey.generate()
+
+    with pytest.raises(ValueError, match="cadence does not match observations"):
+        attestation.create_receipt(
+            subject_path,
+            _write_attestation_private_key(tmp_path, signing_key),
+            tmp_path / "receipt.json",
+            key_id="test-key",
+            keys_path=_write_attestation_keyring(tmp_path, signing_key),
+        )
+
+
 def test_stale_matrix_is_not_measured(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False)

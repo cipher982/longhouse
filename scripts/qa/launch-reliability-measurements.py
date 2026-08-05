@@ -618,7 +618,9 @@ def _retry_backoff_evidence(
             if not isinstance(declared, dict):
                 return None, "retry_backoff_cadence_mismatch"
             if (
-                declared.get("from_attempt") != expected["from_attempt"]
+                not isinstance(declared.get("from_attempt"), int)
+                or isinstance(declared.get("from_attempt"), bool)
+                or declared.get("from_attempt") != expected["from_attempt"]
                 or not isinstance(declared.get("elapsed_seconds"), (int, float))
                 or isinstance(declared.get("elapsed_seconds"), bool)
                 or not math.isclose(

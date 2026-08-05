@@ -277,7 +277,9 @@ def _validate_retry_backoff_evidence(evidence: Any) -> None:
             if elapsed <= 0 or elapsed + tolerance < minimum:
                 raise ValueError("retry-backoff observations are below policy floor")
             if (
-                interval.get("from_attempt") != previous_attempts
+                not isinstance(interval.get("from_attempt"), int)
+                or isinstance(interval.get("from_attempt"), bool)
+                or interval.get("from_attempt") != previous_attempts
                 or not isinstance(interval.get("elapsed_seconds"), (int, float))
                 or isinstance(interval.get("elapsed_seconds"), bool)
                 or not math.isclose(
