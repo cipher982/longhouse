@@ -933,6 +933,12 @@ def _cursor_tui_input_ready(terminal: str) -> bool:
     compact = re.sub(r"[^a-z0-9?]+", "", normalized)
     if "workspacetrustrequired" in compact or "trustingworkspace" in compact:
         return False
+    # A Resume launch can expose the prompt bar while Cursor is still
+    # restoring the conversation. Treat that redraw as a loading boundary;
+    # injecting a bootstrap prompt here leaves the provider permanently in
+    # Working and produces no response hook.
+    if "loadingconversation" in compact or "restoringconversation" in compact:
+        return False
     return "cursoragent" in compact and ("plansearchbuildanything" in compact or "promptbar" in compact)
 
 
@@ -2145,14 +2151,13 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             resume_intent,
             use_credential_files=True,
             cwd=provider_cwd,
-            prompt=_cursor_bootstrap_prompt() if spec.provider == "cursor" else None,
         )
         resume_hook_event_bytes: int | None = None
         if spec.provider == "cursor":
             # Preserve the pre-resume hook boundary before launching the
-            # native selector. The prompt is appended after the provider's
-            # resume/model flags, which is Cursor's supported cold-start
-            # interaction surface.
+            # native selector. Resume must first finish restoring the
+            # conversation; its first foreground turn is sent only after the
+            # TUI and provider-owned idle phase are ready.
             resume_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
         _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         resumed = PtyProcess(
@@ -2177,12 +2182,25 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         if spec.provider == "cursor":
-            # The first resumed turn was supplied through Cursor's native
-            # argv. Require its identity-matched hook receipt before sending
-            # the post-resume marker through the Helm socket.
+            # Do not put the bootstrap prompt in Cursor's resume argv. Cursor
+            # can render that prompt before its conversation restore is
+            # complete, leaving it in Working forever. Wait for the restored
+            # TUI/idle boundary, send through the managed socket, and require
+            # a new hook event before sending the post-resume marker.
+            _wait_cursor_idle(
+                resumed_state,
+                environment,
+            )
+            bootstrap_send = _control_send(
+                spec,
+                args,
+                resumed_state,
+                resumed,
+                _cursor_bootstrap_prompt(),
+            )
             _write_json(
                 root / "resume-bootstrap-send.json",
-                {"method": "provider_argv_bootstrap", "returncode": 0},
+                bootstrap_send,
             )
             _wait_cursor_idle(
                 resumed_state,

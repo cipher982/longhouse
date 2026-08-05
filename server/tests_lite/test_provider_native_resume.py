@@ -377,6 +377,7 @@ def test_cursor_readiness_rejects_the_trust_transition_and_accepts_the_prompt() 
     assert _cursor_tui_input_ready("Workspace Trust Required [a] Trust this workspace") is False
     assert _cursor_tui_input_ready("Cursor Agent — Plan, search, build anything") is True
     assert _cursor_tui_input_ready("Cursor Agent — Trusting workspace...") is False
+    assert _cursor_tui_input_ready("Cursor Agent — Loading conversation") is False
 
 
 def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> None:
