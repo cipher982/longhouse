@@ -696,6 +696,27 @@ def test_retry_cadence_is_recomputed_from_raw_observations(tmp_path: Path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("attempts", True), ("observed_monotonic_seconds", False)],
+)
+def test_retry_observation_booleans_are_not_numeric(
+    tmp_path: Path, field: str, value: bool
+):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["machine_agent_cold_restart"]["retry_backoff_observations"][0][field] = value
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
+        {"path": str(matrix), "reason": "malformed_retry_backoff_observations"}
+    ]
+
+
 def test_stale_matrix_is_not_measured(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False)

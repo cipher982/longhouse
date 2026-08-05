@@ -52,11 +52,17 @@ jobs:
           exit 1
 
       - name: Checkout trusted gate source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: refs/heads/main
           path: trusted-release-gate
           persist-credentials: false
+
+      - name: Install the trusted gate runtime
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: '0.10.10'
+          checksum: '3e1027f26ce8c7e4c32e2277a7fed2cb410f2f1f9320d3df97653d40e21f415b'
 
       - name: Resolve and qualify the release source
         id: resolve
@@ -69,8 +75,18 @@ jobs:
           if [[ "${{ steps.release_tier.outputs.tier }}" != "stable" ]]; then
             args+=(--resolve-only)
           fi
-          result="$(python3 scripts/ci/require-launch-reliability-attestation.py "${args[@]}")"
+          result="$(uv run --frozen --project server python scripts/ci/require-launch-reliability-attestation.py "${args[@]}")"
           release_sha="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["release_sha"])' "$result")"
+          if [[ "${{ steps.release_tier.outputs.tier }}" == "stable" ]]; then
+            comparison="$(gh api "repos/${{ github.repository }}/compare/main...$release_sha" --jq .status)"
+            case "$comparison" in
+              behind|identical) ;;
+              *)
+                echo "Qualified release source is not on protected main history: $comparison." >&2
+                exit 1
+                ;;
+            esac
+          fi
           printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
           if [[ "${{ steps.release_tier.outputs.tier }}" == "stable" ]]; then
             qualification_run_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["run_id"])' "$result")"
@@ -975,11 +991,13 @@ jobs:
   release-attach-arm64:
     needs:
       - release
+      - require-launch-reliability-attestation
       - build-engine-linux-arm64
     if: ${{ needs.build-engine-linux-arm64.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      EXPECTED_RELEASE_SHA: ${{ needs.require-launch-reliability-attestation.outputs.release_sha }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -991,6 +1009,14 @@ jobs:
 
       - name: List arm64 artifacts
         run: ls -la binaries
+
+      - name: Assert release tag still points to the qualified source
+        run: |
+          actual_sha="$(gh api "repos/${{ github.repository }}/commits/${RELEASE_TAG}" --jq .sha)"
+          test "$actual_sha" = "$EXPECTED_RELEASE_SHA" || {
+            echo "Release tag moved before arm64 publication: expected $EXPECTED_RELEASE_SHA, got $actual_sha." >&2
+            exit 1
+          }
 
       - name: Add arm64 checksums to the release manifest
         run: |

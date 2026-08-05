@@ -245,8 +245,10 @@ def _validate_retry_backoff_evidence(evidence: Any) -> None:
             not isinstance(session_id, str)
             or not session_id
             or not isinstance(attempts, int)
+            or isinstance(attempts, bool)
             or attempts < 1
             or not isinstance(observed, (int, float))
+            or isinstance(observed, bool)
             or not math.isfinite(float(observed))
         ):
             raise ValueError("retry-backoff observation is malformed")
@@ -277,10 +279,12 @@ def _validate_retry_backoff_evidence(evidence: Any) -> None:
             if (
                 interval.get("from_attempt") != previous_attempts
                 or not isinstance(interval.get("elapsed_seconds"), (int, float))
+                or isinstance(interval.get("elapsed_seconds"), bool)
                 or not math.isclose(
                     float(interval["elapsed_seconds"]), round(elapsed, 3), abs_tol=0.001
                 )
                 or not isinstance(interval.get("minimum_seconds"), (int, float))
+                or isinstance(interval.get("minimum_seconds"), bool)
                 or not math.isclose(
                     float(interval["minimum_seconds"]), minimum, abs_tol=0.001
                 )

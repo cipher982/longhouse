@@ -564,8 +564,10 @@ def _retry_backoff_evidence(
             not isinstance(session_id, str)
             or not session_id
             or not isinstance(attempts, int)
+            or isinstance(attempts, bool)
             or attempts < 1
             or not isinstance(observed, (int, float))
+            or isinstance(observed, bool)
             or not math.isfinite(float(observed))
         ):
             return None, "malformed_retry_backoff_observations"
@@ -618,12 +620,14 @@ def _retry_backoff_evidence(
             if (
                 declared.get("from_attempt") != expected["from_attempt"]
                 or not isinstance(declared.get("elapsed_seconds"), (int, float))
+                or isinstance(declared.get("elapsed_seconds"), bool)
                 or not math.isclose(
                     float(declared["elapsed_seconds"]),
                     float(expected["elapsed_seconds"]),
                     abs_tol=0.001,
                 )
                 or not isinstance(declared.get("minimum_seconds"), (int, float))
+                or isinstance(declared.get("minimum_seconds"), bool)
                 or not math.isclose(
                     float(declared["minimum_seconds"]),
                     float(expected["minimum_seconds"]),
