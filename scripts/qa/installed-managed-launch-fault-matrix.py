@@ -763,30 +763,47 @@ def cleanup_detached_provider(
         timeout=15,
         check=False,
     )
-    groups = session_process_groups(session_id)
-    for pgid in verified_session_groups(groups):
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except (OSError, PermissionError):
-            pass
-    time.sleep(0.5)
-    remaining_groups = session_process_groups(session_id)
-    remaining = sorted(verified_session_groups(remaining_groups))
-    for pgid in remaining:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (OSError, PermissionError):
-            pass
-    time.sleep(0.2)
+    natural_timeout = float(os.environ.get("LONGHOUSE_NATURAL_CLEANUP_TIMEOUT", "8"))
+    natural_deadline = time.monotonic() + natural_timeout
+    remaining: list[int] = []
+    while time.monotonic() < natural_deadline:
+        remaining = sorted(verified_session_groups(session_process_groups(session_id)))
+        if not remaining:
+            break
+        time.sleep(0.1)
+    remaining = sorted(verified_session_groups(session_process_groups(session_id)))
+    forced_cleanup = bool(remaining)
+    if forced_cleanup:
+        for pgid in remaining:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (OSError, PermissionError):
+                pass
+        time.sleep(0.5)
+        remaining = sorted(verified_session_groups(session_process_groups(session_id)))
+        for pgid in remaining:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (OSError, PermissionError):
+                pass
+        time.sleep(0.2)
     final_groups = session_process_groups(session_id)
     final_group_ids = sorted(verified_session_groups(final_groups))
     return {
-        "status": "pass" if not final_group_ids else "fail",
+        "status": (
+            "forced_cleanup"
+            if forced_cleanup
+            else "pass"
+            if not final_group_ids
+            else "fail"
+        ),
         "stop_returncode": stop.returncode,
         "stop_output": redact(
             (stop.stdout or "") + (stop.stderr or ""),
             env.get("LONGHOUSE_DEVICE_TOKEN", ""),
         ),
+        "natural_cleanup_observed": not forced_cleanup,
+        "forced_cleanup": forced_cleanup,
         "remaining_process_groups": final_group_ids,
     }
 
@@ -1238,12 +1255,9 @@ def finish_live_command(
             os.killpg(os.getpgid(command.process.pid), signal.SIGINT)
         except (OSError, PermissionError):
             pass
-    if command.process.poll() is None:
-        kill_group(command.process, grace=0.2)
     # Closing the owned pty is part of terminating a TTY provider. Keeping the
     # master open can leave the launcher/provider group in macOS `?E` state
-    # until the cleanup function returns, which makes an early process scan
-    # report a leak that the close itself would resolve.
+    # during natural-stop observation.
     if command.is_tty:
         try:
             os.close(command.output_fd)
@@ -1251,33 +1265,51 @@ def finish_live_command(
             pass
     elif command.process.stdout is not None:
         command.process.stdout.close()
-    try:
-        command.process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        kill_group(command.process, grace=0.1)
-        command.process.kill()
-        try:
-            command.process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
-    launcher_reaped_initial = command.process.poll() is not None
+
+    # First observe the provider's own bounded stop path. The qualification
+    # must prove that Longhouse can end a managed session without the harness
+    # rescuing it; forced signals are evidence of a product cleanup failure,
+    # even if the final process scan is empty.
+    natural_cleanup_timeout = float(
+        os.environ.get("LONGHOUSE_NATURAL_CLEANUP_TIMEOUT", "8")
+    )
+    natural_deadline = time.monotonic() + natural_cleanup_timeout
+    natural_remaining: dict[int, dict[str, Any]] = {}
+    while time.monotonic() < natural_deadline:
+        command.process.poll()
+        natural_remaining = (
+            scoped_process_table(cleanup_scope) if cleanup_scope is not None else {}
+        )
+        if command.process.poll() is not None and not natural_remaining:
+            break
+        time.sleep(0.1)
+    command.process.poll()
+    natural_remaining = (
+        scoped_process_table(cleanup_scope) if cleanup_scope is not None else {}
+    )
+    launcher_reaped_naturally = command.process.poll() is not None
+    forced_cleanup = not launcher_reaped_naturally or bool(natural_remaining)
+    if forced_cleanup and command.process.poll() is None:
+        kill_group(command.process, grace=0.2)
+
     if cleanup_scope is not None:
         # Re-scan after the normal signals. Detached provider bridges are
         # allowed to outlive the facade, so terminate only the attributable
         # scoped records and verify the boundary again.
         remaining = scoped_process_table(cleanup_scope)
-        for pgid in sorted(verified_cleanup_groups(remaining, cleanup_scope)):
-            try:
-                os.killpg(pgid, signal.SIGTERM)
-            except (OSError, PermissionError):
-                pass
-        time.sleep(0.5)
-        remaining = scoped_process_table(cleanup_scope)
-        for pgid in sorted(verified_cleanup_groups(remaining, cleanup_scope)):
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except (OSError, PermissionError):
-                pass
+        if forced_cleanup:
+            for pgid in sorted(verified_cleanup_groups(remaining, cleanup_scope)):
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (OSError, PermissionError):
+                    pass
+            time.sleep(0.5)
+            remaining = scoped_process_table(cleanup_scope)
+            for pgid in sorted(verified_cleanup_groups(remaining, cleanup_scope)):
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (OSError, PermissionError):
+                    pass
         cleanup_timeout = float(
             os.environ.get("LONGHOUSE_INSTALLED_CLEANUP_TIMEOUT", "30")
         )
@@ -1322,7 +1354,9 @@ def finish_live_command(
         }
     )
     cleanup_status = (
-        "pass"
+        "forced_cleanup"
+        if forced_cleanup
+        else "pass"
         if launcher_absent_after_cleanup and not remaining and provider_pid is not None
         else "not_started"
         if (
@@ -1336,11 +1370,14 @@ def finish_live_command(
     return {
         "returncode": command.process.returncode,
         "process_group_reaped": launcher_reaped or launcher_absent_after_cleanup,
+        "launcher_reaped_naturally": launcher_reaped_naturally,
+        "natural_cleanup_observed": not forced_cleanup,
         "launcher_wait_reaped": launcher_reaped,
         "launcher_absent_after_cleanup": launcher_absent_after_cleanup,
         "provider_pid": provider_pid,
         "provider_process_group_cleanup": provider_kill_status,
-        "forced_launcher_cleanup": not launcher_reaped_initial,
+        "forced_launcher_cleanup": not launcher_reaped_naturally,
+        "forced_cleanup": forced_cleanup,
         "remaining_processes": public_process_records(remaining),
         "remaining_process_groups": remaining_process_groups,
         "status": cleanup_status,
@@ -1995,6 +2032,10 @@ def run_provider(
         longhouse_bin=longhouse_bin,
         env=env,
     )
+    if cleanup["status"] != "pass" and cleanup["status"] != "not_applicable":
+        raise RuntimeError(
+            f"{provider} detached cleanup required harness intervention: {cleanup}"
+        )
     result = {
         "provider": provider,
         "provider_binary": str(provider_bin),
@@ -2785,7 +2826,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     {},
                 )
-                finish_live_command(
+                cleanup = finish_live_command(
                     live,
                     provider_pid=result.get("provider_pid"),
                     provider_process_start_time=result.get(
@@ -2793,6 +2834,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     cleanup_scope=result.get("cleanup_scope"),
                 )
+                if cleanup["status"] not in {"pass", "not_started"}:
+                    cleanup_errors.append(
+                        f"{result.get('provider', 'unknown')} cleanup status: {cleanup}"
+                    )
             except Exception as error:  # noqa: BLE001 - cleanup must be reported.
                 cleanup_errors.append(
                     f"live-command cleanup {type(error).__name__}: {error}"

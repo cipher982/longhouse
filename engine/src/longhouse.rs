@@ -2239,13 +2239,30 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         if let Some(registration) = &degraded_registration {
             registration.mark_provider_failed();
         }
+        let _ = stop_codex_bridge(
+            &response.session_id,
+            Some(response.run_id.as_str()),
+            "bridge_start_failed",
+        );
         anyhow::bail!(
             "Codex bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let bridge: BridgeStartResponse =
-        serde_json::from_slice(&output.stdout).context("parse native Codex bridge response")?;
+    let bridge: BridgeStartResponse = match serde_json::from_slice(&output.stdout) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            if let Some(registration) = &degraded_registration {
+                registration.mark_provider_failed();
+            }
+            let _ = stop_codex_bridge(
+                &response.session_id,
+                Some(response.run_id.as_str()),
+                "bridge_start_failed",
+            );
+            return Err(error).context("parse native Codex bridge response");
+        }
+    };
     if !attach
         && bridge
             .thread_id
@@ -3065,6 +3082,7 @@ fn wait_for_child_or_signal(
             } else if waited < 0 {
                 let error = std::io::Error::last_os_error();
                 if error.raw_os_error() != Some(libc::EINTR) {
+                    terminate_and_reap_child(child, process_group);
                     return Err(error.into());
                 }
             }
@@ -3121,17 +3139,39 @@ fn terminate_and_reap_child(child: &mut std::process::Child, process_group: Opti
                 // Do not turn the emergency path back into an unbounded wait.
                 // A process in an uninterruptible kernel state may not be
                 // reapable immediately even after SIGKILL; the wrapper must
-                // return and the OS will reap the child when this owner exits.
+                // return and the shared reaper must retain ownership until
+                // waitpid confirms the child is gone.
                 let reap_deadline = std::time::Instant::now() + Duration::from_millis(250);
                 while std::time::Instant::now() < reap_deadline {
                     match child.try_wait() {
-                        Ok(Some(_)) | Err(_) => break,
+                        Ok(Some(_)) => return,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error) if error.raw_os_error() == Some(libc::ECHILD) => return,
+                        Err(_) => {
+                            crate::process_identity::reap_pid_later(child.id() as libc::pid_t);
+                            return;
+                        }
                         Ok(None) => std::thread::sleep(Duration::from_millis(25)),
                     }
                 }
+                crate::process_identity::reap_pid_later(child.id() as libc::pid_t);
+                return;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => {
                 return;
             }
             Err(_) => {
+                if let Some(group) = process_group {
+                    unsafe {
+                        libc::kill(-group, libc::SIGKILL);
+                    }
+                } else {
+                    let _ = child.kill();
+                }
+                crate::process_identity::reap_pid_later(child.id() as libc::pid_t);
                 return;
             }
         }
@@ -3668,17 +3708,24 @@ fn stop_codex_bridge(
     let deadline = std::time::Instant::now() + CODEX_STOP_DEADLINE;
     let mut rpc_detail: Option<String> = None;
     loop {
-        match child.try_wait()? {
-            Some(status) if status.success() => break,
-            Some(status) => {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(status)) => {
                 rpc_detail = Some(format!("stop helper exited with {status}"));
                 break;
             }
-            None => {}
+            Ok(None) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                let _ = child.kill();
+                crate::process_identity::reap_child_later(child);
+                rpc_detail = Some(format!("could not observe stop helper: {error}"));
+                break;
+            }
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
-            let _ = child.wait();
+            crate::process_identity::reap_child_later(child);
             rpc_detail = Some(format!(
                 "stop helper did not acknowledge within {}s",
                 CODEX_STOP_DEADLINE.as_secs()

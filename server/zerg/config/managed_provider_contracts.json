@@ -489,7 +489,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "97dee86a1aa5d14f89984424a9b951bfb7dc3e312db1ab2ed002779c2486ed37"
+      "adapter_digest": "31389ad520a337aafe19a3aa57aafadd809c7d3f440edad1ec4ecd46dab769b4"
     },
     {
       "provider": "claude",
@@ -1080,7 +1080,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "d5e0ea1365d5494967c8b5f7291c194afd7ab5782db26abf488e196511311dcd"
+      "adapter_digest": "b8066f451fab65398a54bee9ff8ab19b0521ce9ac5a3b469dcc6fee03352a0d8"
     },
     {
       "provider": "opencode",
@@ -1513,7 +1513,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "7c5c8b736d2bc9f74a358079be9ea85498047e83d8779bd696d0d1743fd65dda"
+      "adapter_digest": "465caf183caaa42f0464cee612869315fdb4c6e8a25e2e1d50a8d18527dec67e"
     },
     {
       "provider": "antigravity",
@@ -2228,7 +2228,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "83b3d34c4749fd58e47703813eeaa63183e855f36003e0b4f72d5b8519b661f0"
+      "adapter_digest": "c94aef61b4f410b264661ff9844b78d924adc846dc8341d7f95335dc83886c6f"
     }
   ]
 }
