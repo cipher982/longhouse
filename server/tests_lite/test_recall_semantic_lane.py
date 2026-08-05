@@ -524,7 +524,7 @@ async def test_semantic_session_listing_survives_one_unreadable_candidate(monkey
     from dataclasses import dataclass
     from dataclasses import replace as dataclass_replace
 
-    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalog_read_gateway import CatalogReadError
 
     @dataclass(frozen=True)
     class _Session:
@@ -546,7 +546,7 @@ async def test_semantic_session_listing_survives_one_unreadable_candidate(monkey
 
     def read(session_id, *, owner_id):
         if str(session_id) == bad_id:
-            raise CatalogUnavailable("catalogd unavailable for session.shadow_state.read.v2")
+            raise CatalogReadError("catalog_unavailable", "The live catalog is temporarily unavailable.")
         return (_Session(id=good_id), None, "1")
 
     monkeypatch.setattr(agents_search, "_semantic_recall_matches", matches)
@@ -570,13 +570,13 @@ async def test_semantic_session_listing_survives_one_unreadable_candidate(monkey
 async def test_semantic_session_listing_fails_when_every_candidate_is_unreadable(monkeypatch):
     """An empty list would claim the corpus holds nothing relevant. It doesn't."""
 
-    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalog_read_gateway import CatalogReadError
 
     async def matches(**_kwargs):
         return [_match(str(uuid4()), 0.9)]
 
     def read(_session_id, *, owner_id):
-        raise CatalogUnavailable("catalogd unavailable for session.shadow_state.read.v2")
+        raise CatalogReadError("catalog_unavailable", "The live catalog is temporarily unavailable.")
 
     monkeypatch.setattr(agents_search, "_semantic_recall_matches", matches)
     monkeypatch.setattr(agents_search, "read_live_catalog_session", read)
