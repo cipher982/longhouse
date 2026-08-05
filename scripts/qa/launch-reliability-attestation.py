@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 REPOSITORY = Path(__file__).resolve().parents[2]
+REPOSITORY_IDENTITY = "cipher982/longhouse"
 TRUSTED_KEYS_PATH = REPOSITORY / "config/qa/launch_reliability_attestation_keys.json"
 ARTIFACT_KIND = "launch_reliability_dogfood_attestation"
 SCHEMA_VERSION = 1
@@ -69,7 +70,7 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         raise ValueError("attestation subject has no full source SHA")
     if provenance.get("repository_dirty") is not False or provenance.get("harness_file_dirty") is not False:
         raise ValueError("attestation subject provenance is dirty")
-    if not isinstance(provenance.get("repository"), str) or not provenance["repository"]:
+    if provenance.get("repository") != REPOSITORY_IDENTITY:
         raise ValueError("attestation subject has no repository identity")
     report_sha = provenance.get("sha256")
     if (
@@ -125,10 +126,9 @@ def build_subject(report: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("report has no provenance or input subject")
     if not isinstance(dogfood, dict):
         raise ValueError("report has no dogfood series subject")
-    repository = provenance.get("repository")
     required_provenance = {
         "git_sha": provenance.get("git_sha"),
-        "repository": Path(repository).name if isinstance(repository, str) else None,
+        "repository": REPOSITORY_IDENTITY,
         "repository_dirty": provenance.get("repository_dirty"),
         "harness_file_dirty": provenance.get("harness_file_dirty"),
         "sha256": provenance.get("sha256"),

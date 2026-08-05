@@ -4,11 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full source commit recorded by the dogfood report
-        required: true
-        type: string
-      report_path:
-        description: Absolute path to the retained report on the qualification runner
+        description: Full source commit to qualify
         required: true
         type: string
 
@@ -28,8 +24,7 @@ jobs:
     env:
       ATTESTATION_KEY_ID: longhouse-ci-2026
       SOURCE_SHA: ${{ inputs.source_sha }}
-      REPORT_PATH: ${{ inputs.report_path }}
-      PRIVATE_KEY_PEM: ${{ secrets.LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM }}
+      EVIDENCE_ROOT: /var/lib/longhouse/qualification
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,46 +37,83 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      - name: Require the protected signer key
+      - name: Rebuild the report from retained evidence
         shell: bash
         run: |
-          test -n "$PRIVATE_KEY_PEM" || {
-            echo "LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM is not configured." >&2
-            exit 1
-          }
-          test -s "$REPORT_PATH" || {
-            echo "Report does not exist on the qualification runner: $REPORT_PATH" >&2
-            exit 1
-          }
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA" || {
             echo "Checked-out source does not match the requested source SHA." >&2
             exit 1
           }
-          test "$(jq -r '.provenance.git_sha // empty' "$REPORT_PATH")" = "$SOURCE_SHA" || {
-            echo "Report provenance does not match the requested source SHA." >&2
+          run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
+          matrix_root="$run_root/matrix"
+          health_root="$run_root/native-health"
+          harness_root="$run_root/provider-harness"
+          dogfood_root="$run_root/dogfood"
+          test -d "$matrix_root" || { echo "Missing matrix evidence root: $matrix_root" >&2; exit 1; }
+          test -d "$health_root" || { echo "Missing native health evidence root: $health_root" >&2; exit 1; }
+          test -d "$harness_root" || { echo "Missing provider harness evidence root: $harness_root" >&2; exit 1; }
+          test -d "$dogfood_root" || { echo "Missing dogfood evidence root: $dogfood_root" >&2; exit 1; }
+          shopt -s nullglob
+          harness=("$harness_root"/*.json)
+          health=("$health_root"/*.json)
+          dogfood=("$dogfood_root"/episodes/*.json)
+          challenges=("$dogfood_root"/challenges/*.json)
+          test "${#harness[@]}" -gt 0 || { echo "No provider harness artifacts retained." >&2; exit 1; }
+          test "${#health[@]}" -gt 0 || { echo "No native health artifacts retained." >&2; exit 1; }
+          test "${#dogfood[@]}" -gt 0 || { echo "No dogfood episodes retained." >&2; exit 1; }
+          test "${#dogfood[@]}" = "${#challenges[@]}" || { echo "Dogfood episode/challenge counts differ." >&2; exit 1; }
+          report_path="$run_root/launch-reliability-measurements.json"
+          subject_path="$run_root/launch-reliability-attestation-subject.json"
+          args=(
+            --matrix-root "$matrix_root"
+            --output "$report_path"
+            --attestation-subject "$subject_path"
+          )
+          for path in "${harness[@]}"; do args+=(--provider-harness-artifact "$path"); done
+          for path in "${health[@]}"; do args+=(--health-artifact "$path"); done
+          for path in "${dogfood[@]}"; do args+=(--dogfood-series "$path"); done
+          for path in "${challenges[@]}"; do args+=(--dogfood-challenge "$path"); done
+          uv run --project server python scripts/qa/launch-reliability-measurements.py "${args[@]}"
+          test -s "$report_path" || { echo "Report generation produced no report." >&2; exit 1; }
+          test -s "$subject_path" || {
+            echo "Report did not produce a qualifying attestation subject." >&2
             exit 1
           }
 
-      - name: Derive and sign the exact report subject
+      - name: Sign and verify the regenerated report
         shell: bash
         env:
           KEY_PATH: ${{ runner.temp }}/longhouse-attestation-private-key.pem
-          SUBJECT_PATH: ${{ runner.temp }}/launch-reliability-attestation-subject.json
-          RECEIPT_PATH: ${{ runner.temp }}/launch-reliability-attestation.json
+          PRIVATE_KEY_PEM: ${{ secrets.LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM }}
         run: |
+          run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
+          report_path="$run_root/launch-reliability-measurements.json"
+          subject_path="$run_root/launch-reliability-attestation-subject.json"
+          receipt_path="$run_root/launch-reliability-attestation.json"
+          test -n "$PRIVATE_KEY_PEM" || {
+            echo "LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM is not configured." >&2
+            exit 1
+          }
           umask 077
           printf '%s' "$PRIVATE_KEY_PEM" > "$KEY_PATH"
           uv run --project server python scripts/qa/launch-reliability-attestation.py \
             create-from-report \
-            --report "$REPORT_PATH" \
+            --report "$report_path" \
             --private-key "$KEY_PATH" \
-            --subject-output "$SUBJECT_PATH" \
-            --output "$RECEIPT_PATH" \
+            --subject-output "$subject_path" \
+            --output "$receipt_path" \
             --key-id "$ATTESTATION_KEY_ID"
           uv run --project server python scripts/qa/launch-reliability-attestation.py \
             verify \
-            --receipt "$RECEIPT_PATH" \
-            --subject "$SUBJECT_PATH"
+            --receipt "$receipt_path" \
+            --subject "$subject_path"
+
+      - name: Remove the signing key from the self-hosted runner
+        if: ${{ always() }}
+        shell: bash
+        env:
+          KEY_PATH: ${{ runner.temp }}/longhouse-attestation-private-key.pem
+        run: rm -f -- "$KEY_PATH"
 
       - name: Upload signed qualification evidence
         uses: actions/upload-artifact@v7
@@ -89,5 +121,6 @@ jobs:
           name: launch-reliability-attestation-${{ github.run_id }}
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/launch-reliability-attestation-subject.json
-            ${{ runner.temp }}/launch-reliability-attestation.json
+            /var/lib/longhouse/qualification/${{ inputs.source_sha }}/launch-reliability-measurements.json
+            /var/lib/longhouse/qualification/${{ inputs.source_sha }}/launch-reliability-attestation-subject.json
+            /var/lib/longhouse/qualification/${{ inputs.source_sha }}/launch-reliability-attestation.json

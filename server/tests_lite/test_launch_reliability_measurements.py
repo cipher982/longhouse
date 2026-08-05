@@ -1035,7 +1035,7 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
         "report_schema_version": 2,
         "report_provenance": {
             "git_sha": "a" * 40,
-            "repository": "/repo",
+            "repository": "cipher982/longhouse",
             "repository_dirty": False,
             "harness_file_dirty": False,
             "sha256": "b" * 64,

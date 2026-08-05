@@ -130,12 +130,26 @@ matching public key is
 `config/qa/launch_reliability_attestation_keys.json`; changing it is a trust
 root rotation and requires a release review.
 
-Run the `Launch reliability attestation` workflow manually on the
-`longhouse-release-qualification` runner with the report's full source SHA and
-the report path on that runner. The workflow runs `create-from-report`, which
-re-derives and validates the subject before signing, then verifies the receipt
-against the committed public key. A missing secret, missing report, dirty
-subject, or key mismatch fails the job.
+Retain the evidence on the protected qualification runner under this fixed
+layout before dispatching the `Launch reliability attestation` workflow:
+
+```text
+/var/lib/longhouse/qualification/<full-source-sha>/
+  matrix/                       # managed-launch matrix directory
+  provider-harness/*.json
+  native-health/*.json
+  dogfood/episodes/*.json
+  dogfood/challenges/*.json
+```
+
+Dispatch the workflow with the report's full source SHA. It checks out that
+SHA and rebuilds the report from this fixed evidence root before the signing
+secret is exposed. It then runs `create-from-report`, which re-derives and
+validates the subject before signing, and verifies the receipt against the
+committed public key. A missing evidence set, missing secret, dirty subject,
+source mismatch, or key mismatch fails the job. The fixed root is writable by
+the qualification collector and readable by the signer; it is not a path
+selected by the operator at dispatch time.
 
 After the workflow uploads the receipt, regenerate the final report from the
 same clean qualification checkout and retained inputs, adding:
