@@ -68,7 +68,10 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         or any(character not in LOWER_HEX for character in git_sha)
     ):
         raise ValueError("attestation subject has no full source SHA")
-    if provenance.get("repository_dirty") is not False or provenance.get("harness_file_dirty") is not False:
+    if (
+        provenance.get("repository_dirty") is not False
+        or provenance.get("harness_file_dirty") is not False
+    ):
         raise ValueError("attestation subject provenance is dirty")
     if provenance.get("repository") != REPOSITORY_IDENTITY:
         raise ValueError("attestation subject has no repository identity")
@@ -95,18 +98,23 @@ def _validate_subject(subject: dict[str, Any]) -> None:
             raise ValueError(f"attestation subject input {name} is empty")
         for value in values:
             if not isinstance(value, str) or len(value) != 64:
-                raise ValueError(f"attestation subject input {name} has an invalid SHA-256")
+                raise ValueError(
+                    f"attestation subject input {name} has an invalid SHA-256"
+                )
     matrix_source_shas = subject.get("matrix_source_shas")
     if not isinstance(matrix_source_shas, list) or not matrix_source_shas:
         raise ValueError("attestation subject has no matrix source provenance")
     if any(value != provenance["git_sha"] for value in matrix_source_shas):
-        raise ValueError("attestation subject matrix source SHA does not match the report")
+        raise ValueError(
+            "attestation subject matrix source SHA does not match the report"
+        )
     matrix_implementations = subject.get("matrix_implementations")
-    if (
-        not isinstance(matrix_implementations, list)
-        or len(matrix_implementations) != len(matrix_source_shas)
-    ):
-        raise ValueError("attestation subject has incomplete matrix implementation provenance")
+    if not isinstance(matrix_implementations, list) or len(
+        matrix_implementations
+    ) != len(matrix_source_shas):
+        raise ValueError(
+            "attestation subject has incomplete matrix implementation provenance"
+        )
     for implementation in matrix_implementations:
         if not isinstance(implementation, dict):
             raise ValueError("attestation subject matrix implementation is malformed")
@@ -116,7 +124,9 @@ def _validate_subject(subject: dict[str, Any]) -> None:
             or implementation.get("binary_dirty") is not False
             or implementation.get("engine_dirty") is not False
         ):
-            raise ValueError("attestation subject matrix implementation provenance is invalid")
+            raise ValueError(
+                "attestation subject matrix implementation provenance is invalid"
+            )
         for field in ("binary_sha256", "engine_sha256"):
             value = implementation.get(field)
             if (
@@ -180,13 +190,22 @@ def build_subject(
         "harness_file_dirty": provenance.get("harness_file_dirty"),
         "sha256": provenance.get("sha256"),
     }
-    if not isinstance(required_provenance["git_sha"], str) or len(required_provenance["git_sha"]) != 40:
+    if (
+        not isinstance(required_provenance["git_sha"], str)
+        or len(required_provenance["git_sha"]) != 40
+    ):
         raise ValueError("report provenance has no full source SHA")
-    if expected_source_sha is not None and required_provenance["git_sha"] != expected_source_sha:
+    if (
+        expected_source_sha is not None
+        and required_provenance["git_sha"] != expected_source_sha
+    ):
         raise ValueError("report source SHA does not match the expected source SHA")
     if required_provenance["repository"] != REPOSITORY_IDENTITY:
         raise ValueError("report provenance has an untrusted repository identity")
-    if required_provenance["repository_dirty"] is not False or required_provenance["harness_file_dirty"] is not False:
+    if (
+        required_provenance["repository_dirty"] is not False
+        or required_provenance["harness_file_dirty"] is not False
+    ):
         raise ValueError("report provenance is dirty")
     matrix = report.get("matrix")
     matrix_history = matrix.get("history") if isinstance(matrix, dict) else None
@@ -236,8 +255,13 @@ def build_subject(
     if dogfood.get("input_status") != "valid":
         raise ValueError("dogfood series input is not valid")
     observation_window = dogfood.get("observation_window")
-    if not isinstance(observation_window, dict) or observation_window.get("status") != "eligible":
-        raise ValueError("dogfood series does not meet its observation-window requirement")
+    if (
+        not isinstance(observation_window, dict)
+        or observation_window.get("status") != "eligible"
+    ):
+        raise ValueError(
+            "dogfood series does not meet its observation-window requirement"
+        )
     measures = report.get("measures")
     if not isinstance(measures, dict):
         raise ValueError("report has no measured dogfood values")
@@ -248,37 +272,38 @@ def build_subject(
         for name in measured_names
     ):
         raise ValueError("report does not contain all observed dogfood measures")
+    input_hashes: dict[str, list[str]] = {}
+    for name in (
+        "matrix_artifacts",
+        "provider_harness_artifacts",
+        "health_artifacts",
+        "dogfood_series_artifacts",
+    ):
+        references = inputs.get(name)
+        if not isinstance(references, list) or not references:
+            raise ValueError(f"report has no {name} input artifacts")
+        hashes: list[str] = []
+        for reference in references:
+            if not isinstance(reference, dict) or not isinstance(
+                reference.get("sha256"), str
+            ):
+                raise ValueError(f"report has an invalid {name} input artifact")
+            hashes.append(reference["sha256"])
+        input_hashes[name] = sorted(set(hashes))
     subject = {
         "artifact_kind": "launch_reliability_measurements",
         "report_schema_version": report.get("schema_version"),
         "report_provenance": required_provenance,
         "matrix_source_shas": matrix_source_shas,
         "matrix_implementations": matrix_implementations,
-        "inputs": {
-            name: sorted(
-                {
-                    value.get("sha256")
-                    for value in inputs.get(name, [])
-                    if isinstance(value, dict)
-                    and isinstance(value.get("sha256"), str)
-                }
-            )
-            for name in (
-                "matrix_artifacts",
-                "provider_harness_artifacts",
-                "health_artifacts",
-                "dogfood_series_artifacts",
-            )
-        },
+        "inputs": input_hashes,
         "dogfood_series": {
             "input_status": dogfood.get("input_status"),
             "episode_count": dogfood.get("episode_count"),
             "observation_window": dogfood.get("observation_window"),
             "attestation_subjects": subjects,
         },
-        "measures": {
-            name: _stable_measure(measures[name]) for name in measured_names
-        },
+        "measures": {name: _stable_measure(measures[name]) for name in measured_names},
     }
     _validate_subject(subject)
     return subject
@@ -323,9 +348,13 @@ def _trusted_public_key(
     try:
         public_bytes = base64.b64decode(encoded, validate=True)
     except (ValueError, TypeError) as exc:
-        raise ValueError(f"trusted attestation public key is not base64: {key_id}") from exc
+        raise ValueError(
+            f"trusted attestation public key is not base64: {key_id}"
+        ) from exc
     if len(public_bytes) != 32:
-        raise ValueError(f"trusted attestation public key has the wrong length: {key_id}")
+        raise ValueError(
+            f"trusted attestation public key has the wrong length: {key_id}"
+        )
     return Ed25519PublicKey.from_public_bytes(public_bytes)
 
 
@@ -364,7 +393,9 @@ def create_receipt(
         serialization.PublicFormat.Raw,
     )
     if public_bytes != trusted_bytes:
-        raise ValueError(f"attestation private key does not match trusted key: {key_id}")
+        raise ValueError(
+            f"attestation private key does not match trusted key: {key_id}"
+        )
     issued_at = (now or datetime.now(UTC)).astimezone(UTC)
     expires_at = issued_at + MAX_RECEIPT_LIFETIME
     receipt = {
@@ -383,7 +414,9 @@ def create_receipt(
         key.sign(canonical_json(_unsigned_receipt(receipt)))
     ).decode("ascii")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return receipt
 
 
@@ -531,7 +564,12 @@ def main(argv: list[str] | None = None) -> int:
             print(args.output)
         else:
             subject = _read_object(args.subject, label="attestation subject")
-            print(json.dumps(verify_receipt(args.receipt, subject, keys_path=args.keys), sort_keys=True))
+            print(
+                json.dumps(
+                    verify_receipt(args.receipt, subject, keys_path=args.keys),
+                    sort_keys=True,
+                )
+            )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"launch reliability attestation: {exc}") from exc
     return 0

@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Any
 from typing import Iterable
 
+from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
+from zerg.services.managed_provider_contracts import factory_provider_names
+
 MATRIX_FILENAME = "installed-managed-launch-fault-matrix.json"
 EXPECTED_PROVIDERS = frozenset({"claude", "codex", "cursor", "opencode"})
 DOGFOOD_ARTIFACT_KIND = "launch_reliability_dogfood_series"
@@ -57,6 +60,11 @@ HEALTH_ARTIFACT_KIND = "installed_native_health_fault_matrix"
 HEALTH_SCHEMA_VERSION = 1
 HARNESS_ARTIFACT_KIND = "universal_agent_harness_run"
 HARNESS_SCHEMA_VERSION = 1
+EXPECTED_HARNESS_PROVIDERS = frozenset(factory_provider_names(include_maintenance=True))
+EXPECTED_HARNESS_SCENARIOS = frozenset(DEFAULT_HARNESS_SCENARIOS)
+HARNESS_ACCEPTABLE_STATUSES = frozenset({"pass", "unsupported_gap", "not_applicable"})
+HARNESS_ACCEPTABLE_VERDICTS = frozenset({"green", "yellow"})
+MAX_HARNESS_ARTIFACT_AGE_SECONDS = 86400.0
 MAX_HEALTH_OBSERVATION_AGE_SECONDS = 300.0
 MAX_HEALTH_ARTIFACT_AGE_SECONDS = 86400.0
 HEALTH_EXPECTATIONS = {
@@ -1330,6 +1338,14 @@ def _validate_provider_harness_artifact(artifact: dict[str, Any]) -> None:
         raise ValueError(
             "provider harness scenarios must be a non-empty unique string list"
         )
+    if set(providers) != EXPECTED_HARNESS_PROVIDERS:
+        raise ValueError(
+            "provider harness providers do not match the canonical provider set"
+        )
+    if set(scenarios) != EXPECTED_HARNESS_SCENARIOS:
+        raise ValueError(
+            "provider harness scenarios do not match the canonical scenario set"
+        )
     results = artifact.get("results")
     if not isinstance(results, list) or not results:
         raise ValueError("provider harness results must be non-empty")
@@ -1356,6 +1372,37 @@ def _validate_provider_harness_artifact(artifact: dict[str, Any]) -> None:
         raise ValueError(
             "provider harness results do not cover the declared provider/scenario matrix"
         )
+
+
+def _validate_provider_harness_qualification(artifact: dict[str, Any]) -> None:
+    """Reject incomplete or failed harness evidence from release qualification.
+
+    ``unsupported_gap`` and ``not_applicable`` are explicit provider-contract
+    outcomes. They remain visible in the diagnostic report and are allowed for
+    the maintenance-tier portions of the canonical matrix. A missing, blocked,
+    failed, or otherwise unexpected status cannot become a qualified release
+    subject merely because the result row exists.
+    """
+
+    verdict = artifact.get("verdict")
+    if verdict not in HARNESS_ACCEPTABLE_VERDICTS:
+        raise ValueError(
+            "provider harness verdict is not an acceptable qualification verdict"
+        )
+    statuses = [
+        result.get("status")
+        for result in artifact.get("results") or []
+        if isinstance(result, dict)
+    ]
+    if any(status not in HARNESS_ACCEPTABLE_STATUSES for status in statuses):
+        raise ValueError(
+            "provider harness contains a blocked, failed, or unknown result status"
+        )
+    expected_verdict = (
+        "yellow" if any(status != "pass" for status in statuses) else "green"
+    )
+    if verdict != expected_verdict:
+        raise ValueError("provider harness verdict does not match its result statuses")
 
 
 def _health_measurements(
@@ -1855,6 +1902,23 @@ def build_report(
                 }
             )
             continue
+        try:
+            generated_at = _timestamp(
+                artifact.get("generated_at"), label="provider harness.generated_at"
+            )
+            if generated_at > report_generated_at:
+                raise ValueError(
+                    "provider harness.generated_at is after report generation time"
+                )
+            if (
+                report_generated_at - generated_at
+            ).total_seconds() > MAX_HARNESS_ARTIFACT_AGE_SECONDS:
+                raise ValueError(
+                    f"provider harness.generated_at is older than {MAX_HARNESS_ARTIFACT_AGE_SECONDS:g} seconds before report generation time"
+                )
+            _validate_provider_harness_qualification(artifact)
+        except ValueError as exc:
+            invalid.append({"path": str(path), "error": str(exc)})
         harness_inputs.append(str(path))
         for result in artifact.get("results") or []:
             if not isinstance(result, dict):

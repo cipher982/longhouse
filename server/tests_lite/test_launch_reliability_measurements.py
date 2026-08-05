@@ -50,6 +50,21 @@ def _harness_provenance() -> dict[str, object]:
     }
 
 
+def _provider_harness_artifact() -> dict[str, object]:
+    providers = sorted(MODULE.EXPECTED_HARNESS_PROVIDERS)
+    scenarios = sorted(MODULE.EXPECTED_HARNESS_SCENARIOS)
+    return {
+        "harness": _harness_provenance(),
+        "artifact_kind": "universal_agent_harness_run",
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "providers": providers,
+        "scenarios": scenarios,
+        "verdict": "green",
+        "results": [{"provider": provider, "scenario": scenario, "status": "pass"} for provider in providers for scenario in scenarios],
+    }
+
+
 def _dogfood_provenance() -> dict[str, object]:
     git_sha = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
@@ -431,38 +446,34 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix)
     harness = tmp_path / "harness.json"
-    harness.write_text(
-        json.dumps(
-            {
-                "harness": _harness_provenance(),
-                "artifact_kind": "universal_agent_harness_run",
-                "schema_version": 1,
-                "providers": ["fixture"],
-                "scenarios": ["fixture"],
-                "results": [
-                    {
-                        "provider": "fixture",
-                        "scenario": "fixture",
-                        "status": "blocked",
-                        "data": {
-                            "operation_evidence": {
-                                "pause_request_detect": {"level": "hermetic", "status": "pass"},
-                                "live_answer_delivery": {
-                                    "level": "live_token_required",
-                                    "status": "blocked",
-                                    "failure_code": "answer_pause_provider_delivery_unproven",
-                                },
-                            }
-                        },
-                    }
-                ],
+    payload = _provider_harness_artifact()
+    payload["results"][0] = {
+        **payload["results"][0],
+        "status": "blocked",
+        "data": {
+            "operation_evidence": {
+                "pause_request_detect": {"level": "hermetic", "status": "pass"},
+                "live_answer_delivery": {
+                    "level": "live_token_required",
+                    "status": "blocked",
+                    "failure_code": "answer_pause_provider_delivery_unproven",
+                },
             }
-        )
-    )
+        },
+    }
+    harness.write_text(json.dumps(payload))
 
     report = MODULE.build_report([matrix], [harness])
 
-    assert report["provider_scenarios"]["result_status_counts"] == {"blocked": 1}
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {
+            "path": str(harness),
+            "error": "provider harness contains a blocked, failed, or unknown result status",
+        }
+    ]
+    assert report["provider_scenarios"]["result_status_counts"]["blocked"] == 1
+    assert report["provider_scenarios"]["result_status_counts"]["pass"] == len(payload["results"]) - 1
     assert report["provider_scenarios"]["operation_status_counts"] == {"blocked": 1, "pass": 1}
     assert report["provider_scenarios"]["blocked_operations"][0]["operation"] == "live_answer_delivery"
     assert report["provider_scenarios"]["evidence_level_counts"] == {"hermetic": 1, "live_token_required": 1}
@@ -472,18 +483,9 @@ def test_dirty_provider_harness_is_invalid(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False)
     harness = tmp_path / "harness.json"
-    harness.write_text(
-        json.dumps(
-            {
-                "harness": {**_harness_provenance(), "repository_dirty": True},
-                "artifact_kind": "universal_agent_harness_run",
-                "schema_version": 1,
-                "providers": ["fixture"],
-                "scenarios": ["fixture"],
-                "results": [{"provider": "fixture", "scenario": "fixture", "status": "pass"}],
-            }
-        )
-    )
+    payload = _provider_harness_artifact()
+    payload["harness"]["repository_dirty"] = True
+    harness.write_text(json.dumps(payload))
 
     report = MODULE.build_report([matrix], [harness])
 
@@ -492,6 +494,46 @@ def test_dirty_provider_harness_is_invalid(tmp_path: Path):
         {
             "path": str(harness),
             "error": "provider harness provenance is not a clean report-source checkout",
+        }
+    ]
+
+
+def test_stale_provider_harness_is_invalid(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    harness = tmp_path / "harness.json"
+    payload = _provider_harness_artifact()
+    payload["generated_at"] = (
+        (datetime.now(UTC) - timedelta(seconds=MODULE.MAX_HARNESS_ARTIFACT_AGE_SECONDS + 1)).isoformat().replace("+00:00", "Z")
+    )
+    harness.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix], [harness])
+
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {
+            "path": str(harness),
+            "error": "provider harness.generated_at is older than 86400 seconds before report generation time",
+        }
+    ]
+
+
+def test_incomplete_provider_harness_matrix_is_invalid(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    harness = tmp_path / "harness.json"
+    payload = _provider_harness_artifact()
+    payload["providers"] = payload["providers"][:-1]
+    harness.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix], [harness])
+
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {
+            "path": str(harness),
+            "error": "provider harness providers do not match the canonical provider set",
         }
     ]
 
@@ -548,35 +590,19 @@ def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False)
     harness = tmp_path / "harness.json"
-    harness.write_text(
-        json.dumps(
-            {
-                "harness": _harness_provenance(),
-                "artifact_kind": "universal_agent_harness_run",
-                "schema_version": 1,
-                "providers": ["fixture"],
-                "scenarios": ["fixture"],
-                "results": [
-                    {
-                        "provider": "fixture",
-                        "scenario": "fixture",
-                        "status": "pass",
-                        "data": {
-                            "operation_evidence": {
-                                "pause_request_detect": {"level": "hermetic", "status": "pass"},
-                            }
-                        },
-                    }
-                ],
-            }
-        )
-    )
+    payload = _provider_harness_artifact()
+    payload["results"][0]["data"] = {
+        "operation_evidence": {
+            "pause_request_detect": {"level": "hermetic", "status": "pass"},
+        }
+    }
+    harness.write_text(json.dumps(payload))
     harness_copy = tmp_path / "harness-copy.json"
     harness_copy.write_bytes(harness.read_bytes())
 
     report = MODULE.build_report([matrix], [harness, harness_copy, harness])
 
-    assert report["provider_scenarios"]["result_status_counts"] == {"pass": 1}
+    assert report["provider_scenarios"]["result_status_counts"] == {"pass": len(payload["results"])}
     assert report["provider_scenarios"]["operation_status_counts"] == {"pass": 1}
     assert len(report["inputs"]["provider_harness_artifacts"]) == 1
 
@@ -1349,18 +1375,7 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
     matrix_path = tmp_path / "matrix.json"
     _matrix(path=matrix_path, auth_gap=False)
     harness_path = tmp_path / "provider-harness.json"
-    harness_path.write_text(
-        json.dumps(
-            {
-                "artifact_kind": "universal_agent_harness_run",
-                "schema_version": 1,
-                "harness": _harness_provenance(),
-                "providers": ["fixture"],
-                "scenarios": ["fixture"],
-                "results": [{"provider": "fixture", "scenario": "fixture", "status": "pass"}],
-            }
-        )
-    )
+    harness_path.write_text(json.dumps(_provider_harness_artifact()))
     health_path = tmp_path / "health.json"
     health_path.write_text(json.dumps(_health_artifact([])))
 
