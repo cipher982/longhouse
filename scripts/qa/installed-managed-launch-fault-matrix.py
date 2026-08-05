@@ -1448,11 +1448,16 @@ def finish_live_command(
     ):
         provider_cleanup_pid = provider_pid
     elif provider_pid is not None:
-        provider_kill_status = (
-            "identity_missing"
-            if provider_process_start_time is None
-            else "identity_mismatch"
-        )
+        if provider_process_start_time is None:
+            provider_kill_status = "identity_missing"
+        elif process_start_identity(provider_pid) is None:
+            # The provider may have exited naturally between the durable
+            # ownership read and teardown. Its recorded identity proves which
+            # process we owned; an absent current PID proves it is gone.
+            provider_kill_status = "natural"
+            provider_natural_cleanup_verified = True
+        else:
+            provider_kill_status = "identity_mismatch"
     elif (
         cleanup_scope is not None
         and cleanup_scope.get("provider_process_observed") is False
@@ -2170,6 +2175,12 @@ def run_provider_live(
         None,
     )
     if owner is not None:
+        owner_session_id = owner.get("expected_session_id")
+        if owner_session_id:
+            # The startup marker can arrive before the attach line. The
+            # durable intent is the authoritative session identity once the
+            # owner record has been matched to this launcher/cwd.
+            result["session_id_observed"] = str(owner_session_id)
         result["provider_pid"] = owner.get("provider_pid")
         result["provider_process_start_time"] = owner.get("provider_process_start_time")
     result["cleanup_scope"] = provider_cleanup_scope(
