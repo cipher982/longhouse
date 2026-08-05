@@ -6,7 +6,6 @@ use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 #[cfg(not(unix))]
 use std::sync::mpsc;
-#[cfg(unix)]
 use std::sync::{mpsc::Sender, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -145,7 +144,6 @@ fn reap_after_timeout(mut child: Child) {
     reap_child_later(child);
 }
 
-#[cfg(unix)]
 fn reaper_sender() -> &'static Sender<Child> {
     static REAPER: OnceLock<Sender<Child>> = OnceLock::new();
     REAPER.get_or_init(|| {
@@ -161,10 +159,15 @@ fn reaper_sender() -> &'static Sender<Child> {
                     let mut index = 0;
                     while index < children.len() {
                         match children[index].try_wait() {
-                            Ok(Some(_)) | Err(_) => {
+                            Ok(Some(_)) => {
                                 children.swap_remove(index);
                             }
-                            Ok(None) => index += 1,
+                            Ok(None) | Err(_) => {
+                                // Keep ownership and retry. Dropping a Child
+                                // here can leave a zombie, while blocking on
+                                // wait() would recreate head-of-line blocking.
+                                index += 1;
+                            }
                         }
                     }
                     if children.is_empty() {
@@ -182,14 +185,8 @@ fn reaper_sender() -> &'static Sender<Child> {
     })
 }
 
-#[cfg(unix)]
 pub(crate) fn reap_child_later(child: Child) {
     let _ = reaper_sender().send(child);
-}
-
-#[cfg(not(unix))]
-pub(crate) fn reap_child_later(mut child: Child) {
-    let _ = child.wait();
 }
 
 #[cfg(unix)]
@@ -655,13 +652,19 @@ mod tests {
         reap_child_later(blocker);
         reap_child_later(follower);
         let deadline = Instant::now() + Duration::from_secs(1);
-        while unsafe { libc::kill(follower_pid as i32, 0) == 0 } && Instant::now() < deadline {
+        let follower_reaped = loop {
+            if unsafe { libc::kill(follower_pid as i32, 0) != 0 } {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
             thread::sleep(Duration::from_millis(10));
-        }
+        };
         unsafe {
             let _ = libc::kill(blocker_pid as i32, libc::SIGTERM);
         }
-        assert!(unsafe { libc::kill(follower_pid as i32, 0) != 0 });
+        assert!(follower_reaped);
     }
 
     #[test]
