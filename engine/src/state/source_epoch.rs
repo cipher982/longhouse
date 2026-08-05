@@ -678,6 +678,38 @@ mod tests {
 
     use super::*;
 
+    /// A throwaway shipper database for one test.
+    ///
+    /// Six tests in this module called `open_db(None)`, which resolves to
+    /// `default_db_path()` — the machine's **real** shipper database. On a
+    /// developer's Mac that meant every run mutated live state: a fake `codex`
+    /// epoch with `opaque_source_id = "path-sha256:stable"` was found sitting
+    /// in a 9.7GB production database, first written in July and last touched
+    /// by running these tests today.
+    ///
+    /// It also made them fail. State persisted between runs, so the second and
+    /// every later run found a cursor already advanced and
+    /// `acknowledge_position(expected_start: 0)` matched no rows. Linux CI
+    /// passed throughout because the default path does not exist there, so each
+    /// run got a fresh empty database — the failure was invisible to exactly
+    /// the automation meant to catch it.
+    struct IsolatedDb {
+        _dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+    }
+
+    impl IsolatedDb {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("shipper.db");
+            Self { _dir: dir, path }
+        }
+
+        fn open(&self) -> Connection {
+            crate::state::db::open_db(Some(&self.path)).unwrap()
+        }
+    }
+
     /// An epoch with its durable cursor advanced to `position`.
     fn epoch_at(dir: &std::path::Path, position: u64) -> (Connection, Uuid) {
         let db_path = dir.join("state.db");
@@ -814,7 +846,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("history.jsonl");
         fs::write(&source, b"one\ntwo\n").unwrap();
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let _isolated = IsolatedDb::new();
+        let mut conn = _isolated.open();
 
         let initial = observe_file(
             &mut conn,
@@ -1008,7 +1041,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_device_remap_preserves_epoch_lane_and_upgrades_identity() {
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let _isolated = IsolatedDb::new();
+        let mut conn = _isolated.open();
         let initial = observe_source(
             &mut conn,
             "codex",
@@ -1053,7 +1087,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_inode_reuse_with_new_birth_time_still_rotates() {
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let _isolated = IsolatedDb::new();
+        let mut conn = _isolated.open();
         let initial = observe_source(
             &mut conn,
             "codex",
@@ -1091,7 +1126,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("history.jsonl");
         fs::write(&source, b"one\ntwo\n").unwrap();
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let _isolated = IsolatedDb::new();
+        let mut conn = _isolated.open();
 
         let parsed = observe_file(
             &mut conn,
@@ -1146,7 +1182,8 @@ mod tests {
 
     #[test]
     fn provider_identity_follows_ordered_sources_in_one_managed_session() {
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let _isolated = IsolatedDb::new();
+        let mut conn = _isolated.open();
         let first = observe_source(
             &mut conn,
             "claude",
@@ -1192,7 +1229,8 @@ mod tests {
 
     #[test]
     fn wire_predecessor_collapses_only_empty_unadmitted_epochs() {
-        let mut conn = crate::state::db::open_db(None).unwrap();
+        let _isolated = IsolatedDb::new();
+        let mut conn = _isolated.open();
         let first = observe_source(
             &mut conn,
             "cursor",
