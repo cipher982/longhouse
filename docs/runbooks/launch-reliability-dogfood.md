@@ -114,3 +114,50 @@ measured source SHA, with `dirty=false`. A stale installed binary therefore
 fails closed instead of qualifying an older implementation. Any invalid episode
 clears the numerical dogfood claims rather than partially counting the
 remaining files.
+
+## Release-owned qualification receipt
+
+The report above is still `qualification.status=not_qualified`. The operator
+challenge is an integrity check for diagnosis; it is not the release trust
+boundary. A protected qualification runner must derive the subject from the
+completed report and sign it with the private half of the committed
+`longhouse-ci-2026` Ed25519 key.
+
+The private key must exist only as the protected CI environment secret
+`LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM`. Do not put it in the checkout,
+an episode artifact, shell history, or a normal developer secret store. The
+matching public key is
+`config/qa/launch_reliability_attestation_keys.json`; changing it is a trust
+root rotation and requires a release review.
+
+Run the `Launch reliability attestation` workflow manually on the
+`longhouse-release-qualification` runner with the report's full source SHA and
+the report path on that runner. The workflow runs `create-from-report`, which
+re-derives and validates the subject before signing, then verifies the receipt
+against the committed public key. A missing secret, missing report, dirty
+subject, or key mismatch fails the job.
+
+After the workflow uploads the receipt, regenerate the final report from the
+same clean qualification checkout and retained inputs, adding:
+
+```bash
+uv run --project server python scripts/qa/launch-reliability-measurements.py \
+  --matrix-root /path/to/installed-managed-launch-fault-matrix \
+  --provider-harness-artifact /path/to/provider-harness.json \
+  --health-artifact /path/to/installed-native-health-fault-matrix.json \
+  --dogfood-series /tmp/longhouse-dogfood-episode-a.json \
+  --dogfood-series /tmp/longhouse-dogfood-episode-b.json \
+  --dogfood-series /tmp/longhouse-dogfood-episode-c.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge-a.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge-b.json \
+  --dogfood-challenge /tmp/longhouse-dogfood-challenge-c.json \
+  --dogfood-attestation /path/to/launch-reliability-attestation.json \
+  --output /tmp/launch-reliability-qualified.json
+```
+
+The final report is qualifying only when it has
+`report_status=ok`, `qualification.status=qualified`,
+`qualification.dogfood_attestation=external_receipt`, and a receipt subject
+hash matching the report's exact inputs. A receipt for a different report,
+expired receipt, future-issued receipt, wrong key, or changed artifact fails
+closed.

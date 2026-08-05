@@ -6,9 +6,14 @@ import hmac
 import importlib.util
 import json
 import subprocess
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/qa/launch-reliability-measurements.py"
 SPEC = importlib.util.spec_from_file_location("launch_reliability_measurements", SCRIPT)
@@ -174,6 +179,18 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
                     "health_state": "broken",
                     "producer_freshness": "stale",
                     "suggested_action_ids": ["inspect_local_health"],
+                },
+                "event_bearing_issue": {
+                    "status": "unresolved",
+                    "opened_at": observed_at,
+                },
+                "evidence_conservation": {
+                    "source_events": 1,
+                    "archived_events": 1,
+                    "replayed_events": 0,
+                    "duplicate_events": 0,
+                    "discarded_events": 0,
+                    "unresolved_events": 0,
                 },
             }
         )
@@ -972,6 +989,227 @@ def test_dogfood_series_supplies_longitudinal_measures(tmp_path: Path):
     assert conservation["conservation_status"] == "complete"
 
 
+def _write_attestation_keyring(
+    tmp_path: Path, material: Ed25519PrivateKey
+) -> Path:
+    public_key = material.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    keyring = tmp_path / "attestation-keys.json"
+    keyring.parent.mkdir(parents=True, exist_ok=True)
+    keyring.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "keys": {
+                    "test-key": {
+                        "algorithm": "ed25519",
+                        "public_key_base64": base64.b64encode(public_key).decode("ascii"),
+                    }
+                },
+            }
+        )
+    )
+    return keyring
+
+
+def _write_attestation_private_key(
+    tmp_path: Path, material: Ed25519PrivateKey
+) -> Path:
+    path = tmp_path / "attestation-private-key.pem"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        material.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    return path
+
+
+def _minimal_attestation_subject(attestation) -> dict[str, object]:
+    return {
+        "artifact_kind": "launch_reliability_measurements",
+        "report_schema_version": 2,
+        "report_provenance": {
+            "git_sha": "a" * 40,
+            "repository": "/repo",
+            "repository_dirty": False,
+            "harness_file_dirty": False,
+            "sha256": "b" * 64,
+        },
+        "inputs": {
+            "matrix_artifacts": ["c" * 64],
+            "provider_harness_artifacts": ["d" * 64],
+            "health_artifacts": ["e" * 64],
+            "dogfood_series_artifacts": ["f" * 64],
+        },
+        "dogfood_series": {
+            "input_status": "valid",
+            "episode_count": 3,
+            "observation_window": {"status": "eligible"},
+            "attestation_subjects": [{"episode_id": "episode-1"}],
+        },
+        "measures": {
+            name: {"status": "observed"}
+            for name in attestation.MEASURE_NAMES
+        },
+    }
+
+
+def test_release_attestation_receipt_verifies_and_rejects_tampering(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    signing_key = Ed25519PrivateKey.generate()
+    keyring = _write_attestation_keyring(tmp_path, signing_key)
+    private_key_path = _write_attestation_private_key(tmp_path, signing_key)
+    subject_path = tmp_path / "subject.json"
+    subject = _minimal_attestation_subject(attestation)
+    subject_path.write_text(json.dumps(subject))
+    receipt_path = tmp_path / "receipt.json"
+    issued_at = datetime(2026, 8, 4, 18, 0, tzinfo=UTC)
+
+    attestation.create_receipt(
+        subject_path,
+        private_key_path,
+        receipt_path,
+        key_id="test-key",
+        now=issued_at,
+        keys_path=keyring,
+    )
+    verified = attestation.verify_receipt(
+        receipt_path,
+        subject,
+        as_of=issued_at,
+        keys_path=keyring,
+    )
+    assert verified["key_id"] == "test-key"
+    assert verified["subject_sha256"] == attestation.sha256_json(subject)
+
+    original_receipt = json.loads(receipt_path.read_text())
+    tampered = json.loads(json.dumps(original_receipt))
+    tampered["signature"] = base64.b64encode(bytes(64)).decode("ascii")
+    receipt_path.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="signature does not verify"):
+        attestation.verify_receipt(
+            receipt_path,
+            subject,
+            as_of=issued_at,
+            keys_path=keyring,
+        )
+
+    tampered = json.loads(json.dumps(original_receipt))
+    tampered["subject"]["git_sha"] = "tampered"
+    receipt_path.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="different attestation subject"):
+        attestation.verify_receipt(
+            receipt_path,
+            subject,
+            as_of=issued_at,
+            keys_path=keyring,
+        )
+
+
+def test_release_attestation_rejects_bad_key_and_clock_bounds(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    signing_key = Ed25519PrivateKey.generate()
+    keyring = _write_attestation_keyring(tmp_path, signing_key)
+    private_key_path = _write_attestation_private_key(tmp_path, signing_key)
+    subject_path = tmp_path / "subject.json"
+    subject = _minimal_attestation_subject(attestation)
+    subject_path.write_text(json.dumps(subject))
+    receipt_path = tmp_path / "receipt.json"
+    issued_at = datetime(2026, 8, 4, 18, 0, tzinfo=UTC)
+    attestation.create_receipt(
+        subject_path,
+        private_key_path,
+        receipt_path,
+        key_id="test-key",
+        now=issued_at,
+        keys_path=keyring,
+    )
+
+    with pytest.raises(ValueError, match="issued in the future"):
+        attestation.verify_receipt(
+            receipt_path,
+            subject,
+            as_of=issued_at - timedelta(seconds=1),
+            keys_path=keyring,
+        )
+    with pytest.raises(ValueError, match="has expired"):
+        attestation.verify_receipt(
+            receipt_path,
+            subject,
+            as_of=issued_at + attestation.MAX_RECEIPT_LIFETIME,
+            keys_path=keyring,
+        )
+
+    other_key = Ed25519PrivateKey.generate()
+    other_keyring = _write_attestation_keyring(tmp_path / "other", other_key)
+    with pytest.raises(ValueError, match="signature does not verify"):
+        attestation.verify_receipt(
+            receipt_path,
+            subject,
+            as_of=issued_at,
+            keys_path=other_keyring,
+        )
+    with pytest.raises(ValueError, match="does not match trusted key"):
+        attestation.create_receipt(
+            subject_path,
+            _write_attestation_private_key(tmp_path / "other-key", other_key),
+            tmp_path / "wrong-receipt.json",
+            key_id="test-key",
+            now=issued_at,
+            keys_path=keyring,
+        )
+
+
+def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monkeypatch):
+    attestation = MODULE._attestation_module()
+    series = tmp_path / "dogfood.json"
+    _dogfood_series(series)
+    episode_paths, challenge_paths = _split_dogfood_series(series)
+
+    diagnostic_report = MODULE.build_report(
+        [],
+        dogfood_paths=episode_paths,
+        dogfood_challenge_paths=challenge_paths,
+    )
+    assert diagnostic_report["report_status"] == "ok"
+    report_path = tmp_path / "diagnostic-report.json"
+    report_path.write_text(json.dumps(diagnostic_report))
+    subject_path = tmp_path / "subject.json"
+
+    signing_key = Ed25519PrivateKey.generate()
+    keyring = _write_attestation_keyring(tmp_path, signing_key)
+    private_key_path = _write_attestation_private_key(tmp_path, signing_key)
+    receipt_path = tmp_path / "receipt.json"
+    attestation.create_receipt_from_report(
+        report_path,
+        private_key_path,
+        receipt_path,
+        subject_path,
+        key_id="test-key",
+        now=datetime.fromisoformat(diagnostic_report["generated_at"].replace("Z", "+00:00")),
+        keys_path=keyring,
+    )
+
+    monkeypatch.setattr(attestation, "TRUSTED_KEYS_PATH", keyring)
+    qualified = MODULE.build_report(
+        [],
+        dogfood_paths=episode_paths,
+        dogfood_challenge_paths=challenge_paths,
+        dogfood_attestation_paths=[receipt_path],
+    )
+
+    assert qualified["report_status"] == "ok", qualified["inputs"]["invalid_artifacts"]
+    assert qualified["qualification"]["status"] == "qualified"
+    assert qualified["qualification"]["dogfood_attestation"] == "external_receipt"
+    assert qualified["inputs"]["dogfood_attestation_receipts"][0]["sha256"]
+    assert attestation.TRUSTED_KEYS_PATH == keyring
+
+
 def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
     series = tmp_path / "dogfood.json"
     challenge = _write_signed_dogfood(
@@ -1294,6 +1532,7 @@ def test_duplicate_observation_timestamps_do_not_promote_series(tmp_path: Path):
         payload = json.loads(path.read_text())
         payload["episodes"][0]["observed_at"] = first_observed_at
         payload["episodes"][0]["collector_started_at"] = first_observed_at
+        payload["episodes"][0]["event_bearing_issue"]["opened_at"] = first_observed_at
         payload.pop("challenge", None)
         payload.pop("signature", None)
         challenges[index] = _write_signed_dogfood(path, payload)

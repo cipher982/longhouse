@@ -14,6 +14,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import importlib.util
 import json
 import math
 import os
@@ -145,6 +146,21 @@ EXPECTED_HEALTH_SCENARIOS = frozenset(HEALTH_EXPECTATIONS)
 KNOWN_ACTION_IDS = frozenset(
     contract["action"] for contract in HEALTH_EXPECTATIONS.values()
 )
+ATTESTATION_MODULE_PATH = Path(__file__).with_name("launch_reliability_attestation.py")
+_ATTESTATION_MODULE: Any | None = None
+
+
+def _attestation_module() -> Any:
+    global _ATTESTATION_MODULE
+    if _ATTESTATION_MODULE is None:
+        spec = importlib.util.spec_from_file_location(
+            "launch_reliability_attestation", ATTESTATION_MODULE_PATH
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {ATTESTATION_MODULE_PATH}")
+        _ATTESTATION_MODULE = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_ATTESTATION_MODULE)
+    return _ATTESTATION_MODULE
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -848,7 +864,19 @@ def _load_dogfood_series(
                             raise ValueError(
                                 f"episode {index}.evidence_conservation.{field} exceeds source_events"
                             )
-                loaded_episodes.append(dict(episode))
+                loaded_episode = dict(episode)
+                sampled_binary = provenance["sampled_binary"]
+                loaded_episode["_attestation_subject"] = {
+                    "artifact_sha256": content_hash,
+                    "collector_started_at": episode["collector_started_at"],
+                    "episode_id": episode["episode_id"],
+                    "generated_at": artifact["generated_at"],
+                    "observed_at": episode["observed_at"],
+                    "paired_engine_sha256": sampled_binary["engine_sha256"],
+                    "sampled_binary_sha256": sampled_binary["sha256"],
+                    "source_git_sha": provenance["git_sha"],
+                }
+                loaded_episodes.append(loaded_episode)
             episodes.extend(loaded_episodes)
             seen_episode_ids.update(loaded_ids)
             references.append(_input_reference(path))
@@ -972,6 +1000,14 @@ def _dogfood_summary(
         for field in ("archived_events", "discarded_events", "unresolved_events")
     )
     source_events = conservation_totals["source_events"]
+    attestation_subjects = sorted(
+        (
+            episode["_attestation_subject"]
+            for episode in episodes
+            if isinstance(episode.get("_attestation_subject"), dict)
+        ),
+        key=lambda subject: (subject["observed_at"], subject["episode_id"]),
+    )
     summary = {
         "scope": "dogfood_episode_series",
         "attestation": {
@@ -984,6 +1020,7 @@ def _dogfood_summary(
         },
         "episode_count": len(episodes),
         "source": references,
+        "attestation_subjects": attestation_subjects,
         "observation_window": {
             "status": "eligible" if series_eligible else "insufficient",
             "reason": series_reason,
@@ -1135,6 +1172,7 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
     }
     summary["episode_count"] = 0
     summary["source"] = []
+    summary["attestation_subjects"] = []
     summary["observation_window"] = {
         "status": "invalid",
         "reason": "one or more dogfood artifacts failed validation",
@@ -1476,9 +1514,11 @@ def build_report(
     health_paths: Iterable[Path] = (),
     dogfood_paths: Iterable[Path] = (),
     dogfood_challenge_paths: Iterable[Path] = (),
+    dogfood_attestation_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     dogfood_paths = list(dogfood_paths)
     dogfood_challenge_paths = list(dogfood_challenge_paths)
+    dogfood_attestation_paths = list(dogfood_attestation_paths)
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
     seen_matrix_paths: set[Path] = set()
@@ -1695,6 +1735,7 @@ def build_report(
             ],
             "health_artifacts": health_inputs,
             "dogfood_series_artifacts": dogfood_inputs,
+            "dogfood_attestation_receipts": [],
             "dogfood_deduplicated_artifacts": dogfood_deduplicated,
             "invalid_artifacts": invalid,
         },
@@ -1814,6 +1855,44 @@ def build_report(
             ),
         },
     }
+    if dogfood_attestation_paths:
+        if not dogfood_paths:
+            invalid.append(
+                {
+                    "path": str(dogfood_attestation_paths[0]),
+                    "error": "external dogfood attestation requires dogfood series inputs",
+                }
+            )
+        elif len(dogfood_attestation_paths) != 1:
+            invalid.append(
+                {
+                    "path": ",".join(str(path) for path in dogfood_attestation_paths),
+                    "error": "exactly one external dogfood attestation receipt is required",
+                }
+            )
+        else:
+            receipt_path = dogfood_attestation_paths[0].expanduser().resolve()
+            try:
+                attestation_module = _attestation_module()
+                subject = attestation_module.build_subject(report)
+                receipt_reference = attestation_module.verify_receipt(
+                    receipt_path,
+                    subject,
+                    as_of=datetime.now(UTC),
+                )
+            except (OSError, ValueError) as exc:
+                invalid.append({"path": str(receipt_path), "error": str(exc)})
+            else:
+                report["inputs"]["dogfood_attestation_receipts"] = [
+                    _input_reference(receipt_path)
+                ]
+                report["qualification"] = {
+                    "status": "qualified",
+                    "dogfood_attestation": "external_receipt",
+                    "receipt": receipt_reference,
+                    "reason": "External release-owned Ed25519 receipt verified against the exact report subject.",
+                }
+    report["report_status"] = "invalid" if invalid else "ok"
     return report
 
 
@@ -1855,12 +1934,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reporter-issued dogfood challenge JSON; repeatable.",
     )
     parser.add_argument(
+        "--dogfood-attestation",
+        action="append",
+        type=Path,
+        default=[],
+        help="Release-owned Ed25519 dogfood receipt JSON; exactly one is required for qualification.",
+    )
+    parser.add_argument(
         "--create-dogfood-challenge",
         type=Path,
         help="Create a private reporter-issued challenge and exit.",
     )
     parser.add_argument(
         "--output", type=Path, help="Write the report JSON to this path."
+    )
+    parser.add_argument(
+        "--attestation-subject",
+        type=Path,
+        help="Write the stable external-attestation subject JSON for CI signing.",
     )
     return parser
 
@@ -1886,7 +1977,19 @@ def main(argv: list[str] | None = None) -> int:
         args.health_artifact,
         args.dogfood_series,
         args.dogfood_challenge,
+        args.dogfood_attestation,
     )
+    subject_error: ValueError | None = None
+    if args.attestation_subject:
+        try:
+            subject = _attestation_module().build_subject(report)
+        except ValueError as exc:
+            subject_error = exc
+        else:
+            args.attestation_subject.parent.mkdir(parents=True, exist_ok=True)
+            args.attestation_subject.write_text(
+                json.dumps(subject, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -1894,6 +1997,8 @@ def main(argv: list[str] | None = None) -> int:
         print(args.output)
     else:
         print(encoded, end="")
+    if subject_error is not None:
+        raise SystemExit(f"attestation subject: {subject_error}")
     return 0 if not report["inputs"]["invalid_artifacts"] else 1
 
 

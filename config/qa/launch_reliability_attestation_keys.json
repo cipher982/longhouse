@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "keys": {
+    "longhouse-ci-2026": {
+      "algorithm": "ed25519",
+      "public_key_base64": "iWoZOb66fdLrtPKnXwBqlWC+HJzwmY0LUkl7BuAoEAU="
+    }
+  }
+}
