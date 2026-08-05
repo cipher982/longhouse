@@ -83,6 +83,25 @@ function historyImportVariant(state: HistoryImportSnapshot["state"]): StatusBadg
   return "neutral";
 }
 
+function machineActionLabel(actionId: string): string {
+  switch (actionId) {
+    case "inspect_transport":
+      return "Inspect transport";
+    case "inspect_shipping":
+      return "Inspect shipping";
+    case "inspect_archive":
+      return "Inspect archive";
+    case "inspect_storage_source":
+      return "Inspect source evidence";
+    case "inspect_managed_session":
+      return "Inspect managed session";
+    case "stop_managed_bridge":
+      return "Stop orphaned processes";
+    default:
+      return `Inspect ${actionId.replace(/^inspect_/, "").replaceAll("_", " ")}`;
+  }
+}
+
 function HistoryImportPanel({ historyImport }: { historyImport: HistoryImportSnapshot | undefined }) {
   if (historyImport?.state === "discovering") {
     return <p className="observability-history-inventory__note">Scanning local transcript sources…</p>;
@@ -645,6 +664,18 @@ function MachineHealthPanel({ machines }: { machines: MachineHealthItemResponse[
             <span>Heartbeat {formatHeartbeatAge(machine.heartbeat_age_seconds)}</span>
             <span>{machine.ship_attempts_1h} ship attempts (1h)</span>
           </div>
+          {machine.suggested_action_ids?.length ? (
+            <div className="observability-machine-actions" aria-label="Suggested actions">
+              <span className="observability-stat-label">Suggested action</span>
+              <div className="observability-machine-actions__list">
+                {machine.suggested_action_ids.map((actionId) => (
+                  <span key={actionId} className="observability-machine-action">
+                    {machineActionLabel(actionId)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="observability-machine-stats">
             <div className="observability-machine-stat">
               <span className="observability-stat-label">Ship p95</span>

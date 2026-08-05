@@ -680,6 +680,10 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
                 "last_ship_error_message": "429: rate limited",
                 "spool_pending_count": 7,
                 "spool_dead_count": 2,
+                "managed_launch_recovery": {
+                    "active_count": 1,
+                    "exhausted_count": 2,
+                },
                 "parse_error_count_1h": 2,
                 "consecutive_ship_failures": 1,
                 "ship_attempts_1h": 12,
@@ -765,6 +769,10 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert raw["adaptive_backlog_limiter"]["historical_cap"] == 3
             assert raw["ship_scheduler"]["ready_scan"] == 7
             assert raw["history_import"]["state"] == "inventory_ready"
+            assert raw["managed_launch_recovery"] == {
+                "active_count": 1,
+                "exhausted_count": 2,
+            }
             assert raw["history_import"]["inventory"]["generation"] == 4
             assert "path" not in raw["history_import"]["inventory"]["providers"][0]
             assert raw["last_ship_latency_ms"] == 187

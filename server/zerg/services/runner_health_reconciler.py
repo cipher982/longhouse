@@ -8,6 +8,7 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.models import Runner
@@ -26,6 +27,8 @@ OFFLINE_INCIDENT_TYPE = "offline"
 OPEN_INCIDENT_STATUS = "open"
 RESOLVED_INCIDENT_STATUS = "resolved"
 ALERT_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_AFTER_MINUTES", "5")))
+ALERT_REASON_CHANGE_COOLDOWN = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_REASON_CHANGE_COOLDOWN_MINUTES", "15")))
+ALERT_CLAIM_TTL = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_CLAIM_TTL_MINUTES", "10")))
 NON_PROACTIVE_SUPPRESSED_REASON = "non_proactive_availability"
 
 
@@ -219,6 +222,52 @@ def _external_attention_allowed(health: RunnerHealthAssessment) -> tuple[bool, s
     return True, None
 
 
+def _claim_external_alert(
+    db: Session,
+    *,
+    incident: RunnerHealthIncident,
+    reason_code: str,
+    now: datetime,
+) -> bool:
+    """Claim one alert episode before external delivery.
+
+    The claim closes the concurrent-reconciler window and survives a process
+    crash. A failed delivery leaves the claim until its short TTL expires so a
+    later tick can retry; a successful delivery replaces it with alert_sent_at.
+    """
+    context = dict(incident.context or {})
+    if incident.alert_sent_at is not None and context.get("alert_reason_code") == reason_code:
+        return False
+    claim_cutoff = now - ALERT_CLAIM_TTL
+    updated = (
+        db.query(RunnerHealthIncident)
+        .filter(
+            RunnerHealthIncident.id == incident.id,
+            RunnerHealthIncident.status == OPEN_INCIDENT_STATUS,
+            or_(
+                RunnerHealthIncident.alert_claimed_at.is_(None),
+                RunnerHealthIncident.alert_claimed_at < claim_cutoff,
+            ),
+        )
+        .update(
+            {RunnerHealthIncident.alert_claimed_at: now},
+            synchronize_session=False,
+        )
+    )
+    if updated != 1:
+        return False
+    incident.alert_claimed_at = now
+    context.update(
+        {
+            "alert_claimed_at": now.isoformat(),
+            "alert_claimed_reason_code": reason_code,
+        }
+    )
+    incident.context = context
+    db.flush()
+    return True
+
+
 async def _maybe_send_external_alert(
     db: Session,
     *,
@@ -228,7 +277,11 @@ async def _maybe_send_external_alert(
     health: RunnerHealthAssessment,
     now: datetime,
 ) -> bool:
-    if incident.alert_sent_at is not None:
+    context = dict(incident.context or {})
+    alert_reason_changed = incident.alert_sent_at is not None and context.get("alert_reason_code") not in {None, health.status_reason}
+    if alert_reason_changed and incident.alert_sent_at is not None and now - incident.alert_sent_at < ALERT_REASON_CHANGE_COOLDOWN:
+        return False
+    if incident.alert_sent_at is not None and not alert_reason_changed:
         return False
     allowed, suppressed_reason = _external_attention_allowed(health)
     if not allowed:
@@ -246,6 +299,19 @@ async def _maybe_send_external_alert(
     if now - incident.opened_at < ALERT_AFTER:
         return False
 
+    if not _claim_external_alert(
+        db,
+        incident=incident,
+        reason_code=health.status_reason,
+        now=now,
+    ):
+        return False
+
+    # The claim must be visible to another reconciler before delivery starts.
+    # If the process dies after sending, the short-lived durable claim prevents
+    # a duplicate; if delivery fails, the next tick can retry after its TTL.
+    db.commit()
+
     subject, body = _build_external_alert_copy(runner, health, incident, now)
     if not _send_email_alert(user, subject, body):
         logger.warning(
@@ -256,13 +322,14 @@ async def _maybe_send_external_alert(
         return False
 
     incident.alert_sent_at = now
+    incident.alert_claimed_at = None
     incident.alert_channel = "email"
     incident.alert_count = int(incident.alert_count or 0) + 1
-    context = dict(incident.context or {})
     context.update(
         {
             "alert_sent_at": now.isoformat(),
             "alert_channel": "email",
+            "alert_reason_code": health.status_reason,
         }
     )
     incident.context = context

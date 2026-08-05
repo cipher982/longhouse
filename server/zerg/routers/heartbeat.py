@@ -405,6 +405,7 @@ class HeartbeatIn(BaseModel):
     spool_dead_count: int = 0
     archive_backlog: dict[str, object] = Field(default_factory=dict)
     storage_v2_outbox: dict[str, object] = Field(default_factory=dict)
+    managed_launch_recovery: dict[str, object] = Field(default_factory=dict)
     adaptive_backlog_limiter: dict[str, object] | None = None
     ship_scheduler: dict[str, object] | None = None
     history_import: HistoryImportSnapshot | None = None

@@ -83,7 +83,7 @@ _catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
+VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 _HOT_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 
 # States that trigger auto-resume of snoozed sessions (genuine work restart)
@@ -115,7 +115,7 @@ class PresenceIn(UTCBaseModel):
     """Payload from a Claude Code hook."""
 
     session_id: str
-    state: str  # thinking | running | idle | needs_user | blocked
+    state: str  # thinking | running | idle | needs_user | blocked | stalled
     tool_name: Optional[str] = None
     cwd: Optional[str] = None
     provider: Optional[str] = "claude"

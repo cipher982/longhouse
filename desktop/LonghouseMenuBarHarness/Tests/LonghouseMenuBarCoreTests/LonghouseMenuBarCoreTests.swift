@@ -185,23 +185,86 @@ struct LonghouseMenuBarCoreTests {
         let snapshot = presentationSnapshot(
             reasons: ["storage_v2_sources_blocked"],
             sessions: [presentationSession(phase: "needs permission")],
-            storageBlocked: 1
+            storageBlocked: 1,
+            storageBlockKind: "source_epoch_conflict_unresolved"
         )
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .repair)
-        #expect(presentation.headline == "Durable upload blocked for 1 source")
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
     }
 
     @Test
     func nativePayloadConflictPromotesRepairWithoutReasonCode() {
-        let snapshot = presentationSnapshot(sessions: [], storageBlocked: 2)
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 2,
+            storageBlockKind: "source_epoch_conflict_unresolved"
+        )
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .repair)
-        #expect(presentation.headline == "Durable upload blocked for 2 sources")
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
+    }
+
+    @Test
+    func reconcilableSourceConflictStaysAmber() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 2,
+            storageBlockKind: "source_epoch_conflict"
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let durable = presentation.facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Source upload reconciliation pending for 2 sources")
+        #expect(durable?.promotion == .inspect)
+    }
+
+    @Test
+    func exhaustedManagedRecoveryStaysAmberAndSpecific() {
+        let snapshot = presentationSnapshot(
+            reasons: ["managed_launch_recovery_exhausted"],
+            sessions: []
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Managed session recovery needs attention")
+    }
+
+    @Test
+    func unresolvedSourceRemainsRedWhenNewerConflictIsReconcilable() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 2,
+            storageBlockKind: "source_epoch_conflict",
+            storageUnresolved: 1
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.headline == "Durable upload needs inspection for 1 source")
+    }
+
+    @Test
+    func unknownSourceConflictRequiresInspection() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            storageBlocked: 1,
+            storageBlockKind: nil
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Durable upload proof unavailable for 1 source")
     }
 
     @Test
@@ -305,6 +368,23 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.promotion == .inspect)
         #expect(presentation.headline == "Historical archive needs review")
+    }
+
+    @Test
+    func archivePauseIsInspectableNotNormal() {
+        let snapshot = presentationSnapshot(
+            reasons: ["archive_repair_paused"], sessions: [],
+            archive: ArchiveBacklogStatus(
+                state: "complete", mode: "paused", pendingRanges: 0,
+                pendingPaths: 0, pendingSessions: 0, pendingBytes: 0,
+                deadRanges: 0, deadBytes: 0
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.needsStatusItemBadge)
     }
 
     @Test
@@ -427,6 +507,27 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.control?.connection == "connected")
         #expect(session.canStopFromMenuBar)
         #expect(session.menuBarAttentionKind == .working)
+    }
+
+    @Test
+    func runtimeProjectionRefreshPreservesMachineActionIdentifiers() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-07-22T20:30:32Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Orphaned managed process",
+            reasons: ["orphaned_managed_bridge"],
+            suggestedActions: ["Stop the exact managed process"],
+            suggestedActionIds: ["stop_managed_bridge"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.markingRuntimeHostProjectionUnavailable().suggestedActionIds == ["stop_managed_bridge"])
     }
 
     @Test
@@ -884,6 +985,63 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func sourceInspectionDryRunUsesScopedShippingCommand() throws {
+        let sourceEpoch = "01234567-89ab-cdef-0123-456789abcdef"
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Durable upload needs inspection",
+            reasons: ["storage_v2_sources_unresolved"],
+            suggestedActions: ["Inspect retained source evidence"],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: nil,
+                exists: true,
+                fresh: true,
+                ageSeconds: 1,
+                payload: EngineStatusPayload(
+                    version: "test",
+                    daemonPid: 1,
+                    lastShipAt: nil,
+                    spoolPendingCount: 0,
+                    spoolDeadCount: 0,
+                    storageV2Outbox: StorageV2OutboxStatus(
+                        pendingCount: 0,
+                        pendingBytes: 0,
+                        blockedSourceCount: 1,
+                        blockedBytes: 0,
+                        latestBlockSourceEpoch: sourceEpoch,
+                        latestUnresolvedBlockSourceEpoch: sourceEpoch,
+                        latestBlockKind: "source_epoch_conflict_unresolved",
+                        latestBlockDetail: nil,
+                        byteLimit: 1_073_741_824,
+                        error: nil
+                    ),
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 0,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: [],
+                    lastUpdated: "2026-04-08T01:52:00Z"
+                ),
+                error: nil
+            ),
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.inspectStorageSource, snapshot: snapshot)
+
+        #expect(feedback?.style == .info)
+        #expect(feedback?.title == "Source inspection dry run recorded")
+        #expect(feedback?.detail.contains("longhouse shipping inspect --source-epoch \(sourceEpoch) --json") == true)
+    }
+
+    @Test
     func setupDryRunReturnsVisibleFeedback() throws {
         let snapshot = HealthSnapshot.setupRequiredSnapshot(detail: "zsh:1: command not found: longhouse")
 
@@ -923,6 +1081,30 @@ struct LonghouseMenuBarCoreTests {
         #expect(feedback?.style == .warning)
         #expect(feedback?.title == "Stop dry run recorded")
         #expect(feedback?.detail.contains("zerg") == true)
+    }
+
+    @Test
+    func freeDiskSpaceDryRunReturnsVisibleFeedback() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Disk space is critically low",
+            reasons: ["disk_critically_low"],
+            suggestedActions: ["free_disk_space"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.freeDiskSpace, snapshot: snapshot)
+
+        #expect(feedback?.style == .info)
+        #expect(feedback?.title == "Free disk space dry run recorded")
     }
 
     @Test
@@ -1527,7 +1709,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "yellow",
             headline: "Longhouse archive repair is draining",
             reasons: ["archive_repair_draining"],
-            suggestedActions: ["Inspect archive backlog: longhouse archive status"],
+            suggestedActions: ["Inspect archive backlog: longhouse local-health --fast --json"],
             attention: AttentionSnapshot(
                 state: "watching",
                 summary: nil
@@ -1985,6 +2167,21 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func unresolvedSourceFixtureCarriesScopedActionIdentifier() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/immutable-source-unresolved.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+
+        #expect(snapshot.severity == "red")
+        #expect(snapshot.suggestedActionIds == ["inspect_storage_source"])
+        #expect(snapshot.storageBlockRequiresRepair)
+    }
+
+    @Test
     func managedUIPresenceSeparatesBackgroundFromRuntimeAttached() throws {
         let data = Data("""
         {
@@ -2412,6 +2609,29 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
     }
 
+    @Test
+    func nativeRedWithoutRowLevelExceptionPromotesRepair() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-22T03:00:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse reported a new machine failure",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            managedSummary: nil,
+            managedSessions: [],
+            orphanBridges: [],
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .repair)
+    }
+
     private func makeFakeHomeDirectory() throws -> URL {
         let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2637,6 +2857,19 @@ struct LonghouseMenuBarCoreTests {
         #expect(value("durable-upload") == "Unknown")
         #expect(value("transport") == "Unknown")
         #expect(facts.first(where: { $0.id == "transport" })?.promotion == .unavailable)
+    }
+
+    @Test
+    func unreadableStorageOutboxDoesNotRenderDurableFactAsClear() {
+        let snapshot = presentationSnapshot(
+            reasons: ["storage_v2_outbox_unreadable"],
+            sessions: []
+        )
+        let facts = snapshot.menuBarPresentation(relativeTo: Date()).facts
+        let durable = facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(durable?.value == "Unknown")
+        #expect(durable?.promotion == .repair)
     }
 
     @Test
@@ -2896,6 +3129,67 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func malformedStorageCounterKeepsNativeEnvelopeDecodableAndInspectable() throws {
+        let data = Data("""
+        {
+          "schema_version": 1,
+          "collected_at": "2026-08-04T20:00:00Z",
+          "health_state": "degraded",
+          "severity": "yellow",
+          "headline": "Longhouse native fast health needs attention",
+          "reasons": ["storage_v2_sources_proof_unknown"],
+          "suggested_actions": ["Update Longhouse and inspect the retained source evidence."],
+          "suggested_action_ids": ["inspect_storage_source"],
+          "engine_status": {
+            "path": "/tmp/engine-status.json",
+            "exists": true,
+            "fresh": true,
+            "age_seconds": 1,
+            "payload": {
+              "storage_v2_outbox": {
+                "blocked_source_count": "malformed",
+                "unresolved_blocked_source_count": 0
+              }
+            }
+          }
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+
+        #expect(snapshot.storageBlockProofUnknown)
+        #expect(snapshot.storageBlockRequiresRepair == false)
+        #expect(snapshot.suggestedActionIds == ["inspect_storage_source"])
+    }
+
+    @Test
+    func nonObjectStorageOutboxKeepsNativeEnvelopeActionable() throws {
+        let data = Data("""
+        {
+          "schema_version": 1,
+          "collected_at": "2026-08-04T20:00:00Z",
+          "health_state": "broken",
+          "severity": "red",
+          "headline": "Source upload state unavailable",
+          "reasons": ["storage_v2_outbox_unreadable"],
+          "suggested_actions": ["Inspect the storage-v2 outbox error in engine-status.json."],
+          "suggested_action_ids": ["inspect_storage_outbox"],
+          "engine_status": {
+            "exists": true,
+            "fresh": true,
+            "age_seconds": 1,
+            "payload": {"storage_v2_outbox": "unreadable"}
+          }
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+
+        #expect(snapshot.engineStatus?.payload?.storageV2Outbox?.malformedCounter == true)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .repair)
+    }
+
+    @Test
     func projectionWithoutRuntimeHostAuthorityIsLeftAlone() {
         let localOnly = ManagedSessionSnapshot(
             sessionId: "s2", provider: "claude", workspaceLabel: "longhouse",
@@ -2924,7 +3218,7 @@ private func makeHealthySnapshot(
     headline: String = "Longhouse shipping healthy",
     sessions: [ManagedSessionSnapshot]? = nil
 ) -> HealthSnapshot {
-    HealthSnapshot(
+    return HealthSnapshot(
         schemaVersion: 1,
         collectedAt: "2026-05-05T12:00:00Z",
         healthState: "healthy",
@@ -2955,13 +3249,21 @@ private func presentationSnapshot(
     sessions: [ManagedSessionSnapshot],
     archive: ArchiveBacklogStatus? = nil,
     storageBlocked: Int = 0,
+    storageBlockKind: String? = nil,
+    storageUnresolved: Int? = nil,
     storagePending: Int = 0,
     shipFailures: Int = 0,
     isOffline: Bool = false,
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
 ) -> HealthSnapshot {
-    HealthSnapshot(
+    let resolvedStorageUnresolved = storageUnresolved ?? (
+        storageBlockKind == "source_epoch_conflict" || storageBlockKind == "render_generation_revision_conflict"
+            ? 0
+            : storageBlockKind == "source_epoch_conflict_unresolved" ? 1 : nil
+    )
+
+    return HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
         healthState: "healthy", severity: "green", headline: "Healthy",
         reasons: reasons, suggestedActions: [],
@@ -2976,7 +3278,8 @@ private func presentationSnapshot(
                 spoolPendingCount: 0, spoolDeadCount: 0, archiveBacklog: archive,
                 storageV2Outbox: StorageV2OutboxStatus(
                     pendingCount: storagePending, pendingBytes: 0, blockedSourceCount: storageBlocked,
-                    blockedBytes: 0, latestBlockKind: nil, latestBlockDetail: nil,
+                    unresolvedBlockedSourceCount: resolvedStorageUnresolved,
+                    blockedBytes: 0, latestBlockKind: storageBlockKind, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, consecutiveShipFailures: shipFailures, diskFreeBytes: nil,

@@ -111,3 +111,23 @@ def test_machine_state_generation_ignores_legacy_topology_and_runner_flags(tmp_p
     assert second.runner_enabled is False
     assert second.config_generation == first.config_generation
     assert machine_state_source_hash(second) == machine_state_source_hash(first)
+
+
+def test_machine_state_hash_includes_derived_archive_repair_mode(tmp_path: Path):
+    hosted = write_machine_state(
+        base_dir=tmp_path / "hosted",
+        written_by="connect-install",
+        runtime_url="https://david010.longhouse.ai",
+        machine_name="cinder",
+        desktop_app_enabled=True,
+    )
+    self_hosted = write_machine_state(
+        base_dir=tmp_path / "self-hosted",
+        written_by="connect-install",
+        runtime_url="https://demo.longhouse.test",
+        machine_name="cinder",
+        desktop_app_enabled=True,
+    )
+
+    assert machine_state_source_hash(hosted) == "01e4c4fc4bd92b09bb67f0121e6efb268bc1574a02ed95c8e45a8b0202f0ed58"
+    assert machine_state_source_hash(self_hosted) == "07cbce4c7cea60395ca0a1c6ee86824550c1ae96eff7ed5e79d5e6ab066ff067"

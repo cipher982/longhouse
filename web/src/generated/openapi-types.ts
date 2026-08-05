@@ -5689,6 +5689,10 @@ export interface components {
             storage_v2_outbox?: {
                 [key: string]: unknown;
             };
+            /** Managed Launch Recovery */
+            managed_launch_recovery?: {
+                [key: string]: unknown;
+            };
             /** Adaptive Backlog Limiter */
             adaptive_backlog_limiter?: {
                 [key: string]: unknown;
@@ -6122,6 +6126,8 @@ export interface components {
             status_summary: string;
             /** Reasons */
             reasons: string[];
+            /** Suggested Action Ids */
+            suggested_action_ids?: string[];
             /** Last Ship At */
             last_ship_at?: string | null;
             /** Last Ship Attempt At */

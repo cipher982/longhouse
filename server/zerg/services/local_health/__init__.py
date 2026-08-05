@@ -119,6 +119,7 @@ from .classifier import _broken_health_headline
 from .classifier import _broken_shipping_flag
 from .classifier import _classify_health
 from .classifier import _collect_health_reasons
+from .classifier import _collect_managed_launch_recovery
 from .classifier import _degraded_health_headline
 from .classifier import _degraded_shipping_flag
 from .classifier import _degraded_state_is_watching
@@ -132,6 +133,7 @@ from .classifier import _launch_health_flags
 from .classifier import _managed_health_flags
 from .classifier import _outbox_is_actionable
 from .classifier import _repair_action_for_launch_readiness
+from .classifier import _suggested_action_ids
 from .claude import _collect_provider_hook_diagnostics
 from .claude import _hook_diagnostic_event_from_payload
 from .claude import _hook_error_commands_from_payload
@@ -521,6 +523,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     phase_overlay = None
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
+    managed_launch_recovery = _collect_managed_launch_recovery(engine_status)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
@@ -615,6 +618,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
+        managed_launch_recovery=managed_launch_recovery,
     )
     latest_contract_issue = _apply_managed_session_contract_diagnostics(
         diagnostics=managed_session_contracts,
@@ -706,6 +710,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
+        managed_launch_recovery=managed_launch_recovery,
     )
     attention = _derive_attention(
         health_state=health_state,
@@ -714,6 +719,8 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         suggested_actions=suggested_actions,
         context=attention_context,
     )
+    suggested_action_ids = _suggested_action_ids(reasons)
+    attention["suggested_action_ids"] = suggested_action_ids
     _mark_machine_preview_sessions(managed_sessions)
 
     return {
@@ -726,6 +733,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "headline": headline,
         "reasons": reasons,
         "suggested_actions": suggested_actions,
+        "suggested_action_ids": suggested_action_ids,
         "attention": attention,
         "service": service,
         "engine_status": engine_status,
@@ -735,6 +743,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         ),
         "archive_repair": archive_repair,
         "storage_v2_outbox": storage_v2_outbox,
+        "managed_launch_recovery": managed_launch_recovery,
         "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,

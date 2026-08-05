@@ -34,6 +34,11 @@
   },
   "headline": "Longhouse native fast health is healthy",
   "health_state": "healthy",
+  "managed_launch_recovery": {
+    "active_count": 0,
+    "exhausted_count": 0,
+    "scan_error": false
+  },
   "managed_sessions": [
     {
       "bridge_heartbeat_at": "2026-08-03T16:00:00Z",
@@ -67,6 +72,7 @@
     "dead_count": 0,
     "pending_count": 0
   },
+  "suggested_action_ids": [],
   "suggested_actions": [],
   "transport": {
     "status": "healthy",

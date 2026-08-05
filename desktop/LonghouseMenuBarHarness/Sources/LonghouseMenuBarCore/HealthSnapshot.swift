@@ -46,6 +46,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let headline: String
     public let reasons: [String]
     public let suggestedActions: [String]
+    public let suggestedActionIds: [String]?
     public let attention: AttentionSnapshot?
     public let service: ServiceSnapshot?
     public let engineStatus: EngineStatusSnapshot?
@@ -68,6 +69,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         headline: String,
         reasons: [String],
         suggestedActions: [String],
+        suggestedActionIds: [String]? = nil,
         attention: AttentionSnapshot? = nil,
         service: ServiceSnapshot?,
         engineStatus: EngineStatusSnapshot?,
@@ -89,6 +91,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.headline = headline
         self.reasons = reasons
         self.suggestedActions = suggestedActions
+        self.suggestedActionIds = suggestedActionIds
         self.attention = attention
         self.service = service
         self.engineStatus = engineStatus
@@ -127,6 +130,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             headline: headline,
             reasons: reasons,
             suggestedActions: suggestedActions,
+            suggestedActionIds: suggestedActionIds,
             attention: attention,
             service: service,
             engineStatus: engineStatus,
@@ -239,6 +243,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         HealthSnapshot(
             schemaVersion: schemaVersion, collectedAt: replacementCollectedAt ?? collectedAt, healthState: healthState,
             severity: severity, headline: headline, reasons: reasons, suggestedActions: suggestedActions,
+            suggestedActionIds: suggestedActionIds,
             attention: attention, service: service, engineStatus: replacementEngineStatus ?? engineStatus, outbox: outbox,
             activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,
             realtime: realtime, unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
@@ -479,6 +484,52 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public var storageBlockedCount: Int {
         engineStatus?.payload?.storageV2Outbox?.blockedSourceCount ?? 0
+    }
+
+    /// A blocked source is not automatically a data-loss incident. The
+    /// shipper leaves a source in `source_epoch_conflict` while its typed
+    /// reconciliation path can still make progress. Only an unresolved or
+    /// unknown block kind should promote the machine to repair severity.
+    public var storageBlockKind: String? {
+        engineStatus?.payload?.storageV2Outbox?.latestBlockKind
+    }
+
+    public var storageUnresolvedBlockCount: Int {
+        engineStatus?.payload?.storageV2Outbox?.unresolvedBlockedSourceCount ?? 0
+    }
+
+    public var storageInspectionSourceEpoch: String? {
+        if storageUnresolvedBlockCount > 0 {
+            return engineStatus?.payload?.storageV2Outbox?.latestUnresolvedBlockSourceEpoch
+        }
+        return engineStatus?.payload?.storageV2Outbox?.latestBlockSourceEpoch
+    }
+
+    /// Older engine payloads did not include the aggregate unresolved count.
+    /// The latest block kind cannot classify every retained source, so expose
+    /// that version skew as inspectable uncertainty instead of health.
+    public var storageBlockProofUnknown: Bool {
+        if reasons.contains("storage_v2_sources_proof_unknown") {
+            return true
+        }
+        guard let storage = engineStatus?.payload?.storageV2Outbox else { return false }
+        return storage.malformedCounter
+            || (storageBlockedCount > 0 && storage.unresolvedBlockedSourceCount == nil)
+    }
+
+    public var storageBlockRequiresRepair: Bool {
+        if reasons.contains("storage_v2_sources_unresolved") {
+            return true
+        }
+        guard let storage = engineStatus?.payload?.storageV2Outbox,
+              !storage.malformedCounter,
+              storageBlockedCount > 0
+        else { return false }
+        return storageUnresolvedBlockCount > 0
+    }
+
+    public var storageBlockIsRecovering: Bool {
+        storageBlockedCount > 0 && !storageBlockRequiresRepair && !storageBlockProofUnknown
     }
 
     public var pipelineValueLabel: String {
@@ -1428,6 +1479,58 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case lastUpdated
         case build
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let storageV2Outbox: StorageV2OutboxStatus?
+        if !container.contains(.storageV2Outbox) {
+            storageV2Outbox = nil
+        } else if (try? container.decodeNil(forKey: .storageV2Outbox)) == true {
+            storageV2Outbox = StorageV2OutboxStatus(
+                pendingCount: nil,
+                pendingBytes: nil,
+                blockedSourceCount: nil,
+                blockedBytes: nil,
+                latestBlockKind: nil,
+                latestBlockDetail: nil,
+                byteLimit: nil,
+                error: nil,
+                malformedCounter: true
+            )
+        } else if let decoded = try? container.decode(StorageV2OutboxStatus.self, forKey: .storageV2Outbox) {
+            storageV2Outbox = decoded
+        } else {
+            storageV2Outbox = StorageV2OutboxStatus(
+                pendingCount: nil,
+                pendingBytes: nil,
+                blockedSourceCount: nil,
+                blockedBytes: nil,
+                latestBlockKind: nil,
+                latestBlockDetail: nil,
+                byteLimit: nil,
+                error: nil,
+                malformedCounter: true
+            )
+        }
+
+        self.init(
+            version: try container.decodeIfPresent(String.self, forKey: .version),
+            daemonPid: try container.decodeIfPresent(Int.self, forKey: .daemonPid),
+            lastShipAt: try container.decodeIfPresent(String.self, forKey: .lastShipAt),
+            spoolPendingCount: try container.decodeIfPresent(Int.self, forKey: .spoolPendingCount),
+            spoolDeadCount: try container.decodeIfPresent(Int.self, forKey: .spoolDeadCount),
+            archiveBacklog: try container.decodeIfPresent(ArchiveBacklogStatus.self, forKey: .archiveBacklog),
+            storageV2Outbox: storageV2Outbox,
+            parseErrorCount1H: try container.decodeIfPresent(Int.self, forKey: .parseErrorCount1H),
+            consecutiveShipFailures: try container.decodeIfPresent(Int.self, forKey: .consecutiveShipFailures),
+            diskFreeBytes: try container.decodeIfPresent(UInt64.self, forKey: .diskFreeBytes),
+            isOffline: try container.decodeIfPresent(Bool.self, forKey: .isOffline),
+            localProjection: try container.decodeIfPresent(LocalProjectionStatus.self, forKey: .localProjection),
+            recentDeadLetters: try container.decodeIfPresent([DeadLetterSnapshot].self, forKey: .recentDeadLetters),
+            lastUpdated: try container.decodeIfPresent(String.self, forKey: .lastUpdated),
+            build: try container.decodeIfPresent(BuildIdentityRecord.self, forKey: .build)
+        )
+    }
 }
 
 public struct LocalProjectionStatus: Codable, Equatable, Sendable {
@@ -1448,11 +1551,106 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
     public let pendingCount: Int?
     public let pendingBytes: UInt64?
     public let blockedSourceCount: Int?
+    public let reconcilingBlockedSourceCount: Int?
+    public let unresolvedBlockedSourceCount: Int?
     public let blockedBytes: UInt64?
+    public let latestBlockSourceEpoch: String?
+    public let latestUnresolvedBlockSourceEpoch: String?
     public let latestBlockKind: String?
     public let latestBlockDetail: String?
     public let byteLimit: UInt64?
     public let error: String?
+    /// A producer emitted a present storage counter with an unsupported JSON
+    /// type. Keep the envelope decodable and expose proof uncertainty rather
+    /// than silently turning the value into zero.
+    public let malformedCounter: Bool
+
+    public init(
+        pendingCount: Int?, pendingBytes: UInt64?, blockedSourceCount: Int?,
+        reconcilingBlockedSourceCount: Int? = nil,
+        unresolvedBlockedSourceCount: Int? = nil,
+        blockedBytes: UInt64?, latestBlockSourceEpoch: String? = nil,
+        latestUnresolvedBlockSourceEpoch: String? = nil,
+        latestBlockKind: String?, latestBlockDetail: String?,
+        byteLimit: UInt64?, error: String?, malformedCounter: Bool = false
+    ) {
+        self.pendingCount = pendingCount
+        self.pendingBytes = pendingBytes
+        self.blockedSourceCount = blockedSourceCount
+        self.reconcilingBlockedSourceCount = reconcilingBlockedSourceCount
+        self.unresolvedBlockedSourceCount = unresolvedBlockedSourceCount
+        self.blockedBytes = blockedBytes
+        self.latestBlockSourceEpoch = latestBlockSourceEpoch
+        self.latestUnresolvedBlockSourceEpoch = latestUnresolvedBlockSourceEpoch
+        self.latestBlockKind = latestBlockKind
+        self.latestBlockDetail = latestBlockDetail
+        self.byteLimit = byteLimit
+        self.error = error
+        self.malformedCounter = malformedCounter
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pendingCount
+        case pendingBytes
+        case blockedSourceCount
+        case reconcilingBlockedSourceCount
+        case unresolvedBlockedSourceCount
+        case blockedBytes
+        case latestBlockSourceEpoch
+        case latestUnresolvedBlockSourceEpoch
+        case latestBlockKind
+        case latestBlockDetail
+        case byteLimit
+        case error
+    }
+
+    private static func decodeLossyInt(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> (value: Int?, malformed: Bool) {
+        guard container.contains(key) else { return (nil, false) }
+        if (try? container.decodeNil(forKey: key)) == true {
+            return (nil, true)
+        }
+        do {
+            let value = try container.decode(Int.self, forKey: key)
+            return (value, value < 0)
+        } catch {
+            return (nil, true)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let pendingCount = Self.decodeLossyInt(from: container, forKey: .pendingCount)
+        let blockedSourceCount = Self.decodeLossyInt(from: container, forKey: .blockedSourceCount)
+        let reconcilingBlockedSourceCount = Self.decodeLossyInt(
+            from: container,
+            forKey: .reconcilingBlockedSourceCount
+        )
+        let unresolvedBlockedSourceCount = Self.decodeLossyInt(
+            from: container,
+            forKey: .unresolvedBlockedSourceCount
+        )
+        self.init(
+            pendingCount: pendingCount.value,
+            pendingBytes: try container.decodeIfPresent(UInt64.self, forKey: .pendingBytes),
+            blockedSourceCount: blockedSourceCount.value,
+            reconcilingBlockedSourceCount: reconcilingBlockedSourceCount.value,
+            unresolvedBlockedSourceCount: unresolvedBlockedSourceCount.value,
+            blockedBytes: try container.decodeIfPresent(UInt64.self, forKey: .blockedBytes),
+            latestBlockSourceEpoch: try container.decodeIfPresent(String.self, forKey: .latestBlockSourceEpoch),
+            latestUnresolvedBlockSourceEpoch: try container.decodeIfPresent(String.self, forKey: .latestUnresolvedBlockSourceEpoch),
+            latestBlockKind: try container.decodeIfPresent(String.self, forKey: .latestBlockKind),
+            latestBlockDetail: try container.decodeIfPresent(String.self, forKey: .latestBlockDetail),
+            byteLimit: try container.decodeIfPresent(UInt64.self, forKey: .byteLimit),
+            error: try container.decodeIfPresent(String.self, forKey: .error),
+            malformedCounter: pendingCount.malformed
+                || blockedSourceCount.malformed
+                || reconcilingBlockedSourceCount.malformed
+                || unresolvedBlockedSourceCount.malformed
+        )
+    }
 }
 
 public struct ArchiveBacklogStatus: Codable, Equatable, Sendable {

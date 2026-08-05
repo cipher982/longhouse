@@ -36,11 +36,11 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse
 
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.machine_state import default_archive_repair_mode_for_url
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 
@@ -94,18 +94,6 @@ def _common_service_path() -> str:
     home = Path.home()
     parts = [str(home / suffix) if not suffix.startswith("/") else suffix for suffix in COMMON_SERVICE_PATH_SUFFIXES]
     return ":".join(parts)
-
-
-def _default_archive_repair_mode_for_url(url: str) -> str:
-    """Hosted Runtime Hosts continuously reconcile at the safe background rate."""
-    try:
-        hostname = urlparse(url).hostname or ""
-    except Exception:
-        hostname = ""
-    hostname = hostname.lower().rstrip(".")
-    if hostname == "longhouse.ai" or hostname.endswith(".longhouse.ai"):
-        return "trickle"
-    return "drain"
 
 
 def _validate_archive_repair_mode(mode: str) -> str:
@@ -483,7 +471,7 @@ def install_service(
         claude_dir=claude_dir,
         fallback_scan_secs=fallback_scan_secs,
         spool_replay_secs=spool_replay_secs,
-        archive_repair_mode=_validate_archive_repair_mode(archive_repair_mode or _default_archive_repair_mode_for_url(url)),
+        archive_repair_mode=_validate_archive_repair_mode(archive_repair_mode or default_archive_repair_mode_for_url(url)),
         log_dir=log_dir,
         compression=compression,
         machine_name=machine_name,

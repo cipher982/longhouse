@@ -1,13 +1,11 @@
 {
   "schema_version": 1,
   "collected_at": "2026-07-15T21:30:00Z",
-  "health_state": "degraded",
-  "severity": "yellow",
-  "headline": "Source upload conflict",
-  "reasons": ["storage_v2_sources_blocked"],
-  "suggested_actions": [
-    "Inspect retained source evidence: longhouse shipping inspect --source-epoch 01234567-89ab-cdef-0123-456789abcdef --json."
-  ],
+  "health_state": "broken",
+  "severity": "red",
+  "headline": "Longhouse has unresolved durable source evidence",
+  "reasons": ["storage_v2_sources_unresolved"],
+  "suggested_actions": ["Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it."],
   "suggested_action_ids": ["inspect_storage_source"],
   "service": { "status": "running" },
   "engine_status": {
@@ -21,12 +19,14 @@
       "storage_v2_outbox": {
         "pending_count": 1,
         "pending_bytes": 4096,
-        "blocked_source_count": 1,
-        "blocked_bytes": 2048,
-        "latest_block_source_epoch": "01234567-89ab-cdef-0123-456789abcdef",
+        "blocked_source_count": 2,
+        "reconciling_blocked_source_count": 1,
+        "unresolved_blocked_source_count": 1,
+        "blocked_bytes": 4096,
         "latest_block_kind": "source_epoch_conflict",
-        "latest_block_detail": "hosted prefix does not match local source",
-        "unresolved_blocked_source_count": 0,
+        "latest_block_detail": "Runtime Host rejected the exact envelope and has no manifest for its source epoch",
+        "latest_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
+        "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
         "byte_limit": 1073741824
       }
     }
@@ -43,7 +43,7 @@
       "session_id": "session-needs-user",
       "provider": "codex",
       "workspace_label": "longhouse",
-      "timeline_title": "Resolve immutable source conflict",
+      "timeline_title": "Inspect unresolved source evidence",
       "state": "attached",
       "phase": "needs permission",
       "last_activity_at": "2026-07-15T21:29:55Z",

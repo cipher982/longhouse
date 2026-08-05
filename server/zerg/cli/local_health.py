@@ -232,6 +232,33 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  ship failures: {payload.get('consecutive_ship_failures', 0)}")
     typer.echo(f"  offline: {'yes' if payload.get('is_offline') else 'no'}")
 
+    storage = dict(payload.get("storage_v2_outbox") or {})
+    blocked_sources = int(storage.get("blocked_source_count") or 0)
+    if blocked_sources:
+        latest_block_kind = str(storage.get("latest_block_kind") or "").strip()
+        unresolved_sources = storage.get("unresolved_blocked_source_count")
+        if unresolved_sources is None:
+            unresolved_sources = int(latest_block_kind not in {"source_epoch_conflict", "render_generation_revision_conflict"})
+        unresolved_sources = int(unresolved_sources or 0)
+        reconciling_sources = int(storage.get("reconciling_blocked_source_count") or 0)
+        typer.echo("")
+        typer.echo("Durable Upload")
+        typer.echo(f"  blocked sources: {blocked_sources}")
+        typer.echo(f"  reconciling: {reconciling_sources}")
+        typer.echo(f"  unresolved: {unresolved_sources}")
+        typer.echo(f"  oldest blocked: {storage.get('oldest_blocked_at') or '-'}")
+        typer.echo(f"  latest block: {latest_block_kind or 'unknown'}")
+        if unresolved_sources:
+            typer.echo("  evidence risk: unresolved source proof may include event-bearing data")
+            typer.echo("  action: inspect the exact source proof before retrying or discarding it")
+        else:
+            typer.echo("  evidence risk: retained reconciliation work; no discard is implied")
+            typer.echo("  action: inspect reconciliation progress; Longhouse will keep retrying safely")
+
+    action_ids = [str(item) for item in list(snapshot.get("suggested_action_ids") or []) if str(item).strip()]
+    if action_ids:
+        typer.echo("  action ids: " + ", ".join(action_ids))
+
     ship_lanes = dict(payload.get("ship_lanes") or {})
     active_lanes = [(name, dict(raw or {})) for name, raw in ship_lanes.items() if _has_lane_activity(dict(raw or {}))]
     if active_lanes:
