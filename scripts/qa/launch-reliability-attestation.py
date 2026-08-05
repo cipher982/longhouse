@@ -674,7 +674,6 @@ def main(argv: list[str] | None = None) -> int:
                 key_id=args.key_id,
                 keys_path=args.keys,
                 expected_source_sha=args.expected_source_sha,
-                evidence_manifest_path=args.evidence_manifest,
             )
             print(args.output)
         elif args.command == "create-from-report":
@@ -686,6 +685,7 @@ def main(argv: list[str] | None = None) -> int:
                 key_id=args.key_id,
                 keys_path=args.keys,
                 expected_source_sha=args.expected_source_sha,
+                evidence_manifest_path=args.evidence_manifest,
             )
             print(args.output)
         else:

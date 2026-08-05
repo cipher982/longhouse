@@ -1553,6 +1553,46 @@ def test_attestation_manifest_binds_all_report_inputs(tmp_path: Path):
         attestation._validate_evidence_manifest(report, manifest)
 
 
+def test_attestation_cli_passes_manifest_to_report_signer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    attestation = MODULE._attestation_module()
+    cli = attestation.module()
+    calls: list[dict[str, object]] = []
+
+    def fake_create_receipt_from_report(*args: object, **kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(cli, "create_receipt_from_report", fake_create_receipt_from_report)
+    cli.main(
+        [
+            "create-from-report",
+            "--report",
+            str(tmp_path / "report.json"),
+            "--private-key",
+            str(tmp_path / "key.pem"),
+            "--output",
+            str(tmp_path / "receipt.json"),
+            "--subject-output",
+            str(tmp_path / "subject.json"),
+            "--key-id",
+            "test-key",
+            "--expected-source-sha",
+            "a" * 40,
+            "--evidence-manifest",
+            str(tmp_path / "manifest"),
+        ]
+    )
+
+    assert calls == [
+        {
+            "key_id": "test-key",
+            "keys_path": attestation.TRUSTED_KEYS_PATH,
+            "expected_source_sha": "a" * 40,
+            "evidence_manifest_path": tmp_path / "manifest",
+        }
+    ]
+
+
 def test_malformed_dogfood_series_fails_closed(tmp_path: Path):
     series = tmp_path / "dogfood.json"
     challenge = _write_signed_dogfood(
