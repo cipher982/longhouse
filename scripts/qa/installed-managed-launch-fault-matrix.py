@@ -3041,7 +3041,13 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 longhouse_bin=longhouse_bin,
                 engine_bin=engine_bin,
             )
-            if cleanup["status"] != "pass":
+            unstarted_provider_cleanup = (
+                cleanup["status"] == "not_started"
+                and result.get("startup_failure") is not None
+                and result.get("provider_process_observed") is False
+                and result.get("provider_ready_durable") is not True
+            )
+            if cleanup["status"] != "pass" and not unstarted_provider_cleanup:
                 raise RuntimeError(
                     f"{result['provider']} provider cleanup failed after adoption: {cleanup}"
                 )
