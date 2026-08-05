@@ -15,7 +15,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -64,13 +63,11 @@ def sha256_file(path: Path) -> str:
 
 
 def resolve_binary(raw: str | None) -> Path:
-    if raw:
-        path = Path(raw).expanduser().resolve()
-    else:
-        resolved = shutil.which("longhouse")
-        if resolved is None:
-            raise RuntimeError("longhouse was not found on PATH")
-        path = Path(resolved).resolve()
+    if not raw:
+        raise RuntimeError(
+            "native longhouse facade must be supplied with --binary or LONGHOUSE_HEALTH_BIN"
+        )
+    path = Path(raw).expanduser().resolve()
     if not path.is_file() or not os.access(path, os.X_OK):
         raise RuntimeError(f"native longhouse facade is not runnable: {path}")
     return path

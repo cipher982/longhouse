@@ -352,9 +352,11 @@ def verified_harness_provenance() -> dict[str, Any]:
     return provenance
 
 
-def resolve_file(raw: str | None, name: str) -> Path:
+def resolve_file(raw: str | None, name: str, *, allow_path: bool = True) -> Path:
     candidate = Path(raw).expanduser() if raw else None
     if candidate is None:
+        if not allow_path:
+            raise RuntimeError(f"{name} must be supplied by explicit path or environment override")
         resolved = shutil.which(name)
         if resolved is None:
             raise RuntimeError(f"{name} was not found on PATH")
@@ -2499,10 +2501,12 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         longhouse_bin = resolve_file(
             args.longhouse_bin or os.environ.get("LONGHOUSE_FAULT_LONGHOUSE_BIN"),
             "longhouse",
+            allow_path=False,
         )
         engine_bin = resolve_file(
             args.engine_bin or os.environ.get("LONGHOUSE_FAULT_ENGINE_BIN"),
             "longhouse-engine",
+            allow_path=False,
         )
         implementation_before = validated_implementation_snapshot(
             longhouse_bin, engine_bin
