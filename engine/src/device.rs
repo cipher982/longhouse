@@ -2372,6 +2372,15 @@ fn collect_native_repair_service_status(
     }
 }
 
+/// Path to the service definition actually installed on this machine.
+///
+/// Exposed so the update path can read the *installed* restart policy rather
+/// than assume the one this binary would generate. Duplicating the label
+/// literals at the call site is how those two drift apart.
+pub(crate) fn installed_service_definition_path(home: &Path) -> Option<PathBuf> {
+    service_path(NativeServicePlatform::current(), home)
+}
+
 fn service_path(platform: NativeServicePlatform, home: &Path) -> Option<PathBuf> {
     match platform {
         NativeServicePlatform::Macos => Some(
@@ -2638,11 +2647,23 @@ fn generate_systemd_unit(
 Description=Longhouse Engine - Session Sync
 After=network-online.target
 Wants=network-online.target
+# Widened to match Restart=always below: a planned restart per release must not
+# spend the burst allowance that exists to catch crash loops. These directives
+# live in [Unit], not [Service] — systemd moved them in v229 and silently
+# ignores them in the wrong section.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
 ExecStart={exec_start}
-Restart=on-failure
+# `always`, not `on-failure`. The engine exits cleanly on purpose after
+# installing a native update, so the supervisor is what brings it back running
+# the new binary. Under `on-failure` a clean exit would stop the service
+# permanently and leave the machine with no Machine Agent at all — strictly
+# worse than running one release behind. This matches launchd, which runs the
+# same job with KeepAlive=true.
+Restart=always
 RestartSec=10
 {environment_block}
 

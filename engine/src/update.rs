@@ -31,12 +31,18 @@
 //! - A failed check is not an assertion that no update exists. `last_error` is
 //!   recorded and `update_available` stays `None`, because reporting "current"
 //!   from a failed lookup is the false-green this product forbids.
-//! - **This path updates the native pair only.** `scripts/install.sh:390-414`
-//!   also installs the matching `Longhouse.app`, and nothing here does. On
-//!   macOS an applied update therefore leaves the app at its previous version.
-//!   That skew is reported rather than hidden (see [`describe_status`]); until
-//!   the app is handled, `apply` on macOS is a knowingly partial upgrade and
-//!   the shell installer remains the complete one.
+//! - **This path updates the native pair only**, so on a machine with
+//!   `Longhouse.app` installed it declines to apply at all rather than produce
+//!   a half-upgraded install. The installer versions the app and the pair
+//!   together (`scripts/install.sh:390-414`) and `scripts/ops/release.sh` bumps
+//!   both to one shared version, so they are lockstep by design. Replacing a
+//!   running GUI app from a background daemon — `rm -rf /Applications/…` under
+//!   a user who may have it open — is a worse failure than being one release
+//!   behind. The shell installer moves both and stays the complete path.
+//! - **Self-restart is gated on the installed service definition**, read from
+//!   disk rather than assumed. An engine that exits cleanly under an older unit
+//!   carrying `Restart=on-failure` would never come back, and a machine with no
+//!   Machine Agent is worse than a stale one.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -475,21 +481,25 @@ pub async fn run_check_tick(client: &reqwest::Client) {
 
 /// Download, verify, and install a release, then record that a restart is owed.
 ///
-/// ## Why this never restarts the daemon itself
+/// ## Restarting, and why it is conditional
 ///
-/// The two supervisors disagree in a way that makes self-exit unsafe to
-/// generalise. macOS launchd runs this job with `KeepAlive=true`, so any exit
-/// is restarted. The generated systemd unit uses `Restart=on-failure`
-/// (`device.rs:2645`), so a clean exit would stop the service permanently and
-/// leave the machine with no Machine Agent at all — strictly worse than running
-/// a version one release behind. Exiting non-zero to force a systemd restart
-/// would instead spend the unit's start-limit burst allowance on a routine
-/// update.
+/// A swap on disk that never runs has not delivered the fix, so this exits so
+/// the supervisor brings the process back on the new binary — but only when
+/// [`supervisor_restarts_clean_exit`] proves it will.
 ///
-/// So the swap completes on disk and the running process keeps its old inode
-/// until something restarts it for a reason of its own. `restart_required`
-/// makes that state legible rather than silent, which is the difference between
-/// a pending update and the half-applied limbo this work exists to remove.
+/// The two supervisors genuinely disagree. launchd runs this job with a bare
+/// `KeepAlive=true`, so any exit restarts. The generated systemd unit now uses
+/// `Restart=always` for exactly this reason; it previously used
+/// `Restart=on-failure`, under which a clean exit stops the service
+/// permanently. Machines installed before that change still carry the old unit,
+/// which is why the policy is read from the file on disk rather than assumed
+/// from this binary's own generator. Being a release behind is recoverable;
+/// having no Machine Agent is not.
+///
+/// When the restart cannot be proven safe the swap still completes and
+/// `restart_required` records the debt, with `apply_blocked_reason` naming what
+/// to do about it. That is the difference between a pending update and the
+/// half-applied limbo this work exists to remove.
 async fn apply_staged(client: &reqwest::Client, version: &str, status: &mut UpdateStatus) {
     // Held across staging and activation so a concurrent `update check` cannot
     // publish or activate the same directory underneath this one.
@@ -515,12 +525,43 @@ async fn apply_staged(client: &reqwest::Client, version: &str, status: &mut Upda
         status.last_apply_error = Some(message);
         return;
     }
-    tracing::info!(
-        %version,
-        "installed native update; restart pending to run it"
-    );
     status.restart_required = true;
     status.staged_version = Some(version.to_string());
+
+    // Record the obligation before acting on it. If the exit below happens, this
+    // process does not get another chance to write anything, and a restart that
+    // is owed but unrecorded is the half-applied limbo this work removes.
+    if let Err(error) = write_status(status) {
+        tracing::warn!(error = %format!("{error:#}"), "could not persist update status");
+    }
+
+    match supervisor_restarts_clean_exit() {
+        Some(true) => {
+            tracing::info!(
+                %version,
+                "installed native update; exiting so the supervisor restarts on the new binary"
+            );
+            // The binaries are already swapped and this process holds the old
+            // inode, so only a restart can run the fix. Safe here because the
+            // *installed* definition was read and proves we come back.
+            std::process::exit(0);
+        }
+        Some(false) => {
+            tracing::warn!(
+                %version,
+                "installed native update, but the service definition would not restart a clean \
+                 exit; run `longhouse machine repair --repair-service` to refresh it"
+            );
+            status.apply_blocked_reason = Some("supervisor_would_not_restart".to_string());
+        }
+        None => {
+            tracing::warn!(
+                %version,
+                "installed native update; could not read the service definition, so not exiting"
+            );
+            status.apply_blocked_reason = Some("supervisor_policy_unknown".to_string());
+        }
+    }
 }
 
 /// Carry a pending restart obligation across ticks, or retire it once served.
@@ -564,20 +605,84 @@ fn should_apply(status: &UpdateStatus) -> bool {
     status.update_available == Some(true)
 }
 
+/// Whether the installed supervisor will restart this process after a clean exit.
+///
+/// The whole safety of self-restart rests on this being read from the service
+/// definition **actually installed on the machine**, not from what the current
+/// engine version would generate. An engine that upgraded itself while running
+/// under an older unit — one still carrying `Restart=on-failure` — would exit
+/// cleanly and never come back, leaving that machine with no Machine Agent.
+/// Being one release behind is recoverable; being absent is not.
+///
+/// Returns `None` when the definition cannot be read, which is treated as "do
+/// not exit". Absence of evidence is not evidence that a restart will happen.
+pub fn supervisor_restarts_clean_exit() -> Option<bool> {
+    let home = native_home().ok()?;
+    let path = crate::device::installed_service_definition_path(&home)?;
+    let body = std::fs::read_to_string(&path).ok()?;
+    Some(definition_restarts_clean_exit(&body))
+}
+
+/// Does this service definition bring the process back after `exit(0)`?
+fn definition_restarts_clean_exit(body: &str) -> bool {
+    if body.contains("<key>KeepAlive</key>") {
+        // launchd restarts unconditionally only for a bare `<true/>`. The
+        // dictionary form — `{SuccessfulExit: false}`, which the Desktop app
+        // uses so Quit means quit — deliberately does *not* restart a clean
+        // exit, and reading it as if it did is the exact mistake this guard
+        // exists to prevent.
+        return body
+            .split("<key>KeepAlive</key>")
+            .nth(1)
+            .map(|rest| rest.trim_start().starts_with("<true/>"))
+            .unwrap_or(false);
+    }
+    body.lines().any(|line| {
+        matches!(line.trim(), "Restart=always" | "Restart=on-success")
+    })
+}
+
+/// Version of an installed `Longhouse.app`, when one is present.
+///
+/// `scripts/ops/release.sh` bumps the app, the CLI, the engine and the iOS
+/// project to one shared release version, so they are lockstep by design.
+pub fn installed_macos_app_version() -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let plist = std::path::Path::new("/Applications/Longhouse.app/Contents/Info.plist");
+    let body = std::fs::read_to_string(plist).ok()?;
+    let rest = body.split("<key>CFBundleShortVersionString</key>").nth(1)?;
+    let value = rest.split("<string>").nth(1)?.split("</string>").next()?;
+    let value = normalize_version(value);
+    (!value.is_empty()).then_some(value)
+}
+
 /// Why an available update will not be applied, or `None` when it would be.
 pub fn apply_blocked_reason(policy: UpdatePolicy) -> Option<String> {
     match policy {
         UpdatePolicy::Off => Some("policy_off".to_string()),
         UpdatePolicy::Notify => Some("policy_notify".to_string()),
         UpdatePolicy::Apply => {
-            if build_identity::CHANNEL == "release" {
-                None
-            } else {
+            if build_identity::CHANNEL != "release" {
                 // A dogfood build in ~/.local/bin is uncommitted work in
                 // binary form. Overwriting it with a published release would
                 // discard exactly what the developer is testing.
-                Some("non_release_build".to_string())
+                return Some("non_release_build".to_string());
             }
+            // Do not create a half-upgraded macOS install.
+            //
+            // The installer versions `Longhouse.app` and the native pair
+            // together (`install.sh:390-414`), and this path can only move the
+            // pair. Replacing a running GUI app from a background daemon —
+            // `rm -rf /Applications/Longhouse.app` under a user who may have it
+            // open — is a worse failure than being a release behind, so the
+            // engine declines rather than doing half the job silently. The
+            // shell installer upgrades both and remains the complete path.
+            if installed_macos_app_version().is_some() {
+                return Some("macos_app_installed".to_string());
+            }
+            None
         }
     }
 }
@@ -593,10 +698,14 @@ pub fn describe_status(status: &UpdateStatus) -> String {
             "Installed {staged}; restart the Longhouse engine service to run it (still running {}).",
             status.installed_version
         );
-        if cfg!(target_os = "macos") {
-            // Saying this plainly beats letting a user discover the skew from
-            // mismatched behaviour between the app and the CLI.
-            message.push_str(" Longhouse.app is not updated by this path; re-run the installer to match it.");
+        if let Some(app_version) = installed_macos_app_version() {
+            if Some(app_version.as_str()) != status.staged_version.as_deref() {
+                // Only says this when the versions actually differ, so it stops
+                // being noise the moment the installer has brought both across.
+                message.push_str(&format!(
+                    " Longhouse.app is at {app_version}; re-run the installer to match it."
+                ));
+            }
         }
         return message;
     }
@@ -610,6 +719,19 @@ pub fn describe_status(status: &UpdateStatus) -> String {
                 Some("non_release_build") => format!(
                     "{latest} is available; this is a {} build, so it will not be replaced automatically.",
                     status.channel
+                ),
+                Some("macos_app_installed") => format!(
+                    "{latest} is available. Longhouse.app is installed, and this path upgrades \
+                     only the command line, so it will not half-upgrade you — run the installer \
+                     to move both: curl -fsSL https://get.longhouse.ai/install.sh | bash"
+                ),
+                Some("supervisor_would_not_restart") => format!(
+                    "Installed {latest}, but this machine's service would not restart on a clean \
+                     exit. Run: longhouse machine repair --repair-service"
+                ),
+                Some("supervisor_policy_unknown") => format!(
+                    "Installed {latest}, but the service definition could not be read, so the \
+                     engine did not restart itself. Restart it to finish."
                 ),
                 Some("policy_off") => format!("{latest} is available; update policy is off."),
                 Some(_) => format!(
@@ -1422,6 +1544,43 @@ mod tests {
             control.effective_policy(UpdatePolicy::Notify),
             UpdatePolicy::Off
         );
+    }
+
+    #[test]
+    fn launchd_keepalive_true_restarts_a_clean_exit() {
+        let plist = "<key>KeepAlive</key>\n\t<true/>\n";
+        assert!(definition_restarts_clean_exit(plist));
+    }
+
+    #[test]
+    fn launchd_keepalive_dictionary_does_not_restart_a_clean_exit() {
+        // The Desktop app uses {SuccessfulExit: false} so Quit means quit.
+        // Reading that as unconditional would strand a user with no agent.
+        let plist = "<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n";
+        assert!(!definition_restarts_clean_exit(plist));
+    }
+
+    #[test]
+    fn systemd_restart_always_restarts_a_clean_exit() {
+        assert!(definition_restarts_clean_exit(
+            "[Service]\nType=simple\nRestart=always\nRestartSec=10\n"
+        ));
+    }
+
+    #[test]
+    fn systemd_restart_on_failure_does_not_restart_a_clean_exit() {
+        // The old generated unit. An engine self-exiting under it never returns,
+        // which is the whole reason self-restart is gated on the installed file.
+        assert!(!definition_restarts_clean_exit(
+            "[Service]\nType=simple\nRestart=on-failure\nRestartSec=10\n"
+        ));
+    }
+
+    #[test]
+    fn a_definition_naming_restart_only_in_a_comment_does_not_count() {
+        assert!(!definition_restarts_clean_exit(
+            "[Service]\n# Restart=always would be wrong here\nRestart=on-failure\n"
+        ));
     }
 
     #[test]
