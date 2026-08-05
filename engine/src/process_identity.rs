@@ -132,7 +132,15 @@ fn reap_after_timeout(mut child: Child) {
     let deadline = Instant::now() + Duration::from_millis(250);
     loop {
         match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return,
+            Ok(Some(_)) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => {
+                // Preserve ownership on an observation error. The shared
+                // polling reaper can distinguish ECHILD from a transient or
+                // platform-specific error without blocking this caller.
+                reap_child_later(child);
+                return;
+            }
             Ok(None) if Instant::now() >= deadline => break,
             Ok(None) => thread::sleep(Duration::from_millis(5)),
         }
@@ -148,11 +156,13 @@ enum DeferredReap {
     Child {
         child: Child,
         error_count: u8,
+        retry_after: Instant,
     },
     #[cfg(unix)]
     Pid {
         pid: libc::pid_t,
         error_count: u8,
+        retry_after: Instant,
     },
 }
 
@@ -192,23 +202,44 @@ fn reaper_sender() -> &'static Sender<DeferredReap> {
 }
 
 fn poll_deferred_reap(item: &mut DeferredReap) -> bool {
+    let now = Instant::now();
     match item {
-        DeferredReap::Child { child, error_count } => match child.try_wait() {
-            Ok(Some(_)) => true,
-            Ok(None) => {
-                *error_count = 0;
-                false
+        DeferredReap::Child {
+            child,
+            error_count,
+            retry_after,
+        } => {
+            if now < *retry_after {
+                return false;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => false,
-            Err(error) if is_already_reaped_error(&error) => true,
-            Err(_) if *error_count >= 100 => true,
-            Err(_) => {
-                *error_count += 1;
-                false
+            match child.try_wait() {
+                Ok(Some(_)) => true,
+                Ok(None) => {
+                    *error_count = 0;
+                    *retry_after = now;
+                    false
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    *retry_after = now + Duration::from_millis(10);
+                    false
+                }
+                Err(error) if is_already_reaped_error(&error) => true,
+                Err(_) => {
+                    *error_count = error_count.saturating_add(1);
+                    *retry_after = now + deferred_error_backoff(*error_count);
+                    false
+                }
             }
-        },
+        }
         #[cfg(unix)]
-        DeferredReap::Pid { pid, error_count } => {
+        DeferredReap::Pid {
+            pid,
+            error_count,
+            retry_after,
+        } => {
+            if now < *retry_after {
+                return false;
+            }
             let mut status = 0;
             let observed = unsafe { libc::waitpid(*pid, &mut status, libc::WNOHANG) };
             if observed == *pid {
@@ -216,19 +247,27 @@ fn poll_deferred_reap(item: &mut DeferredReap) -> bool {
             }
             if observed == 0 {
                 *error_count = 0;
+                *retry_after = now;
                 return false;
             }
             let error = std::io::Error::last_os_error();
-            if is_already_reaped_error(&error)
-                || error.kind() == std::io::ErrorKind::Interrupted
-                || *error_count >= 100
-            {
-                return is_already_reaped_error(&error) || *error_count >= 100;
+            if is_already_reaped_error(&error) {
+                return true;
             }
-            *error_count += 1;
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                *retry_after = now + Duration::from_millis(10);
+                return false;
+            }
+            *error_count = error_count.saturating_add(1);
+            *retry_after = now + deferred_error_backoff(*error_count);
             false
         }
     }
+}
+
+fn deferred_error_backoff(error_count: u8) -> Duration {
+    let shift = u32::from(error_count.min(6));
+    Duration::from_millis((10u64 << shift).min(1_000))
 }
 
 fn is_already_reaped_error(error: &std::io::Error) -> bool {
@@ -246,6 +285,7 @@ pub(crate) fn reap_child_later(child: Child) {
     let _ = reaper_sender().send(DeferredReap::Child {
         child,
         error_count: 0,
+        retry_after: Instant::now(),
     });
 }
 
@@ -254,6 +294,7 @@ pub(crate) fn reap_pid_later(pid: libc::pid_t) {
     let _ = reaper_sender().send(DeferredReap::Pid {
         pid,
         error_count: 0,
+        retry_after: Instant::now(),
     });
 }
 

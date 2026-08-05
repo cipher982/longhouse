@@ -88,8 +88,11 @@ fn terminate_and_reap_pid_bounded(pid: libc::pid_t) -> Option<libc::c_int> {
     let mut status = 0;
     let mut observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
     for _ in 0..25 {
-        if observed != 0 {
-            return (observed == pid).then_some(status);
+        if observed == pid {
+            return Some(status);
+        }
+        if observed < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            return None;
         }
         thread::sleep(Duration::from_millis(10));
         observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
@@ -100,8 +103,11 @@ fn terminate_and_reap_pid_bounded(pid: libc::pid_t) -> Option<libc::c_int> {
     }
     for _ in 0..25 {
         observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if observed != 0 {
-            return (observed == pid).then_some(status);
+        if observed == pid {
+            return Some(status);
+        }
+        if observed < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            return None;
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -111,8 +117,11 @@ fn terminate_and_reap_pid_bounded(pid: libc::pid_t) -> Option<libc::c_int> {
     }
     for _ in 0..25 {
         observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if observed != 0 {
-            return (observed == pid).then_some(status);
+        if observed == pid {
+            return Some(status);
+        }
+        if observed < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            return None;
         }
         thread::sleep(Duration::from_millis(10));
     }
