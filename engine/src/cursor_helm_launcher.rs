@@ -527,15 +527,78 @@ fn read_cursor_project_hooks_state(path: &Path) -> std::io::Result<CursorProject
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
+fn strip_longhouse_project_hooks(config: &mut Value) {
+    let Some(hooks) = config.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for entries in hooks.values_mut() {
+        let Some(entries) = entries.as_array_mut() else {
+            continue;
+        };
+        entries.retain(|entry| {
+            let command = entry.to_string();
+            ![
+                "longhouse-cursor-hook.py",
+                "longhouse-cursor-permission-hook.py",
+                "cursor-lifecycle-hook",
+                "cursor-permission-hook",
+            ]
+            .iter()
+            .any(|marker| command.contains(marker))
+        });
+    }
+}
+
 fn restore_cursor_project_hooks(path: &Path, original: Option<&str>) -> std::io::Result<()> {
-    match original {
-        Some(original) => crate::cursor_hooks::atomic_write(path, original.as_bytes()),
-        None => match fs::remove_file(path) {
+    let current = match fs::read_to_string(path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return match original {
+                Some(original) => crate::cursor_hooks::atomic_write(path, original.as_bytes()),
+                None => Ok(()),
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    let Ok(mut config) = serde_json::from_str::<Value>(&current) else {
+        // Never overwrite a user's file that became invalid while Helm was
+        // active. Leaving the managed entries in place is safer than losing
+        // the user's edit; the next repair can remove them explicitly.
+        return Ok(());
+    };
+    strip_longhouse_project_hooks(&mut config);
+    let original_value = original.and_then(|value| serde_json::from_str::<Value>(value).ok());
+    if let Some(hooks) = config.get_mut("hooks").and_then(Value::as_object_mut) {
+        let original_hooks = original_value
+            .as_ref()
+            .and_then(|value| value.get("hooks"))
+            .and_then(Value::as_object);
+        hooks.retain(|name, entries| {
+            !entries.as_array().is_some_and(|entries| entries.is_empty())
+                || original_hooks.is_some_and(|original| original.contains_key(name))
+        });
+    }
+    if original_value.as_ref() == Some(&config) {
+        return crate::cursor_hooks::atomic_write(path, original.unwrap().as_bytes());
+    }
+    let hooks_empty = config
+        .get("hooks")
+        .and_then(Value::as_object)
+        .is_some_and(|hooks| {
+            hooks
+                .values()
+                .all(|entries| entries.as_array().is_some_and(|entries| entries.is_empty()))
+        });
+    if original.is_none() && hooks_empty {
+        return match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
-        },
+        };
     }
+    let mut bytes = serde_json::to_vec_pretty(&config).map_err(std::io::Error::other)?;
+    bytes.push(b'\n');
+    crate::cursor_hooks::atomic_write(path, &bytes)
 }
 
 fn capture_cursor_project_hooks_original(path: &Path) -> Option<String> {
@@ -679,10 +742,7 @@ fn coordination_token_status(
         });
     }
     if config.resume_session.is_none() {
-        return Ok(CoordinationTokenStatus {
-            token: None,
-            reason_code: None,
-        });
+        return Ok(CoordinationTokenStatus::unavailable());
     }
     let machine = match home(config.config_dir.as_deref()) {
         Ok(root) => root.join("machine"),
@@ -882,14 +942,40 @@ fn new_mcp_config_state(path: &Path) -> anyhow::Result<CursorMcpConfigState> {
 }
 
 fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()> {
-    match original {
-        Some(original) => fs::write(path, original),
-        None => match fs::remove_file(path) {
+    let current = match fs::read_to_string(path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return match original {
+                Some(original) => fs::write(path, original),
+                None => Ok(()),
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    let Ok(mut config) = serde_json::from_str::<Value>(&current) else {
+        return Ok(());
+    };
+    if let Some(servers) = config.get_mut("mcpServers").and_then(Value::as_object_mut) {
+        servers.remove("longhouse-coordination");
+    }
+    let original_value = original.and_then(|value| serde_json::from_str::<Value>(value).ok());
+    if original_value.as_ref() == Some(&config) {
+        return fs::write(path, original.unwrap());
+    }
+    let empty_servers = config
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .is_some_and(|servers| servers.is_empty());
+    if original.is_none() && empty_servers {
+        return match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
-        },
+        };
     }
+    let mut bytes = serde_json::to_vec_pretty(&config).map_err(std::io::Error::other)?;
+    bytes.push(b'\n');
+    crate::cursor_hooks::atomic_write(path, &bytes)
 }
 
 pub fn serve_coordination_mcp() -> anyhow::Result<()> {
@@ -1411,6 +1497,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     }
     let coordination_status = coordination_token_status(&config, Some(&registered), &session_id)?;
     let coordination_token = coordination_status.token.clone();
+    let control_ready = coordination_status.token.is_some()
+        && coordination_status.reason_code.is_none()
+        && degraded_registration.is_none();
+    let registration_state = if control_ready {
+        "registered"
+    } else {
+        "degraded"
+    };
     // Cursor's native hook loader is workspace-scoped.  Install Longhouse's
     // lifecycle/permission hooks in this project for the managed lifetime and
     // restore the user's original configuration when the last Helm owner
@@ -1492,7 +1586,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     ]);
     env_pairs.push((
         b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
-        b"1".to_vec(),
+        if control_ready { b"1" } else { b"0" }.to_vec(),
     ));
     for key in [
         b"CI".as_slice(),
@@ -1593,7 +1687,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         let now = Utc::now().to_rfc3339();
         write_json(
             &dir.join(format!("{session_id}.json")),
-            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if degraded_registration.is_some() { "degraded" } else { "registered" },"reason_codes":coordination_status.reason_code.iter().cloned().collect::<Vec<_>>(),"started_at":now,"updated_at":now}),
+            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":registration_state,"reason_codes":coordination_status.reason_code.iter().cloned().collect::<Vec<_>>(),"started_at":now,"updated_at":now}),
         )?;
         let terminal = Terminal(0, raw(0)?);
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
@@ -1937,6 +2031,28 @@ mod tests {
     }
 
     #[test]
+    fn mcp_config_cleanup_preserves_user_changes_during_helm() {
+        let root = tempfile::tempdir().unwrap();
+        let config = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let path = root.path().join(".cursor/mcp.json");
+        let mut current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        current["mcpServers"]["user-added"] = json!({"command":"user-server"});
+        fs::write(&path, serde_json::to_vec_pretty(&current).unwrap()).unwrap();
+
+        drop(config);
+        let restored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(restored["mcpServers"].get("user-added").is_some());
+        assert!(restored["mcpServers"]
+            .get("longhouse-coordination")
+            .is_none());
+    }
+
+    #[test]
     fn concurrent_mcp_configs_do_not_remove_live_authority_or_leave_tokens() {
         let root = tempfile::tempdir().unwrap();
         let first = write_cursor_mcp_config(
@@ -1990,6 +2106,34 @@ mod tests {
     }
 
     #[test]
+    fn project_hooks_cleanup_preserves_user_changes_during_helm() {
+        let root = tempfile::tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let hooks = root.path().join(".cursor/hooks.json");
+        fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+        fs::write(
+            &hooks,
+            br#"{"version":1,"hooks":{"sessionStart":[{"command":"user-hook"}]}}"#,
+        )
+        .unwrap();
+
+        let configured = configure_cursor_project_hooks(
+            &state_root,
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let mut current: Value = serde_json::from_slice(&fs::read(&hooks).unwrap()).unwrap();
+        current["hooks"]["afterSessionStart"] = json!([{"command":"user-added"}]);
+        fs::write(&hooks, serde_json::to_vec_pretty(&current).unwrap()).unwrap();
+
+        drop(configured);
+        let restored: Value = serde_json::from_slice(&fs::read(&hooks).unwrap()).unwrap();
+        assert!(restored.to_string().contains("user-added"));
+        assert!(!restored.to_string().contains("cursor-lifecycle-hook"));
+    }
+
+    #[test]
     fn concurrent_project_hooks_keep_injection_until_last_owner() {
         let root = tempfile::tempdir().unwrap();
         let state_root = root.path().join("state");
@@ -2012,7 +2156,9 @@ mod tests {
         .unwrap();
 
         drop(first);
-        assert!(fs::read_to_string(&hooks).unwrap().contains("cursor-lifecycle-hook"));
+        assert!(fs::read_to_string(&hooks)
+            .unwrap()
+            .contains("cursor-lifecycle-hook"));
         drop(second);
         assert_eq!(fs::read(&hooks).unwrap(), original);
     }

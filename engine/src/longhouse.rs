@@ -1285,13 +1285,12 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     );
     let mut response: Option<ManagedLaunchResponse> = match registration {
         Ok(response) => Some(response),
-        Err(error) if resume_target.is_none() && !args.remote_approve => {
+        Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Claude without Longhouse control because registration failed ({error:#})"
+                "Longhouse warning: starting Claude in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive (registration failed: {error:#})"
             );
             None
         }
-        Err(error) => return Err(error),
     };
     let expected_provider_session_id = resume_target
         .as_ref()
@@ -1309,10 +1308,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             abort_claude_registration_in_background(&url, &token, invalid);
         }
         eprintln!(
-            "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
+            "Longhouse warning: starting Claude in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive (registration was unusable: {issue})"
         );
     }
-    if response.is_none() && resume_target.is_none() {
+    if response.is_none() {
         // The provider remains usable while registration retries. Logging and
         // control recovery must never delay or prevent the provider TUI.
         let session_id = payload

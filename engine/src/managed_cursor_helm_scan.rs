@@ -135,7 +135,14 @@ pub(crate) fn collect_observations_from_paths(
         });
         let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
         let ready = state.ready.unwrap_or(false);
-        let live = launcher_alive && cursor_pid.is_some() && socket_present && ready;
+        // A provider process can remain healthy while Longhouse control is
+        // unavailable. Keep that observation for degraded health, but never
+        // project it as an attached/controllable lease.
+        let live = launcher_alive
+            && cursor_pid.is_some()
+            && socket_present
+            && ready
+            && state.reason_codes.is_empty();
         out.push(CursorHelmObservation {
             session_id,
             provider_session_id: state

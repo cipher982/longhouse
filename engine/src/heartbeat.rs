@@ -1024,10 +1024,11 @@ pub(crate) fn leases_from_opencode_server_observations(
     leases
 }
 
-/// Cursor Helm leases: a live `longhouse cursor` launcher (pid alive + control
-/// socket present) is the readiness observation. Dead state files are omitted so
-/// the Runtime Host detaches the prior connection. There is no separate lease
-/// sidecar; the launcher's state file + socket IS the liveness signal.
+/// Cursor Helm leases: a live provider-owned launcher remains visible even when
+/// its Longhouse control authority is degraded. Only the fully corroborated
+/// observation becomes `attached`; the provider process itself becomes a
+/// `degraded` lease so the UI can explain and recover it instead of silently
+/// losing the session.
 pub(crate) fn leases_from_cursor_helm_observations(
     machine_id: &str,
     observations: &[CursorHelmObservation],
@@ -1038,18 +1039,19 @@ pub(crate) fn leases_from_cursor_helm_observations(
     let mut leases = Vec::with_capacity(observations.len());
 
     for obs in observations {
-        if !obs.live {
+        if !obs.launcher_alive || obs.cursor_pid.is_none() {
             continue;
         }
+        let attached = obs.live;
         leases.push(ManagedSessionLease {
             session_id: obs.session_id.clone(),
             provider: "cursor".to_string(),
             machine_id: machine_id.trim().to_string(),
             sequence,
-            state: "attached".to_string(),
+            state: if attached { "attached" } else { "degraded" }.to_string(),
             phase: None,
             tool_name: None,
-            bridge_status: Some("ready".to_string()),
+            bridge_status: Some(if attached { "ready" } else { "unavailable" }.to_string()),
             thread_subscription_status: None,
             observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
             lease_ttl_ms: 15 * 60 * 1000,
@@ -1092,7 +1094,7 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
         }
     }
     for observation in cursor_observations {
-        if observation.live {
+        if observation.launcher_alive || observation.cursor_pid.is_some() {
             managed_pids.extend(observation.launcher_pid);
             managed_pids.extend(observation.cursor_pid);
         }
@@ -1528,7 +1530,14 @@ pub(crate) fn machine_evidence_from_observations(
             }
         }
         if let Some(run_id) = &obs.run_id {
-            let state = if obs.live { "attached" } else { "detached" };
+            let provider_alive = obs.launcher_alive && obs.cursor_pid.is_some();
+            let state = if obs.live {
+                "attached"
+            } else if provider_alive {
+                "degraded"
+            } else {
+                "detached"
+            };
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "cursor".to_string(),
@@ -1546,7 +1555,16 @@ pub(crate) fn machine_evidence_from_observations(
                 granted_operations: granted_control_operations("cursor", state == "attached"),
                 ownership: "managed".to_string(),
                 state: state.to_string(),
-                bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
+                bridge_status: Some(
+                    if obs.live {
+                        "ready"
+                    } else if provider_alive {
+                        "unavailable"
+                    } else {
+                        "detached"
+                    }
+                    .to_string(),
+                ),
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "cursor_helm_scan".to_string(),
@@ -4312,6 +4330,22 @@ mod tests {
     }
 
     #[test]
+    fn cursor_control_degradation_keeps_provider_visible_without_granting_control() {
+        let mut observation = test_cursor_observation("degraded-cursor");
+        observation.live = false;
+        observation.reason_codes = vec!["managed_session_control_degraded".to_string()];
+        let leases = leases_from_cursor_helm_observations(
+            "cinder",
+            std::slice::from_ref(&observation),
+            Utc::now(),
+        );
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].state, "degraded");
+        assert_eq!(leases[0].bridge_status.as_deref(), Some("unavailable"));
+        assert!(granted_control_operations("cursor", false).is_empty());
+    }
+
+    #[test]
     fn resolved_sessions_keep_sparse_managed_cursor_without_observation() {
         let lease = cursor_lease("managed-cursor");
         let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[]);
@@ -5053,7 +5087,12 @@ mod tests {
         assert!(evidence
             .control
             .iter()
-            .any(|fact| fact.provider == "cursor" && fact.state == "detached"));
+            .any(|fact| fact.provider == "cursor" && fact.state == "degraded"));
+        assert!(evidence.control.iter().any(|fact| {
+            fact.provider == "cursor"
+                && fact.bridge_status.as_deref() == Some("unavailable")
+                && fact.granted_operations.is_empty()
+        }));
         assert_eq!(evidence.readiness.len(), 1);
         assert!(evidence.readiness[0].recent_hook_observed);
         assert!(evidence.readiness[0].claim_observed);
