@@ -35,7 +35,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::io::{IsTerminal, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -2079,6 +2079,7 @@ fn ensure_claude_channel_prerequisite(
 ) -> anyhow::Result<()> {
     let mut command = Command::new(binary);
     command.args(["auth", "status", "--json"]);
+    command.stdin(Stdio::null());
     if let Some(claude_dir) = claude_dir {
         command.env("CLAUDE_CONFIG_DIR", claude_dir);
     }
