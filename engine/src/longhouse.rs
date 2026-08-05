@@ -12,6 +12,10 @@ mod managed_launch_lifecycle;
 mod managed_launch_payload;
 #[path = "managed_terminal.rs"]
 mod managed_terminal;
+// The facade reuses the bounded subprocess/reaper primitives from this
+// module; provider-inventory predicates are exercised by the engine binary
+// and intentionally have no facade call site.
+#[allow(dead_code)]
 #[path = "process_identity.rs"]
 mod process_identity;
 
