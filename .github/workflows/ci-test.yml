@@ -35,7 +35,10 @@ env:
 
 jobs:
   run:
-    runs-on: cube
+    # Only a main checkout may run on cube. The user-selected ref remains
+    # supported, but arbitrary branch/SHA code is measured on GitHub-hosted
+    # infrastructure.
+    runs-on: ${{ github.ref == 'refs/heads/main' && inputs.ref == 'main' && 'cube' || 'ubuntu-24.04' }}
     name: "🧪 ci-test--${{ inputs.suite }}--${{ inputs.ref }}"
     env:
       SUITE: ${{ inputs.suite }}

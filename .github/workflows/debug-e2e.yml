@@ -9,7 +9,7 @@ on:
 
 jobs:
   debug:
-    runs-on: cube
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     steps:
     - uses: actions/checkout@v6
 

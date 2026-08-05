@@ -12,7 +12,7 @@ concurrency:
 jobs:
   smoke:
     name: "🧪 Canary (cube)"
-    runs-on: cube
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.CUBE_RUNNER_CANARY_ENABLED != 'false' }}
 
