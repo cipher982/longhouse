@@ -151,28 +151,45 @@ fn reaper_sender() -> &'static Sender<Child> {
         thread::Builder::new()
             .name("longhouse-process-reaper".to_string())
             .spawn(move || {
-                let mut children = Vec::new();
+                let mut children = Vec::<(Child, u8)>::new();
                 loop {
                     while let Ok(child) = receiver.try_recv() {
-                        children.push(child);
+                        children.push((child, 0));
                     }
                     let mut index = 0;
                     while index < children.len() {
-                        match children[index].try_wait() {
+                        match children[index].0.try_wait() {
                             Ok(Some(_)) => {
                                 children.swap_remove(index);
                             }
-                            Ok(None) | Err(_) => {
-                                // Keep ownership and retry. Dropping a Child
-                                // here can leave a zombie, while blocking on
-                                // wait() would recreate head-of-line blocking.
+                            Ok(None) => {
+                                children[index].1 = 0;
+                                index += 1;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                                index += 1;
+                            }
+                            Err(error) if is_already_reaped_error(&error) => {
+                                // ECHILD means the kernel has no child for
+                                // this handle to reap anymore.
+                                children.swap_remove(index);
+                            }
+                            Err(_) if children[index].1 >= 100 => {
+                                // Keep the worker bounded when an unexpected
+                                // platform error persists. The provider was
+                                // already killed before this handoff; there
+                                // is no safe blocking wait to use here.
+                                children.swap_remove(index);
+                            }
+                            Err(_) => {
+                                children[index].1 += 1;
                                 index += 1;
                             }
                         }
                     }
                     if children.is_empty() {
                         match receiver.recv() {
-                            Ok(child) => children.push(child),
+                            Ok(child) => children.push((child, 0)),
                             Err(_) => break,
                         }
                     } else {
@@ -183,6 +200,17 @@ fn reaper_sender() -> &'static Sender<Child> {
             .expect("spawn Longhouse process reaper");
         sender
     })
+}
+
+fn is_already_reaped_error(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ECHILD)
+    }
+    #[cfg(not(unix))]
+    {
+        error.kind() == std::io::ErrorKind::InvalidInput
+    }
 }
 
 pub(crate) fn reap_child_later(child: Child) {

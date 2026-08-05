@@ -83,6 +83,38 @@ fn process_start_time(pid: libc::pid_t) -> Option<String> {
         .and_then(crate::process_identity::try_collect_process_fact)
         .map(|fact| fact.lstart)
 }
+
+fn terminate_and_reap_pid_bounded(pid: libc::pid_t) {
+    let mut status = 0;
+    let mut observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    for _ in 0..25 {
+        if observed != 0 {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+        observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    }
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+    for _ in 0..25 {
+        observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if observed != 0 {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    for _ in 0..25 {
+        observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if observed != 0 {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
 fn phase(dir: &Path, session_id: &str, conversation: &str, launch_id: &str) -> Option<Value> {
     let value: Value =
         serde_json::from_slice(&fs::read(dir.join(format!("{session_id}.phase.json"))).ok()?)
@@ -1390,10 +1422,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     {
         let error = std::io::Error::last_os_error();
         unsafe {
-            libc::kill(pid, libc::SIGKILL);
             libc::close(master);
-            libc::waitpid(pid, std::ptr::null_mut(), 0);
         }
+        terminate_and_reap_pid_bounded(pid);
         return Err(error).context("set Cursor Helm PTY nonblocking");
     }
     // XNU can discard queued PTY output or hold a session-leader child in the
@@ -1406,10 +1437,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let slave_hold = -1;
     if cfg!(target_os = "macos") && slave_hold < 0 {
         unsafe {
-            libc::kill(pid, libc::SIGKILL);
             libc::close(master);
-            libc::waitpid(pid, std::ptr::null_mut(), 0);
         }
+        terminate_and_reap_pid_bounded(pid);
         anyhow::bail!(
             "open Cursor PTY slave hold failed: {}",
             std::io::Error::last_os_error()
@@ -1418,8 +1448,24 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let stop = Arc::new(AtomicBool::new(false));
     let requested_session_end = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
-    let cursor_start =
-        process_start_time(pid).context("could not capture cursor-agent process identity")?;
+    let cursor_start = match process_start_time(pid) {
+        Some(start) => start,
+        None => {
+            if slave_hold >= 0 {
+                unsafe {
+                    libc::close(slave_hold);
+                }
+            }
+            unsafe {
+                libc::close(master);
+            }
+            terminate_and_reap_pid_bounded(pid);
+            if let Some(registration) = &degraded_registration {
+                registration.mark_provider_failed();
+            }
+            anyhow::bail!("could not capture cursor-agent process identity");
+        }
+    };
     let setup = (|| -> anyhow::Result<Terminal> {
         let launcher_pid = std::process::id();
         let launcher_start = process_start_time(launcher_pid as libc::pid_t)
@@ -1439,14 +1485,15 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let terminal = match setup {
         Ok(terminal) => terminal,
         Err(error) => {
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-                if slave_hold >= 0 {
+            if slave_hold >= 0 {
+                unsafe {
                     libc::close(slave_hold);
                 }
-                libc::close(master);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
+            unsafe {
+                libc::close(master);
+            }
+            terminate_and_reap_pid_bounded(pid);
             if let Some(registration) = &degraded_registration {
                 registration.mark_provider_failed();
             }
@@ -1460,14 +1507,15 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         {
             registration.mark_provider_failed();
             drop(terminal);
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-                if slave_hold >= 0 {
+            if slave_hold >= 0 {
+                unsafe {
                     libc::close(slave_hold);
                 }
-                libc::close(master);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
+            unsafe {
+                libc::close(master);
+            }
+            terminate_and_reap_pid_bounded(pid);
             return Err(error.context("persist managed Cursor readiness"));
         }
     }

@@ -1683,13 +1683,26 @@ fn finish_managed_opencode_attach(
     stop_result: anyhow::Result<()>,
     mark_provider_exited: impl FnOnce(),
 ) -> anyhow::Result<i32> {
-    // Teardown errors must not strand a ready provider as a live retry owner.
-    // Record the provider exit before propagating either foreground or cleanup
-    // error so restart reconciliation sees the true post-hoc lifecycle.
-    mark_provider_exited();
-    let exit = run_result?;
-    stop_result?;
-    Ok(exit)
+    match (run_result, stop_result) {
+        (Ok(exit), Ok(())) => {
+            mark_provider_exited();
+            Ok(exit)
+        }
+        (Err(run_error), Ok(())) => {
+            // The provider is confirmed stopped, so its terminal fact is safe
+            // to publish even when the foreground attach failed.
+            mark_provider_exited();
+            Err(run_error)
+        }
+        (Ok(_), Err(stop_error)) => {
+            // Retain live ownership evidence until cleanup is confirmed. A
+            // failed stop must remain visible for reconciliation and repair.
+            Err(stop_error)
+        }
+        (Err(run_error), Err(stop_error)) => Err(run_error.context(format!(
+            "OpenCode bridge cleanup also failed: {stop_error:#}"
+        ))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -4126,7 +4139,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_teardown_marks_provider_exited_before_propagating_errors() {
+    fn opencode_teardown_marks_provider_exited_only_after_cleanup() {
         let mut marked = false;
         let error = finish_managed_opencode_attach(
             Ok(0),
@@ -4134,7 +4147,7 @@ mod tests {
             || marked = true,
         )
         .expect_err("cleanup failure should still be returned");
-        assert!(marked);
+        assert!(!marked);
         assert_eq!(error.to_string(), "bridge stop failed");
 
         marked = false;
