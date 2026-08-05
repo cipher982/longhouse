@@ -2116,8 +2116,12 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         ):
             raise RuntimeError(f"provider transcript did not correlate initial {provider} marker {seed_marker}")
         _write_json(root / "initial-response-correlation.json", initial_response_correlation)
-        if spec.provider == "cursor":
-            _wait_cursor_idle(initial_state, environment)
+        # The correlated assistant response is the completed-turn oracle for
+        # the initial marker. Cursor's hook may publish its next idle phase
+        # late (or omit that redundant transition while the TUI is redrawing),
+        # so do not make teardown depend on a second idle receipt. The Resume
+        # path still requires an idle boundary before sending its bootstrap and
+        # a fresh hook event after it.
         _write_json(root / "initial-transcript.jsonl", initial_tail)
 
         transition = _stop(spec, args, initial_state, initial, force=args.variant == "process_loss")
