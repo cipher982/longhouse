@@ -114,6 +114,18 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         raise ValueError("attestation subject does not contain all observed measures")
 
 
+def _stable_measure(measure: dict[str, Any]) -> dict[str, Any]:
+    stable = dict(measure)
+    source = stable.get("source")
+    if isinstance(source, list):
+        stable["source"] = [
+            value.get("sha256")
+            for value in source
+            if isinstance(value, dict) and isinstance(value.get("sha256"), str)
+        ]
+    return stable
+
+
 def build_subject(report: dict[str, Any]) -> dict[str, Any]:
     """Return the stable, externally attestable portion of a report."""
 
@@ -137,6 +149,14 @@ def build_subject(report: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("report provenance has no full source SHA")
     if required_provenance["repository_dirty"] is not False or required_provenance["harness_file_dirty"] is not False:
         raise ValueError("report provenance is dirty")
+    matrix = report.get("matrix")
+    if isinstance(matrix, dict):
+        for history in matrix.get("history", []):
+            if not isinstance(history, dict):
+                continue
+            source_sha = history.get("implementation_source_git_sha")
+            if source_sha is not None and source_sha != required_provenance["git_sha"]:
+                raise ValueError("matrix artifact source SHA does not match the report")
     subjects = dogfood.get("attestation_subjects")
     if not isinstance(subjects, list) or not subjects:
         raise ValueError("report has no dogfood sampled-binary subjects")
@@ -179,7 +199,7 @@ def build_subject(report: dict[str, Any]) -> dict[str, Any]:
             "attestation_subjects": subjects,
         },
         "measures": {
-            name: measures[name] for name in measured_names
+            name: _stable_measure(measures[name]) for name in measured_names
         },
     }
     _validate_subject(subject)

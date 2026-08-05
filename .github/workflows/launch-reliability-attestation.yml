@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: launch-reliability-attestation-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
 jobs:
   sign:
     name: Sign launch reliability report
@@ -62,8 +66,10 @@ jobs:
           test "${#health[@]}" -gt 0 || { echo "No native health artifacts retained." >&2; exit 1; }
           test "${#dogfood[@]}" -gt 0 || { echo "No dogfood episodes retained." >&2; exit 1; }
           test "${#dogfood[@]}" = "${#challenges[@]}" || { echo "Dogfood episode/challenge counts differ." >&2; exit 1; }
-          report_path="$run_root/launch-reliability-measurements.json"
-          subject_path="$run_root/launch-reliability-attestation-subject.json"
+          report_path="$RUNNER_TEMP/launch-reliability-measurements.json"
+          subject_path="$RUNNER_TEMP/launch-reliability-attestation-subject.json"
+          rm -f -- "$report_path" "$subject_path"
+          umask 077
           args=(
             --matrix-root "$matrix_root"
             --output "$report_path"
@@ -87,9 +93,9 @@ jobs:
           PRIVATE_KEY_PEM: ${{ secrets.LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM }}
         run: |
           run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
-          report_path="$run_root/launch-reliability-measurements.json"
-          subject_path="$run_root/launch-reliability-attestation-subject.json"
-          receipt_path="$run_root/launch-reliability-attestation.json"
+          report_path="$RUNNER_TEMP/launch-reliability-measurements.json"
+          subject_path="$RUNNER_TEMP/launch-reliability-attestation-subject.json"
+          receipt_path="$RUNNER_TEMP/launch-reliability-attestation.json"
           test -n "$PRIVATE_KEY_PEM" || {
             echo "LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM is not configured." >&2
             exit 1
@@ -121,6 +127,6 @@ jobs:
           name: launch-reliability-attestation-${{ github.run_id }}
           if-no-files-found: error
           path: |
-            /var/lib/longhouse/qualification/${{ inputs.source_sha }}/launch-reliability-measurements.json
-            /var/lib/longhouse/qualification/${{ inputs.source_sha }}/launch-reliability-attestation-subject.json
-            /var/lib/longhouse/qualification/${{ inputs.source_sha }}/launch-reliability-attestation.json
+            ${{ runner.temp }}/launch-reliability-measurements.json
+            ${{ runner.temp }}/launch-reliability-attestation-subject.json
+            ${{ runner.temp }}/launch-reliability-attestation.json
