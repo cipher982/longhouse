@@ -201,6 +201,39 @@ def _matrix(
         "provider_startup_failures": startup_failures,
         "retry_intents_before_recovery": 8,
         "retry_intents_after_recovery": retry_after,
+        "machine_agent_cold_restart": {
+            "retry_backoff_observations": [
+                {
+                    "session_id": "session-1",
+                    "attempts": 1,
+                    "observed_monotonic_seconds": 0.0,
+                },
+                {
+                    "session_id": "session-1",
+                    "attempts": 2,
+                    "observed_monotonic_seconds": 2.2,
+                },
+                {
+                    "session_id": "session-1",
+                    "attempts": 3,
+                    "observed_monotonic_seconds": 6.5,
+                },
+            ],
+            "retry_backoff_cadence": {
+                "session-1": [
+                    {
+                        "from_attempt": 1,
+                        "elapsed_seconds": 2.2,
+                        "minimum_seconds": 2.0,
+                    },
+                    {
+                        "from_attempt": 2,
+                        "elapsed_seconds": 4.3,
+                        "minimum_seconds": 4.0,
+                    },
+                ]
+            },
+        },
         "measurements": {"recovery_duration_seconds": 5.0, "run_duration_seconds": 100.0},
         "harness": {"repository_dirty": False, "harness_file_dirty": False, "repository_git_sha": "harness-sha"},
         "implementation": {
@@ -595,6 +628,51 @@ def test_missing_provider_binary_evidence_is_not_measured(tmp_path: Path):
             "path": str(matrix),
             "reason": "missing_or_unverified_provider_binary_evidence",
         }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("machine_agent_cold_restart", "missing_cold_restart_retry_evidence"),
+        ("retry_backoff_observations", "missing_retry_backoff_observations"),
+        ("retry_backoff_cadence", "missing_retry_backoff_cadence"),
+    ],
+)
+def test_missing_retry_cadence_evidence_is_not_measured(
+    tmp_path: Path, field: str, reason: str
+):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    if field == "machine_agent_cold_restart":
+        payload.pop(field)
+    else:
+        payload["machine_agent_cold_restart"].pop(field)
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
+        {"path": str(matrix), "reason": reason}
+    ]
+
+
+def test_invalid_retry_cadence_evidence_is_not_measured(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["machine_agent_cold_restart"]["retry_backoff_cadence"]["session-1"][0][
+        "elapsed_seconds"
+    ] = 1.0
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
+        {"path": str(matrix), "reason": "invalid_retry_backoff_cadence"}
     ]
 
 

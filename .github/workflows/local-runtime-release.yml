@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
   attestations: write
   id-token: write
 
@@ -808,10 +809,49 @@ jobs:
           path: binaries/*
           retention-days: 7
 
+  require-launch-reliability-attestation:
+    name: Require source-bound launch qualification
+    needs:
+      - build-engine-linux-x64
+      - build-macos
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Classify release tier
+        id: release_tier
+        run: |
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tier=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier=smoke" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout release source
+        if: ${{ steps.release_tier.outputs.tier == 'stable' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Require exact source-bound launch qualification
+        if: ${{ steps.release_tier.outputs.tier == 'stable' }}
+        run: |
+          python3 scripts/ci/require-launch-reliability-attestation.py \
+            --repository "${{ github.repository }}" \
+            --release-tag "$RELEASE_TAG"
+
+      - name: Allow smoke release without stable qualification
+        if: ${{ steps.release_tier.outputs.tier != 'stable' }}
+        run: echo "Smoke release; stable launch-reliability qualification is not required."
+
   release:
     needs:
       - build-engine-linux-x64
       - build-macos
+      - require-launch-reliability-attestation
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}

@@ -534,6 +534,65 @@ def _matrix_freshness_exclusion_reason(
     return None
 
 
+def _retry_backoff_exclusion_reason(artifact: dict[str, Any]) -> str | None:
+    """Require measured retry cadence before a run can qualify externally."""
+
+    cold_restart = artifact.get("machine_agent_cold_restart")
+    if not isinstance(cold_restart, dict):
+        return "missing_cold_restart_retry_evidence"
+    observations = cold_restart.get("retry_backoff_observations")
+    cadence = cold_restart.get("retry_backoff_cadence")
+    if not isinstance(observations, list) or not observations:
+        return "missing_retry_backoff_observations"
+    if not isinstance(cadence, dict) or not cadence:
+        return "missing_retry_backoff_cadence"
+
+    observation_counts: dict[str, int] = {}
+    for observation in observations:
+        if not isinstance(observation, dict):
+            return "malformed_retry_backoff_observations"
+        session_id = observation.get("session_id")
+        attempts = observation.get("attempts")
+        observed = observation.get("observed_monotonic_seconds")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(attempts, int)
+            or attempts < 1
+            or not isinstance(observed, (int, float))
+            or not math.isfinite(float(observed))
+        ):
+            return "malformed_retry_backoff_observations"
+        observation_counts[session_id] = observation_counts.get(session_id, 0) + 1
+
+    for session_id, intervals in cadence.items():
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(intervals, list)
+            or not intervals
+            or observation_counts.get(session_id, 0) < 2
+        ):
+            return "malformed_retry_backoff_cadence"
+        for interval in intervals:
+            if not isinstance(interval, dict):
+                return "malformed_retry_backoff_cadence"
+            elapsed = interval.get("elapsed_seconds")
+            minimum = interval.get("minimum_seconds")
+            from_attempt = interval.get("from_attempt")
+            if (
+                not isinstance(from_attempt, int)
+                or from_attempt < 1
+                or not isinstance(elapsed, (int, float))
+                or not math.isfinite(float(elapsed))
+                or not isinstance(minimum, (int, float))
+                or not math.isfinite(float(minimum))
+                or float(elapsed) < float(minimum)
+            ):
+                return "invalid_retry_backoff_cadence"
+    return None
+
+
 def _measured_run(
     artifact: dict[str, Any],
     *,
@@ -549,6 +608,7 @@ def _measured_run(
         and artifact.get("harness", {}).get("repository_dirty") is False
         and artifact.get("harness", {}).get("harness_file_dirty") is False
         and _matrix_freshness_exclusion_reason(artifact, as_of=as_of) is None
+        and _retry_backoff_exclusion_reason(artifact) is None
         and _implementation_exclusion_reason(
             artifact, report_source_sha=report_source_sha
         )
@@ -585,6 +645,9 @@ def _excluded_run_reason(
         or harness.get("harness_file_dirty") is not False
     ):
         return "dirty_harness_or_repository"
+    retry_reason = _retry_backoff_exclusion_reason(artifact)
+    if retry_reason is not None:
+        return retry_reason
     implementation_reason = _implementation_exclusion_reason(
         artifact, report_source_sha=report_source_sha
     )

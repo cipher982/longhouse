@@ -1527,6 +1527,16 @@ mod tests {
     }
 
     #[test]
+    fn transport_validation_rejects_missing_transport() {
+        let response = response("session", "run");
+        let error = response
+            .validate_transport("Codex", "codex_app_server")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("got missing"));
+    }
+
+    #[test]
     fn degraded_response_preserves_client_minted_identity() {
         let payload = serde_json::json!({
             "session_id": "11111111-1111-4111-8111-111111111111",

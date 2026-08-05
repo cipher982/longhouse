@@ -2159,13 +2159,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         }
     };
     if let Some(response) = response.as_ref() {
-        if let Some(registered) = response.managed_transport.as_deref() {
-            if registered != "codex_app_server" {
-                anyhow::bail!(
-                    "Runtime Host returned an unsupported managed-local transport for Codex (expected codex_app_server, got {registered})"
-                );
-            }
-        }
+        response.validate_transport("Codex", "codex_app_server")?;
     }
     let response = response.context("Codex launch has no local session identity")?;
     let mut launch_transaction = if degraded_registration.is_none() {
