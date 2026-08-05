@@ -114,6 +114,15 @@ fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().ok()? {
+            #[cfg(unix)]
+            if let Ok(process_group) = i32::try_from(child.id()) {
+                // The direct child may have exited while a descendant still
+                // owns stdout. Reap the private group before joining the
+                // reader so a successful probe cannot hang either.
+                unsafe {
+                    libc::kill(-process_group, libc::SIGKILL);
+                }
+            }
             break status;
         }
         if Instant::now() >= deadline {
@@ -446,6 +455,17 @@ mod tests {
         command.args(["-c", "sleep 1"]);
         let started = Instant::now();
         assert!(output_with_timeout(command, Duration::from_millis(10)).is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_output_terminates_descendant_after_parent_exits() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 1 &"]);
+        let started = Instant::now();
+        let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
+        assert!(output.status.success());
         assert!(started.elapsed() < Duration::from_millis(500));
     }
 

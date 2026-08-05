@@ -134,6 +134,20 @@ def test_hosted_machine_health_keeps_malformed_storage_counts_degraded():
     assert facts["degraded_reasons"] == ("storage_v2_sources_proof_unknown",)
 
 
+def test_hosted_machine_health_fails_closed_on_malformed_managed_recovery():
+    for payload in (
+        {"managed_launch_recovery": {"active_count": "0"}},
+        {"managed_launch_recovery": []},
+    ):
+        facts = machine_health_service._local_health_facts_from_heartbeat(
+            SimpleNamespace(raw_json=json.dumps(payload))
+        )
+
+        assert facts["reasons"] == ("managed_launch_recovery_unreadable",)
+        assert facts["broken_reasons"] == ("managed_launch_recovery_unreadable",)
+        assert facts["degraded_reasons"] == ()
+
+
 def test_hosted_machine_health_surfaces_unreadable_storage_outbox():
     facts = machine_health_service._local_health_facts_from_heartbeat(
         SimpleNamespace(

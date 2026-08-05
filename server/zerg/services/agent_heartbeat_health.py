@@ -450,8 +450,9 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
     storage_present = "storage_v2_outbox" in raw
     storage_value = raw.get("storage_v2_outbox")
     storage = storage_value if isinstance(storage_value, dict) else None
-    recovery = raw.get("managed_launch_recovery")
-    recovery = recovery if isinstance(recovery, dict) else None
+    recovery_present = "managed_launch_recovery" in raw
+    recovery_value = raw.get("managed_launch_recovery")
+    recovery = recovery_value if isinstance(recovery_value, dict) else None
     reasons: list[str] = []
     broken_reasons: list[str] = []
     degraded_reasons: list[str] = []
@@ -493,14 +494,26 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
             reasons.append("storage_v2_outbox_unreadable")
             broken_reasons.append("storage_v2_outbox_unreadable")
 
-    if recovery is not None:
+    if recovery_present and recovery is None:
+        reasons.append("managed_launch_recovery_unreadable")
+        broken_reasons.append("managed_launch_recovery_unreadable")
+    elif recovery is not None:
+        malformed = any(
+            _counter_is_malformed(recovery.get(field), present=field in recovery) for field in ("exhausted_count", "active_count")
+        )
+        scan_error = recovery.get("scan_error")
+        if "scan_error" in recovery and not isinstance(scan_error, bool):
+            malformed = True
+        if malformed:
+            reasons.append("managed_launch_recovery_unreadable")
+            broken_reasons.append("managed_launch_recovery_unreadable")
         if _nonnegative_int(recovery.get("exhausted_count")) > 0:
             reasons.append("managed_launch_recovery_exhausted")
             degraded_reasons.append("managed_launch_recovery_exhausted")
         if _nonnegative_int(recovery.get("active_count")) > 0:
             reasons.append("managed_launch_recovery_active")
             degraded_reasons.append("managed_launch_recovery_active")
-        if bool(recovery.get("scan_error")):
+        if scan_error is True:
             reasons.append("managed_launch_recovery_unreadable")
             broken_reasons.append("managed_launch_recovery_unreadable")
 
