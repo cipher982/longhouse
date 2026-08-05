@@ -159,6 +159,15 @@ group restricted to this repository and workflow. Confirm the protected-main
 branch rules, environment reviewers, runner-group restriction, and
 single-job runner behavior before treating a receipt as release evidence.
 
+The qualification runner and its retained evidence are part of the trusted
+computing base: the measurement job executes the checked-out source's report
+code and reads the finalized evidence tree. Restrict its runner group to this
+repository and workflow as well, use a dedicated or ephemeral runner, and
+prevent other jobs or users from writing
+`/var/lib/longhouse/qualification/<full-source-sha>/` during qualification.
+The manifest checks detect ordinary concurrent changes, but they cannot make a
+compromised qualification runner trustworthy.
+
 The `report.sha256` file is a transport-corruption check for the uploaded
 report. The trusted subject re-derivation and receipt signature are the release
 trust boundary.

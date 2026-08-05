@@ -27,17 +27,17 @@ jobs:
       EVIDENCE_ROOT: /var/lib/longhouse/qualification
     steps:
       - name: Checkout the measured source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
           path: measured-source
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
 
       - name: Snapshot evidence and rebuild the report
         id: measure
@@ -55,14 +55,15 @@ jobs:
             echo "source_sha must be a full 40-character commit SHA." >&2
             exit 1
           }
+          SOURCE_SHA="$(printf '%s' "$SOURCE_SHA" | tr '[:upper:]' '[:lower:]')"
           measured_root="$GITHUB_WORKSPACE/measured-source"
           test "$(git -C "$measured_root" rev-parse HEAD)" = "$SOURCE_SHA" || {
             echo "Measured checkout does not match the requested source SHA." >&2
             exit 1
           }
           git -C "$measured_root" fetch --no-tags origin main:refs/remotes/origin/main
-          git -C "$measured_root" merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main || {
-            echo "The measured source SHA is not reachable from protected main." >&2
+          git -C "$measured_root" rev-list --first-parent refs/remotes/origin/main | grep -Fxq "$SOURCE_SHA" || {
+            echo "The measured source SHA is not a protected main first-parent commit." >&2
             exit 1
           }
           run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
@@ -74,19 +75,28 @@ jobs:
               shasum -a 256 "$1"
             fi
           }
+          assert_no_symlink_path() {
+            local path="$1"
+            local current="/"
+            local component
+            local -a components
+            IFS=/ read -r -a components <<< "${path#/}"
+            for component in "${components[@]}"; do
+              test -n "$component" || continue
+              current="${current%/}/$component"
+              test ! -L "$current" || {
+                echo "Symlinks are not allowed in retained evidence path: $current" >&2
+                return 1
+              }
+            done
+          }
           manifest_tree() {
             local base="$1"
-            local rel path file digest special component
-            test ! -L "$base" || { echo "Evidence tree is a symlink: $base" >&2; return 1; }
+            local rel path file digest special
+            assert_no_symlink_path "$base"
             for rel in matrix native-health provider-harness dogfood/episodes dogfood/challenges; do
               path="$base/$rel"
               test -d "$path" || { echo "Missing retained evidence tree: $path" >&2; return 1; }
-              for component in "$base" "$base/${rel%%/*}" "$path"; do
-                test ! -L "$component" || {
-                  echo "Symlinks are not allowed in retained evidence: $component" >&2
-                  return 1
-                }
-              done
               special="$(find "$path" ! -type f ! -type d -print -quit)"
               if test -n "$special"; then
                 echo "Only regular files and directories are allowed in retained evidence: $special" >&2
@@ -98,8 +108,9 @@ jobs:
               done < <(find "$path" -type f -print | LC_ALL=C sort)
             done
           }
-          test ! -L "$EVIDENCE_ROOT" || { echo "Evidence root must not be a symlink." >&2; exit 1; }
-          test ! -L "$run_root" || { echo "Evidence run root must not be a symlink." >&2; exit 1; }
+          umask 077
+          assert_no_symlink_path "$EVIDENCE_ROOT"
+          assert_no_symlink_path "$run_root"
           test -d "$run_root" || { echo "No retained evidence exists for $SOURCE_SHA." >&2; exit 1; }
           before_manifest="$RUNNER_TEMP/launch-reliability-evidence.before.manifest"
           after_manifest="$RUNNER_TEMP/launch-reliability-evidence.after.manifest"
@@ -140,7 +151,6 @@ jobs:
           report_path="$RUNNER_TEMP/launch-reliability-measurements.json"
           subject_path="$RUNNER_TEMP/launch-reliability-attestation-subject.json"
           rm -f -- "$report_path" "$subject_path" "$RUNNER_TEMP/report.sha256"
-          umask 077
           args=(
             --matrix-root "$matrix_root"
             --output "$report_path"
@@ -163,7 +173,7 @@ jobs:
           sha256_file "$report_path" > "$RUNNER_TEMP/report.sha256"
 
       - name: Upload measured report for the isolated signer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: launch-reliability-measurement-${{ github.run_id }}
           if-no-files-found: error
@@ -185,20 +195,20 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
     steps:
       - name: Checkout the reviewed signer source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: trusted-source
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
 
       - name: Download the measured report
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
           name: launch-reliability-measurement-${{ github.run_id }}
           path: ${{ runner.temp }}/launch-reliability-measurement
@@ -270,7 +280,7 @@ jobs:
         run: rm -f -- "$KEY_PATH"
 
       - name: Upload signed qualification evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: launch-reliability-attestation-${{ github.run_id }}
           if-no-files-found: error
