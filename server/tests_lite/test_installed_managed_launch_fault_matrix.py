@@ -210,6 +210,37 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
     assert "kill" not in events
 
 
+def test_run_tty_command_uses_pty_interrupt_without_direct_group_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signals: list[str] = []
+    monkeypatch.setattr(
+        _MODULE.os,
+        "killpg",
+        lambda *args: signals.append("killpg"),
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "kill_group",
+        lambda *args, **kwargs: signals.append("kill_group"),
+    )
+
+    evidence = _MODULE.run_tty_command(
+        [
+            sys.executable,
+            "-c",
+            "print('READY', flush=True); input()",
+        ],
+        {},
+        marker="READY",
+        timeout=5,
+    )
+
+    assert evidence.marker_seen is True
+    assert evidence.timed_out is False
+    assert signals == []
+
+
 def test_run_matrix_records_completion_after_teardown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[str] = []
     provider_root: Path | None = None

@@ -6223,8 +6223,10 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
             }
         }
         match tokio::time::timeout(CHILD_REAP_TIMEOUT, child.wait()).await {
-            Ok(status) => {
-                let _ = status?;
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                defer_child_reap(child);
+                return Err(error.into());
             }
             Err(_) => defer_child_reap(child),
         }

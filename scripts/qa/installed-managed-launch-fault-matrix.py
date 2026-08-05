@@ -837,6 +837,7 @@ def run_tty_command(
     sent_interrupt = False
     marker_at: float | None = None
     started = time.monotonic()
+    returncode: int | None = None
     try:
         while time.monotonic() - started < timeout:
             readable, _, _ = select.select([master], [], [], 0.2)
@@ -860,16 +861,14 @@ def run_tty_command(
                     os.write(master, b"\x03")
                 except OSError:
                     pass
-                try:
-                    os.killpg(os.getpgid(pid), signal.SIGINT)
-                except (OSError, PermissionError):
-                    pass
-            if sent_interrupt and wait_status(pid, 0.0) is not None:
-                break
-        timed_out = wait_status(pid, 0.0) is None
+            if sent_interrupt:
+                returncode = wait_status(pid, 0.0)
+                if returncode is not None:
+                    break
+        timed_out = returncode is None
         if timed_out:
             kill_group(pid, grace=0.2)
-        returncode = wait_status(pid, 5)
+            returncode = wait_status(pid, 5)
         return CommandEvidence(
             returncode=returncode,
             output=output.decode("utf-8", errors="replace"),
@@ -2565,6 +2564,12 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 cold_engine.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 kill_group(cold_engine, grace=0.1)
+                try:
+                    cold_engine.wait(timeout=2)
+                except subprocess.TimeoutExpired as final_error:
+                    raise ProcessScanFailure(
+                        "cold-start Machine Agent could not be reaped before restart"
+                    ) from final_error
             cold_handle.close()
             engine = None
             engine_handle = None

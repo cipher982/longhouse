@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::io::Write as _;
@@ -25,6 +25,7 @@ const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=fal
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const CONSOLE_WORKER_POOL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const CONSOLE_WARM_POOL_TARGET: usize = 1;
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
@@ -381,12 +382,12 @@ pub async fn prewarm_codex_console_workers() {
         ),
     }
     drop(pool);
-    if let Some(mut worker) = discard {
+    if let Some(worker) = discard {
         eprintln!(
             "[codex-exec] latency stage=warm_worker_reaped pid={} reason=surplus",
             worker.pid.unwrap_or(0)
         );
-        let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
+        let _ = shutdown_worker_process_group(worker.child, worker.pgid).await;
     }
     spawn_finished.notify_waiters();
 }
@@ -554,7 +555,7 @@ async fn spawn_initialized_codex_worker(
         .map_err(|_| anyhow::anyhow!("Codex worker initialize timed out"))
         .and_then(|result| result)
     {
-        let _ = shutdown_worker_process_group(&mut child, pgid).await;
+        let _ = shutdown_worker_process_group(child, pgid).await;
         if let Some(task) = stderr_task {
             let _ = task.await;
         }
@@ -580,7 +581,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         None
     };
     let warm_hit = warm_worker.is_some();
-    let mut worker = match warm_worker {
+    let worker = match warm_worker {
         Some(worker) => worker,
         None => {
             spawn_initialized_codex_worker(
@@ -596,7 +597,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         }
     };
     if !warm_hit && !register_active_worker(&worker).await {
-        shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
+        shutdown_worker_process_group(worker.child, worker.pgid).await?;
         anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
     }
     let pid = worker.pid;
@@ -646,9 +647,14 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let sandbox = config.sandbox.clone();
     let resume_thread_id = config.resume_thread_id.clone();
     tokio::spawn(async move {
+        let worker_pid = worker.pid;
+        let worker_pgid = worker.pgid;
+        let worker_stderr_task = worker.stderr_task;
+        let worker_rpc = worker.rpc;
+        let mut worker_child = worker.child;
         let mut run_result = run_app_server_turn(
-            &mut worker.child,
-            worker.rpc,
+            &mut worker_child,
+            worker_rpc,
             &monitor_sink,
             &prompt,
             &cwd,
@@ -659,8 +665,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             leased_at,
         )
         .await;
-        if let Err(kill_error) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await
-        {
+        if let Err(kill_error) = shutdown_worker_process_group(worker_child, worker_pgid).await {
             run_result = match run_result {
                 Err(original) => Err(original.context(format!(
                     "also failed to stop Codex app-server process group: {kill_error}"
@@ -668,14 +673,14 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 Ok(value) => {
                     eprintln!(
                         "[codex-exec] worker process-group cleanup failed pid={} error={kill_error}",
-                        worker.pid.unwrap_or(0)
+                        worker_pid.unwrap_or(0)
                     );
                     Ok(value)
                 }
             };
         }
-        unregister_active_worker(worker.pid).await;
-        if let Some(task) = worker.stderr_task {
+        unregister_active_worker(worker_pid).await;
+        if let Some(task) = worker_stderr_task {
             let _ = task.await;
         }
         let (terminal_state, exit_code, detail) = match run_result {
@@ -689,16 +694,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 exit_code,
                 Some(format!("Codex app-server exited with code {exit_code:?}")),
             ),
-            Err(err) => (
-                "run_failed",
-                worker
-                    .child
-                    .try_wait()
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.code()),
-                Some(err.to_string()),
-            ),
+            Err(err) => ("run_failed", None, Some(err.to_string())),
         };
         monitor_sink
             .post_terminal(terminal_state, exit_code, detail)
@@ -847,12 +843,9 @@ async fn run_app_server_turn(
             let status = match tokio::time::timeout(Duration::from_millis(250), child.wait()).await
             {
                 Ok(status) => status?,
-                Err(_) => {
-                    defer_child_reap(&child);
-                    anyhow::bail!(
-                        "Codex app-server did not exit after turn completion; reaping deferred"
-                    );
-                }
+                Err(_) => anyhow::bail!(
+                    "Codex app-server did not exit after turn completion; reaping deferred"
+                ),
             };
             anyhow::bail!(
                 "Codex app-server did not exit after turn completion; killed with status {status}"
@@ -863,16 +856,17 @@ async fn run_app_server_turn(
 }
 
 #[cfg(unix)]
-fn defer_child_reap(child: &Child) {
+fn defer_child_reap(child: Child) {
     if let Some(pid) = child.id() {
+        drop(child);
         crate::process_identity::reap_pid_later(pid as libc::pid_t);
     }
 }
 
 #[cfg(not(unix))]
-fn defer_child_reap(_child: &Child) {}
+fn defer_child_reap(_child: Child) {}
 
-async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
+async fn shutdown_worker_process_group(mut child: Child, pgid: Option<i32>) -> Result<()> {
     if let Some(pgid) = pgid {
         shutdown_process_group(pgid).await;
     }
@@ -886,8 +880,10 @@ async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> 
         }
     }
     match tokio::time::timeout(Duration::from_millis(250), child.wait()).await {
-        Ok(status) => {
-            let _ = status?;
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            defer_child_reap(child);
+            return Err(error.into());
         }
         Err(_) => {
             defer_child_reap(child);
@@ -915,6 +911,7 @@ async fn shutdown_process_group(pgid: i32) {
 }
 
 pub async fn shutdown_codex_console_worker_pool() {
+    let deadline = Instant::now() + CONSOLE_WORKER_POOL_SHUTDOWN_TIMEOUT;
     loop {
         let wait = {
             let mut pool = console_worker_pool().lock().await;
@@ -926,7 +923,15 @@ pub async fn shutdown_codex_console_worker_pool() {
             }
         };
         let Some(wait) = wait else { break };
-        wait.await;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            eprintln!("[codex-exec] worker spawn shutdown wait timed out");
+            break;
+        }
+        if tokio::time::timeout(remaining, wait).await.is_err() {
+            eprintln!("[codex-exec] worker spawn shutdown wait timed out");
+            break;
+        }
     }
     let (workers, active_process_groups) = {
         let mut pool = console_worker_pool().lock().await;
@@ -941,8 +946,8 @@ pub async fn shutdown_codex_console_worker_pool() {
     for pgid in active_process_groups {
         shutdown_process_group(pgid).await;
     }
-    for mut worker in workers {
-        if let Err(err) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await {
+    for worker in workers {
+        if let Err(err) = shutdown_worker_process_group(worker.child, worker.pgid).await {
             eprintln!(
                 "[codex-exec] warm worker shutdown failed pid={} error={err}",
                 worker.pid.unwrap_or(0)
@@ -959,7 +964,15 @@ pub async fn shutdown_codex_console_worker_pool() {
             }
         };
         let Some(wait) = wait else { break };
-        wait.await;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            eprintln!("[codex-exec] active worker shutdown wait timed out");
+            break;
+        }
+        if tokio::time::timeout(remaining, wait).await.is_err() {
+            eprintln!("[codex-exec] active worker shutdown wait timed out");
+            break;
+        }
     }
 }
 
@@ -1840,7 +1853,7 @@ for line in sys.stdin:
             .parse()
             .unwrap();
 
-        shutdown_worker_process_group(&mut worker.child, worker.pgid)
+        shutdown_worker_process_group(worker.child, worker.pgid)
             .await
             .unwrap();
 
