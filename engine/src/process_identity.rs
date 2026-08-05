@@ -153,8 +153,28 @@ fn reaper_sender() -> &'static Sender<Child> {
         thread::Builder::new()
             .name("longhouse-process-reaper".to_string())
             .spawn(move || {
-                for mut child in receiver {
-                    let _ = child.wait();
+                let mut children = Vec::new();
+                loop {
+                    while let Ok(child) = receiver.try_recv() {
+                        children.push(child);
+                    }
+                    let mut index = 0;
+                    while index < children.len() {
+                        match children[index].try_wait() {
+                            Ok(Some(_)) | Err(_) => {
+                                children.swap_remove(index);
+                            }
+                            Ok(None) => index += 1,
+                        }
+                    }
+                    if children.is_empty() {
+                        match receiver.recv() {
+                            Ok(child) => children.push(child),
+                            Err(_) => break,
+                        }
+                    } else {
+                        thread::sleep(Duration::from_millis(10));
+                    }
                 }
             })
             .expect("spawn Longhouse process reaper");
@@ -618,6 +638,30 @@ mod tests {
         let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
         assert!(output.status.success());
         assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deferred_reaper_does_not_head_of_line_block_later_children() {
+        let mut blocker = Command::new("sh");
+        blocker.args(["-c", "sleep 5"]);
+        let blocker = blocker.spawn().unwrap();
+        let blocker_pid = blocker.id();
+        let follower = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let follower_pid = follower.id();
+
+        // If the reaper waits on blocker, follower remains a zombie. The
+        // polling implementation must reap follower independently.
+        reap_child_later(blocker);
+        reap_child_later(follower);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while unsafe { libc::kill(follower_pid as i32, 0) == 0 } && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        unsafe {
+            let _ = libc::kill(blocker_pid as i32, libc::SIGTERM);
+        }
+        assert!(unsafe { libc::kill(follower_pid as i32, 0) != 0 });
     }
 
     #[test]
