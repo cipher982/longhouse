@@ -794,19 +794,20 @@ fn registration_payload(
 }
 
 fn default_machine_name() -> String {
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("HOSTNAME")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .unwrap_or_else(|| "unknown".into())
+    crate::process_identity::output_with_timeout(
+        std::process::Command::new("hostname"),
+        Duration::from_secs(2),
+    )
+    .filter(|output| output.status.success())
+    .and_then(|output| String::from_utf8(output.stdout).ok())
+    .map(|value| value.trim().to_owned())
+    .filter(|value| !value.is_empty())
+    .or_else(|| {
+        std::env::var("HOSTNAME")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    })
+    .unwrap_or_else(|| "unknown".into())
 }
 
 fn register(

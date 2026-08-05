@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -107,13 +108,15 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
         .ok()?;
     let mut stdout = child.stdout.take()?;
     let mut stderr = child.stderr.take()?;
-    let stdout_reader = thread::spawn(move || {
+    let (stdout_sender, stdout_receiver) = mpsc::sync_channel(1);
+    let (stderr_sender, stderr_receiver) = mpsc::sync_channel(1);
+    let _stdout_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes).ok()
+        let _ = stdout_sender.send(stdout.read_to_end(&mut bytes).map(|_| bytes).ok());
     });
-    let stderr_reader = thread::spawn(move || {
+    let _stderr_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).map(|_| bytes).ok()
+        let _ = stderr_sender.send(stderr.read_to_end(&mut bytes).map(|_| bytes).ok());
     });
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -137,15 +140,21 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
                 }
             }
             let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            let _ = child.try_wait();
             return None;
         }
         thread::sleep(Duration::from_millis(5));
     };
-    let stdout = stdout_reader.join().ok()??;
-    let stderr = stderr_reader.join().ok()??;
+    // A descendant may retain either pipe after the direct child exits. Drain
+    // briefly after killing the private group, then return rather than
+    // joining a reader forever on an uninterruptible process.
+    let drain_deadline = Instant::now() + Duration::from_millis(250);
+    let stdout = stdout_receiver
+        .recv_timeout(drain_deadline.saturating_duration_since(Instant::now()))
+        .ok()??;
+    let stderr = stderr_receiver
+        .recv_timeout(drain_deadline.saturating_duration_since(Instant::now()))
+        .ok()??;
     Some(Output {
         status,
         stdout,

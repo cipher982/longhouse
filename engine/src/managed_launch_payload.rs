@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 /// Permission posture Longhouse reports for a managed launch.
 ///
@@ -137,7 +138,9 @@ pub fn git_context(cwd: &Path) -> (Option<String>, Option<String>) {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).current_dir(cwd).output().ok()?;
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd);
+    let output = crate::process_identity::output_with_timeout(command, Duration::from_secs(5))?;
     if !output.status.success() {
         return None;
     }
@@ -191,7 +194,10 @@ mod tests {
             let payload = registration(provider, vec![]);
             let map: &JsonMap<String, Value> = payload.as_object().unwrap();
             for key in REQUIRED_REGISTRATION_KEYS {
-                assert!(map.contains_key(*key), "{provider} payload is missing {key}");
+                assert!(
+                    map.contains_key(*key),
+                    "{provider} payload is missing {key}"
+                );
             }
             assert_eq!(map["provider"], provider);
         }

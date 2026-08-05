@@ -386,13 +386,17 @@ async fn monitor_opencode_events_once(
     longhouse_session_id: &str,
     stop: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let mut response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
-        .build()?
-        .get(format!("{server_url}/global/event"))
-        .basic_auth(username, Some(password))
-        .send()
-        .await?;
+        .build()?;
+    let mut response = tokio::time::timeout(
+        Duration::from_secs(10),
+        client
+            .get(format!("{server_url}/global/event"))
+            .basic_auth(username, Some(password))
+            .send(),
+    )
+    .await??;
     if !response.status().is_success() {
         bail!("OpenCode event stream failed ({})", response.status());
     }

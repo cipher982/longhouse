@@ -40,6 +40,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const MANAGED_PROVIDER_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const OPENCODE_BRIDGE_START_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Parser)]
 #[command(name = "longhouse", about = "Native Longhouse device CLI")]
@@ -1009,9 +1010,7 @@ fn configure_cursor_hooks(cursor_dir: Option<PathBuf>) -> anyhow::Result<()> {
 }
 
 fn native_machine_name() -> String {
-    Command::new("hostname")
-        .output()
-        .ok()
+    crate::process_identity::output_with_timeout(Command::new("hostname"), Duration::from_secs(2))
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
@@ -1565,15 +1564,17 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             .arg(&target.provider_session_id);
     }
     let output =
-        match crate::process_identity::output_with_timeout(start, MANAGED_PROVIDER_COMMAND_TIMEOUT)
-        {
+        match crate::process_identity::output_with_timeout(start, OPENCODE_BRIDGE_START_TIMEOUT) {
             Some(output) => output,
             None => {
                 if let Some(registration) = &degraded_registration {
                     registration.mark_provider_failed();
                 }
                 let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
-                anyhow::bail!("native OpenCode bridge start timed out after 10 seconds");
+                anyhow::bail!(
+                    "native OpenCode bridge start timed out after {} seconds",
+                    OPENCODE_BRIDGE_START_TIMEOUT.as_secs()
+                );
             }
         };
     if !output.status.success() {
@@ -1603,14 +1604,20 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
     if let Some(registration) = &degraded_registration {
-        if let Some(pid) = bridge_response.pid {
-            if let Err(error) =
-                registration.record_provider_owner(pid, bridge_response.process_start_time.clone())
-            {
-                registration.mark_provider_failed();
-                let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
-                return Err(error.context("persist managed OpenCode provider ownership"));
-            }
+        let Some(pid) = bridge_response.pid else {
+            registration.mark_provider_failed();
+            let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+            anyhow::bail!("native OpenCode bridge did not return its provider PID");
+        };
+        let Some(process_start_time) = bridge_response.process_start_time.clone() else {
+            registration.mark_provider_failed();
+            let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+            anyhow::bail!("native OpenCode bridge did not return its process identity");
+        };
+        if let Err(error) = registration.record_provider_owner(pid, Some(process_start_time)) {
+            registration.mark_provider_failed();
+            let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+            return Err(error.context("persist managed OpenCode provider ownership"));
         }
         if let Err(error) = registration.mark_provider_ready() {
             registration.mark_provider_failed();
@@ -2000,15 +2007,7 @@ fn resolve_codex_config(
     let machine_name = state
         .machine_name
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            Command::new("hostname")
-                .output()
-                .ok()
-                .and_then(|output| String::from_utf8(output.stdout).ok())
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "unknown".into())
-        });
+        .unwrap_or_else(native_machine_name);
     Ok((url, token.trim().to_string(), machine_name))
 }
 
