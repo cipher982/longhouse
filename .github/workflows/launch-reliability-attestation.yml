@@ -242,6 +242,15 @@ jobs:
           health=("$health_root"/*.json)
           dogfood=("$dogfood_root"/episodes/*.json)
           challenges=("$dogfood_root"/challenges/*.json)
+          matrix_count="$("$LONGHOUSE_QUALIFICATION_PYTHON" - "$matrix_root" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          print(sum(1 for path in root.rglob("*.json") if path.is_file() and not path.is_symlink()))
+          PY
+          )"
+          test "$matrix_count" -gt 0 || { echo "No managed-launch matrix artifacts retained." >&2; exit 1; }
           test "${#harness[@]}" -gt 0 || { echo "No provider harness artifacts retained." >&2; exit 1; }
           test "${#health[@]}" -gt 0 || { echo "No native health artifacts retained." >&2; exit 1; }
           test "${#dogfood[@]}" -gt 0 || { echo "No dogfood episodes retained." >&2; exit 1; }

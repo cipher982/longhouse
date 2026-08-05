@@ -418,11 +418,16 @@ def _implementation_exclusion_reason(
     artifact: dict[str, Any], *, report_source_sha: str | None
 ) -> str | None:
     implementation = artifact.get("implementation")
-    if not isinstance(implementation, dict):
+    implementation_before = artifact.get("implementation_before")
+    if not isinstance(implementation, dict) or not isinstance(
+        implementation_before, dict
+    ):
         return "unbound_or_dirty_implementation_binary"
+    identities: dict[str, dict[str, Any]] = {}
     for label in ("longhouse", "longhouse_engine"):
         value = implementation.get(label)
-        if not isinstance(value, dict):
+        before_value = implementation_before.get(label)
+        if not isinstance(value, dict) or not isinstance(before_value, dict):
             return "unbound_or_dirty_implementation_binary"
         if (
             "build_identity" not in value
@@ -430,6 +435,10 @@ def _implementation_exclusion_reason(
             or value.get("build_identity_error") is not None
         ):
             return "unbound_or_dirty_implementation_binary"
+        build_identity = value.get("build_identity")
+        if not isinstance(build_identity, dict):
+            return "unbound_or_dirty_implementation_binary"
+        identities[label] = build_identity
         source_sha = value.get("source_git_sha")
         if (
             not isinstance(source_sha, str)
@@ -444,6 +453,31 @@ def _implementation_exclusion_reason(
             r"[0-9a-f]{64}", binary_sha
         ):
             return "unbound_or_dirty_implementation_binary"
+        if before_value.get("sha256") != binary_sha:
+            return "unbound_or_dirty_implementation_binary"
+        if label == "longhouse":
+            facade_identity = build_identity.get("facade")
+            paired_engine_identity = build_identity.get("engine")
+            if (
+                not isinstance(facade_identity, dict)
+                or not isinstance(paired_engine_identity, dict)
+                or facade_identity.get("commit") != source_sha
+                or facade_identity.get("dirty") is not False
+            ):
+                return "unbound_or_dirty_implementation_binary"
+        elif (
+            build_identity.get("commit") != source_sha
+            or build_identity.get("dirty") is not False
+        ):
+            return "unbound_or_dirty_implementation_binary"
+    paired_engine_identity = identities["longhouse"].get("engine")
+    engine_source = implementation["longhouse_engine"].get("source_git_sha")
+    if (
+        not isinstance(paired_engine_identity, dict)
+        or paired_engine_identity.get("commit") != engine_source
+        or paired_engine_identity.get("dirty") is not False
+    ):
+        return "unbound_or_dirty_implementation_binary"
     return None
 
 
@@ -1402,6 +1436,16 @@ def _health_measurements(
                 )
             if implementation.get("returncode") != 0:
                 raise ValueError("health implementation.returncode must be zero")
+            harness = artifact.get("harness")
+            if (
+                not isinstance(harness, dict)
+                or harness.get("repository_git_sha") != report_source_sha
+                or harness.get("repository_dirty") is not False
+                or harness.get("harness_file_dirty") is not False
+            ):
+                raise ValueError(
+                    "health harness provenance is not a clean report-source checkout"
+                )
             scenarios = artifact.get("scenarios")
             if (
                 not isinstance(scenarios, list)

@@ -90,14 +90,70 @@ def version_probe(binary: Path) -> dict[str, Any]:
         parsed = None
     if isinstance(parsed, dict):
         identity = parsed
+    reported_identity = (
+        identity.get("facade") if isinstance(identity.get("facade"), dict) else identity
+    )
     return {
         "path": str(binary),
         "sha256": sha256_file(binary),
         "returncode": result.returncode,
         "output": (result.stdout or result.stderr or "").strip(),
-        "source_git_sha": identity.get("commit"),
-        "build_dirty": identity.get("dirty"),
+        "source_git_sha": reported_identity.get("commit"),
+        "build_dirty": reported_identity.get("dirty"),
     }
+
+
+def harness_provenance() -> dict[str, Any]:
+    path = Path(__file__).resolve()
+    repository = path.parents[2]
+    revision = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    relative_path = str(path.relative_to(repository))
+    file_status = subprocess.run(
+        ["git", "-C", str(repository), "status", "--short", "--", relative_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    repository_status = subprocess.run(
+        ["git", "-C", str(repository), "status", "--short"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {
+        "path": str(path),
+        "repository": str(repository),
+        "repository_git_sha": (
+            revision.stdout.strip() if revision.returncode == 0 else None
+        ),
+        "repository_dirty": (
+            bool(repository_status.stdout.strip())
+            if repository_status.returncode == 0
+            else None
+        ),
+        "harness_file_dirty": (
+            bool(file_status.stdout.strip()) if file_status.returncode == 0 else None
+        ),
+    }
+
+
+def verified_harness_provenance() -> dict[str, Any]:
+    provenance = harness_provenance()
+    missing = [
+        key
+        for key in ("repository_git_sha", "repository_dirty", "harness_file_dirty")
+        if provenance.get(key) is None
+    ]
+    if missing:
+        raise RuntimeError(
+            "health harness provenance could not be verified: " + ", ".join(missing)
+        )
+    return provenance
 
 
 def status_path(root: Path) -> Path:
@@ -469,7 +525,10 @@ def run_case(case: str, binary: Path) -> dict[str, Any]:
                     "expected the installed unresolved-source action to preserve the "
                     f"source epoch, got {suggested_actions!r}"
                 )
-            if observed["payload"].get("headline") != "Longhouse has unresolved durable source evidence":
+            if (
+                observed["payload"].get("headline")
+                != "Longhouse has unresolved durable source evidence"
+            ):
                 raise AssertionError(
                     "expected the installed unresolved-source headline to be precise, "
                     f"got {observed['payload'].get('headline')!r}"
@@ -547,6 +606,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         # complete installed fault matrix.
         "verdict": "green" if selected == CASES else "partial",
         "implementation": version_probe(binary),
+        "harness": verified_harness_provenance(),
         "scenarios": [result["case"] for result in results],
         "results": results,
     }

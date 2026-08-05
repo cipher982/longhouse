@@ -10,6 +10,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -196,6 +197,10 @@ def _matrix(
                 "build_identity_error": None,
             },
         },
+        "implementation_before": {
+            "longhouse": {"sha256": "a" * 64},
+            "longhouse_engine": {"sha256": "b" * 64},
+        },
         "recovery_qualification": "mixed_provider_degraded_start_with_harness_precondition_gap",
     }
     path.write_text(json.dumps(payload))
@@ -333,9 +338,39 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
             "source_git_sha": _current_repo_sha(),
             "build_dirty": False,
         },
+        "harness": {
+            "repository_git_sha": _current_repo_sha(),
+            "repository_dirty": False,
+            "harness_file_dirty": False,
+        },
         "scenarios": list(HEALTH_CASES),
         "results": normalized_results,
     }
+
+
+def test_installed_health_version_probe_reads_nested_facade_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    binary = tmp_path / "longhouse"
+    binary.write_bytes(b"native facade")
+    commit = "a" * 40
+    monkeypatch.setattr(
+        MATRIX_MODULE.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "facade": {"commit": commit, "dirty": False},
+                    "engine": {"commit": commit, "dirty": False},
+                }
+            ),
+            stderr="",
+        ),
+    )
+
+    result = MATRIX_MODULE.version_probe(binary)
+
+    assert result["source_git_sha"] == commit
+    assert result["build_dirty"] is False
 
 
 def test_measurement_contract_matches_installed_health_matrix() -> None:
@@ -475,6 +510,36 @@ def test_unbound_implementation_binary_is_not_measured(tmp_path: Path):
         {
             "path": str(matrix),
             "reason": "unbound_or_dirty_implementation_binary",
+        }
+    ]
+
+
+def test_changed_implementation_hash_is_not_measured(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["implementation_before"]["longhouse"]["sha256"] = "c" * 64
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"][0]["reason"] == ("unbound_or_dirty_implementation_binary")
+
+
+def test_dirty_health_harness_is_invalid(tmp_path: Path):
+    health = tmp_path / "health.json"
+    payload = _health_artifact([])
+    payload["harness"]["repository_dirty"] = True
+    health.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[health])
+
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {
+            "path": str(health),
+            "error": "health harness provenance is not a clean report-source checkout",
         }
     ]
 
