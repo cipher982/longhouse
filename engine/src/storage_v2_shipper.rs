@@ -583,16 +583,24 @@ pub(crate) async fn ship_prepared_envelope(
     let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
         .context("prepared storage-v2 envelope is not durable")?;
     validate_pending_matches_prepared(&pending, &prepared)?;
-    if pending.blocked_at.is_some()
-        && prepared.envelope.provider == "cursor"
-        && (reconcile_blocked_cursor_replacement(conn, client, &prepared, request_timeout).await?
-            || reconcile_blocked_cursor_lineage(conn, client, &prepared, request_timeout).await?)
-    {
-        return Ok(StorageV2ShipOutcome {
-            bytes_shipped: 0,
-            events_shipped: 0,
-            has_more: true,
-        });
+    if pending.blocked_at.is_some() {
+        // Every blocked source gets one host-truth re-examination, whatever its
+        // provider. This branch used to be gated on `provider == "cursor"`, so a
+        // blocked Claude, Codex, OpenCode or Antigravity source returned
+        // `StorageV2SourceBlocked` below without ever touching the wire again —
+        // recovery existed only for the provider whose incident prompted it, and
+        // every other provider's blocks were permanent by default.
+        //
+        // Re-examination is a manifest fetch and a watermark comparison, not a
+        // re-POST of the frozen body: re-sending an envelope the host already
+        // rejected cannot succeed when the disagreement is about position.
+        if reexamine_blocked_source(conn, client, &pending, &prepared, request_timeout).await? {
+            return Ok(StorageV2ShipOutcome {
+                bytes_shipped: 0,
+                events_shipped: 0,
+                has_more: true,
+            });
+        }
     }
     if let Some(blocked_at) = pending.blocked_at.as_deref() {
         return Err(StorageV2SourceBlocked {
@@ -800,6 +808,19 @@ async fn reconcile_storage_v2_conflict(
         }
         Err(error) => return Err(error),
     };
+    // The host may be *behind* us rather than ahead. `proven_manifest_prefix`
+    // walks forward from `range_start` and so can only answer "how much of what
+    // I am sending do you already hold" — it has no way to express a gap below
+    // that point, and every such conflict fell through to quarantine.
+    //
+    // A gap is the more recoverable case, not the less: for a byte-offset
+    // source the missing bytes are still in the file on disk, so the cursor can
+    // be corrected to the host's watermark and the range re-shipped. Attempt
+    // that before anything else, because succeeding here means no source is
+    // blocked at all.
+    if let Some(outcome) = resync_behind_host(conn, &pending.source_path, prepared, &manifest)? {
+        return Ok(Some(outcome));
+    }
     let Some(proven_through) = proven_manifest_prefix(prepared, &manifest)? else {
         return Ok(None);
     };
@@ -836,6 +857,137 @@ async fn reconcile_storage_v2_conflict(
         bytes_shipped: proven_through - prepared.range_start,
         events_shipped: prefix_events,
         has_more: replacement.is_some() || prepared.has_more,
+    }))
+}
+
+/// Give a blocked source one provider-neutral re-examination against host truth.
+///
+/// Returns true when something changed and the caller should come back around.
+///
+/// The order matters. Resync is tried first because it is the only branch that
+/// can clear a `range_gap`, which is the most common block and the one whose
+/// bytes are still on disk. The Cursor-specific lineage and replacement repairs
+/// remain for the epoch-identity failures only they understand; they are now
+/// reached through this one door rather than gating whether the door opens.
+async fn reexamine_blocked_source(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    request_timeout: Duration,
+) -> Result<bool> {
+    // A source the host has no epoch for cannot be resynced against anything;
+    // that path stays with the provider-specific handlers below.
+    if let Ok(manifest) = client
+        .storage_v2_source_manifest(
+            &prepared.source_epoch.to_string(),
+            prepared.range_start,
+            Some(request_timeout),
+        )
+        .await
+    {
+        if resync_behind_host(conn, &pending.source_path, prepared, &manifest)?.is_some() {
+            return Ok(true);
+        }
+    }
+    if prepared.envelope.provider == "cursor" {
+        return Ok(
+            reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
+                || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?,
+        );
+    }
+    Ok(false)
+}
+
+/// Correct a local cursor that has run ahead of what the Runtime Host holds.
+///
+/// This is the rescan half of durable shipping. For a source whose bytes are a
+/// re-readable file, nothing about shipping progress needs to be recovered from
+/// local bookkeeping: the host says how far it got, the file still holds the
+/// rest, and the difference is the work. A disagreement becomes a resync rather
+/// than an incident.
+///
+/// Restricted to `range_kind == "byte_offset"` — Claude, Codex, Antigravity.
+/// Cursor and OpenCode ship record ordinals over a mutable SQLite database
+/// where an earlier ordinal may no longer be reconstructable, so their
+/// bookkeeping is load-bearing and must not be re-derived this way.
+///
+/// Returns `None` when this is not the situation, leaving the existing
+/// proven-prefix path to handle a host that is ahead.
+fn resync_behind_host(
+    conn: &mut Connection,
+    source_path: &str,
+    prepared: &PreparedStorageV2Envelope,
+    manifest: &StorageV2SourceManifest,
+) -> Result<Option<StorageV2ShipOutcome>> {
+    let epoch = &manifest.source_epoch;
+    let envelope = &prepared.envelope;
+    // Identity must match exactly before any host number is trusted. A manifest
+    // for a different tenant, machine, provider, source, or range unit says
+    // nothing about this cursor.
+    if manifest.v != 2
+        || epoch.source_epoch != envelope.source_epoch
+        || epoch.tenant_id != envelope.tenant_id
+        || epoch.machine_id != envelope.machine_id
+        || epoch.provider != envelope.provider
+        || epoch.opaque_source_id != envelope.opaque_source_id
+        || epoch.range_kind != envelope.range_kind
+        || epoch.range_kind != "byte_offset"
+    {
+        return Ok(None);
+    }
+    let Ok(accepted_through) = epoch.accepted_through.parse::<u64>() else {
+        return Ok(None);
+    };
+    // Only a gap below where we are about to send. Anything else is either
+    // agreement or an overlap the proven-prefix path owns.
+    if accepted_through >= prepared.range_start {
+        return Ok(None);
+    }
+    // The bytes must still exist to be re-sent. A truncated or rotated file
+    // cannot serve them, and rewinding onto one would swap a stuck source for a
+    // permanently failing one.
+    let source_len = std::fs::metadata(source_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if source_len < prepared.range_start {
+        tracing::warn!(
+            source_epoch = %prepared.source_epoch,
+            accepted_through,
+            range_start = prepared.range_start,
+            source_len,
+            "host is behind but the source can no longer serve the gap"
+        );
+        return Ok(None);
+    }
+
+    let previous = crate::state::source_epoch::resync_to_host_watermark(
+        conn,
+        prepared.source_epoch,
+        SourceLane::Durable,
+        accepted_through,
+    )?;
+    // The frozen envelope described a range that starts after the gap, so it is
+    // no longer the work to do, and deleting it also clears the block: a source
+    // is blocked by the presence of that row, so removing it is what lets the
+    // next prepare rebuild from the corrected cursor and ship contiguously.
+    pending_source_envelope::discard_after_cursor_resync(
+        conn,
+        prepared.source_epoch,
+        &prepared.envelope.expected_envelope_id,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        provider = %envelope.provider,
+        accepted_through,
+        local_was = previous,
+        recovered_bytes = previous - accepted_through,
+        "resynced durable cursor to Runtime Host watermark"
+    );
+    Ok(Some(StorageV2ShipOutcome {
+        bytes_shipped: 0,
+        events_shipped: 0,
+        has_more: true,
     }))
 }
 

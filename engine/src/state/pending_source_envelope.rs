@@ -166,12 +166,18 @@ pub fn load_for_epoch(
 /// scheduler. Multiple epochs for one path collapse into one scheduler job.
 pub fn retry_paths(conn: &Connection) -> Result<Vec<PendingSourceRetryPath>> {
     let mut statement = conn.prepare(
+        // Blocked rows are included. They used to be filtered out here, which
+        // meant a quarantined source was skipped by restart recovery as well as
+        // by the live path, so nothing in the process ever looked at it again —
+        // the block was terminal by scheduling, not just by policy. A blocked
+        // source now gets woken like any other and is re-examined against host
+        // truth once it arrives; if that re-examination finds nothing to do, it
+        // stays blocked and costs one manifest fetch.
         "SELECT epoch.provider, pending.source_path,
                 SUM(pending.raw_bytes), MIN(pending.created_at)
          FROM pending_source_envelope AS pending
          JOIN source_epoch_registry AS epoch
            ON epoch.source_epoch = pending.source_epoch
-         WHERE pending.blocked_at IS NULL
          GROUP BY epoch.provider, pending.source_path
          ORDER BY MIN(pending.created_at), epoch.provider, pending.source_path",
     )?;
@@ -394,6 +400,30 @@ pub fn discard_unattempted(
     Ok(conn.execute(
         "DELETE FROM pending_source_envelope
          WHERE source_epoch = ?1 AND envelope_id = ?2 AND attempt_count = 0",
+        params![source_epoch.to_string(), envelope_id],
+    )? == 1)
+}
+
+/// Drop a frozen envelope whose range no longer describes the work to do.
+///
+/// After the durable cursor is resynced to the Runtime Host's watermark, the
+/// pending body describes a range starting *after* a gap the host never
+/// received, so it can never be accepted as-is. Deleting it lets the next
+/// prepare rebuild from the corrected cursor and send the missing bytes
+/// contiguously.
+///
+/// Unlike [`discard_unattempted`] this deliberately applies to attempted and
+/// blocked rows — those are exactly the ones a resync exists to rescue — so it
+/// keys on the exact envelope identity instead of an attempt count, and returns
+/// false rather than deleting anything if that identity has moved on.
+pub fn discard_after_cursor_resync(
+    conn: &Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+) -> Result<bool> {
+    Ok(conn.execute(
+        "DELETE FROM pending_source_envelope
+         WHERE source_epoch = ?1 AND envelope_id = ?2",
         params![source_epoch.to_string(), envelope_id],
     )? == 1)
 }
@@ -859,6 +889,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let blocked_epoch = Uuid::new_v4();
+        register_epoch(&conn, blocked_epoch, "claude");
         let blocked = candidate(blocked_epoch, "blocked");
         persist_or_load(&mut conn, &blocked).unwrap();
         assert!(quarantine(
@@ -868,7 +899,9 @@ mod tests {
             "proof mismatch"
         )
         .unwrap());
-        let live = candidate(Uuid::new_v4(), "live");
+        let live_epoch = Uuid::new_v4();
+        register_epoch(&conn, live_epoch, "claude");
+        let live = candidate(live_epoch, "live");
         persist_or_load(&mut conn, &live).unwrap();
 
         let state = snapshot(&conn).unwrap();
@@ -879,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_paths_are_provider_scoped_deduplicated_and_skip_quarantine() {
+    fn retry_paths_are_provider_scoped_deduplicated_and_include_quarantine() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let active = Uuid::new_v4();
@@ -915,13 +948,28 @@ mod tests {
         persist_or_load(&mut conn, &blocked_envelope).unwrap();
         quarantine(&mut conn, blocked, "fixture", "blocked").unwrap();
 
+        // A blocked source is scheduled like any other. Excluding it here is
+        // what made quarantine terminal by scheduling as well as by policy:
+        // nothing in the process ever looked at the row again, so no repair
+        // could run even once one existed. It is woken and re-examined against
+        // host truth; if there is nothing to do it stays blocked.
+        // Ordering is by MIN(created_at) then provider then path; the fixtures
+        // share a timestamp, so the blocked claude row sorts first on provider.
+        let paths = retry_paths(&conn).unwrap();
         assert_eq!(
-            retry_paths(&conn).unwrap(),
-            vec![super::PendingSourceRetryPath {
-                provider: "codex".to_string(),
-                source_path: "/tmp/shared.jsonl".to_string(),
-                raw_bytes: 8,
-            }]
+            paths,
+            vec![
+                super::PendingSourceRetryPath {
+                    provider: "claude".to_string(),
+                    source_path: "/tmp/blocked.jsonl".to_string(),
+                    raw_bytes: 1,
+                },
+                super::PendingSourceRetryPath {
+                    provider: "codex".to_string(),
+                    source_path: "/tmp/shared.jsonl".to_string(),
+                    raw_bytes: 8,
+                },
+            ]
         );
     }
 
@@ -1065,6 +1113,28 @@ mod tests {
         assert_eq!(audit.0, pending.request_body_zstd);
         assert!(audit.1.is_empty());
         assert_eq!(audit.2, "fixture host replacement proof");
+    }
+
+    /// Register the epoch a pending row points at.
+    ///
+    /// `pending_source_envelope` carries a foreign key to
+    /// `source_epoch_registry`, so a fixture that skips this cannot insert at
+    /// all. Tests that forgot it failed with a bare "FOREIGN KEY constraint
+    /// failed" rather than anything about what they were checking.
+    fn register_epoch(conn: &rusqlite::Connection, source_epoch: Uuid, provider: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'fixture', 'initial', 1, ?4, ?4)",
+            params![
+                source_epoch.to_string(),
+                provider,
+                format!("source-{source_epoch}"),
+                "2026-07-15T00:00:00Z"
+            ],
+        )
+        .unwrap();
     }
 
     fn candidate(source_epoch: Uuid, source_path: &str) -> PendingSourceEnvelope {

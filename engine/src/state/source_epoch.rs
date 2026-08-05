@@ -480,6 +480,59 @@ fn load_lane_position(
     .transpose()
 }
 
+/// Move a lane cursor back to a position the Runtime Host has proven it holds.
+///
+/// The forward-only rule in [`acknowledge_position`] is right for acknowledging
+/// work: progress claimed without a receipt is how a cursor runs ahead of the
+/// host in the first place. But it left no way to *correct* a cursor that had
+/// already run ahead, which is why a `range_gap` conflict was terminal — the
+/// engine could see the disagreement, and had no operation that resolved it.
+///
+/// This is the correction, and it is deliberately narrow:
+///
+/// - `host_accepted_through` must come from a Runtime Host manifest for this
+///   exact epoch, not from local state. The host is the authority for what is
+///   durable; the local cursor is a cache of that fact.
+/// - It only ever moves backward. A manifest that claims more than the local
+///   cursor is not a rewind and must not be laundered into one here.
+/// - The source bytes below the new position must still be readable, which the
+///   caller checks. Rewinding to a position the file can no longer serve would
+///   trade a stuck source for a permanently failing one.
+///
+/// Safe because the range being re-shipped is content-addressed: re-sending
+/// bytes the host already holds is idempotent, and the gap it opens is exactly
+/// the bytes the host says it never received.
+pub fn resync_to_host_watermark(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    lane: SourceLane,
+    host_accepted_through: u64,
+) -> Result<u64> {
+    let current = lane_position(conn, source_epoch, lane)?;
+    if host_accepted_through >= current {
+        bail!(
+            "host watermark {host_accepted_through} is not behind local cursor {current}; \
+             nothing to resync"
+        );
+    }
+    let changed = conn.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = ?1, updated_at = ?2
+         WHERE source_epoch = ?3 AND lane = ?4 AND last_position = ?5",
+        params![
+            i64::try_from(host_accepted_through).context("host watermark exceeds SQLite INTEGER")?,
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string(),
+            lane.as_str(),
+            i64::try_from(current).context("source position exceeds SQLite INTEGER")?,
+        ],
+    )?;
+    if changed != 1 {
+        bail!("source epoch lane cursor changed before resync");
+    }
+    Ok(current)
+}
+
 pub fn acknowledge_position(
     conn: &mut Connection,
     source_epoch: Uuid,
@@ -624,6 +677,63 @@ mod tests {
     use std::io::Write;
 
     use super::*;
+
+    /// An epoch with its durable cursor advanced to `position`.
+    fn epoch_at(dir: &std::path::Path, position: u64) -> (Connection, Uuid) {
+        let db_path = dir.join("state.db");
+        let source = dir.join("history.jsonl");
+        fs::write(&source, vec![b'x'; 4096]).unwrap();
+        let mut conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let resolution = observe_file(
+            &mut conn,
+            "claude",
+            "history.jsonl",
+            &source,
+            SourceLane::Durable,
+            position,
+            Some("revision-1"),
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        (conn, resolution.source_epoch)
+    }
+
+    #[test]
+    fn resync_moves_the_cursor_back_to_the_host_watermark() {
+        // The gap case: the host accepted less than the engine believes it
+        // shipped, and the engine has to be corrected to the host's truth.
+        // Positions stay inside the fixture file because observe_file refuses a
+        // cursor past the source length.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, epoch) = epoch_at(dir.path(), 4000);
+        let previous =
+            resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 3081).unwrap();
+        assert_eq!(previous, 4000);
+        assert_eq!(lane_position(&conn, epoch, SourceLane::Durable).unwrap(), 3081);
+    }
+
+    #[test]
+    fn resync_refuses_to_move_the_cursor_forward() {
+        // A manifest claiming more than local progress is not a rewind, and
+        // laundering it into one would acknowledge bytes never receipted.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, epoch) = epoch_at(dir.path(), 100);
+        assert!(resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 500).is_err());
+        assert!(resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 100).is_err());
+        assert_eq!(lane_position(&conn, epoch, SourceLane::Durable).unwrap(), 100);
+    }
+
+    #[test]
+    fn a_resynced_cursor_can_acknowledge_forward_again() {
+        // The point of the rewind is to re-ship the gap; the forward path must
+        // still work from the corrected position.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, epoch) = epoch_at(dir.path(), 900);
+        resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 500).unwrap();
+        acknowledge_position(&mut conn, epoch, SourceLane::Durable, 500, 900).unwrap();
+        assert_eq!(lane_position(&conn, epoch, SourceLane::Durable).unwrap(), 900);
+    }
 
     #[test]
     fn epoch_survives_restart_and_is_shared_across_lanes() {
