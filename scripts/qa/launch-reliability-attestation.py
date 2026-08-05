@@ -354,6 +354,14 @@ def build_subject(
             "report matrix history contains a non-green measured run; "
             "release attestation requires every measured run to qualify"
         )
+    excluded_full_runs = matrix.get("excluded_full_runs")
+    if not isinstance(excluded_full_runs, list):
+        raise ValueError("report has no complete full-run measurement ledger")
+    if excluded_full_runs:
+        raise ValueError(
+            "report contains excluded full runs; release attestation requires "
+            "every discovered full run to qualify"
+        )
     report_generated_at = _timestamp(
         report.get("generated_at"), label="report.generated_at"
     )

@@ -1771,6 +1771,40 @@ def test_attestation_rejects_mixed_green_and_yellow_matrix_history(tmp_path: Pat
         attestation.build_subject(report)
 
 
+def test_attestation_rejects_excluded_full_runs(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    series = tmp_path / "dogfood.json"
+    _dogfood_series(series)
+    episode_paths, challenge_paths = _split_dogfood_series(series)
+
+    green = tmp_path / "green.json"
+    excluded = tmp_path / "excluded.json"
+    _matrix(path=green, auth_gap=False)
+    _matrix(path=excluded, auth_gap=False)
+    excluded_payload = json.loads(excluded.read_text())
+    excluded_payload["implementation"]["longhouse"]["build_identity_error"] = (
+        "build identity probe exited 127"
+    )
+    excluded.write_text(json.dumps(excluded_payload))
+
+    harness = tmp_path / "provider-harness.json"
+    harness.write_text(json.dumps(_provider_harness_artifact()))
+    health = tmp_path / "health.json"
+    health.write_text(json.dumps(_health_artifact([])))
+    report = MODULE.build_report(
+        [green, excluded],
+        [harness],
+        [health],
+        dogfood_paths=episode_paths,
+        dogfood_challenge_paths=challenge_paths,
+    )
+
+    assert report["matrix"]["measured_clean_run_count"] == 1
+    assert report["matrix"]["excluded_full_runs"]
+    with pytest.raises(ValueError, match="excluded full runs"):
+        attestation.build_subject(report)
+
+
 def test_attestation_manifest_binds_all_report_inputs(tmp_path: Path):
     attestation = MODULE._attestation_module()
     report = {

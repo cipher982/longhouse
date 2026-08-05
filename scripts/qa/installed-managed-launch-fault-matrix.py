@@ -1801,9 +1801,14 @@ def provider_native_output_observed(provider: str, output: str) -> bool:
 def classify_cursor_startup_failure(
     result: dict[str, Any], cursor_auth: dict[str, Any]
 ) -> None:
+    positive_harness_evidence = (
+        result.get("launch_intent_created") is True
+        or result.get("cursor_harness_timeout") is True
+    )
     attributable_timeout = (
         result.get("degraded_marker_seen") is True
         and result.get("provider_output_observed") is False
+        and positive_harness_evidence
         and (
             result.get("timed_out") is True
             or result.get("cursor_harness_timeout") is True
