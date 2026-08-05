@@ -88,9 +88,9 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
-from zerg.services.notification_policy import WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
-from zerg.services.notification_policy import AttentionDeliveryAction
-from zerg.services.notification_policy import evaluate_tier1_delivery_with_facts
+from zerg.services.notification_policy_core import WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
+from zerg.services.notification_policy_core import AttentionDeliveryAction
+from zerg.services.notification_policy_core import evaluate_tier1_delivery_with_facts
 from zerg.services.session_title import sanitize_title
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity

@@ -92,6 +92,15 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
 }
 
 fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+    #[cfg(unix)]
+    {
+        // Keep descendants in a private process group. A command such as
+        // `sh -c "sleep 1"` can leave a descendant holding stdout open after
+        // the shell is killed; reaping the whole group keeps the timeout
+        // bounded through the reader join below.
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -108,6 +117,12 @@ fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output
             break status;
         }
         if Instant::now() >= deadline {
+            #[cfg(unix)]
+            if let Ok(process_group) = i32::try_from(child.id()) {
+                unsafe {
+                    libc::kill(-process_group, libc::SIGKILL);
+                }
+            }
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader.join();

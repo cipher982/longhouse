@@ -142,6 +142,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "runner_health_incidents",
         "runner_jobs",
         "runners",
+        "notification_events",
     } | set(live_catalog_table_names())
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables

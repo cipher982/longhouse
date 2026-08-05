@@ -7160,6 +7160,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn test_spawn_caffeinate_uses_correct_args() {
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
@@ -7194,6 +7195,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn test_caffeinate_child_exits_when_dropped() {
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
