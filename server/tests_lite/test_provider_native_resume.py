@@ -782,6 +782,17 @@ def test_cursor_resume_commands_pin_the_factory_model(tmp_path: Path, monkeypatc
     assert resumed[-3:] == ["--", "--model", "cursor-grok-4.5-high"]
     assert "cursor_model" in receipt["factory_overrides"]
 
+    bootstrap = "Reply with exactly READY and nothing else. Do not use tools or inspect files."
+    resumed_with_bootstrap, bootstrap_receipt = _command_from_resume_intent(
+        SPECS["cursor"],
+        args,
+        session_id,
+        intent,
+        prompt=bootstrap,
+    )
+    assert resumed_with_bootstrap[-1] == bootstrap
+    assert bootstrap_receipt["executed_argv"][-1] == bootstrap
+
 
 @pytest.mark.parametrize(
     ("provider", "selector"),

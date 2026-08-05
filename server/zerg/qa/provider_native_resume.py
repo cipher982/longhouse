@@ -1374,6 +1374,7 @@ def _command_from_resume_intent(
     *,
     use_credential_files: bool = False,
     cwd: Path | None = None,
+    prompt: str | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     working_directory = cwd or args.repo_root
     expected_argv = [
@@ -1407,6 +1408,8 @@ def _command_from_resume_intent(
         cursor_model = os.environ.get("CURSOR_MODEL", "").strip()
         if cursor_model:
             command.extend(("--", "--model", cursor_model))
+        if prompt:
+            command.append(prompt)
     retained_command = ["<redacted>" if value == args.agents_token else value for value in command]
     receipt = {
         "requested_at": _now(),
@@ -1815,6 +1818,7 @@ def _launch_command(
     *,
     use_credential_files: bool = False,
     cwd: Path | None = None,
+    prompt: str | None = None,
 ) -> list[str]:
     working_directory = cwd or args.repo_root
     command = [
@@ -1836,6 +1840,12 @@ def _launch_command(
         cursor_model = os.environ.get("CURSOR_MODEL", "").strip()
         if cursor_model:
             command.extend(("--", "--model", cursor_model))
+        if prompt:
+            # Cursor accepts a first prompt after its provider flags.  Using
+            # that native launch surface gives the provider a complete turn
+            # to publish its afterAgentResponse/idle hook before the Helm
+            # socket is used for the qualification marker.
+            command.append(prompt)
     return command
 
 
@@ -2021,7 +2031,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             if cursor_hooks.returncode != 0:
                 raise RuntimeError(f"Cursor native hook configuration failed: {cursor_hooks.stderr[-1000:]}")
         initial = PtyProcess(
-            _launch_command(spec, args, None, use_credential_files=True, cwd=provider_cwd),
+            _launch_command(
+                spec,
+                args,
+                None,
+                use_credential_files=True,
+                cwd=provider_cwd,
+                prompt=_cursor_bootstrap_prompt() if spec.provider == "cursor" else None,
+            ),
             cwd=provider_cwd,
             env=environment,
             recording=root / "initial.tty",
@@ -2048,21 +2065,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         )
         initial_prior_assistant_event_digests = _assistant_event_digests(initial_prior_tail)
         if spec.provider == "cursor":
-            initial_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
-            bootstrap_send = _control_send(
-                spec,
-                args,
-                initial_state,
-                initial,
-                _cursor_bootstrap_prompt(),
-                initial=True,
+            # The first Cursor turn was supplied through the provider's
+            # native launch argv above. Wait for that turn's identity-matched
+            # hook receipt before exercising the managed Helm socket.
+            _write_json(
+                root / "initial-bootstrap-send.json",
+                {"method": "provider_argv_bootstrap", "returncode": 0},
             )
-            _write_json(root / "initial-bootstrap-send.json", bootstrap_send)
-            _wait_cursor_idle(
-                initial_state,
-                environment,
-                minimum_hook_event_bytes=initial_hook_event_bytes,
-            )
+            _wait_cursor_idle(initial_state, environment)
             _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
@@ -2135,7 +2145,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             resume_intent,
             use_credential_files=True,
             cwd=provider_cwd,
+            prompt=_cursor_bootstrap_prompt() if spec.provider == "cursor" else None,
         )
+        resume_hook_event_bytes: int | None = None
+        if spec.provider == "cursor":
+            # Preserve the pre-resume hook boundary before launching the
+            # native selector. The prompt is appended after the provider's
+            # resume/model flags, which is Cursor's supported cold-start
+            # interaction surface.
+            resume_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
         _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         resumed = PtyProcess(
             resumed_command,
@@ -2159,20 +2177,13 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "opencode":
             _wait_opencode_tui_ready(resumed, root / "native-resume.tty")
         if spec.provider == "cursor":
-            # A cold Cursor Resume also starts before the provider emits its
-            # first hook phase. Bootstrap one harmless foreground prompt
-            # through the disposable PTY, then require the native hook to
-            # publish idle before exercising the real Helm control socket.
-            resume_hook_event_bytes = _cursor_hook_event_bytes(resumed_state, environment)
-            bootstrap_send = _control_send(
-                spec,
-                args,
-                resumed_state,
-                resumed,
-                _cursor_bootstrap_prompt(),
-                initial=True,
+            # The first resumed turn was supplied through Cursor's native
+            # argv. Require its identity-matched hook receipt before sending
+            # the post-resume marker through the Helm socket.
+            _write_json(
+                root / "resume-bootstrap-send.json",
+                {"method": "provider_argv_bootstrap", "returncode": 0},
             )
-            _write_json(root / "resume-bootstrap-send.json", bootstrap_send)
             _wait_cursor_idle(
                 resumed_state,
                 environment,
