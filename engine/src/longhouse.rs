@@ -357,6 +357,8 @@ struct OpencodeAttachArgs {
 struct OpencodeStopArgs {
     #[arg(long)]
     session_id: String,
+    #[arg(long = "config-dir", alias = "claude-dir")]
+    config_dir: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -4070,7 +4072,9 @@ fn main() -> anyhow::Result<()> {
         },
         Commands::Opencode { command, launch } => match command {
             Some(OpencodeCommand::Attach(args)) => attach_managed_opencode(args)?,
-            Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id, None)?,
+            Some(OpencodeCommand::Stop(args)) => {
+                stop_opencode_bridge(&args.session_id, args.config_dir)?
+            }
             None => launch_managed_opencode(launch)?,
         },
         Commands::Cursor {
@@ -4696,6 +4700,30 @@ mod tests {
             };
             assert!(command.is_none());
             assert_eq!(launch.config_dir.unwrap(), PathBuf::from("/tmp/opencode"));
+        }
+    }
+
+    #[test]
+    fn opencode_stop_parser_accepts_provider_config_dir() {
+        for flag in ["--config-dir", "--claude-dir"] {
+            let cli = Cli::try_parse_from([
+                "longhouse",
+                "opencode",
+                "stop",
+                "--session-id",
+                "00000000-0000-4000-8000-000000000001",
+                flag,
+                "/tmp/opencode",
+            ])
+            .unwrap();
+            let Commands::Opencode {
+                command: Some(OpencodeCommand::Stop(args)),
+                ..
+            } = cli.command.unwrap()
+            else {
+                panic!("expected opencode stop command");
+            };
+            assert_eq!(args.config_dir.unwrap(), PathBuf::from("/tmp/opencode"));
         }
     }
 

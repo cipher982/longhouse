@@ -840,11 +840,15 @@ def cleanup_detached_provider(
     *,
     longhouse_bin: Path,
     env: dict[str, str],
+    config_dir: Path | None = None,
 ) -> dict[str, Any]:
     if provider not in {"codex", "opencode"} or not session_id:
         return {"status": "not_applicable", "remaining_process_groups": []}
+    stop_command = [str(longhouse_bin), provider, "stop", "--session-id", session_id]
+    if config_dir is not None:
+        stop_command.extend(["--config-dir", str(config_dir)])
     stop = subprocess.run(
-        [str(longhouse_bin), provider, "stop", "--session-id", session_id],
+        stop_command,
         env=env,
         capture_output=True,
         text=True,
@@ -942,6 +946,11 @@ def finish_owned_live_provider(
             str(session_id),
             longhouse_bin=longhouse_bin,
             env=provider_cleanup_environment(cleanup_scope, engine_bin=engine_bin),
+            config_dir=(
+                Path(str(cleanup_scope["provider_config_root"]))
+                if provider == "opencode"
+                else None
+            ),
         )
     else:
         owned_stop = {"status": "not_applicable", "remaining_process_groups": []}
@@ -2258,6 +2267,11 @@ def run_provider(
         session_match.group(0) if session_match else None,
         longhouse_bin=longhouse_bin,
         env=env,
+        config_dir=(
+            root / "provider-config" / provider
+            if provider == "opencode"
+            else None
+        ),
     )
     if cleanup["status"] != "pass" and cleanup["status"] != "not_applicable":
         raise RuntimeError(
