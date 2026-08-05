@@ -13,6 +13,16 @@ fn engine() -> &'static str {
     env!("CARGO_BIN_EXE_longhouse-engine")
 }
 
+fn read_request(stream: &mut std::net::TcpStream, raw: &mut [u8]) -> usize {
+    loop {
+        match stream.read(raw) {
+            Ok(count) => return count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => panic!("failed to read hook request: {error}"),
+        }
+    }
+}
+
 fn run_hook(home: &std::path::Path, command: &str, event: &str, input: &str) -> Value {
     run_hook_with_env(home, command, event, input, &[])
 }
@@ -62,7 +72,7 @@ fn permission_server(decision: &'static str) -> (String, thread::JoinHandle<()>)
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
             let mut raw = [0u8; 8192];
-            let count = stream.read(&mut raw).unwrap();
+            let count = read_request(&mut stream, &mut raw);
             let request = String::from_utf8_lossy(&raw[..count]);
             assert!(request
                 .to_ascii_lowercase()
@@ -95,7 +105,7 @@ fn captured_permission_server(
         for index in 0..(invocations * 2) {
             let (mut stream, _) = listener.accept().unwrap();
             let mut raw = [0u8; 8192];
-            let count = stream.read(&mut raw).unwrap();
+            let count = read_request(&mut stream, &mut raw);
             let request = String::from_utf8_lossy(&raw[..count]);
             let body = if index % 2 == 0 {
                 let json = request.split("\r\n\r\n").nth(1).unwrap();
@@ -126,7 +136,7 @@ fn unresolved_permission_server() -> (String, thread::JoinHandle<()>) {
     let handle = thread::spawn(move || loop {
         let (mut stream, _) = listener.accept().unwrap();
         let mut raw = [0u8; 8192];
-        let count = stream.read(&mut raw).unwrap();
+        let count = read_request(&mut stream, &mut raw);
         let request = String::from_utf8_lossy(&raw[..count]);
         let (status, body, done) = if request.starts_with("POST /api/agents/permission-requests/") {
             ("200 OK", r#"{}"#, true)
@@ -330,7 +340,7 @@ fn permission_hook_denies_mismatch_invalid_timeout_poll_failure_and_timeout() {
         for index in 0..2 {
             let (mut stream, _) = listener.accept().unwrap();
             let mut raw = [0u8; 8192];
-            let _ = stream.read(&mut raw).unwrap();
+            let _ = read_request(&mut stream, &mut raw);
             let (status, body) = if index == 0 {
                 ("200 OK", r#"{"pause_request_id":"pause-1"}"#)
             } else {
