@@ -173,9 +173,6 @@ fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result
     else {
         return Ok(false);
     };
-    let Some(provider_session_id) = state.require_provider_session_id().ok() else {
-        return Ok(false);
-    };
     let runtime_key = format!("opencode:{}", state.session_id);
     let device_id = std::env::var("HOSTNAME").ok();
     let event = crate::managed_terminal::ManagedTerminalEvent {
@@ -184,7 +181,11 @@ fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result
         run_id,
         provider: "opencode",
         managed_transport: OPENCODE_SERVER_BRIDGE_TRANSPORT,
-        provider_session_id: Some(provider_session_id),
+        // A startup state can be stopped before OpenCode has created its
+        // provider session. The terminal event still has durable Longhouse
+        // identity through session_id/run_id; dropping it would strand the
+        // managed run after the server was successfully terminated.
+        provider_session_id: state.provider_session_id.as_deref(),
         device_id: device_id.as_deref(),
         source: "opencode_server_bridge",
         dedupe_prefix: "opencode-terminal",
@@ -1044,6 +1045,28 @@ mod tests {
             event["payload"]["managed_transport"],
             OPENCODE_SERVER_BRIDGE_TRANSPORT
         );
+    }
+
+    #[test]
+    fn provisional_terminal_event_is_durable_without_provider_session() {
+        let temp = TempDir::new().unwrap();
+        let mut payload = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
+        payload["provider_session_id"] = Value::Null;
+        write_state_payload(temp.path(), SESSION_ID, payload);
+        let state = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap();
+        let outbox = temp.path().join("outbox");
+
+        assert!(enqueue_terminal_event(&state, &outbox).unwrap());
+        let event_path = fs::read_dir(&outbox)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert!(event["payload"]["provider_session_id"].is_null());
+        assert_eq!(event["session_id"], SESSION_ID);
+        assert_eq!(event["run_id"], "run-1");
     }
 
     #[cfg(unix)]

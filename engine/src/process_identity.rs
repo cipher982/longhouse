@@ -6,6 +6,8 @@ use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 #[cfg(not(unix))]
 use std::sync::mpsc;
+#[cfg(unix)]
+use std::sync::{mpsc::Sender, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -137,11 +139,37 @@ fn reap_after_timeout(mut child: Child) {
         }
     }
     // SIGKILL normally makes the bounded loop above observe exit immediately.
-    // If the kernel still withholds that observation, finish the reap away
-    // from the launch/control caller so a zombie cannot persist indefinitely.
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
+    // If the kernel still withholds that observation, hand the child to the
+    // single process reaper instead of creating one unbounded waiter per
+    // failed probe.
+    reap_child_later(child);
+}
+
+#[cfg(unix)]
+fn reaper_sender() -> &'static Sender<Child> {
+    static REAPER: OnceLock<Sender<Child>> = OnceLock::new();
+    REAPER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel::<Child>();
+        thread::Builder::new()
+            .name("longhouse-process-reaper".to_string())
+            .spawn(move || {
+                for mut child in receiver {
+                    let _ = child.wait();
+                }
+            })
+            .expect("spawn Longhouse process reaper");
+        sender
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn reap_child_later(child: Child) {
+    let _ = reaper_sender().send(child);
+}
+
+#[cfg(not(unix))]
+pub(crate) fn reap_child_later(mut child: Child) {
+    let _ = child.wait();
 }
 
 #[cfg(unix)]
@@ -160,8 +188,16 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let mut stderr = child.stderr.take()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        kill_process_group(&mut child);
+        reap_after_timeout(child);
+        return None;
+    };
+    let Some(mut stderr) = child.stderr.take() else {
+        kill_process_group(&mut child);
+        reap_after_timeout(child);
+        return None;
+    };
     if !set_nonblocking(&stdout) || !set_nonblocking(&stderr) {
         kill_process_group(&mut child);
         reap_after_timeout(child);
@@ -174,16 +210,34 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
     let deadline = Instant::now() + timeout;
     let status = loop {
         if !stdout_closed {
-            stdout_closed = drain_nonblocking(&mut stdout, &mut stdout_bytes)?;
+            let Some(closed) = drain_nonblocking(&mut stdout, &mut stdout_bytes) else {
+                kill_process_group(&mut child);
+                reap_after_timeout(child);
+                return None;
+            };
+            stdout_closed = closed;
         }
         if !stderr_closed {
-            stderr_closed = drain_nonblocking(&mut stderr, &mut stderr_bytes)?;
+            let Some(closed) = drain_nonblocking(&mut stderr, &mut stderr_bytes) else {
+                kill_process_group(&mut child);
+                reap_after_timeout(child);
+                return None;
+            };
+            stderr_closed = closed;
         }
-        if let Some(status) = child.try_wait().ok()? {
-            // The direct child may have exited while a descendant still owns
-            // stdout. Reap the private group before the bounded final drain.
-            kill_process_group(&mut child);
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // The direct child may have exited while a descendant still
+                // owns stdout. Reap the private group before the bounded final drain.
+                kill_process_group(&mut child);
+                break status;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                kill_process_group(&mut child);
+                reap_after_timeout(child);
+                return None;
+            }
         }
         if Instant::now() >= deadline {
             kill_process_group(&mut child);
@@ -199,10 +253,20 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
     let drain_deadline = Instant::now() + Duration::from_millis(250);
     while !(stdout_closed && stderr_closed) && Instant::now() < drain_deadline {
         if !stdout_closed {
-            stdout_closed = drain_nonblocking(&mut stdout, &mut stdout_bytes)?;
+            let Some(closed) = drain_nonblocking(&mut stdout, &mut stdout_bytes) else {
+                kill_process_group(&mut child);
+                reap_after_timeout(child);
+                return None;
+            };
+            stdout_closed = closed;
         }
         if !stderr_closed {
-            stderr_closed = drain_nonblocking(&mut stderr, &mut stderr_bytes)?;
+            let Some(closed) = drain_nonblocking(&mut stderr, &mut stderr_bytes) else {
+                kill_process_group(&mut child);
+                reap_after_timeout(child);
+                return None;
+            };
+            stderr_closed = closed;
         }
         if !(stdout_closed && stderr_closed) {
             thread::sleep(Duration::from_millis(5));

@@ -7,7 +7,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -154,7 +154,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             );
         }
         if started.elapsed() > READY_TIMEOUT {
-            let _ = stop_pid(pid);
+            let _ = stop_pid(child);
             bail!(
                 "timed out waiting for OpenCode server readiness: {}",
                 tail(&log_path)?
@@ -162,8 +162,16 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let (process_start_time, process_command) =
-        process_identity(pid).context("could not establish OpenCode provider process identity")?;
+    let (process_start_time, process_command) = match process_identity(pid) {
+        Some(identity) => identity,
+        None => {
+            // Readiness is not ownership. If the bounded identity probe fails,
+            // stop the still-unregistered provider before returning so a
+            // transient ps failure cannot orphan a live OpenCode server.
+            let _ = stop_pid(child);
+            bail!("could not establish OpenCode provider process identity");
+        }
+    };
     let now = chrono::Utc::now().to_rfc3339();
     // Persist ownership as soon as the provider is ready to accept requests,
     // before session creation. If the outer facade deadline fires during that
@@ -181,7 +189,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             "owner_wrapper_pid": 0, "owner_wrapper_start_time": ""
         }),
     ) {
-        let _ = stop_pid(pid);
+        let _ = stop_pid(child);
         return Err(error);
     }
     let result = (|| -> Result<StartResult> {
@@ -225,7 +233,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         })
     })();
     if result.is_err() {
-        let _ = stop_pid(pid);
+        let _ = stop_pid(child);
         let _ = fs::remove_file(&state_path);
     }
     result
@@ -881,29 +889,51 @@ fn process_identity(pid: u32) -> Option<(String, String)> {
     (line.len() > 24).then(|| (line[..24].trim().to_owned(), line[24..].trim().to_owned()))
 }
 
-fn stop_pid(pid: u32) -> Result<()> {
+fn stop_pid(mut child: Child) -> Result<()> {
+    let pid = child.id();
     #[cfg(unix)]
-    unsafe {
-        let _ = libc::killpg(pid as i32, libc::SIGTERM);
-        let _ = libc::kill(pid as i32, libc::SIGTERM);
-    }
+    signal_process_group(pid, libc::SIGTERM);
     let grace_deadline = Instant::now() + Duration::from_secs(2);
-    while pid_alive(pid) && Instant::now() < grace_deadline {
-        thread::sleep(Duration::from_millis(25));
-    }
-    if !pid_alive(pid) {
-        return Ok(());
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if Instant::now() >= grace_deadline => break,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                #[cfg(unix)]
+                signal_process_group(pid, libc::SIGKILL);
+                crate::process_identity::reap_child_later(child);
+                return Err(error.into());
+            }
+        }
     }
     #[cfg(unix)]
-    unsafe {
-        let _ = libc::killpg(pid as i32, libc::SIGKILL);
-        let _ = libc::kill(pid as i32, libc::SIGKILL);
-    }
+    signal_process_group(pid, libc::SIGKILL);
     let reap_deadline = Instant::now() + Duration::from_secs(2);
-    while pid_alive(pid) && Instant::now() < reap_deadline {
-        thread::sleep(Duration::from_millis(25));
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if Instant::now() >= reap_deadline => break,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                crate::process_identity::reap_child_later(child);
+                return Err(error.into());
+            }
+        }
     }
+    // Keep the control path bounded even if the kernel delays waitpid after
+    // SIGKILL. The child has already been killed; this final waiter only
+    // preserves reaping ownership after the caller returns.
+    crate::process_identity::reap_child_later(child);
     Ok(())
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: libc::c_int) {
+    unsafe {
+        let _ = libc::killpg(pid as i32, signal);
+        let _ = libc::kill(pid as i32, signal);
+    }
 }
 
 fn pid_alive(pid: u32) -> bool {
@@ -933,6 +963,22 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_pid_reaps_direct_child_without_pid_poll_delay() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60"]);
+        command.process_group(0);
+        let child = command.spawn().unwrap();
+        let started = Instant::now();
+
+        stop_pid(child).unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
