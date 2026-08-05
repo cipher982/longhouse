@@ -17,7 +17,9 @@ on:
 
 jobs:
   build-frontend:
-    runs-on: cube
+    # Pull-request code stays on GitHub-hosted infrastructure; cube's DinD
+    # runners are reserved for trusted pushes and explicit dispatches.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
     name: "🏗️ Build frontend once"
 
     steps:
@@ -73,7 +75,7 @@ jobs:
         working-directory: web
 
   bundle-size:
-    runs-on: cube
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
     name: "📦 Bundle Size"
     needs: build-frontend
 
@@ -95,7 +97,7 @@ jobs:
         run: cd web && node ./scripts/check-bundle-size.mjs
 
   image-size:
-    runs-on: cube
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
     name: "🖼️ Image Size Check"
 
     steps:

@@ -290,7 +290,9 @@ jobs:
   frontend-tests:
     needs: changes
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    # Never execute fork or same-repository pull-request code on cube's
+    # privileged DinD lanes. Pushes and explicit dispatches remain on cube.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
     name: "Frontend + runner tests"
 
     steps:
@@ -420,7 +422,7 @@ jobs:
   e2e-core:
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
     name: "Core E2E tests"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)
@@ -495,7 +497,7 @@ jobs:
   e2e-a11y:
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
     name: "Accessibility E2E tests"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)
