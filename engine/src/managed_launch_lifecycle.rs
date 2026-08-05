@@ -822,15 +822,7 @@ fn retry_exhausted(intent: &ManagedLaunchRetryIntent, now: DateTime<Utc>) -> boo
 }
 
 pub fn process_start_identity(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then_some(value)
+    crate::process_identity::try_collect_process_fact(pid).map(|fact| fact.lstart)
 }
 
 fn process_exists(pid: u32) -> Option<bool> {
@@ -850,15 +842,7 @@ fn process_exists(pid: u32) -> Option<bool> {
 }
 
 fn process_is_zombie(pid: u32) -> Option<bool> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "stat="])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!state.is_empty()).then_some(state.starts_with('Z'))
+    crate::process_identity::try_collect_process_fact(pid).map(|fact| fact.stat.starts_with('Z'))
 }
 
 fn provider_owner_alive(intent: &ManagedLaunchRetryIntent) -> Option<bool> {
