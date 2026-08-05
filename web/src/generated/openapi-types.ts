@@ -5689,6 +5689,10 @@ export interface components {
             storage_v2_outbox?: {
                 [key: string]: unknown;
             };
+            /** Managed Launch Recovery */
+            managed_launch_recovery?: {
+                [key: string]: unknown;
+            };
             /** Adaptive Backlog Limiter */
             adaptive_backlog_limiter?: {
                 [key: string]: unknown;
