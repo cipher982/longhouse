@@ -240,6 +240,16 @@ def test_run_tty_command_uses_pty_interrupt_without_direct_group_signal(
     assert evidence.timed_out is False
     assert signals == []
 
+    natural_exit = _MODULE.run_tty_command(
+        [sys.executable, "-c", "print('READY', flush=True)"],
+        {},
+        marker="READY",
+        timeout=5,
+    )
+    assert natural_exit.marker_seen is True
+    assert natural_exit.timed_out is False
+    assert signals == []
+
 
 def test_run_matrix_records_completion_after_teardown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[str] = []

@@ -861,10 +861,9 @@ def run_tty_command(
                     os.write(master, b"\x03")
                 except OSError:
                     pass
-            if sent_interrupt:
-                returncode = wait_status(pid, 0.0)
-                if returncode is not None:
-                    break
+            returncode = wait_status(pid, 0.0)
+            if returncode is not None:
+                break
         timed_out = returncode is None
         if timed_out:
             kill_group(pid, grace=0.2)

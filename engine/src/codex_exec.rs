@@ -24,6 +24,7 @@ use walkdir::WalkDir;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
+const STDERR_TASK_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const CONSOLE_WORKER_POOL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const CONSOLE_WARM_POOL_TARGET: usize = 1;
@@ -557,7 +558,7 @@ async fn spawn_initialized_codex_worker(
     {
         let _ = shutdown_worker_process_group(child, pgid).await;
         if let Some(task) = stderr_task {
-            let _ = task.await;
+            finish_stderr_task(task, "Codex worker initialize").await;
         }
         return Err(error);
     }
@@ -681,7 +682,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         }
         unregister_active_worker(worker_pid).await;
         if let Some(task) = worker_stderr_task {
-            let _ = task.await;
+            finish_stderr_task(task, "Codex worker run").await;
         }
         let (terminal_state, exit_code, detail) = match run_result {
             Ok(exit_code) if exit_code == Some(0) => (
@@ -866,20 +867,39 @@ fn defer_child_reap(child: Child) {
 #[cfg(not(unix))]
 fn defer_child_reap(_child: Child) {}
 
-async fn shutdown_worker_process_group(mut child: Child, pgid: Option<i32>) -> Result<()> {
+async fn shutdown_worker_process_group(child: Child, pgid: Option<i32>) -> Result<()> {
+    shutdown_worker_process_group_until(child, pgid, Instant::now() + Duration::from_millis(350))
+        .await
+}
+
+async fn shutdown_worker_process_group_until(
+    mut child: Child,
+    pgid: Option<i32>,
+    deadline: Instant,
+) -> Result<()> {
     if let Some(pgid) = pgid {
-        shutdown_process_group(pgid).await;
+        shutdown_process_group_until(pgid, deadline).await;
     }
     match child.try_wait() {
         Ok(Some(_)) => return Ok(()),
-        Ok(None) => child.start_kill()?,
+        Ok(None) => {
+            if let Err(error) = child.start_kill() {
+                defer_child_reap(child);
+                return Err(error.into());
+            }
+        }
         Err(error) => {
             let _ = child.start_kill();
             defer_child_reap(child);
             return Err(error.into());
         }
     }
-    match tokio::time::timeout(Duration::from_millis(250), child.wait()).await {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        defer_child_reap(child);
+        anyhow::bail!("Codex worker shutdown deadline exceeded; reaping deferred");
+    }
+    match tokio::time::timeout(remaining.min(Duration::from_millis(250)), child.wait()).await {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => {
             defer_child_reap(child);
@@ -893,21 +913,26 @@ async fn shutdown_worker_process_group(mut child: Child, pgid: Option<i32>) -> R
     Ok(())
 }
 
-async fn shutdown_process_group(pgid: i32) {
+async fn shutdown_process_group_until(pgid: i32, deadline: Instant) {
     #[cfg(unix)]
     {
         unsafe {
             libc::killpg(pgid, libc::SIGTERM);
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if unsafe { libc::killpg(pgid, 0) } == 0 {
-            unsafe {
+        let grace = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(100));
+        if !grace.is_zero() {
+            tokio::time::sleep(grace).await;
+        }
+        unsafe {
+            if libc::killpg(pgid, 0) == 0 {
                 libc::killpg(pgid, libc::SIGKILL);
             }
         }
     }
     #[cfg(not(unix))]
-    let _ = pgid;
+    let _ = (pgid, deadline);
 }
 
 pub async fn shutdown_codex_console_worker_pool() {
@@ -944,10 +969,12 @@ pub async fn shutdown_codex_console_worker_pool() {
         )
     };
     for pgid in active_process_groups {
-        shutdown_process_group(pgid).await;
+        shutdown_process_group_until(pgid, deadline).await;
     }
     for worker in workers {
-        if let Err(err) = shutdown_worker_process_group(worker.child, worker.pgid).await {
+        if let Err(err) =
+            shutdown_worker_process_group_until(worker.child, worker.pgid, deadline).await
+        {
             eprintln!(
                 "[codex-exec] warm worker shutdown failed pid={} error={err}",
                 worker.pid.unwrap_or(0)
@@ -1057,6 +1084,24 @@ fn json_string(value: &Value, path: &[&str]) -> Option<String> {
         current = current.get(*key)?;
     }
     current.as_str().map(str::to_string)
+}
+
+async fn finish_stderr_task(task: tokio::task::JoinHandle<()>, context: &str) {
+    let mut task = task;
+    match tokio::time::timeout(STDERR_TASK_DRAIN_TIMEOUT, &mut task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("[codex-exec] {context} stderr task failed: {error}"),
+        Err(_) => {
+            task.abort();
+            match tokio::time::timeout(STDERR_TASK_DRAIN_TIMEOUT, &mut task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    eprintln!("[codex-exec] {context} stderr task aborted: {error}")
+                }
+                Err(_) => eprintln!("[codex-exec] {context} stderr task abort timed out"),
+            }
+        }
+    }
 }
 
 async fn read_stderr_tail(stream: tokio::process::ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) {
@@ -1803,6 +1848,16 @@ mod tests {
 
         assert_eq!(reservations, CONSOLE_WARM_POOL_TARGET);
         assert_eq!(pool.spawning, CONSOLE_WARM_POOL_TARGET);
+    }
+
+    #[tokio::test]
+    async fn stderr_task_drain_is_bounded() {
+        let task = tokio::spawn(async { std::future::pending::<()>().await });
+        let started = Instant::now();
+
+        finish_stderr_task(task, "test").await;
+
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[tokio::test]
