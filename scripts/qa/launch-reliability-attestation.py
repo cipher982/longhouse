@@ -15,7 +15,6 @@ import base64
 import hashlib
 import json
 import secrets
-import string
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -30,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 REPOSITORY = Path(__file__).resolve().parents[2]
 REPOSITORY_IDENTITY = "cipher982/longhouse"
 TRUSTED_KEYS_PATH = REPOSITORY / "config/qa/launch_reliability_attestation_keys.json"
+LOWER_HEX = frozenset("0123456789abcdef")
 ARTIFACT_KIND = "launch_reliability_dogfood_attestation"
 SCHEMA_VERSION = 1
 ISSUER = "longhouse-release-ci"
@@ -65,7 +65,7 @@ def _validate_subject(subject: dict[str, Any]) -> None:
     if (
         not isinstance(git_sha, str)
         or len(git_sha) != 40
-        or any(character not in string.hexdigits for character in git_sha)
+        or any(character not in LOWER_HEX for character in git_sha)
     ):
         raise ValueError("attestation subject has no full source SHA")
     if provenance.get("repository_dirty") is not False or provenance.get("harness_file_dirty") is not False:
@@ -76,7 +76,7 @@ def _validate_subject(subject: dict[str, Any]) -> None:
     if (
         not isinstance(report_sha, str)
         or len(report_sha) != 64
-        or any(character not in string.hexdigits for character in report_sha)
+        or any(character not in LOWER_HEX for character in report_sha)
     ):
         raise ValueError("attestation subject has no report SHA-256")
     inputs = subject.get("inputs")
@@ -101,6 +101,30 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         raise ValueError("attestation subject has no matrix source provenance")
     if any(value != provenance["git_sha"] for value in matrix_source_shas):
         raise ValueError("attestation subject matrix source SHA does not match the report")
+    matrix_implementations = subject.get("matrix_implementations")
+    if (
+        not isinstance(matrix_implementations, list)
+        or len(matrix_implementations) != len(matrix_source_shas)
+    ):
+        raise ValueError("attestation subject has incomplete matrix implementation provenance")
+    for implementation in matrix_implementations:
+        if not isinstance(implementation, dict):
+            raise ValueError("attestation subject matrix implementation is malformed")
+        if (
+            implementation.get("source_git_sha") != provenance["git_sha"]
+            or implementation.get("engine_source_git_sha") != provenance["git_sha"]
+            or implementation.get("binary_dirty") is not False
+            or implementation.get("engine_dirty") is not False
+        ):
+            raise ValueError("attestation subject matrix implementation provenance is invalid")
+        for field in ("binary_sha256", "engine_sha256"):
+            value = implementation.get(field)
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in LOWER_HEX for character in value)
+            ):
+                raise ValueError("attestation subject matrix binary hash is invalid")
     dogfood = subject.get("dogfood_series")
     if not isinstance(dogfood, dict) or dogfood.get("input_status") != "valid":
         raise ValueError("attestation subject dogfood input is not valid")
@@ -169,13 +193,43 @@ def build_subject(
     if not isinstance(matrix_history, list) or not matrix_history:
         raise ValueError("report has no measured matrix source provenance")
     matrix_source_shas = []
+    matrix_implementations = []
     for history in matrix_history:
         if not isinstance(history, dict):
             raise ValueError("report matrix history is malformed")
         source_sha = history.get("implementation_source_git_sha")
         if source_sha != required_provenance["git_sha"]:
             raise ValueError("matrix artifact source SHA does not match the report")
+        engine_source_sha = history.get("implementation_engine_source_git_sha")
+        if engine_source_sha != required_provenance["git_sha"]:
+            raise ValueError("matrix engine source SHA does not match the report")
+        if (
+            history.get("implementation_binary_dirty") is not False
+            or history.get("implementation_engine_dirty") is not False
+        ):
+            raise ValueError("matrix implementation provenance is dirty")
+        binary_sha = history.get("implementation_binary_sha256")
+        engine_sha = history.get("implementation_engine_sha256")
+        if (
+            not isinstance(binary_sha, str)
+            or len(binary_sha) != 64
+            or any(character not in LOWER_HEX for character in binary_sha)
+            or not isinstance(engine_sha, str)
+            or len(engine_sha) != 64
+            or any(character not in LOWER_HEX for character in engine_sha)
+        ):
+            raise ValueError("matrix implementation binary hashes are invalid")
         matrix_source_shas.append(source_sha)
+        matrix_implementations.append(
+            {
+                "source_git_sha": source_sha,
+                "engine_source_git_sha": engine_source_sha,
+                "binary_sha256": binary_sha,
+                "engine_sha256": engine_sha,
+                "binary_dirty": history.get("implementation_binary_dirty"),
+                "engine_dirty": history.get("implementation_engine_dirty"),
+            }
+        )
     subjects = dogfood.get("attestation_subjects")
     if not isinstance(subjects, list) or not subjects:
         raise ValueError("report has no dogfood sampled-binary subjects")
@@ -199,6 +253,7 @@ def build_subject(
         "report_schema_version": report.get("schema_version"),
         "report_provenance": required_provenance,
         "matrix_source_shas": matrix_source_shas,
+        "matrix_implementations": matrix_implementations,
         "inputs": {
             name: sorted(
                 {

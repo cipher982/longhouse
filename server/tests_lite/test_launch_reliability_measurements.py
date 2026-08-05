@@ -177,7 +177,18 @@ def _matrix(
         "retry_intents_after_recovery": retry_after,
         "measurements": {"recovery_duration_seconds": 5.0, "run_duration_seconds": 100.0},
         "harness": {"repository_dirty": False, "harness_file_dirty": False, "repository_git_sha": "harness-sha"},
-        "implementation": {"longhouse": {"source_git_sha": source_sha}},
+        "implementation": {
+            "longhouse": {
+                "source_git_sha": source_sha,
+                "sha256": "a" * 64,
+                "source_dirty": False,
+            },
+            "longhouse_engine": {
+                "source_git_sha": source_sha,
+                "sha256": "b" * 64,
+                "source_dirty": False,
+            },
+        },
         "recovery_qualification": "mixed_provider_degraded_start_with_harness_precondition_gap",
     }
     path.write_text(json.dumps(payload))
@@ -313,6 +324,7 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
             "sha256": ("abcdef" * 10) + "abcd",
             "returncode": 0,
             "source_git_sha": _current_repo_sha(),
+            "build_dirty": False,
         },
         "scenarios": list(HEALTH_CASES),
         "results": normalized_results,
@@ -381,8 +393,14 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
         json.dumps(
             {
                 "harness": _harness_provenance(),
+                "artifact_kind": "universal_agent_harness_run",
+                "schema_version": 1,
+                "providers": ["fixture"],
+                "scenarios": ["fixture"],
                 "results": [
                     {
+                        "provider": "fixture",
+                        "scenario": "fixture",
                         "status": "blocked",
                         "data": {
                             "operation_evidence": {
@@ -416,8 +434,14 @@ def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
         json.dumps(
             {
                 "harness": _harness_provenance(),
+                "artifact_kind": "universal_agent_harness_run",
+                "schema_version": 1,
+                "providers": ["fixture"],
+                "scenarios": ["fixture"],
                 "results": [
                     {
+                        "provider": "fixture",
+                        "scenario": "fixture",
                         "status": "pass",
                         "data": {
                             "operation_evidence": {
@@ -1071,6 +1095,16 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
             "sha256": "b" * 64,
         },
         "matrix_source_shas": ["a" * 40],
+        "matrix_implementations": [
+            {
+                "source_git_sha": "a" * 40,
+                "engine_source_git_sha": "a" * 40,
+                "binary_sha256": "1" * 64,
+                "engine_sha256": "2" * 64,
+                "binary_dirty": False,
+                "engine_dirty": False,
+            }
+        ],
         "inputs": {
             "matrix_artifacts": ["c" * 64],
             "provider_harness_artifacts": ["d" * 64],
@@ -1204,7 +1238,18 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
     matrix_path = tmp_path / "matrix.json"
     _matrix(path=matrix_path, auth_gap=False)
     harness_path = tmp_path / "provider-harness.json"
-    harness_path.write_text(json.dumps({"harness": _harness_provenance(), "results": []}))
+    harness_path.write_text(
+        json.dumps(
+            {
+                "artifact_kind": "universal_agent_harness_run",
+                "schema_version": 1,
+                "harness": _harness_provenance(),
+                "providers": ["fixture"],
+                "scenarios": ["fixture"],
+                "results": [{"provider": "fixture", "scenario": "fixture", "status": "pass"}],
+            }
+        )
+    )
     health_path = tmp_path / "health.json"
     health_path.write_text(json.dumps(_health_artifact([])))
 

@@ -54,6 +54,8 @@ HEALTH_STATES = frozenset({"healthy", "degraded", "broken", "unknown"})
 PRODUCER_FRESHNESS_STATES = frozenset({"fresh", "stale", "unknown"})
 HEALTH_ARTIFACT_KIND = "installed_native_health_fault_matrix"
 HEALTH_SCHEMA_VERSION = 1
+HARNESS_ARTIFACT_KIND = "universal_agent_harness_run"
+HARNESS_SCHEMA_VERSION = 1
 MAX_HEALTH_OBSERVATION_AGE_SECONDS = 300.0
 MAX_HEALTH_ARTIFACT_AGE_SECONDS = 86400.0
 HEALTH_EXPECTATIONS = {
@@ -1218,6 +1220,55 @@ def _invalidate_dogfood_summary(summary: dict[str, Any]) -> None:
             metric["conservation_status"] = None
 
 
+def _validate_provider_harness_artifact(artifact: dict[str, Any]) -> None:
+    if artifact.get("artifact_kind") != HARNESS_ARTIFACT_KIND:
+        raise ValueError(f"provider harness artifact_kind must be {HARNESS_ARTIFACT_KIND}")
+    if artifact.get("schema_version") != HARNESS_SCHEMA_VERSION:
+        raise ValueError(
+            f"provider harness schema_version must be {HARNESS_SCHEMA_VERSION}"
+        )
+    providers = artifact.get("providers")
+    scenarios = artifact.get("scenarios")
+    if (
+        not isinstance(providers, list)
+        or not providers
+        or not all(isinstance(value, str) and value for value in providers)
+        or len(set(providers)) != len(providers)
+    ):
+        raise ValueError("provider harness providers must be a non-empty unique string list")
+    if (
+        not isinstance(scenarios, list)
+        or not scenarios
+        or not all(isinstance(value, str) and value for value in scenarios)
+        or len(set(scenarios)) != len(scenarios)
+    ):
+        raise ValueError("provider harness scenarios must be a non-empty unique string list")
+    results = artifact.get("results")
+    if not isinstance(results, list) or not results:
+        raise ValueError("provider harness results must be non-empty")
+    expected_pairs = {
+        (provider, scenario) for provider in providers for scenario in scenarios
+    }
+    actual_pairs: set[tuple[str, str]] = set()
+    for index, result in enumerate(results):
+        if not isinstance(result, dict):
+            raise ValueError(f"provider harness result {index} must be an object")
+        provider = result.get("provider")
+        scenario = result.get("scenario")
+        if not isinstance(provider, str) or not isinstance(scenario, str):
+            raise ValueError(
+                f"provider harness result {index} must identify provider and scenario"
+            )
+        pair = (provider, scenario)
+        if pair in actual_pairs:
+            raise ValueError(f"provider harness result {index} duplicates provider/scenario")
+        actual_pairs.add(pair)
+    if actual_pairs != expected_pairs:
+        raise ValueError(
+            "provider harness results do not cover the declared provider/scenario matrix"
+        )
+
+
 def _health_measurements(
     paths: Iterable[Path],
     invalid: list[dict[str, str]],
@@ -1276,6 +1327,8 @@ def _health_measurements(
                 raise ValueError(
                     "health implementation.source_git_sha does not match the report source revision"
                 )
+            if implementation.get("build_dirty") is not False:
+                raise ValueError("health implementation.build_dirty must be false")
             implementation_sha = implementation.get("sha256")
             if (
                 not isinstance(implementation_sha, str)
@@ -1621,6 +1674,21 @@ def build_report(
                 "implementation_source_git_sha": (
                     (artifact.get("implementation") or {}).get("longhouse") or {}
                 ).get("source_git_sha"),
+                "implementation_engine_source_git_sha": (
+                    (artifact.get("implementation") or {}).get("longhouse_engine") or {}
+                ).get("source_git_sha"),
+                "implementation_binary_sha256": (
+                    (artifact.get("implementation") or {}).get("longhouse") or {}
+                ).get("sha256"),
+                "implementation_engine_sha256": (
+                    (artifact.get("implementation") or {}).get("longhouse_engine") or {}
+                ).get("sha256"),
+                "implementation_binary_dirty": (
+                    (artifact.get("implementation") or {}).get("longhouse") or {}
+                ).get("source_dirty"),
+                "implementation_engine_dirty": (
+                    (artifact.get("implementation") or {}).get("longhouse_engine") or {}
+                ).get("source_dirty"),
             }
         )
 
@@ -1652,6 +1720,11 @@ def build_report(
                     "error": "provider harness artifact has no results list",
                 }
             )
+            continue
+        try:
+            _validate_provider_harness_artifact(artifact)
+        except ValueError as exc:
+            invalid.append({"path": str(path), "error": str(exc)})
             continue
         harness = artifact.get("harness")
         if not isinstance(harness, dict):

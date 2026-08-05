@@ -50,7 +50,7 @@ jobs:
             echo "source_sha must be a lowercase 40-character commit SHA" >&2
             exit 1
           fi
-          git fetch --no-tags origin main
+          git fetch --no-tags origin main:refs/remotes/origin/main
           git cat-file -e "$source_sha^{commit}"
           if ! git merge-base --is-ancestor "$source_sha" origin/main; then
             echo "source_sha is not an ancestor of origin/main" >&2

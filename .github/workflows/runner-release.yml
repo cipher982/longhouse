@@ -12,12 +12,11 @@ on:
         type: string
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
+    if: github.repository == 'cipher982/longhouse' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/runner-v')))
     strategy:
       matrix:
         include:
@@ -63,11 +62,31 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/runner-v')))
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate release commit ancestry
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
+            echo "release commit is not an ancestor of origin/main" >&2
+            exit 1
+          fi
+          if ! git rev-list --first-parent origin/main | grep -Fx -- "$RELEASE_SHA" >/dev/null; then
+            echo "release commit is not on the first-parent history of origin/main" >&2
+            exit 1
+          fi
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
