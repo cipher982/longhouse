@@ -91,9 +91,16 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         values = inputs.get(name)
         if not isinstance(values, list):
             raise ValueError(f"attestation subject input {name} is not a list")
+        if not values:
+            raise ValueError(f"attestation subject input {name} is empty")
         for value in values:
             if not isinstance(value, str) or len(value) != 64:
                 raise ValueError(f"attestation subject input {name} has an invalid SHA-256")
+    matrix_source_shas = subject.get("matrix_source_shas")
+    if not isinstance(matrix_source_shas, list) or not matrix_source_shas:
+        raise ValueError("attestation subject has no matrix source provenance")
+    if any(value != provenance["git_sha"] for value in matrix_source_shas):
+        raise ValueError("attestation subject matrix source SHA does not match the report")
     dogfood = subject.get("dogfood_series")
     if not isinstance(dogfood, dict) or dogfood.get("input_status") != "valid":
         raise ValueError("attestation subject dogfood input is not valid")
@@ -150,13 +157,17 @@ def build_subject(report: dict[str, Any]) -> dict[str, Any]:
     if required_provenance["repository_dirty"] is not False or required_provenance["harness_file_dirty"] is not False:
         raise ValueError("report provenance is dirty")
     matrix = report.get("matrix")
-    if isinstance(matrix, dict):
-        for history in matrix.get("history", []):
-            if not isinstance(history, dict):
-                continue
-            source_sha = history.get("implementation_source_git_sha")
-            if source_sha is not None and source_sha != required_provenance["git_sha"]:
-                raise ValueError("matrix artifact source SHA does not match the report")
+    matrix_history = matrix.get("history") if isinstance(matrix, dict) else None
+    if not isinstance(matrix_history, list) or not matrix_history:
+        raise ValueError("report has no measured matrix source provenance")
+    matrix_source_shas = []
+    for history in matrix_history:
+        if not isinstance(history, dict):
+            raise ValueError("report matrix history is malformed")
+        source_sha = history.get("implementation_source_git_sha")
+        if source_sha != required_provenance["git_sha"]:
+            raise ValueError("matrix artifact source SHA does not match the report")
+        matrix_source_shas.append(source_sha)
     subjects = dogfood.get("attestation_subjects")
     if not isinstance(subjects, list) or not subjects:
         raise ValueError("report has no dogfood sampled-binary subjects")
@@ -179,12 +190,16 @@ def build_subject(report: dict[str, Any]) -> dict[str, Any]:
         "artifact_kind": "launch_reliability_measurements",
         "report_schema_version": report.get("schema_version"),
         "report_provenance": required_provenance,
+        "matrix_source_shas": matrix_source_shas,
         "inputs": {
-            name: [
-                value.get("sha256")
-                for value in inputs.get(name, [])
-                if isinstance(value, dict) and isinstance(value.get("sha256"), str)
-            ]
+            name: sorted(
+                {
+                    value.get("sha256")
+                    for value in inputs.get(name, [])
+                    if isinstance(value, dict)
+                    and isinstance(value.get("sha256"), str)
+                }
+            )
             for name in (
                 "matrix_artifacts",
                 "provider_harness_artifacts",

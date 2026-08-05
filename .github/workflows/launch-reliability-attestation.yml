@@ -30,10 +30,19 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       EVIDENCE_ROOT: /var/lib/longhouse/qualification
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout the reviewed workflow source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: trusted-source
+
+      - name: Checkout the measured source
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 1
+          path: measured-source
 
       - uses: actions/setup-python@v6
         with:
@@ -42,21 +51,34 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Rebuild the report from retained evidence
+        id: measure
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA" || {
+          trusted_root="$GITHUB_WORKSPACE/trusted-source"
+          measured_root="$GITHUB_WORKSPACE/measured-source"
+          test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_SHA" || {
+            echo "Trusted checkout does not match the workflow commit." >&2
+            exit 1
+          }
+          test "$(git -C "$measured_root" rev-parse HEAD)" = "$SOURCE_SHA" || {
             echo "Checked-out source does not match the requested source SHA." >&2
             exit 1
           }
           run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
-          matrix_root="$run_root/matrix"
-          health_root="$run_root/native-health"
-          harness_root="$run_root/provider-harness"
-          dogfood_root="$run_root/dogfood"
-          test -d "$matrix_root" || { echo "Missing matrix evidence root: $matrix_root" >&2; exit 1; }
-          test -d "$health_root" || { echo "Missing native health evidence root: $health_root" >&2; exit 1; }
-          test -d "$harness_root" || { echo "Missing provider harness evidence root: $harness_root" >&2; exit 1; }
-          test -d "$dogfood_root" || { echo "Missing dogfood evidence root: $dogfood_root" >&2; exit 1; }
+          snapshot_root="$RUNNER_TEMP/launch-reliability-evidence"
+          rm -rf -- "$snapshot_root"
+          mkdir -p "$snapshot_root/matrix" "$snapshot_root/native-health" \
+            "$snapshot_root/provider-harness" "$snapshot_root/dogfood/episodes" \
+            "$snapshot_root/dogfood/challenges"
+          cp -R "$run_root/matrix/." "$snapshot_root/matrix/"
+          cp -R "$run_root/native-health/." "$snapshot_root/native-health/"
+          cp -R "$run_root/provider-harness/." "$snapshot_root/provider-harness/"
+          cp -R "$run_root/dogfood/episodes/." "$snapshot_root/dogfood/episodes/"
+          cp -R "$run_root/dogfood/challenges/." "$snapshot_root/dogfood/challenges/"
+          matrix_root="$snapshot_root/matrix"
+          health_root="$snapshot_root/native-health"
+          harness_root="$snapshot_root/provider-harness"
+          dogfood_root="$snapshot_root/dogfood"
           shopt -s nullglob
           harness=("$harness_root"/*.json)
           health=("$health_root"/*.json)
@@ -79,12 +101,15 @@ jobs:
           for path in "${health[@]}"; do args+=(--health-artifact "$path"); done
           for path in "${dogfood[@]}"; do args+=(--dogfood-series "$path"); done
           for path in "${challenges[@]}"; do args+=(--dogfood-challenge "$path"); done
-          uv run --project server python scripts/qa/launch-reliability-measurements.py "${args[@]}"
+          cd "$measured_root"
+          uv run --project "$measured_root/server" python \
+            "$measured_root/scripts/qa/launch-reliability-measurements.py" "${args[@]}"
           test -s "$report_path" || { echo "Report generation produced no report." >&2; exit 1; }
           test -s "$subject_path" || {
             echo "Report did not produce a qualifying attestation subject." >&2
             exit 1
           }
+          echo "report_sha256=$(sha256sum "$report_path" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Sign and verify the regenerated report
         shell: bash
@@ -92,16 +117,21 @@ jobs:
           KEY_PATH: ${{ runner.temp }}/longhouse-attestation-private-key.pem
           PRIVATE_KEY_PEM: ${{ secrets.LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM }}
         run: |
-          run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
           report_path="$RUNNER_TEMP/launch-reliability-measurements.json"
           subject_path="$RUNNER_TEMP/launch-reliability-attestation-subject.json"
           receipt_path="$RUNNER_TEMP/launch-reliability-attestation.json"
+          test "$(sha256sum "$report_path" | cut -d' ' -f1)" = "${{ steps.measure.outputs.report_sha256 }}" || {
+            echo "The report changed between measurement and signing." >&2
+            exit 1
+          }
           test -n "$PRIVATE_KEY_PEM" || {
             echo "LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM is not configured." >&2
             exit 1
           }
           umask 077
           printf '%s' "$PRIVATE_KEY_PEM" > "$KEY_PATH"
+          trusted_root="$GITHUB_WORKSPACE/trusted-source"
+          cd "$trusted_root"
           uv run --project server python scripts/qa/launch-reliability-attestation.py \
             create-from-report \
             --report "$report_path" \

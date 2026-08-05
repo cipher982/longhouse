@@ -121,6 +121,12 @@ def _matrix(
     provider_failure: bool = False,
     retry_after: int = 0,
 ) -> None:
+    source_sha = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     providers = []
     for provider in ("claude", "codex", "opencode", "cursor"):
         providers.extend(
@@ -154,7 +160,7 @@ def _matrix(
         "retry_intents_after_recovery": retry_after,
         "measurements": {"recovery_duration_seconds": 5.0, "run_duration_seconds": 100.0},
         "harness": {"repository_dirty": False, "harness_file_dirty": False, "repository_git_sha": "harness-sha"},
-        "implementation": {"longhouse": {"source_git_sha": "implementation-sha"}},
+        "implementation": {"longhouse": {"source_git_sha": source_sha}},
         "recovery_qualification": "mixed_provider_degraded_start_with_harness_precondition_gap",
     }
     path.write_text(json.dumps(payload))
@@ -1040,6 +1046,7 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
             "harness_file_dirty": False,
             "sha256": "b" * 64,
         },
+        "matrix_source_shas": ["a" * 40],
         "inputs": {
             "matrix_artifacts": ["c" * 64],
             "provider_harness_artifacts": ["d" * 64],
@@ -1170,13 +1177,25 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
     series = tmp_path / "dogfood.json"
     _dogfood_series(series)
     episode_paths, challenge_paths = _split_dogfood_series(series)
+    matrix_path = tmp_path / "matrix.json"
+    _matrix(path=matrix_path, auth_gap=False)
+    harness_path = tmp_path / "provider-harness.json"
+    harness_path.write_text(json.dumps({"results": []}))
+    health_path = tmp_path / "health.json"
+    health_path.write_text(json.dumps(_health_artifact([])))
 
     diagnostic_report = MODULE.build_report(
-        [],
+        [matrix_path],
+        [harness_path],
+        [health_path],
         dogfood_paths=episode_paths,
         dogfood_challenge_paths=challenge_paths,
     )
     assert diagnostic_report["report_status"] == "ok"
+    bad_report = json.loads(json.dumps(diagnostic_report))
+    bad_report["matrix"]["history"][0]["implementation_source_git_sha"] = "b" * 40
+    with pytest.raises(ValueError, match="matrix artifact source SHA"):
+        attestation.build_subject(bad_report)
     report_path = tmp_path / "diagnostic-report.json"
     report_path.write_text(json.dumps(diagnostic_report))
     subject_path = tmp_path / "subject.json"
@@ -1194,10 +1213,16 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
         now=datetime.fromisoformat(diagnostic_report["generated_at"].replace("Z", "+00:00")),
         keys_path=keyring,
     )
+    serialized_subject = json.loads(subject_path.read_text())
+    for measure in serialized_subject["measures"].values():
+        if isinstance(measure.get("source"), list):
+            assert all(isinstance(value, str) and len(value) == 64 for value in measure["source"])
 
     monkeypatch.setattr(attestation, "TRUSTED_KEYS_PATH", keyring)
     qualified = MODULE.build_report(
-        [],
+        [matrix_path],
+        [harness_path],
+        [health_path],
         dogfood_paths=episode_paths,
         dogfood_challenge_paths=challenge_paths,
         dogfood_attestation_paths=[receipt_path],
