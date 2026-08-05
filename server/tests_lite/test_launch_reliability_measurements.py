@@ -31,6 +31,11 @@ MATRIX_SPEC.loader.exec_module(MATRIX_MODULE)
 
 REPO_ROOT = SCRIPT.parents[2]
 DOGFOOD_GENERATOR = REPO_ROOT / "scripts" / "qa" / "launch_reliability_dogfood.py"
+FIXTURE_NOW = datetime.now(UTC).replace(microsecond=0)
+
+
+def _fixture_timestamp(offset: timedelta = timedelta()) -> str:
+    return (FIXTURE_NOW + offset).isoformat().replace("+00:00", "Z")
 
 
 def _current_repo_sha() -> str:
@@ -107,15 +112,25 @@ def _write_signed_dogfood(
     path: Path,
     payload: dict[str, object],
     *,
-    expires_at: str = "2026-08-05T11:00:00Z",
+    expires_at: str | None = None,
 ) -> Path:
     challenge_path = path.with_suffix(".challenge.json")
     key = bytes(range(32))
+    generated_at = payload.get("generated_at")
+    if isinstance(generated_at, str):
+        challenge_created_at = datetime.fromisoformat(
+            generated_at.replace("Z", "+00:00")
+        ) - timedelta(hours=2)
+    else:
+        challenge_created_at = FIXTURE_NOW - timedelta(hours=2)
+    effective_expires_at = expires_at or (
+        challenge_created_at + timedelta(hours=24)
+    ).isoformat().replace("+00:00", "Z")
     challenge = {
         "artifact_kind": "launch_reliability_dogfood_challenge",
         "challenge_id": f"test-{path.stem}",
-        "created_at": "2026-08-04T11:00:00Z",
-        "expires_at": expires_at,
+        "created_at": challenge_created_at.isoformat().replace("+00:00", "Z"),
+        "expires_at": effective_expires_at,
         "issuer": "scripts/qa/launch-reliability-measurements.py",
         "key": base64.urlsafe_b64encode(key).decode("ascii"),
         "nonce": f"nonce-{path.stem}",
@@ -187,7 +202,7 @@ def _matrix(
     payload = {
         "artifact_kind": "installed_managed_launch_fault_matrix",
         "schema_version": 1,
-        "generated_at": "2026-08-04T16:00:00Z",
+        "generated_at": _fixture_timestamp(),
         "verdict": verdict,
         "providers": providers,
         "provider_auth": auth,
@@ -268,7 +283,15 @@ def _matrix(
 
 def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object = None) -> None:
     episodes = []
-    for index, observed_at in enumerate(("2026-08-04T12:00:00Z", "2026-08-04T12:30:00Z", "2026-08-04T13:00:00Z")):
+    generated_at = _fixture_timestamp()
+    generated_at_value = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    observed_times = (
+        generated_at_value - timedelta(hours=1),
+        generated_at_value - timedelta(minutes=30),
+        generated_at_value,
+    )
+    for index, observed_at_value in enumerate(observed_times):
+        observed_at = observed_at_value.isoformat().replace("+00:00", "Z")
         episodes.append(
             {
                 "episode_id": "same" if duplicate_ids else f"episode-{index}",
@@ -305,7 +328,7 @@ def _dogfood_series(path: Path, *, duplicate_ids: bool = False, recovery: object
         {
             "schema_version": 1,
             "artifact_kind": "launch_reliability_dogfood_series",
-            "generated_at": "2026-08-04T13:00:30Z",
+            "generated_at": generated_at,
             "provenance": _dogfood_provenance(),
             "episodes": episodes,
         },
@@ -369,7 +392,7 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
             expected.setdefault(field, value)
         normalized["expected"] = expected
         observed = dict(normalized["observed"])
-        observed["collected_at"] = observed.get("collected_at") or "2026-08-04T13:00:00Z"
+        observed["collected_at"] = observed.get("collected_at") or _fixture_timestamp()
         normalized["observed"] = observed
         overrides[case] = normalized
     for case, contract in MODULE.HEALTH_EXPECTATIONS.items():
@@ -381,7 +404,7 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
                 "case": case,
                 "expected": dict(contract),
                 "observed": {
-                    "collected_at": "2026-08-04T13:00:00Z",
+                    "collected_at": _fixture_timestamp(),
                     "health_state": contract["state"],
                     "suggested_action_ids": [] if contract["action"] == "none" else [contract["action"]],
                 },
@@ -390,7 +413,7 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
     return {
         "artifact_kind": "installed_native_health_fault_matrix",
         "schema_version": 1,
-        "generated_at": "2026-08-04T13:00:30Z",
+        "generated_at": _fixture_timestamp(),
         "verdict": "green",
         "implementation": {
             "sha256": ("abcdef" * 10) + "abcd",
@@ -1719,6 +1742,35 @@ def test_yellow_provider_failure_cannot_count_as_successful_recovery(tmp_path: P
     assert report["qualification"]["status"] != "qualified"
 
 
+def test_attestation_rejects_mixed_green_and_yellow_matrix_history(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    series = tmp_path / "dogfood.json"
+    _dogfood_series(series)
+    episode_paths, challenge_paths = _split_dogfood_series(series)
+
+    green = tmp_path / "green.json"
+    yellow = tmp_path / "yellow.json"
+    _matrix(path=green, auth_gap=False)
+    _matrix(path=yellow, auth_gap=False, provider_failure=True)
+    harness = tmp_path / "provider-harness.json"
+    harness.write_text(json.dumps(_provider_harness_artifact()))
+    health = tmp_path / "health.json"
+    health.write_text(json.dumps(_health_artifact([])))
+
+    report = MODULE.build_report(
+        [green, yellow],
+        [harness],
+        [health],
+        dogfood_paths=episode_paths,
+        dogfood_challenge_paths=challenge_paths,
+    )
+
+    assert report["report_status"] == "ok"
+    assert report["matrix"]["successful_recovery_count"] == 1
+    with pytest.raises(ValueError, match="non-green measured run"):
+        attestation.build_subject(report)
+
+
 def test_attestation_manifest_binds_all_report_inputs(tmp_path: Path):
     attestation = MODULE._attestation_module()
     report = {
@@ -1913,10 +1965,17 @@ def test_future_issue_resolution_fails_closed(tmp_path: Path):
     _dogfood_series(series)
     episode, challenge = _split_dogfood_series(series, count=1)
     payload = json.loads(episode[0].read_text())
+    observed_at = datetime.fromisoformat(
+        payload["episodes"][0]["observed_at"].replace("Z", "+00:00")
+    )
     payload["episodes"][0]["event_bearing_issue"] = {
         "status": "resolved",
-        "opened_at": "2026-08-04T11:59:00Z",
-        "resolved_at": "2026-08-04T14:00:00Z",
+        "opened_at": (observed_at - timedelta(seconds=1)).isoformat().replace(
+            "+00:00", "Z"
+        ),
+        "resolved_at": (observed_at + timedelta(hours=1)).isoformat().replace(
+            "+00:00", "Z"
+        ),
     }
     payload.pop("challenge", None)
     payload.pop("signature", None)
@@ -1933,7 +1992,12 @@ def test_episode_after_artifact_generation_fails_closed(tmp_path: Path):
     _dogfood_series(series)
     episode, challenge = _split_dogfood_series(series, count=1)
     payload = json.loads(episode[0].read_text())
-    payload["generated_at"] = "2026-08-04T11:00:00Z"
+    observed_at = datetime.fromisoformat(
+        payload["episodes"][0]["observed_at"].replace("Z", "+00:00")
+    )
+    payload["generated_at"] = (observed_at - timedelta(seconds=1)).isoformat().replace(
+        "+00:00", "Z"
+    )
     payload.pop("challenge", None)
     payload.pop("signature", None)
     challenge[0] = _write_signed_dogfood(episode[0], payload)

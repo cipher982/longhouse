@@ -896,6 +896,7 @@
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },

@@ -1787,6 +1787,10 @@ def provider_native_output_observed(provider: str, output: str) -> bool:
         "Longhouse ",
         "Managed Cursor ",
         "Timeline: ",
+        # This is Longhouse's bounded cursor_chat() error, not output from
+        # cursor-agent. Keep the account-session precondition attributable to
+        # the harness when this is the only non-banner line.
+        "Error: cursor-agent create-chat timed out",
     )
     return any(
         line.strip() and not line.startswith(harness_prefixes)
@@ -2113,6 +2117,10 @@ def run_provider_live(
                 else None,
                 "launch_intent_created": launch_intent_created,
                 "startup_failure": str(error),
+                "cursor_harness_timeout": (
+                    provider == "cursor"
+                    and "Error: cursor-agent create-chat timed out" in output
+                ),
                 "qualification": provider_failure_qualification(provider, output),
                 "provider_output_observed": provider_native_output_observed(
                     provider, output
@@ -2529,10 +2537,13 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             for result in results:
                 if result.get("provider") == "cursor" and result.get("startup_failure"):
                     attributable_timeout = (
-                        result.get("timed_out") is True
-                        and result.get("degraded_marker_seen") is True
+                        result.get("degraded_marker_seen") is True
                         and result.get("launch_intent_created") is True
                         and result.get("provider_output_observed") is False
+                        and (
+                            result.get("timed_out") is True
+                            or result.get("cursor_harness_timeout") is True
+                        )
                     )
                     result["qualification"] = (
                         "harness_precondition_unmet"

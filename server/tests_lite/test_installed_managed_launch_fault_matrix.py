@@ -197,6 +197,15 @@ def test_provider_text_does_not_create_harness_attribution() -> None:
     )
 
 
+def test_cursor_longhouse_timeout_is_not_provider_output() -> None:
+    assert not _MODULE.provider_native_output_observed(
+        "cursor",
+        "Longhouse warning: starting Cursor in degraded Helm mode\n"
+        "Error: cursor-agent create-chat timed out\n",
+    )
+    assert _MODULE.provider_native_output_observed("cursor", "cursor-agent: ready")
+
+
 def test_source_provenance_uses_identity_compiled_into_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     binary = tmp_path / "longhouse"
     binary.write_bytes(b"stale binary")

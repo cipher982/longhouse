@@ -1370,24 +1370,37 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let degraded_provider_registration_for_spawn = degraded_registration.as_ref().cloned();
-    let run_result = run_foreground_command_after_spawn(&mut command, |provider_pid| {
-        if let Some(registration) = degraded_provider_registration_for_spawn {
-            let process_start_time = crate::managed_launch_lifecycle::process_start_identity(
-                provider_pid,
-            )
-            .ok_or_else(|| anyhow::anyhow!("managed Claude provider identity probe failed"))?;
-            registration.record_provider_owner(provider_pid, Some(process_start_time))?;
-            registration.mark_provider_ready()?;
-        }
-        match launch_transaction.as_mut() {
-            Some(transaction) => {
-                transaction.confirm_in_background();
-                Ok(())
+    let degraded_provider_registration_for_owner = degraded_registration.as_ref().cloned();
+    let degraded_provider_registration_for_ready = degraded_registration.as_ref().cloned();
+    let run_result = run_foreground_command_after_spawn(
+        &mut command,
+        |provider_pid| {
+            if let Some(registration) = degraded_provider_registration_for_owner {
+                let process_start_time =
+                    crate::managed_launch_lifecycle::process_start_identity(provider_pid)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("managed Claude provider identity probe failed")
+                        })?;
+                // Persist the exact owner while the provider is still behind
+                // the release barrier. The provider cannot emit terminal
+                // output until this callback has committed its PID identity.
+                registration.record_provider_owner(provider_pid, Some(process_start_time))?;
             }
-            None => Ok(()),
-        }
-    });
+            Ok(())
+        },
+        |_provider_pid| {
+            if let Some(registration) = degraded_provider_registration_for_ready {
+                registration.mark_provider_ready()?;
+            }
+            match launch_transaction.as_mut() {
+                Some(transaction) => {
+                    transaction.confirm_in_background();
+                    Ok(())
+                }
+                None => Ok(()),
+            }
+        },
+    );
     let exit = match run_result {
         Ok(exit) => exit,
         Err(error) => {
@@ -3310,7 +3323,7 @@ fn run_managed_provider_trampoline(_args: ManagedProviderTrampolineArgs) -> anyh
 
 #[cfg(unix)]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
-    run_foreground_command_after_spawn(command, |_| Ok(()))
+    run_foreground_command_after_spawn(command, |_| Ok(()), |_| Ok(()))
 }
 
 #[cfg(unix)]
@@ -3368,7 +3381,8 @@ fn wait_for_provider_exec_with_timeout(
 #[cfg(unix)]
 fn run_foreground_command_after_spawn(
     command: &mut Command,
-    after_spawn: impl FnOnce(u32) -> anyhow::Result<()>,
+    before_release: impl FnOnce(u32) -> anyhow::Result<()>,
+    after_exec: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
@@ -3551,6 +3565,14 @@ fn run_foreground_command_after_spawn(
         None
     };
     if !interactive {
+        if let Err(error) = before_release(child.id()) {
+            unsafe {
+                libc::close(release_fds[1]);
+                libc::close(child_exec_status_read);
+            }
+            terminate_and_reap_child(&mut child, child_process_group);
+            return Err(error);
+        }
         unsafe {
             libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
             libc::close(release_fds[1]);
@@ -3559,7 +3581,7 @@ fn run_foreground_command_after_spawn(
         unsafe {
             libc::close(child_exec_status_read);
         }
-        if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+        if let Err(error) = exec_result.and_then(|_| after_exec(child.id())) {
             terminate_and_reap_child(&mut child, child_process_group);
             return Err(error);
         }
@@ -3599,6 +3621,19 @@ fn run_foreground_command_after_spawn(
             "could not hand the terminal to the managed provider; provider was stopped safely"
         );
     }
+    if let Err(error) = before_release(child.id()) {
+        unsafe {
+            libc::tcsetpgrp(stdin_fd, parent_pgrp);
+            libc::signal(libc::SIGTTOU, old_sigttou);
+            libc::close(release_fds[1]);
+            libc::close(child_exec_status_read);
+        }
+        if let Some(termios) = saved_termios {
+            unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) };
+        }
+        terminate_and_reap_child(&mut child, child_process_group);
+        return Err(error);
+    }
     unsafe {
         libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
         libc::close(release_fds[1]);
@@ -3607,7 +3642,7 @@ fn run_foreground_command_after_spawn(
     unsafe {
         libc::close(child_exec_status_read);
     }
-    if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+    if let Err(error) = exec_result.and_then(|_| after_exec(child.id())) {
         unsafe {
             libc::tcsetpgrp(stdin_fd, parent_pgrp);
             libc::signal(libc::SIGTTOU, old_sigttou);
@@ -3645,16 +3680,17 @@ fn run_foreground_command_after_spawn(
 
 #[cfg(not(unix))]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
-    run_foreground_command_after_spawn(command, |_| Ok(()))
+    run_foreground_command_after_spawn(command, |_| Ok(()), |_| Ok(()))
 }
 
 #[cfg(not(unix))]
 fn run_foreground_command_after_spawn(
     command: &mut Command,
-    after_spawn: impl FnOnce(u32) -> anyhow::Result<()>,
+    before_release: impl FnOnce(u32) -> anyhow::Result<()>,
+    after_exec: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     let mut child = command.spawn()?;
-    if let Err(error) = after_spawn(child.id()) {
+    if let Err(error) = before_release(child.id()).and_then(|_| after_exec(child.id())) {
         terminate_child(&mut child, None);
         let _ = child.wait();
         return Err(error);

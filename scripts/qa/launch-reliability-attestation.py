@@ -336,12 +336,24 @@ def build_subject(
     matrix_history = matrix.get("history") if isinstance(matrix, dict) else None
     if not isinstance(matrix_history, list) or not matrix_history:
         raise ValueError("report has no measured matrix source provenance")
-    if (
-        not isinstance(matrix, dict)
-        or not isinstance(matrix.get("successful_recovery_count"), int)
-        or matrix["successful_recovery_count"] < 1
-    ):
+    if not isinstance(matrix, dict):
+        raise ValueError("report has no measured matrix summary")
+    successful_recovery_count = matrix.get("successful_recovery_count")
+    measured_clean_run_count = matrix.get("measured_clean_run_count")
+    if not isinstance(successful_recovery_count, int) or successful_recovery_count < 1:
         raise ValueError("report has no successful recovery evidence")
+    if (
+        not isinstance(measured_clean_run_count, int)
+        or measured_clean_run_count != successful_recovery_count
+        or any(
+            not isinstance(history, dict) or history.get("verdict") != "green"
+            for history in matrix_history
+        )
+    ):
+        raise ValueError(
+            "report matrix history contains a non-green measured run; "
+            "release attestation requires every measured run to qualify"
+        )
     report_generated_at = _timestamp(
         report.get("generated_at"), label="report.generated_at"
     )
@@ -454,7 +466,8 @@ def build_subject(
         "report_schema_version": report.get("schema_version"),
         "report_provenance": required_provenance,
         "matrix": {
-            "successful_recovery_count": matrix["successful_recovery_count"],
+            "successful_recovery_count": successful_recovery_count,
+            "measured_clean_run_count": measured_clean_run_count,
             "retry_backoff_evidence": retry_backoff_evidence,
         },
         "matrix_generated_at": matrix_generated_at,
