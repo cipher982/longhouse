@@ -63,6 +63,7 @@ mod storage_v2_shipper;
 mod text;
 mod turn_claims;
 mod unmanaged_bindings;
+mod update;
 mod watcher;
 
 use std::path::PathBuf;
@@ -611,6 +612,39 @@ enum Commands {
     Device {
         #[command(subcommand)]
         command: DeviceCommands,
+    },
+
+    /// Native-pair update status, checks, and rollback
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum UpdateCommands {
+    /// Print the last recorded update status.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run an update check now instead of waiting for the daemon's tick.
+    Check {
+        #[arg(long)]
+        json: bool,
+    },
+    /// List native releases already present on this machine.
+    ///
+    /// These are the versions `rollback` can reach without a network.
+    Releases {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reinstall a release already on disk. Never touches the network.
+    Rollback {
+        /// Release version to restore, e.g. `0.1.32`.
+        #[arg(long)]
+        version: String,
     },
 }
 
@@ -1188,6 +1222,12 @@ fn command_name(command: &Commands) -> &'static str {
     match command {
         Commands::Parse { .. } => "parse",
         Commands::BuildIdentity { .. } => "build-identity",
+        Commands::Update { command } => match command {
+            UpdateCommands::Status { .. } => "update-status",
+            UpdateCommands::Check { .. } => "update-check",
+            UpdateCommands::Releases { .. } => "update-releases",
+            UpdateCommands::Rollback { .. } => "update-rollback",
+        },
         Commands::Device { command } => match command {
             DeviceCommands::Plan { .. } => "device-plan",
             DeviceCommands::Status { .. } => "device-status",
@@ -1610,6 +1650,52 @@ fn main() -> anyhow::Result<()> {
             sb.bind(&canonical, &session_id, &provider)?;
             eprintln!("Bound {} → {}", canonical, session_id);
         }
+        Commands::Update { command } => match command {
+            UpdateCommands::Status { json } => {
+                // `None` is printed as an explicit "never checked" rather than
+                // an empty object, so the absence of a check is legible.
+                let status = update::read_status();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                } else {
+                    match status {
+                        Some(status) => println!("{}", update::describe_status(&status)),
+                        None => println!("No update check has completed on this machine yet."),
+                    }
+                }
+            }
+            UpdateCommands::Check { json } => {
+                let client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::limited(5))
+                    .build()?;
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(update::run_check_tick(&client));
+                let status = update::read_status();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                } else if let Some(status) = status {
+                    println!("{}", update::describe_status(&status));
+                }
+            }
+            UpdateCommands::Releases { json } => {
+                let versions = update::local_release_versions();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&versions)?);
+                } else if versions.is_empty() {
+                    println!("No native releases are staged locally.");
+                } else {
+                    for version in versions {
+                        println!("{version}");
+                    }
+                }
+            }
+            UpdateCommands::Rollback { version } => {
+                update::rollback_to_local(&version)?;
+                println!(
+                    "Reinstalled {version}. Restart the Longhouse engine service to run it."
+                );
+            }
+        },
         Commands::Device { command } => match command {
             DeviceCommands::Plan { json } => {
                 device::cmd_device_plan(json)?;

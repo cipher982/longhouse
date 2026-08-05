@@ -408,6 +408,9 @@ class HeartbeatIn(BaseModel):
     managed_launch_recovery: dict[str, object] = Field(default_factory=dict)
     adaptive_backlog_limiter: dict[str, object] | None = None
     ship_scheduler: dict[str, object] | None = None
+    # Native-pair update state. Absent from engines that predate the update
+    # check; None means "this machine has not reported", never "up to date".
+    update: dict[str, object] | None = None
     history_import: HistoryImportSnapshot | None = None
     parse_error_count_1h: int = 0
     consecutive_ship_failures: int = 0

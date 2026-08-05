@@ -147,6 +147,13 @@ pub struct HeartbeatPayload {
     /// Durable, path-free discovery inventory used for onboarding progress.
     #[serde(default)]
     pub history_import: crate::state::source_inventory::HistoryImportSnapshot,
+    /// Native-pair update state for this machine.
+    ///
+    /// Absent until the first check completes, which is the honest encoding of
+    /// "not looked yet". Once present, `update_available: null` still means
+    /// unknown rather than current; see `update.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<crate::update::UpdateStatus>,
 }
 
 /// One machine-observed binding of an unmanaged provider CLI process to
@@ -716,6 +723,10 @@ impl HeartbeatPayload {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import,
+            // Filled in by the daemon's update tick. `None` here is "not
+            // looked yet", which is why the field is skipped when absent
+            // rather than serialized as a null that could read as current.
+            update: None,
         }
     }
 }
@@ -3242,6 +3253,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         };
 
         // Must serialize correctly
@@ -3325,6 +3337,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -4463,6 +4476,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -4527,6 +4541,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         };
 
         spool
@@ -4700,6 +4715,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         };
         let stats = HeartbeatStats {
             conn: &conn,
@@ -4789,6 +4805,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         };
         let stats = HeartbeatStats {
             conn: &conn,
@@ -5623,6 +5640,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         }
     }
 

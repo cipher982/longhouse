@@ -935,6 +935,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     outbox_timer.tick().await; // consume first immediate tick
     let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick
+    let mut update_check_timer = tokio::time::interval(crate::update::UPDATE_CHECK_INTERVAL);
+    update_check_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // A dedicated client: this talks to GitHub, not the Runtime Host, and must
+    // follow redirects without carrying any Longhouse credential.
+    let update_http_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent(concat!("longhouse-engine/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .unwrap_or_default();
+    // Keep the first immediate tick: a daemon that has just started is exactly
+    // when a stale machine most needs to learn it is behind.
     let startup_archive_replay_timer =
         tokio::time::sleep(startup_archive_replay_delay.unwrap_or(Duration::ZERO));
     tokio::pin!(startup_archive_replay_timer);
@@ -2172,6 +2183,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Daily: prune stale file_state and session_binding entries
+            _ = update_check_timer.tick() => {
+                // Spawned, not awaited. A download runs for as long as the
+                // transfer takes, and awaiting it here would stop shipping,
+                // heartbeat, and control work for that whole window.
+                //
+                // Runtime Host reachability is deliberately not consulted:
+                // `offline` describes the Longhouse transport, which says
+                // nothing about whether GitHub is reachable, and gating on it
+                // would hide a stale machine whose own Runtime Host is down.
+                let client = update_http_client.clone();
+                tokio::task::spawn(async move {
+                    crate::update::run_check_tick(&client).await;
+                });
+            }
             _ = prune_timer.tick() => {
                 let fs = FileState::new(&conn);
                 match fs.prune_stale(30) {
@@ -2448,6 +2473,9 @@ fn build_local_status_projection(
         last_ship_at: last_ship_at.clone(),
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
+    // Read fresh rather than threading through the loop, same as the archive
+    // control below. Absent until the first check completes.
+    payload.update = crate::update::read_status();
     let archive_control = read_archive_repair_control();
     payload.adaptive_backlog_limiter = limiter_snapshot;
     payload.ship_scheduler = scheduler_snapshot;
@@ -5275,6 +5303,7 @@ mod tests {
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
             history_import: Default::default(),
+            update: None,
         }
     }
 

@@ -287,6 +287,14 @@ pub fn get_agent_archive_repair_control_path() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("archive-repair-control.json"))
 }
 
+pub fn get_agent_update_control_path() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("update-control.json"))
+}
+
+pub fn get_agent_update_status_path() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("update-status.json"))
+}
+
 pub fn get_agent_log_dir() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("logs"))
 }
