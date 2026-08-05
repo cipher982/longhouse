@@ -541,6 +541,29 @@ jobs:
       - name: Launch-test packaged macOS disk image
         run: |
           MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist binaries/Longhouse-macos-arm64.dmg)"
+          MOUNT_DEVICE="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              device = entity.get("dev-entry")
+              if device:
+                  print(device)
+                  break
+          else:
+              raise SystemExit("Unable to determine attached DMG device")
+          PY
+          )"
+          MOUNT_POINT=""
+          cleanup() {
+            if [[ -n "$MOUNT_POINT" ]]; then
+              hdiutil detach "$MOUNT_POINT" >/dev/null || hdiutil detach "$MOUNT_DEVICE" >/dev/null || true
+            else
+              hdiutil detach "$MOUNT_DEVICE" >/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
           MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
           import os
           import plistlib
@@ -555,10 +578,6 @@ jobs:
               raise SystemExit("Unable to determine mounted DMG path")
           PY
           )"
-          cleanup() {
-            hdiutil detach "$MOUNT_POINT" >/dev/null || true
-          }
-          trap cleanup EXIT
           python3 - \
             "$MOUNT_POINT/Longhouse.app" \
             "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
@@ -650,7 +669,9 @@ jobs:
           APP_PATH="$RUNNER_TEMP/macos-app-bundles/Longhouse.app"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           if [[ "$RELEASE_TIER" == "stable" ]]; then
+            codesign --verify --strict --verbose=2 binaries/Longhouse-macos-arm64.dmg
             spctl --assess --type execute --verbose=4 "$APP_PATH"
+            spctl --assess --type open --verbose=4 binaries/Longhouse-macos-arm64.dmg
             xcrun stapler validate "$APP_PATH"
             xcrun stapler validate binaries/Longhouse-macos-arm64.dmg
           fi
@@ -681,6 +702,29 @@ jobs:
           PY
 
           MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist binaries/Longhouse-macos-arm64.dmg)"
+          MOUNT_DEVICE="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              device = entity.get("dev-entry")
+              if device:
+                  print(device)
+                  break
+          else:
+              raise SystemExit("Unable to determine attached final DMG device")
+          PY
+          )"
+          MOUNT_POINT=""
+          cleanup() {
+            if [[ -n "$MOUNT_POINT" ]]; then
+              hdiutil detach "$MOUNT_POINT" || hdiutil detach "$MOUNT_DEVICE" || true
+            else
+              hdiutil detach "$MOUNT_DEVICE" || true
+            fi
+          }
+          trap cleanup EXIT
           MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
           import os
           import plistlib
@@ -695,10 +739,6 @@ jobs:
               raise SystemExit("Unable to determine mounted final DMG path")
           PY
           )"
-          cleanup() {
-            test -z "$MOUNT_POINT" || hdiutil detach "$MOUNT_POINT"
-          }
-          trap cleanup EXIT
           if [[ "$RELEASE_TIER" == "stable" ]]; then
             spctl --assess --type execute --verbose=4 "$MOUNT_POINT/Longhouse.app"
           fi
