@@ -1060,6 +1060,54 @@ impl<'a> Spool<'a> {
         Ok(result)
     }
 
+    /// Return dead-lettered ranges to the pending queue so they can ship again.
+    ///
+    /// `dead` had no transition back. Every query that selects work asks for
+    /// `status = 'pending'`, and nothing anywhere set a dead row back to it, so
+    /// dead-lettering was an absorbing state: the range was retained, displayed,
+    /// and never retried. That is only defensible if the failure is permanent,
+    /// and most are not — a host outage, a rejected payload shape since fixed,
+    /// or a bug shipped in one engine version and repaired in the next.
+    ///
+    /// Only rows whose source file still exists are revived, because those are
+    /// the ones a retry can actually read. Retry state is reset with them: a row
+    /// carrying its old exhausted retry_count would die again on the first
+    /// attempt without ever reaching the network.
+    ///
+    /// Returns how many rows were revived.
+    pub fn revive_dead_with_readable_sources(&self, limit: usize) -> Result<usize> {
+        let candidates: Vec<i64> = {
+            let mut statement = self.conn.prepare(
+                "SELECT id, file_path FROM spool_queue
+                 WHERE status = 'dead'
+                 ORDER BY created_at
+                 LIMIT ?1",
+            )?;
+            let rows = statement.query_map([limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.filter_map(|row| row.ok())
+                .filter(|(_, path)| std::path::Path::new(path).exists())
+                .map(|(id, _)| id)
+                .collect()
+        };
+        let now = Utc::now().to_rfc3339();
+        let mut revived = 0usize;
+        for id in &candidates {
+            revived += self.conn.execute(
+                "UPDATE spool_queue
+                 SET status = 'pending', retry_count = 0, next_retry_at = ?2,
+                     last_error = COALESCE(last_error, '') || ' [revived]'
+                 WHERE id = ?1 AND status = 'dead'",
+                rusqlite::params![id, now],
+            )?;
+        }
+        if revived > 0 {
+            tracing::info!(revived, "returned dead spool ranges to the pending queue");
+        }
+        Ok(revived)
+    }
+
     /// Return recent dead-lettered ranges, newest first.
     pub fn recent_dead(&self, limit: usize) -> Result<Vec<DeadLetterEntry>> {
         let mut stmt = self.conn.prepare(
@@ -1129,11 +1177,46 @@ impl<'a> Spool<'a> {
             .conn
             .execute(&cleanup_query, cleanup_params.as_slice())?;
 
-        // Hard-delete old dead entries (>30 days)
-        let deleted = self.conn.execute(
-            "DELETE FROM spool_queue WHERE status = 'dead' AND created_at < ?",
-            [&thirty_days_ago],
-        )?;
+        // Dead rows whose source file is gone are the only ones safe to delete.
+        //
+        // This used to hard-delete every dead row older than thirty days. A
+        // spool row is a pointer — provider, file path, byte range — into the
+        // user's own transcript, not a copy of it, so deleting one destroyed no
+        // transcript data. What it destroyed was the *record that those bytes
+        // were never shipped*: `dead_ranges` fell to zero, archive_backlog went
+        // from `dead_lettered` back to `complete`, and the status surface turned
+        // green while the bytes remained unshipped forever. A debt was forgotten
+        // and reported as paid.
+        //
+        // Keeping a pointer costs a few hundred bytes and preserves the only
+        // evidence that anything is owed. When the file itself is gone the
+        // pointer can no longer lead anywhere, and retaining it would only
+        // accumulate rows describing work nobody can ever do.
+        let deletable: Vec<i64> = {
+            let mut statement = self.conn.prepare(
+                "SELECT id, file_path FROM spool_queue
+                 WHERE status = 'dead' AND created_at < ?",
+            )?;
+            let rows = statement.query_map([&thirty_days_ago], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.filter_map(|row| row.ok())
+                .filter(|(_, path)| !std::path::Path::new(path).exists())
+                .map(|(id, _)| id)
+                .collect()
+        };
+        let mut deleted = 0usize;
+        for id in &deletable {
+            deleted += self
+                .conn
+                .execute("DELETE FROM spool_queue WHERE id = ?1", [id])?;
+        }
+        if deleted > 0 {
+            tracing::info!(
+                deleted,
+                "removed dead spool pointers whose source files no longer exist"
+            );
+        }
 
         Ok(marked_dead + deleted)
     }
@@ -1170,6 +1253,101 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(tmp.path())).unwrap();
         (tmp, conn)
+    }
+
+    /// Enqueue one range against a real file, then dead-letter it.
+    fn dead_row_for(spool: &Spool, path: &std::path::Path) -> i64 {
+        spool
+            .enqueue("claude", path.to_str().unwrap(), 0, 100, None)
+            .unwrap();
+        let batch = spool.dequeue_batch(10).unwrap();
+        let id = batch[0].id;
+        spool
+            .conn
+            .execute(
+                "UPDATE spool_queue SET status = 'dead', retry_count = 99,
+                     created_at = ?2 WHERE id = ?1",
+                rusqlite::params![id, "2020-01-01T00:00:00Z"],
+            )
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn dead_ranges_return_to_pending_when_their_source_still_exists() {
+        // `dead` had no transition back: every work query asks for 'pending'
+        // and nothing set it, so a dead-lettered range was retained, displayed,
+        // and never retried again.
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+        let source = tempfile::NamedTempFile::new().unwrap();
+        dead_row_for(&spool, source.path());
+        assert_eq!(spool.dead_count().unwrap(), 1);
+
+        assert_eq!(spool.revive_dead_with_readable_sources(10).unwrap(), 1);
+        assert_eq!(spool.dead_count().unwrap(), 0);
+        assert_eq!(spool.pending_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn revived_ranges_do_not_carry_an_exhausted_retry_count() {
+        // A revived row keeping its old count would die again on the first
+        // attempt without ever reaching the network.
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let id = dead_row_for(&spool, source.path());
+        spool.revive_dead_with_readable_sources(10).unwrap();
+        let retry_count: i64 = conn
+            .query_row(
+                "SELECT retry_count FROM spool_queue WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retry_count, 0);
+    }
+
+    #[test]
+    fn a_dead_range_whose_file_is_gone_is_not_revived() {
+        // Nothing can read those bytes, so reviving would only churn.
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let path = source.path().to_path_buf();
+        dead_row_for(&spool, &path);
+        drop(source);
+        assert_eq!(spool.revive_dead_with_readable_sources(10).unwrap(), 0);
+        assert_eq!(spool.dead_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn cleanup_keeps_an_old_dead_pointer_while_its_source_survives() {
+        // The pointer is a few hundred bytes and is the only evidence that
+        // those bytes were never shipped. Deleting it used to drop dead_ranges
+        // to zero and turn the status surface green with the debt unpaid.
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+        let source = tempfile::NamedTempFile::new().unwrap();
+        dead_row_for(&spool, source.path());
+        spool.cleanup().unwrap();
+        assert_eq!(
+            spool.dead_count().unwrap(),
+            1,
+            "an old dead pointer with a readable source must survive cleanup"
+        );
+    }
+
+    #[test]
+    fn cleanup_removes_an_old_dead_pointer_once_its_source_is_gone() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let path = source.path().to_path_buf();
+        dead_row_for(&spool, &path);
+        drop(source);
+        spool.cleanup().unwrap();
+        assert_eq!(spool.dead_count().unwrap(), 0);
     }
 
     #[test]

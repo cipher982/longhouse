@@ -2198,6 +2198,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 });
             }
             _ = prune_timer.tick() => {
+                // Give dead-lettered ranges another chance before pruning
+                // anything. Most dead-lettering is a transient the engine
+                // outlived — a host outage, a payload shape since fixed — and
+                // without this the range is retained, displayed, and never
+                // retried. Bounded so a large graveyard drains over days rather
+                // than flooding the shipper in one tick.
+                let spool = Spool::new(&conn);
+                match spool.revive_dead_with_readable_sources(200) {
+                    Ok(n) if n > 0 => tracing::info!("Daily revive: returned {} dead ranges to pending", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Dead-range revive error: {}", e),
+                }
                 let fs = FileState::new(&conn);
                 match fs.prune_stale(30) {
                     Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
