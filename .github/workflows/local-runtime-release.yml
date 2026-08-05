@@ -1082,6 +1082,14 @@ jobs:
           uv tool install --force --no-cache "$wheel"
           echo "LONGHOUSE_VERIFY_WHEEL=$wheel" >> "$GITHUB_ENV"
 
+      - name: Install native device pair from the published release
+        env:
+          LONGHOUSE_INSTALL_VERSION: ${{ env.RELEASE_TAG }}
+          LONGHOUSE_TELEMETRY: '0'
+        run: |
+          set -euo pipefail
+          bash scripts/install.sh
+
       - name: Verify installed CLI version matches release tag
         run: |
           set -euo pipefail
@@ -1102,6 +1110,15 @@ jobs:
             --expected-commit "$expected_commit" \
             --expected-version "${RELEASE_TAG#v}" \
             --longhouse-bin longhouse-server
+
+      - name: Verify native device build identity matches release commit
+        run: |
+          set -euo pipefail
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          python3 scripts/ci/assert-installed-build-identity.py \
+            --expected-commit "$expected_commit" \
+            --expected-version "${RELEASE_TAG#v}" \
+            --longhouse-bin "$HOME/.local/bin/longhouse"
 
       - name: Fetch engine binary from the same release via the installed wheel
         env:

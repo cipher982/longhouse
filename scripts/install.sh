@@ -11,6 +11,8 @@
 #   LONGHOUSE_NATIVE_BIN_DIR  Explicit directory containing paired longhouse
 #                             and longhouse-engine binaries (local/dev only)
 #   LONGHOUSE_DESKTOP_APP_SOURCE Local Longhouse.app bundle for macOS smoke tests
+#   LONGHOUSE_APPLICATIONS_DIR Destination root for the macOS app (test-only;
+#                               defaults to /Applications)
 #
 set -euo pipefail
 
@@ -376,15 +378,17 @@ download_and_install_macos_app_release_asset() {
         return 1
     fi
 
-    rm -rf "/Applications/Longhouse.app"
-    if ! ditto "$extracted_app" "/Applications/Longhouse.app"; then
+    local applications_dir="${LONGHOUSE_APPLICATIONS_DIR:-/Applications}"
+    mkdir -p "$applications_dir"
+    rm -rf "$applications_dir/Longhouse.app"
+    if ! ditto "$extracted_app" "$applications_dir/Longhouse.app"; then
         rm -rf "$tmp_dir"
-        error "Could not copy Longhouse.app into /Applications"
+        error "Could not copy Longhouse.app into $applications_dir"
         return 1
     fi
 
     rm -rf "$tmp_dir"
-    success "Longhouse.app installed in /Applications"
+    success "Longhouse.app installed in $applications_dir"
     return 0
 }
 
@@ -409,13 +413,15 @@ install_macos_app() {
             record_install_failure 1
             exit 1
         fi
-        rm -rf "/Applications/Longhouse.app"
-        if ! ditto "$LONGHOUSE_DESKTOP_APP_SOURCE" "/Applications/Longhouse.app"; then
-            error "Could not copy local Longhouse.app into /Applications"
+        local applications_dir="${LONGHOUSE_APPLICATIONS_DIR:-/Applications}"
+        mkdir -p "$applications_dir"
+        rm -rf "$applications_dir/Longhouse.app"
+        if ! ditto "$LONGHOUSE_DESKTOP_APP_SOURCE" "$applications_dir/Longhouse.app"; then
+            error "Could not copy local Longhouse.app into $applications_dir"
             record_install_failure 1
             exit 1
         fi
-        success "Longhouse.app installed in /Applications"
+        success "Longhouse.app installed in $applications_dir"
         return 0
     fi
 
@@ -537,10 +543,11 @@ verify_installation() {
     fi
 
     if [[ "$(uname -s)" == "Darwin" && ( -n "$INSTALL_RELEASE_VERSION" || -n "${LONGHOUSE_DESKTOP_APP_SOURCE:-}" ) ]]; then
-        if [[ -d "/Applications/Longhouse.app" ]]; then
-            success "Longhouse.app: /Applications/Longhouse.app"
+        local applications_dir="${LONGHOUSE_APPLICATIONS_DIR:-/Applications}"
+        if [[ -d "$applications_dir/Longhouse.app" ]]; then
+            success "Longhouse.app: $applications_dir/Longhouse.app"
         else
-            error "Longhouse.app not installed in /Applications"
+            error "Longhouse.app not installed in $applications_dir"
             all_ok=false
         fi
     fi
@@ -724,7 +731,7 @@ main() {
     echo -e "${NC}"
     echo "One-liner installer v1.0"
     echo ""
-    if [[ "${LONGHOUSE_TELEMETRY:-}" =~ ^(0|false|no|off)$ ]] || [[ "${DO_NOT_TRACK:-}" == "1" ]]; then
+    if ! telemetry_enabled; then
         info "Anonymous install telemetry disabled"
     else
         info "Anonymous install telemetry is enabled (set LONGHOUSE_TELEMETRY=0 or DO_NOT_TRACK=1 to disable)"

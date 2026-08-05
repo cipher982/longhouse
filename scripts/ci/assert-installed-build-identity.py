@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import subprocess
 import sys
 from typing import Any
@@ -30,25 +31,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def load_installed_build(longhouse_bin: str) -> dict[str, Any]:
-    proc = subprocess.run(
-        [longhouse_bin, "build-identity", "--json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(f"{longhouse_bin} build-identity --json failed: {detail}")
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{longhouse_bin} build-identity --json did not emit JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"{longhouse_bin} build-identity --json emitted a non-object payload")
-    build = payload.get("facade")
-    if not isinstance(build, dict):
-        raise RuntimeError(f"{longhouse_bin} build-identity --json payload missing facade object")
-    return build
+    # The Runtime Host wheel and the native device facade intentionally have
+    # different entrypoints. Keep one strict checker for both release lanes.
+    # Prefer the interface associated with the executable name, then accept the
+    # other interface so explicit wrapper paths remain usable in local checks.
+    if Path(longhouse_bin).name == "longhouse-server":
+        commands = (("version", "build"), ("build-identity", "facade"))
+    else:
+        commands = (("build-identity", "facade"), ("version", "build"))
+    errors: list[str] = []
+    for command, field in commands:
+        proc = subprocess.run(
+            [longhouse_bin, command, "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout).strip()
+            errors.append(f"{command} --json failed: {detail}")
+            continue
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            errors.append(f"{command} --json did not emit JSON: {exc}")
+            continue
+        if not isinstance(payload, dict):
+            errors.append(f"{command} --json emitted a non-object payload")
+            continue
+        build = payload.get(field)
+        if isinstance(build, dict):
+            return build
+        errors.append(f"{command} --json payload missing {field} object")
+    raise RuntimeError(f"{longhouse_bin} build identity probe failed: {'; '.join(errors)}")
 
 
 def commit_matches(actual: str, expected: str) -> bool:

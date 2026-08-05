@@ -66,6 +66,23 @@ install_pair
 second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
 [[ "$first_release" != "$second_release" ]]
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  app_source="$TEST_ROOT/Longhouse.app"
+  app_destination="$TEST_ROOT/Applications"
+  mkdir -p "$app_source/Contents/MacOS"
+  printf '%s\n' 'native-installer-smoke-app' > "$app_source/Contents/MacOS/Longhouse"
+  env \
+    HOME="$HOME_DIR" \
+    PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
+    SHELL=/bin/zsh \
+    LONGHOUSE_TELEMETRY=0 \
+    LONGHOUSE_NATIVE_BIN_DIR="$PAIR_DIR" \
+    LONGHOUSE_DESKTOP_APP_SOURCE="$app_source" \
+    LONGHOUSE_APPLICATIONS_DIR="$app_destination" \
+    bash "$ROOT_DIR/scripts/install.sh" >/dev/null
+  [[ -d "$app_destination/Longhouse.app" ]]
+fi
+
 installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$installed" ]]
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
