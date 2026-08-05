@@ -49,7 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          # paths-filter may deepen the checkout to find the comparison base.
+          # A complete history avoids its shallow-file race on busy runners.
+          fetch-depth: 0
       - uses: dorny/paths-filter@v4
         id: filter
         with:
