@@ -189,13 +189,15 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
         "kill_group",
         lambda *args, **kwargs: events.append("kill"),
     )
+    monkeypatch.setattr(_MODULE.os, "write", lambda *args: events.append("input"))
+    monkeypatch.setattr(_MODULE.os, "close", lambda *args: events.append("close"))
 
     result = _MODULE.finish_live_command(
         _MODULE.LiveCommand(
             process=NaturalProcess(),
             output_fd=-1,
             output=bytearray(),
-            is_tty=False,
+            is_tty=True,
             provider_ready_observed=True,
         ),
         provider_pid=456,

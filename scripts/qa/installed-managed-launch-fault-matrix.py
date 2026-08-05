@@ -1251,10 +1251,6 @@ def finish_live_command(
             os.write(command.output_fd, b"\x03")
         except OSError:
             pass
-        try:
-            os.killpg(os.getpgid(command.process.pid), signal.SIGINT)
-        except (OSError, PermissionError):
-            pass
     # Closing the owned pty is part of terminating a TTY provider. Keeping the
     # master open can leave the launcher/provider group in macOS `?E` state
     # during natural-stop observation.
@@ -2856,8 +2852,10 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             kill_group(engine)
             try:
                 engine.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+            except subprocess.TimeoutExpired as error:
+                cleanup_errors.append(
+                    f"Machine Agent cleanup did not finish: {error}"
+                )
         try:
             stop_host(host)
         except Exception as error:  # noqa: BLE001 - cleanup must be reported.

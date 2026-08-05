@@ -2050,8 +2050,16 @@ const CHILD_REAP_TIMEOUT: Duration = Duration::from_millis(250);
 
 fn defer_child_reap(mut child: Child) {
     // The bridge must not keep the user's stop request waiting on a kernel
-    // child that ignores SIGKILL. Keep the Tokio Child owned by a background
-    // waiter so it is still reaped when the process becomes waitable.
+    // child that ignores SIGKILL. On Unix, transfer the PID to the shared
+    // process reaper before this short-lived bridge runtime exits.
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        drop(child);
+        crate::process_identity::reap_pid_later(pid as libc::pid_t);
+        return;
+    }
+    // Keep the Tokio Child owned by a background waiter on platforms without
+    // the shared Unix waitpid reaper.
     tokio::spawn(async move {
         let _ = child.wait().await;
     });

@@ -843,8 +843,17 @@ async fn run_app_server_turn(
     let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
         Ok(status) => status?,
         Err(_) => {
-            child.kill().await?;
-            let status = child.wait().await?;
+            child.start_kill()?;
+            let status = match tokio::time::timeout(Duration::from_millis(250), child.wait()).await
+            {
+                Ok(status) => status?,
+                Err(_) => {
+                    defer_child_reap(&child);
+                    anyhow::bail!(
+                        "Codex app-server did not exit after turn completion; reaping deferred"
+                    );
+                }
+            };
             anyhow::bail!(
                 "Codex app-server did not exit after turn completion; killed with status {status}"
             );
@@ -853,14 +862,38 @@ async fn run_app_server_turn(
     Ok(status.code())
 }
 
+#[cfg(unix)]
+fn defer_child_reap(child: &Child) {
+    if let Some(pid) = child.id() {
+        crate::process_identity::reap_pid_later(pid as libc::pid_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn defer_child_reap(_child: &Child) {}
+
 async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
     if let Some(pgid) = pgid {
         shutdown_process_group(pgid).await;
     }
-    if child.try_wait()?.is_none() {
-        child.start_kill()?;
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => child.start_kill()?,
+        Err(error) => {
+            let _ = child.start_kill();
+            defer_child_reap(child);
+            return Err(error.into());
+        }
     }
-    let _ = child.wait().await;
+    match tokio::time::timeout(Duration::from_millis(250), child.wait()).await {
+        Ok(status) => {
+            let _ = status?;
+        }
+        Err(_) => {
+            defer_child_reap(child);
+            anyhow::bail!("Codex worker did not exit after kill; reaping deferred");
+        }
+    }
     Ok(())
 }
 
