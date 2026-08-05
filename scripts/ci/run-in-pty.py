@@ -59,7 +59,19 @@ def _kill_owned_process_group(
         # private process-group ID. This is the ownership boundary for the
         # command under test; killing only the direct child leaks descendants.
         os.killpg(process.pid, signal.SIGKILL)
-    except OSError:
+    except ProcessLookupError:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    except PermissionError as error:
+        print(f"warning: process-group cleanup fell back to leader kill: {error}", file=sys.stderr)
+        try:
+            process.kill()
+        except OSError:
+            pass
+    except OSError as error:
+        print(f"warning: process-group cleanup fell back to leader kill: {error}", file=sys.stderr)
         try:
             process.kill()
         except OSError:
@@ -162,6 +174,7 @@ def main() -> int:
             if exit_code is not None:
                 if not pty_closed:
                     _drain(master, max_duration=0.5)
+                _kill_owned_process_group(process, wait_for=0.1)
                 return exit_code if exit_code >= 0 else 128 - exit_code
     finally:
         os.close(master)
