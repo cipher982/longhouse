@@ -431,10 +431,14 @@ def _validate_evidence_manifest(report: dict[str, Any], manifest_path: Path) -> 
         "dogfood_series_artifacts",
     ):
         references = inputs.get(name)
-        if not isinstance(references, list) or any(
-            not isinstance(reference, dict)
-            or reference.get("sha256") not in manifest_hashes
-            for reference in references
+        if (
+            not isinstance(references, list)
+            or not references
+            or any(
+                not isinstance(reference, dict)
+                or reference.get("sha256") not in manifest_hashes
+                for reference in references
+            )
         ):
             raise ValueError(
                 f"report input hashes are not present in the retained evidence manifest: {name}"
@@ -654,8 +658,8 @@ def build_parser() -> argparse.ArgumentParser:
     create_from_report.add_argument("--subject-output", type=Path, required=True)
     create_from_report.add_argument("--key-id", required=True)
     create_from_report.add_argument("--keys", type=Path, default=TRUSTED_KEYS_PATH)
-    create_from_report.add_argument("--expected-source-sha")
-    create_from_report.add_argument("--evidence-manifest", type=Path)
+    create_from_report.add_argument("--expected-source-sha", required=True)
+    create_from_report.add_argument("--evidence-manifest", type=Path, required=True)
     verify = subparsers.add_parser("verify")
     verify.add_argument("--receipt", type=Path, required=True)
     verify.add_argument("--subject", type=Path, required=True)
