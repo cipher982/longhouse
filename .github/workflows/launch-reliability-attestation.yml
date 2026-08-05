@@ -41,14 +41,48 @@ jobs:
           fetch-depth: 0
           path: measured-source
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12.13'
-
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           version: '0.10.10'
           checksum: ${{ runner.os == 'Linux' && runner.arch == 'X64' && '3e1027f26ce8c7e4c32e2277a7fed2cb410f2f1f9320d3df97653d40e21f415b' || runner.os == 'Linux' && runner.arch == 'ARM64' && '2b80457b950deda12e8d5dc3b9b7494ac143eae47f1fb11b1c6e5a8495a6421e' || runner.os == 'macOS' && runner.arch == 'X64' && 'dd18420591d625f9b4ca2b57a7a6fe3cce43910f02e02d90e47a4101428de14a' || runner.os == 'macOS' && runner.arch == 'ARM64' && '8a09f0ef51ee7f7170731b4cb8bde5bf9ba6da5304f49a7df6cdab42a1f37b5d' || '' }}
+
+      - name: Install verified Python runtime
+        shell: bash
+        run: |
+          case "$RUNNER_OS:$RUNNER_ARCH" in
+            Linux:X64)
+              python_archive_name='cpython-3.12.13+20260804-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+              python_archive_sha='ce2c9c5df1b99a962a86d2f457656918ee5f01b2edea080db28416232a1fcb11'
+              ;;
+            Linux:ARM64)
+              python_archive_name='cpython-3.12.13+20260804-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz'
+              python_archive_sha='5779f28830c6c5f32184c41e0a1c4afb355961cf9fbce18f43391d083a2ae924'
+              ;;
+            macOS:X64)
+              python_archive_name='cpython-3.12.13+20260804-x86_64-apple-darwin-install_only_stripped.tar.gz'
+              python_archive_sha='23c1069b954060a875cce80a2d98afe9ca20b8e5244cf8df6c9475497d78bc4c'
+              ;;
+            macOS:ARM64)
+              python_archive_name='cpython-3.12.13+20260804-aarch64-apple-darwin-install_only_stripped.tar.gz'
+              python_archive_sha='b00971ee829e39965e2bda5585666dfdcc74bd1bd97f4b75071b3b05cecf52fd'
+              ;;
+            *) echo "Unsupported Python runtime platform: $RUNNER_OS/$RUNNER_ARCH." >&2; exit 1 ;;
+          esac
+          python_root="$RUNNER_TEMP/longhouse-python-3.12.13-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python_archive="$RUNNER_TEMP/$python_archive_name"
+          rm -rf -- "$python_root"
+          mkdir -p "$python_root"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20260804/$python_archive_name" \
+            -o "$python_archive"
+          if command -v sha256sum >/dev/null 2>&1; then
+            printf '%s  %s\n' "$python_archive_sha" "$python_archive" | sha256sum -c -
+          else
+            printf '%s  %s\n' "$python_archive_sha" "$python_archive" | shasum -a 256 -c -
+          fi
+          tar -xzf "$python_archive" -C "$python_root" --strip-components=1
+          test "$("$python_root/bin/python3" --version)" = "Python 3.12.13"
+          printf 'LONGHOUSE_QUALIFICATION_PYTHON=%s\n' "$python_root/bin/python3" >> "$GITHUB_ENV"
 
       - name: Snapshot evidence and rebuild the report
         id: measure
@@ -102,7 +136,7 @@ jobs:
           manifest_tree() {
             local base="$1"
             local check_ancestors="${2:-false}"
-            local rel path file digest special
+            local rel path
             if test "$check_ancestors" = true; then
               assert_no_symlink_path "$base"
             else
@@ -111,25 +145,30 @@ jobs:
             for rel in matrix native-health provider-harness dogfood/episodes dogfood/challenges; do
               path="$base/$rel"
               test -d "$path" || { echo "Missing retained evidence tree: $path" >&2; return 1; }
-              special="$(find "$path" ! -type f ! -type d -print -quit)"
-              if test -n "$special"; then
-                echo "Only regular files and directories are allowed in retained evidence: $special" >&2
-                return 1
-              fi
-              while IFS= read -r file; do
-                case "$file" in
-                  *$'\n'*|*$'\r'*)
-                    echo "Newlines are not allowed in retained evidence paths: $file" >&2
-                    return 1
-                    ;;
-                esac
-                digest="$(sha256_file "$file" | awk '{print $1}')"
-                printf '%s  %s\n' "$digest" "${file#"$base"/}"
-              done < <(find "$path" -type f -print | LC_ALL=C sort)
+              "$LONGHOUSE_QUALIFICATION_PYTHON" - "$path" "$base" <<'PY'
+          import hashlib
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          base = Path(sys.argv[2])
+          for entry in sorted(root.rglob("*"), key=lambda value: value.relative_to(base).as_posix()):
+              if entry.is_symlink():
+                  raise SystemExit(f"Symlinks are not allowed in retained evidence: {entry}")
+              if entry.is_dir():
+                  continue
+              if not entry.is_file():
+                  raise SystemExit(f"Only regular files and directories are allowed in retained evidence: {entry}")
+              relative = entry.relative_to(base).as_posix()
+              if "\n" in relative or "\r" in relative:
+                  raise SystemExit(f"Newlines are not allowed in retained evidence paths: {entry}")
+              digest = hashlib.sha256(entry.read_bytes()).hexdigest()
+              print(f"{digest}  {relative}")
+          PY
             done
           }
           canonical_evidence_root="$(
-            python -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' "$EVIDENCE_ROOT"
+            "$LONGHOUSE_QUALIFICATION_PYTHON" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' "$EVIDENCE_ROOT"
           )" || {
             echo "Evidence root does not resolve to an existing directory." >&2
             exit 1
@@ -192,7 +231,7 @@ jobs:
           for path in "${dogfood[@]}"; do args+=(--dogfood-series "$path"); done
           for path in "${challenges[@]}"; do args+=(--dogfood-challenge "$path"); done
           cd "$measured_root"
-          uv run --frozen --project "$measured_root/server" python \
+          uv run --frozen --python "$LONGHOUSE_QUALIFICATION_PYTHON" --project "$measured_root/server" python \
             "$measured_root/scripts/qa/launch-reliability-measurements.py" "${args[@]}"
           manifest_tree "$snapshot_root" false > "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest"
           cmp "$snapshot_manifest" "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest" || {
@@ -240,14 +279,48 @@ jobs:
           fetch-depth: 1
           path: trusted-source
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12.13'
-
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           version: '0.10.10'
           checksum: ${{ runner.os == 'Linux' && runner.arch == 'X64' && '3e1027f26ce8c7e4c32e2277a7fed2cb410f2f1f9320d3df97653d40e21f415b' || runner.os == 'Linux' && runner.arch == 'ARM64' && '2b80457b950deda12e8d5dc3b9b7494ac143eae47f1fb11b1c6e5a8495a6421e' || runner.os == 'macOS' && runner.arch == 'X64' && 'dd18420591d625f9b4ca2b57a7a6fe3cce43910f02e02d90e47a4101428de14a' || runner.os == 'macOS' && runner.arch == 'ARM64' && '8a09f0ef51ee7f7170731b4cb8bde5bf9ba6da5304f49a7df6cdab42a1f37b5d' || '' }}
+
+      - name: Install verified Python runtime
+        shell: bash
+        run: |
+          case "$RUNNER_OS:$RUNNER_ARCH" in
+            Linux:X64)
+              python_archive_name='cpython-3.12.13+20260804-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+              python_archive_sha='ce2c9c5df1b99a962a86d2f457656918ee5f01b2edea080db28416232a1fcb11'
+              ;;
+            Linux:ARM64)
+              python_archive_name='cpython-3.12.13+20260804-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz'
+              python_archive_sha='5779f28830c6c5f32184c41e0a1c4afb355961cf9fbce18f43391d083a2ae924'
+              ;;
+            macOS:X64)
+              python_archive_name='cpython-3.12.13+20260804-x86_64-apple-darwin-install_only_stripped.tar.gz'
+              python_archive_sha='23c1069b954060a875cce80a2d98afe9ca20b8e5244cf8df6c9475497d78bc4c'
+              ;;
+            macOS:ARM64)
+              python_archive_name='cpython-3.12.13+20260804-aarch64-apple-darwin-install_only_stripped.tar.gz'
+              python_archive_sha='b00971ee829e39965e2bda5585666dfdcc74bd1bd97f4b75071b3b05cecf52fd'
+              ;;
+            *) echo "Unsupported Python runtime platform: $RUNNER_OS/$RUNNER_ARCH." >&2; exit 1 ;;
+          esac
+          python_root="$RUNNER_TEMP/longhouse-python-3.12.13-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python_archive="$RUNNER_TEMP/$python_archive_name"
+          rm -rf -- "$python_root"
+          mkdir -p "$python_root"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20260804/$python_archive_name" \
+            -o "$python_archive"
+          if command -v sha256sum >/dev/null 2>&1; then
+            printf '%s  %s\n' "$python_archive_sha" "$python_archive" | sha256sum -c -
+          else
+            printf '%s  %s\n' "$python_archive_sha" "$python_archive" | shasum -a 256 -c -
+          fi
+          tar -xzf "$python_archive" -C "$python_root" --strip-components=1
+          test "$("$python_root/bin/python3" --version)" = "Python 3.12.13"
+          printf 'LONGHOUSE_QUALIFICATION_PYTHON=%s\n' "$python_root/bin/python3" >> "$GITHUB_ENV"
 
       - name: Download the measured report
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
@@ -295,7 +368,7 @@ jobs:
           umask 077
           printf '%s' "$PRIVATE_KEY_PEM" > "$KEY_PATH"
           cd "$trusted_root"
-          uv run --frozen --project "$trusted_root/server" python \
+          uv run --frozen --python "$LONGHOUSE_QUALIFICATION_PYTHON" --project "$trusted_root/server" python \
             "$trusted_root/scripts/qa/launch-reliability-attestation.py" \
             create-from-report \
             --report "$report_path" \
@@ -308,7 +381,7 @@ jobs:
             echo "Trusted subject derivation differs from measured subject." >&2
             exit 1
           }
-          uv run --frozen --project "$trusted_root/server" python \
+          uv run --frozen --python "$LONGHOUSE_QUALIFICATION_PYTHON" --project "$trusted_root/server" python \
             "$trusted_root/scripts/qa/launch-reliability-attestation.py" \
             verify \
             --receipt "$receipt_path" \

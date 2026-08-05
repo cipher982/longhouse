@@ -159,9 +159,10 @@ group restricted to this repository and workflow. Confirm the protected-main
 branch rules, environment reviewers, runner-group restriction, and
 single-job runner behavior before treating a receipt as release evidence.
 
-The workflow supports Linux and macOS X64/ARM64 runners. It pins Python
-3.12.13, uv 0.10.10 with a platform-specific checksum, and uses frozen uv
-resolution in both jobs.
+The workflow supports Linux and macOS X64/ARM64 runners. It downloads the
+Python 3.12.13 `python-build-standalone` archive for the runner platform and
+checks it against the committed SHA-256 before use. It pins uv 0.10.10 with a
+platform-specific checksum and uses frozen uv resolution in both jobs.
 
 The qualification runner and its retained evidence are part of the trusted
 computing base: the measurement job executes the checked-out source's report
