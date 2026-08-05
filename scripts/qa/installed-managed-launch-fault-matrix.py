@@ -20,6 +20,7 @@ import argparse
 import base64
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+import errno
 import hashlib
 import json
 import os
@@ -838,14 +839,22 @@ def run_tty_command(
     marker_at: float | None = None
     started = time.monotonic()
     returncode: int | None = None
+    pty_closed = False
     try:
         while time.monotonic() - started < timeout:
-            readable, _, _ = select.select([master], [], [], 0.2)
+            readable, _, _ = select.select([] if pty_closed else [master], [], [], 0.2)
             if readable:
                 try:
-                    output.extend(os.read(master, 8192))
-                except OSError:
-                    break
+                    chunk = os.read(master, 8192)
+                    if chunk:
+                        output.extend(chunk)
+                    else:
+                        pty_closed = True
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        pty_closed = True
+                    else:
+                        break
             decoded = output.decode("utf-8", errors="replace")
             if marker in decoded and not sent_interrupt:
                 marker_seen = True

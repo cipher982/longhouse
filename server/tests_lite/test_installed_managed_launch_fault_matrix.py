@@ -251,6 +251,33 @@ def test_run_tty_command_uses_pty_interrupt_without_direct_group_signal(
     assert signals == []
 
 
+def test_run_tty_command_reaps_child_after_pty_eio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read = _MODULE.os.read
+    reads = 0
+
+    def read_with_eio(fd: int, size: int) -> bytes:
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            raise OSError(_MODULE.errno.EIO, "pty closed")
+        return original_read(fd, size)
+
+    monkeypatch.setattr(_MODULE.os, "read", read_with_eio)
+    monkeypatch.setattr(_MODULE, "kill_group", lambda *args, **kwargs: pytest.fail("timed out"))
+
+    evidence = _MODULE.run_tty_command(
+        [sys.executable, "-c", "print('READY', flush=True)"],
+        {},
+        marker="READY",
+        timeout=5,
+    )
+
+    assert evidence.marker_seen is True
+    assert evidence.timed_out is False
+
+
 def test_run_matrix_records_completion_after_teardown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[str] = []
     provider_root: Path | None = None

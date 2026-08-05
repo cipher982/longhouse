@@ -944,7 +944,9 @@ pub async fn shutdown_codex_console_worker_pool() {
             if pool.spawning == 0 {
                 None
             } else {
-                Some(pool.spawn_finished.clone().notified_owned())
+                let mut wait = Box::pin(pool.spawn_finished.clone().notified_owned());
+                wait.as_mut().enable();
+                Some(wait)
             }
         };
         let Some(wait) = wait else { break };
@@ -987,7 +989,9 @@ pub async fn shutdown_codex_console_worker_pool() {
             if pool.active_process_groups.is_empty() {
                 None
             } else {
-                Some(pool.active_finished.clone().notified_owned())
+                let mut wait = Box::pin(pool.active_finished.clone().notified_owned());
+                wait.as_mut().enable();
+                Some(wait)
             }
         };
         let Some(wait) = wait else { break };
