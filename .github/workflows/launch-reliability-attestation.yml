@@ -26,6 +26,14 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       EVIDENCE_ROOT: /var/lib/longhouse/qualification
     steps:
+      - name: Require a supported qualification runner
+        shell: bash
+        run: |
+          case "$RUNNER_OS:$RUNNER_ARCH" in
+            Linux:X64|Linux:ARM64|macOS:X64|macOS:ARM64) ;;
+            *) echo "Unsupported qualification runner: $RUNNER_OS/$RUNNER_ARCH." >&2; exit 1 ;;
+          esac
+
       - name: Checkout the measured source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -35,9 +43,12 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.12'
+          python-version: '3.12.13'
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: '0.10.10'
+          checksum: ${{ runner.os == 'Linux' && runner.arch == 'X64' && '3e1027f26ce8c7e4c32e2277a7fed2cb410f2f1f9320d3df97653d40e21f415b' || runner.os == 'Linux' && runner.arch == 'ARM64' && '2b80457b950deda12e8d5dc3b9b7494ac143eae47f1fb11b1c6e5a8495a6421e' || runner.os == 'macOS' && runner.arch == 'X64' && 'dd18420591d625f9b4ca2b57a7a6fe3cce43910f02e02d90e47a4101428de14a' || runner.os == 'macOS' && runner.arch == 'ARM64' && '8a09f0ef51ee7f7170731b4cb8bde5bf9ba6da5304f49a7df6cdab42a1f37b5d' || '' }}
 
       - name: Snapshot evidence and rebuild the report
         id: measure
@@ -51,11 +62,10 @@ jobs:
             echo "Launch reliability attestation must be dispatched from protected main." >&2
             exit 1
           }
-          printf '%s\n' "$SOURCE_SHA" | grep -Eq '^[0-9a-fA-F]{40}$' || {
-            echo "source_sha must be a full 40-character commit SHA." >&2
+          printf '%s\n' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "source_sha must be a lowercase full 40-character commit SHA." >&2
             exit 1
           }
-          SOURCE_SHA="$(printf '%s' "$SOURCE_SHA" | tr '[:upper:]' '[:lower:]')"
           measured_root="$GITHUB_WORKSPACE/measured-source"
           test "$(git -C "$measured_root" rev-parse HEAD)" = "$SOURCE_SHA" || {
             echo "Measured checkout does not match the requested source SHA." >&2
@@ -66,7 +76,6 @@ jobs:
             echo "The measured source SHA is not a protected main first-parent commit." >&2
             exit 1
           }
-          run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
           snapshot_root="$RUNNER_TEMP/launch-reliability-evidence"
           sha256_file() {
             if command -v sha256sum >/dev/null 2>&1; then
@@ -92,8 +101,13 @@ jobs:
           }
           manifest_tree() {
             local base="$1"
+            local check_ancestors="${2:-false}"
             local rel path file digest special
-            assert_no_symlink_path "$base"
+            if test "$check_ancestors" = true; then
+              assert_no_symlink_path "$base"
+            else
+              test ! -L "$base" || { echo "Evidence snapshot must not be a symlink: $base" >&2; return 1; }
+            fi
             for rel in matrix native-health provider-harness dogfood/episodes dogfood/challenges; do
               path="$base/$rel"
               test -d "$path" || { echo "Missing retained evidence tree: $path" >&2; return 1; }
@@ -103,13 +117,30 @@ jobs:
                 return 1
               fi
               while IFS= read -r file; do
+                case "$file" in
+                  *$'\n'*|*$'\r'*)
+                    echo "Newlines are not allowed in retained evidence paths: $file" >&2
+                    return 1
+                    ;;
+                esac
                 digest="$(sha256_file "$file" | awk '{print $1}')"
                 printf '%s  %s\n' "$digest" "${file#"$base"/}"
               done < <(find "$path" -type f -print | LC_ALL=C sort)
             done
           }
+          canonical_evidence_root="$(
+            python -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' "$EVIDENCE_ROOT"
+          )" || {
+            echo "Evidence root does not resolve to an existing directory." >&2
+            exit 1
+          }
+          case "$RUNNER_OS:$canonical_evidence_root" in
+            Linux:/var/lib/longhouse/qualification|macOS:/private/var/lib/longhouse/qualification) ;;
+            *) echo "Evidence root resolved outside the fixed qualification location: $canonical_evidence_root." >&2; exit 1 ;;
+          esac
           umask 077
-          assert_no_symlink_path "$EVIDENCE_ROOT"
+          assert_no_symlink_path "$canonical_evidence_root"
+          run_root="$canonical_evidence_root/$SOURCE_SHA"
           assert_no_symlink_path "$run_root"
           test -d "$run_root" || { echo "No retained evidence exists for $SOURCE_SHA." >&2; exit 1; }
           before_manifest="$RUNNER_TEMP/launch-reliability-evidence.before.manifest"
@@ -119,14 +150,14 @@ jobs:
           mkdir -p "$snapshot_root/matrix" "$snapshot_root/native-health" \
             "$snapshot_root/provider-harness" "$snapshot_root/dogfood/episodes" \
             "$snapshot_root/dogfood/challenges"
-          manifest_tree "$run_root" > "$before_manifest"
+          manifest_tree "$run_root" true > "$before_manifest"
           cp -R "$run_root/matrix/." "$snapshot_root/matrix/"
           cp -R "$run_root/native-health/." "$snapshot_root/native-health/"
           cp -R "$run_root/provider-harness/." "$snapshot_root/provider-harness/"
           cp -R "$run_root/dogfood/episodes/." "$snapshot_root/dogfood/episodes/"
           cp -R "$run_root/dogfood/challenges/." "$snapshot_root/dogfood/challenges/"
-          manifest_tree "$run_root" > "$after_manifest"
-          manifest_tree "$snapshot_root" > "$snapshot_manifest"
+          manifest_tree "$run_root" true > "$after_manifest"
+          manifest_tree "$snapshot_root" false > "$snapshot_manifest"
           cmp "$before_manifest" "$after_manifest" || {
             echo "Retained evidence changed while it was being snapshotted." >&2
             exit 1
@@ -161,9 +192,9 @@ jobs:
           for path in "${dogfood[@]}"; do args+=(--dogfood-series "$path"); done
           for path in "${challenges[@]}"; do args+=(--dogfood-challenge "$path"); done
           cd "$measured_root"
-          uv run --project "$measured_root/server" python \
+          uv run --frozen --project "$measured_root/server" python \
             "$measured_root/scripts/qa/launch-reliability-measurements.py" "${args[@]}"
-          manifest_tree "$snapshot_root" > "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest"
+          manifest_tree "$snapshot_root" false > "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest"
           cmp "$snapshot_manifest" "$RUNNER_TEMP/launch-reliability-evidence.after-report.manifest" || {
             echo "Evidence snapshot changed while the report was being built." >&2
             exit 1
@@ -194,6 +225,14 @@ jobs:
       ATTESTATION_KEY_ID: longhouse-ci-2026
       SOURCE_SHA: ${{ inputs.source_sha }}
     steps:
+      - name: Require a supported signing runner
+        shell: bash
+        run: |
+          case "$RUNNER_OS:$RUNNER_ARCH" in
+            Linux:X64|Linux:ARM64|macOS:X64|macOS:ARM64) ;;
+            *) echo "Unsupported signing runner: $RUNNER_OS/$RUNNER_ARCH." >&2; exit 1 ;;
+          esac
+
       - name: Checkout the reviewed signer source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -203,9 +242,12 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.12'
+          python-version: '3.12.13'
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: '0.10.10'
+          checksum: ${{ runner.os == 'Linux' && runner.arch == 'X64' && '3e1027f26ce8c7e4c32e2277a7fed2cb410f2f1f9320d3df97653d40e21f415b' || runner.os == 'Linux' && runner.arch == 'ARM64' && '2b80457b950deda12e8d5dc3b9b7494ac143eae47f1fb11b1c6e5a8495a6421e' || runner.os == 'macOS' && runner.arch == 'X64' && 'dd18420591d625f9b4ca2b57a7a6fe3cce43910f02e02d90e47a4101428de14a' || runner.os == 'macOS' && runner.arch == 'ARM64' && '8a09f0ef51ee7f7170731b4cb8bde5bf9ba6da5304f49a7df6cdab42a1f37b5d' || '' }}
 
       - name: Download the measured report
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
@@ -253,7 +295,7 @@ jobs:
           umask 077
           printf '%s' "$PRIVATE_KEY_PEM" > "$KEY_PATH"
           cd "$trusted_root"
-          uv run --project "$trusted_root/server" python \
+          uv run --frozen --project "$trusted_root/server" python \
             "$trusted_root/scripts/qa/launch-reliability-attestation.py" \
             create-from-report \
             --report "$report_path" \
@@ -266,7 +308,7 @@ jobs:
             echo "Trusted subject derivation differs from measured subject." >&2
             exit 1
           }
-          uv run --project "$trusted_root/server" python \
+          uv run --frozen --project "$trusted_root/server" python \
             "$trusted_root/scripts/qa/launch-reliability-attestation.py" \
             verify \
             --receipt "$receipt_path" \
