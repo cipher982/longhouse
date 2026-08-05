@@ -29,7 +29,7 @@ jobs:
     name: Publish static blog files
     runs-on: cube-deploy
     needs: validate
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main'
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6

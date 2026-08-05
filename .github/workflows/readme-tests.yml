@@ -21,8 +21,10 @@ on:
 jobs:
   readme-smoke:
     name: README smoke tests
-    runs-on: cube
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    env:
+      README_MODE: ${{ github.event.inputs.mode || 'smoke' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -49,4 +51,8 @@ jobs:
         run: ./scripts/ci/ensure-make.sh
 
       - name: Run readme-test blocks
-        run: make test-readmes MODE=${{ github.event.inputs.mode || 'smoke' }}
+        run: |
+          case "$README_MODE" in
+            smoke|full) make test-readmes "MODE=$README_MODE" ;;
+            *) echo "Unsupported README test mode: $README_MODE" >&2; exit 2 ;;
+          esac

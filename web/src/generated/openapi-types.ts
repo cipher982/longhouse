@@ -6122,6 +6122,8 @@ export interface components {
             status_summary: string;
             /** Reasons */
             reasons: string[];
+            /** Suggested Action Ids */
+            suggested_action_ids?: string[];
             /** Last Ship At */
             last_ship_at?: string | null;
             /** Last Ship Attempt At */

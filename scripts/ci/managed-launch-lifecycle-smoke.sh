@@ -20,10 +20,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
+UV_BIN="$(command -v uv)"
+PYTHON_BIN="$(command -v python3)"
 # Codex's per-session Unix socket must fit the platform SUN_LEN limit. Keep the
 # smoke root short so the test exercises lifecycle behavior rather than the
 # host's unusually long default macOS TMPDIR prefix.
 TEST_ROOT="$(mktemp -d /tmp/lh.XXXXXX)"
+EVIDENCE_BASE="${LONGHOUSE_LIFECYCLE_SMOKE_EVIDENCE_ROOT:-$ROOT_DIR/.build/canaries/managed-launch-lifecycle}"
+EVIDENCE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+EVIDENCE_DIR="$EVIDENCE_BASE/$EVIDENCE_STAMP"
+mkdir -p "$EVIDENCE_DIR"
+exec > >(tee "$EVIDENCE_DIR/console.log") 2>&1
 HOME_DIR="$TEST_ROOT/home"
 BIN_DIR="$TEST_ROOT/bin"
 SERVER_LOG="$TEST_ROOT/server.log"
@@ -34,23 +41,56 @@ CLAUDE_CONTROL_PID=""
 CURSOR_CONTROL_PID=""
 PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
+stop_process_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    stop_process_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+  sleep 0.1
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+stop_and_reap() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  # Provider facades and the Machine Agent can stay in their control loop when
+  # the Runtime Host has already gone away. Recurse first, then force the
+  # exact test process after the short grace period in stop_process_tree;
+  # waiting on a soft kill alone can leave the EXIT trap hung indefinitely.
+  stop_process_tree "$pid"
+  wait "$pid" 2>/dev/null || true
+}
+
+stop_processes_for_test_root() {
+  local pid
+  for pid in $(ps -axo pid=,command= | grep -F "$TEST_ROOT" | awk '{print $1}' || true); do
+    [[ "$pid" == "$$" ]] && continue
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+}
+
 cleanup() {
   if [[ -n "$CURSOR_CONTROL_PID" ]]; then
-    kill "$CURSOR_CONTROL_PID" 2>/dev/null || true
-    wait "$CURSOR_CONTROL_PID" 2>/dev/null || true
+    stop_and_reap "$CURSOR_CONTROL_PID"
   fi
   if [[ -n "$CLAUDE_CONTROL_PID" ]]; then
-    kill "$CLAUDE_CONTROL_PID" 2>/dev/null || true
-    wait "$CLAUDE_CONTROL_PID" 2>/dev/null || true
+    stop_and_reap "$CLAUDE_CONTROL_PID"
   fi
   if [[ -n "$ENGINE_PID" ]]; then
-    kill "$ENGINE_PID" 2>/dev/null || true
-    wait "$ENGINE_PID" 2>/dev/null || true
+    stop_and_reap "$ENGINE_PID"
   fi
   if [[ -n "$SERVER_PID" ]]; then
-    kill "$SERVER_PID" 2>/dev/null || true
+    stop_process_tree "$SERVER_PID"
     wait "$SERVER_PID" 2>/dev/null || true
   fi
+  stop_processes_for_test_root
+  for artifact in "$SERVER_LOG" "$ENGINE_LOG" "$TEST_ROOT"/*.out; do
+    if [[ -f "$artifact" ]]; then
+      cp "$artifact" "$EVIDENCE_DIR/" 2>/dev/null || true
+    fi
+  done
+  echo "lifecycle evidence: $EVIDENCE_DIR"
   if [[ "${LONGHOUSE_KEEP_LIFECYCLE_SMOKE_ROOT:-0}" == "1" ]]; then
     echo "preserved lifecycle smoke root: $TEST_ROOT" >&2
   else
@@ -89,6 +129,12 @@ start_runtime_host() {
   for attempt in 1 2 3 4 5; do
     if [[ "${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}" != "0" ]]; then
       PORT="$LONGHOUSE_LIFECYCLE_SMOKE_PORT"
+      for _ in $(seq 1 1200); do
+        if "$PYTHON_BIN" -c 'import socket, sys; s=socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.close()' "$PORT" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 0.1
+      done
     else
       PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
     fi
@@ -102,12 +148,12 @@ start_runtime_host() {
       # than one that never refuses.
       AUTH_DISABLED=1 \
       LLM_DISABLED=1 \
-      LOG_LEVEL=WARNING \
+      LOG_LEVEL="${LONGHOUSE_LIFECYCLE_SMOKE_LOG_LEVEL:-WARNING}" \
       DATABASE_URL="sqlite:///$TEST_ROOT/longhouse.db" \
       JWT_SECRET="lifecycle-smoke-jwt-secret" \
       FERNET_SECRET="$FERNET" \
       INTERNAL_API_SECRET="lifecycle-smoke-internal-secret" \
-      uv run python -m zerg.cli.main serve --host 127.0.0.1 --port "$PORT" >"$SERVER_LOG" 2>&1
+      "$UV_BIN" run python -m zerg.cli.main serve --host 127.0.0.1 --port "$PORT" >"$SERVER_LOG" 2>&1
     ) &
     SERVER_PID=$!
 
@@ -118,18 +164,19 @@ start_runtime_host() {
       sleep 0.5
     done
 
-    kill "$SERVER_PID" 2>/dev/null || true
+    stop_process_tree "$SERVER_PID"
     wait "$SERVER_PID" 2>/dev/null || true
     SERVER_PID=""
     if [[ "${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}" != "0" ]]; then
-      break
+      echo "runtime host did not come up on port $PORT; retrying the same port" >&2
+    else
+      echo "runtime host did not come up on port $PORT; retrying on a new port" >&2
     fi
-    echo "runtime host did not come up on port $PORT; retrying on a new port" >&2
   done
   return 1
 }
 
-FERNET="$(cd "$ROOT_DIR/server" && uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+FERNET="$(cd "$ROOT_DIR/server" && "$UV_BIN" run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
 
 start_runtime_host || fail "Runtime Host never became healthy"
 echo "runtime host up on $BASE_URL"
@@ -161,10 +208,28 @@ PY
 
 register() {
   local provider="$1" session_id="${2:-}"
-  curl -fsS -X POST "$BASE_URL/api/sessions/managed-local/this-device" \
-    -H "X-Agents-Token: $DEVICE_TOKEN" \
-    -H 'content-type: application/json' \
-    -d "$(launch_payload "$provider" "$session_id")"
+  local response code body deadline=$((SECONDS + 15))
+  while ((SECONDS < deadline)); do
+    response="$(curl -sS -X POST "$BASE_URL/api/sessions/managed-local/this-device" \
+      -H "X-Agents-Token: $DEVICE_TOKEN" \
+      -H 'content-type: application/json' \
+      -d "$(launch_payload "$provider" "$session_id")" \
+      -w $'\n%{http_code}')"
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [[ "$code" == "200" ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    if [[ "$code" == "503" && "$body" == *"catalogd is unavailable"* ]]; then
+      sleep 0.25
+      continue
+    fi
+    printf '%s\n' "$body" >&2
+    return 1
+  done
+  printf '%s\n' "$body" >&2
+  return 1
 }
 
 json_field() {
@@ -198,6 +263,40 @@ wait_for_value() {
     sleep 0.2
   done
   fail "$description stayed '${value:-empty}', expected '$expected'"
+}
+
+wait_for_launch_terminal_state() {
+  local session_id="$1" timeout_secs="$2"
+  local deadline=$((SECONDS + timeout_secs)) value=""
+  while ((SECONDS < deadline)); do
+    value="$(launch_attempt_state "$session_id" 2>/dev/null || true)"
+    case "$value" in
+      adopted|failed|abandoned)
+        printf '%s' "$value"
+        return 0
+        ;;
+    esac
+    sleep 0.2
+  done
+  fail "Runtime Host launch outcome for $session_id stayed '${value:-empty}' without a terminal state"
+}
+
+retry_file_count() {
+  local directory="$1"
+  find "$directory" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+wait_for_retry_files_at_least() {
+  local description="$1" expected="$2" timeout_secs="$3" directory="$4"
+  local deadline=$((SECONDS + timeout_secs)) value=0
+  while ((SECONDS < deadline)); do
+    value="$(retry_file_count "$directory")"
+    if ((value >= expected)); then
+      return 0
+    fi
+    sleep 0.2
+  done
+  fail "$description stayed at '$value', expected at least '$expected'"
 }
 
 send_live() {
@@ -409,6 +508,37 @@ failed_launch_state="$(launch_attempt_state "$failed_session_id")"
 [[ "$failed_launch_state" == "failed" ]] \
   || fail "failed Cursor startup recorded $failed_launch_state instead of failed"
 echo "ok: provider startup failure aborts the registered launch"
+
+# A provider image that cannot exec after `create-chat` must fail before the
+# launcher records local readiness. This guards the exec-status pipe against
+# silently treating EOF as a successful provider handoff; a non-executable
+# file would fail earlier during binary resolution and would not exercise the
+# final provider exec.
+execfail_cursor_bin="$BIN_DIR/execfail-cursor-agent"
+cat >"$execfail_cursor_bin" <<'PY'
+#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:2] == ["create-chat"]:
+    print("00000000-0000-0000-0000-000000000001")
+    raise SystemExit(0)
+raise SystemExit(127)
+PY
+chmod 755 "$execfail_cursor_bin"
+nonexec_launch_out="$TEST_ROOT/cursor-nonexec.out"
+set +e
+run_launch_bounded "$nonexec_launch_out" 90 \
+  "$BIN_DIR/longhouse" cursor --verbose --cwd "$HOME_DIR" --cursor-bin "$execfail_cursor_bin"
+nonexec_launch_status=$?
+set -e
+[[ "$nonexec_launch_status" != "0" ]] || fail "Cursor final provider exec failure returned success"
+nonexec_retry_count=0
+if [[ -d "$HOME_DIR/.longhouse/agent/managed-local/registration-retries" ]]; then
+  nonexec_retry_count="$(find "$HOME_DIR/.longhouse/agent/managed-local/registration-retries" -name '*.json' -type f -print | wc -l | tr -d ' ')"
+fi
+[[ "$nonexec_retry_count" == "0" ]] \
+  || fail "Cursor final provider exec failure left a durable registration retry intent"
+echo "ok: provider exec failure aborts before local readiness"
 
 # The resume leg of coordination authority, per provider, against the real
 # server. This is the assertion the outage needed: `longhouse cursor --resume`
@@ -641,8 +771,9 @@ codex_out="$TEST_ROOT/codex-launch.out"
 grep -q 'Managed Codex ready' "$codex_out" || fail "Codex facade did not report readiness"
 codex_session_id="$(latest_launch_session_id)"
 [[ -n "$codex_session_id" ]] || fail "successful Codex launch did not record its session identity"
-[[ "$(launch_attempt_state "$codex_session_id")" == "adopted" ]] \
-  || fail "successful Codex launch was not adopted"
+codex_launch_state="$(launch_attempt_state "$codex_session_id")"
+[[ "$codex_launch_state" == "pending" || "$codex_launch_state" == "adopted" ]] \
+  || fail "successful Codex launch recorded unexpected state $codex_launch_state"
 "$BIN_DIR/longhouse" codex stop --session-id "$codex_session_id" \
   || fail "Codex launch could not be torn down through the real facade"
 echo "ok: longhouse codex launched and stopped against a WebSocket app-server"
@@ -775,8 +906,9 @@ opencode_out="$TEST_ROOT/opencode-launch.out"
 grep -q 'Managed OpenCode ready' "$opencode_out" || fail "OpenCode facade did not report readiness"
 opencode_session_id="$(latest_launch_session_id)"
 [[ -n "$opencode_session_id" ]] || fail "successful OpenCode launch did not record its session identity"
-[[ "$(launch_attempt_state "$opencode_session_id")" == "adopted" ]] \
-  || fail "successful OpenCode launch was not adopted"
+opencode_launch_state="$(launch_attempt_state "$opencode_session_id")"
+[[ "$opencode_launch_state" == "pending" || "$opencode_launch_state" == "adopted" ]] \
+  || fail "successful OpenCode launch recorded unexpected state $opencode_launch_state"
 "$BIN_DIR/longhouse" opencode stop --session-id "$opencode_session_id" \
   || fail "OpenCode launch could not be torn down through the real facade"
 echo "ok: longhouse opencode launched and stopped against an HTTP server"
@@ -862,6 +994,9 @@ for _ in $(seq 1 100); do
 done
 grep -q 'WebSocket /api/agents/control/ws.*accepted' "$SERVER_LOG" \
   || fail "Machine Agent control channel never connected"
+wait_for_value "Codex durable launch outcome" adopted 20 launch_attempt_state "$codex_session_id"
+wait_for_value "OpenCode durable launch outcome" adopted 20 launch_attempt_state "$opencode_session_id"
+echo "ok: Machine Agent reconciled launch outcomes persisted before it started"
 
 codex_send="$(send_live "$codex_control_session_id" 'CODEX_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through the Codex bridge"
@@ -942,5 +1077,144 @@ cursor_exit=$?
 set -e
 [[ "$cursor_exit" == "7" ]] || fail "provider exit code was $cursor_exit, expected 7"
 echo "ok: provider exit code propagates"
+
+# ---------------------------------------------------------------------------
+# 5. The Runtime Host can disappear before startup. Each managed provider must
+#    still reach its local provider path, retain a durable registration retry,
+#    and return a bounded degraded explanation. The provider executables here
+#    are protocol-faithful launch doubles; the installed-provider version and
+#    path checks belong to the release qualification lane below this smoke.
+# ---------------------------------------------------------------------------
+stop_process_tree "$SERVER_PID"
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+for _ in $(seq 1 50); do
+  if ! curl -fsS --max-time 0.2 -o /dev/null "$BASE_URL/api/health" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+curl -fsS --max-time 0.2 -o /dev/null "$BASE_URL/api/health" 2>/dev/null \
+  && fail "Runtime Host remained reachable after the outage transition"
+
+degraded_cursor_out="$TEST_ROOT/cursor-degraded.out"
+set +e
+run_launch_bounded "$degraded_cursor_out" 30 \
+  "$BIN_DIR/longhouse" cursor --url "$BASE_URL" --token "$DEVICE_TOKEN" \
+  --cwd "$HOME_DIR" --cursor-bin "$BIN_DIR/cursor-agent"
+degraded_cursor_status=$?
+set -e
+[[ "$degraded_cursor_status" == "0" ]] \
+  || fail "Cursor did not return from a Runtime Host outage (status $degraded_cursor_status)"
+grep -q 'CURSOR_LIFECYCLE_PTY_OK' "$degraded_cursor_out" \
+  || fail "Cursor provider path did not start during a Runtime Host outage"
+grep -q 'degraded Helm mode' "$degraded_cursor_out" \
+  || { cat "$degraded_cursor_out" >&2; fail "Cursor outage launch did not explain degraded Helm mode"; }
+echo "ok: Cursor starts locally with durable registration recovery while Runtime Host is unavailable"
+
+degraded_claude_out="$TEST_ROOT/claude-degraded.out"
+set +e
+run_launch_bounded "$degraded_claude_out" 30 \
+  "$BIN_DIR/longhouse" claude --url "$BASE_URL" --token "$DEVICE_TOKEN" \
+  --cwd "$HOME_DIR" --claude-bin "$BIN_DIR/claude"
+degraded_claude_status=$?
+set -e
+[[ "$degraded_claude_status" == "0" ]] \
+  || fail "Claude did not return from a Runtime Host outage (status $degraded_claude_status)"
+grep -q 'CLAUDE_LIFECYCLE_PTY_OK' "$degraded_claude_out" \
+  || fail "Claude provider path did not start during a Runtime Host outage"
+grep -q 'degraded Helm mode' "$degraded_claude_out" \
+  || { cat "$degraded_claude_out" >&2; fail "Claude outage launch did not explain degraded Helm mode"; }
+echo "ok: Claude starts locally with durable registration recovery while Runtime Host is unavailable"
+
+degraded_codex_out="$TEST_ROOT/codex-degraded.out"
+set +e
+run_launch_bounded "$degraded_codex_out" 30 \
+  "$BIN_DIR/longhouse" codex --url "$BASE_URL" --token "$DEVICE_TOKEN" \
+  --no-attach --cwd "$HOME_DIR" --codex-bin "$BIN_DIR/codex"
+degraded_codex_status=$?
+set -e
+[[ "$degraded_codex_status" == "0" ]] \
+  || { cat "$degraded_codex_out" >&2; fail "Codex did not return from a Runtime Host outage (status $degraded_codex_status)"; }
+grep -q 'Managed Codex started in degraded Helm mode' "$degraded_codex_out" \
+  || fail "Codex provider path did not report degraded startup during a Runtime Host outage"
+if grep -q 'Managed Codex ready' "$degraded_codex_out"; then
+  fail "Codex outage launch claimed hosted readiness before registration recovered"
+fi
+grep -q 'degraded Helm mode' "$degraded_codex_out" \
+  || { cat "$degraded_codex_out" >&2; fail "Codex outage launch did not explain degraded Helm mode"; }
+echo "ok: Codex starts locally with durable registration recovery while Runtime Host is unavailable"
+
+degraded_opencode_out="$TEST_ROOT/opencode-degraded.out"
+set +e
+run_launch_bounded "$degraded_opencode_out" 30 \
+  "$BIN_DIR/longhouse" opencode --url "$BASE_URL" --token "$DEVICE_TOKEN" \
+  --no-attach --cwd "$HOME_DIR" --opencode-bin "$BIN_DIR/opencode"
+degraded_opencode_status=$?
+set -e
+[[ "$degraded_opencode_status" == "0" ]] \
+  || { cat "$degraded_opencode_out" >&2; fail "OpenCode did not return from a Runtime Host outage (status $degraded_opencode_status)"; }
+grep -q 'Managed OpenCode started in degraded Helm mode' "$degraded_opencode_out" \
+  || fail "OpenCode provider path did not report degraded startup during a Runtime Host outage"
+if grep -q 'Managed OpenCode ready' "$degraded_opencode_out"; then
+  fail "OpenCode outage launch claimed hosted readiness before registration recovered"
+fi
+grep -q 'degraded Helm mode' "$degraded_opencode_out" \
+  || { cat "$degraded_opencode_out" >&2; fail "OpenCode outage launch did not explain degraded Helm mode"; }
+echo "ok: OpenCode starts locally with durable registration recovery while Runtime Host is unavailable"
+
+registration_retry_dir="$HOME_DIR/.longhouse/agent/managed-local/registration-retries"
+wait_for_retry_files_at_least "durable registration retry intents" 4 10 "$registration_retry_dir"
+retry_session_ids_file="$TEST_ROOT/registration-retry-session-ids.txt"
+python3 - "$registration_retry_dir" >"$retry_session_ids_file" <<'PY'
+import json
+import pathlib
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+for path in sorted(directory.glob("*.json")):
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        continue
+    session_id = payload.get("expected_session_id")
+    if session_id:
+        print(session_id)
+PY
+retry_session_count="$(wc -l <"$retry_session_ids_file" | tr -d ' ')"
+[[ "$retry_session_count" == "4" ]] \
+  || fail "expected four recoverable launch identities, found $retry_session_count"
+echo "ok: outage launches persisted durable registration retry intents"
+
+# Bring the same Runtime Host identity back. The Machine Agent is still alive,
+# so this proves the daemon's owner-local queues converge without relaunching a
+# provider or asking the user to click Repair.
+export LONGHOUSE_LIFECYCLE_SMOKE_PORT="$PORT"
+start_runtime_host || fail "Runtime Host did not recover on its original port"
+echo "runtime host recovered on $BASE_URL"
+wait_for_value "recovered Runtime Host" "200" 20 curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/health"
+wait_for_value "registration retry convergence" "0" 60 retry_file_count "$registration_retry_dir"
+recovered_adopted=0
+recovered_failed=0
+while IFS= read -r retry_session_id; do
+  [[ -n "$retry_session_id" ]] || continue
+  retry_outcome="$(wait_for_launch_terminal_state "$retry_session_id" 30)"
+  case "$retry_outcome" in
+    adopted)
+      recovered_adopted=$((recovered_adopted + 1))
+      ;;
+    failed)
+      recovered_failed=$((recovered_failed + 1))
+      ;;
+    abandoned)
+      fail "Runtime Host abandoned recovered launch $retry_session_id"
+      ;;
+  esac
+  echo "ok: Runtime Host recorded $retry_outcome for recovered launch $retry_session_id"
+done <"$retry_session_ids_file"
+((recovered_adopted > 0)) \
+  || fail "Runtime Host recorded no adopted outcome for the recovered launch set"
+echo "ok: recovered launch set included $recovered_adopted adopted and $recovered_failed failed provider outcomes"
+echo "ok: durable managed launch recovery converged after Runtime Host restart"
 
 echo "managed launch lifecycle smoke passed"

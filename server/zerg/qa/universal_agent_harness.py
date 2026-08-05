@@ -4355,6 +4355,11 @@ def _action_coverage_policy(action_id: str) -> str:
 def _scenario_coverage_status(*, action_id: str, results: Iterable[ScenarioResult]) -> str:
     result_list = list(results)
     statuses = [result.status for result in result_list]
+    if action_id == "answer_pause_request" and any(_scenario_result_proves_action(action_id, result) for result in result_list):
+        # The action contract is the hermetic Longhouse answer dispatch. The
+        # scenario's separate provider-held delivery gate remains visible in
+        # its blocked scenario rollup and does not erase this narrower proof.
+        return STATUS_PASS
     if _action_coverage_policy(action_id) == "any_mapped_scenario" and any(
         _scenario_result_proves_action(action_id, result) for result in result_list
     ):
@@ -4363,9 +4368,11 @@ def _scenario_coverage_status(*, action_id: str, results: Iterable[ScenarioResul
 
 
 def _scenario_result_proves_action(action_id: str, result: ScenarioResult) -> bool:
+    data = result.data if isinstance(result.data, Mapping) else {}
+    if action_id == "answer_pause_request":
+        return _operation_status(data, "answer_pause_request") == STATUS_PASS
     if result.status != STATUS_PASS:
         return False
-    data = result.data if isinstance(result.data, Mapping) else {}
     if action_id == "send_message":
         return _operation_status(data, "send_input") == STATUS_PASS
     if action_id == "session_identity":
@@ -5507,6 +5514,20 @@ def scenario_result(
     if status not in STATUSES:
         status = STATUS_FAIL
     data = {key: value for key, value in payload.items() if key not in {"status", "message", "failure_code"}}
+    # This scenario proves Longhouse's local resolution and dispatch path
+    # hermetically, but it also carries a stronger provider-held delivery
+    # assertion. Keep the local operation green while promoting the scenario
+    # rollup to blocked when that live assertion is unproven.
+    if status == STATUS_PASS and scenario == "answer_pause_request":
+        operation_evidence = data.get("operation_evidence")
+        live_delivery = operation_evidence.get("live_answer_delivery") if isinstance(operation_evidence, Mapping) else None
+        if isinstance(live_delivery, Mapping) and live_delivery.get("status") == STATUS_BLOCKED:
+            status = STATUS_BLOCKED
+            payload = dict(payload)
+            payload["failure_code"] = str(live_delivery.get("failure_code") or "answer_pause_provider_delivery_unproven")
+            payload["message"] = (
+                "Longhouse resolved and dispatched the pause answer, but provider-held " "live answer delivery remains unproven."
+            )
     if status == STATUS_NOT_APPLICABLE:
         # A settled fact has no failure to report. Leaving a failure code behind
         # would keep the row reading as a defect in every downstream rollup.
@@ -7022,6 +7043,7 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": ARTIFACT_KIND,
         "generated_at": utc_now(),
+        "harness": harness_provenance(),
         "providers": list(options.providers),
         "scenarios": list(options.scenarios),
         "evidence_root": str(options.evidence_root),
@@ -7109,6 +7131,46 @@ def build_parser() -> argparse.ArgumentParser:
 def default_evidence_root() -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return default_repo_root() / ".build/canaries/universal-agent-harness" / timestamp
+
+
+def harness_provenance() -> dict[str, Any]:
+    """Bind the harness artifact to the exact source checkout that ran it."""
+
+    path = Path(__file__).resolve()
+    repository = default_repo_root().resolve()
+
+    def run_git(*args: str) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(repository), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    revision = run_git("rev-parse", "HEAD")
+    status = run_git("status", "--porcelain", "--untracked-files=all")
+    file_status = run_git(
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        str(path.relative_to(repository)),
+    )
+    repository_git_sha = revision.stdout.strip() if revision and revision.returncode == 0 else None
+    repository_dirty = bool(status.stdout.strip()) if status and status.returncode == 0 else None
+    return {
+        "path": str(path),
+        "repository": str(repository),
+        "git_sha": repository_git_sha,
+        "repository_git_sha": repository_git_sha,
+        "repository_dirty": repository_dirty,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "dirty": repository_dirty,
+        "harness_file_dirty": bool(file_status.stdout.strip()) if file_status and file_status.returncode == 0 else None,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

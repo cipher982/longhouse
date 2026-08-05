@@ -290,6 +290,14 @@ class CatalogDaemon:
             return await self._upsert_apns_live_activity(request)
         if request.method == "notification.apns.live_activity.end.v2":
             return await self._end_apns_live_activity(request)
+        if request.method == "notification.apns.attention.pending.list.v2":
+            return await self._list_pending_apns_attention(request)
+        if request.method == "notification.apns.attention.validate.v2":
+            return await self._validate_apns_attention(request)
+        if request.method == "notification.apns.attention.rollback.v2":
+            return await self._rollback_apns_attention(request)
+        if request.method == "notification.apns.attention.commit.v2":
+            return await self._commit_apns_attention(request)
         if request.method == "directed_input.create.v2":
             return await self._create_directed_input(request)
         if request.method == "directed_input.link_receipt.v2":
@@ -1076,6 +1084,115 @@ class CatalogDaemon:
             owner_id=owner_id,
             activity_id=activity_id,
             ended_at=ended_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_pending_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"observed_at", "limit"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "notification.apns.attention.pending.list.v2 has invalid parameters",
+            )
+        try:
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+            limit = _bounded_count(request.params["limit"], "limit")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if limit > 100:
+            return self._error(request, "invalid_request", "limit must be at most 100")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_pending_apns_attention_actions,
+            observed_at=observed_at,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _validate_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "action", "state", "notification_event_id", "attention_push_at"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "notification.apns.attention.validate.v2 has invalid parameters",
+            )
+        try:
+            session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
+            action = _bounded_text(request.params["action"], "action", 32)
+            state = _bounded_text(request.params["state"], "state", 32)
+            notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
+            attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if action not in {"attention", "resolution"} or state != "stalled":
+            return self._error(request, "invalid_request", "attention validation action or state is invalid")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.validate_apns_attention,
+            session_id=session_id,
+            action=action,
+            state=state,
+            notification_event_id=notification_event_id,
+            attention_push_at=attention_push_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _rollback_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "action", "state", "previous_state", "notification_event_id", "occurred_at", "attention_push_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "notification.apns.attention.rollback.v2 has invalid parameters")
+        try:
+            session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
+            action = _bounded_text(request.params["action"], "action", 32)
+            state = _bounded_text(request.params["state"], "state", 32)
+            previous_state = _bounded_text_allow_empty(request.params["previous_state"], "previous_state", 64)
+            notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
+            occurred_at = _parse_datetime(request.params["occurred_at"], "occurred_at")
+            attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if action not in {"attention", "resolution"} or state != "stalled":
+            return self._error(request, "invalid_request", "attention rollback action or state is invalid")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.rollback_apns_attention,
+            session_id=session_id,
+            action=action,
+            state=state,
+            previous_state=previous_state,
+            notification_event_id=notification_event_id,
+            occurred_at=occurred_at,
+            attention_push_at=attention_push_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _commit_apns_attention(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "action", "state", "previous_state", "notification_event_id", "occurred_at", "attention_push_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "notification.apns.attention.commit.v2 has invalid parameters")
+        try:
+            session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
+            action = _bounded_text(request.params["action"], "action", 32)
+            state = _bounded_text(request.params["state"], "state", 32)
+            _bounded_text_allow_empty(request.params["previous_state"], "previous_state", 64)
+            notification_event_id = str(_canonical_uuid(request.params["notification_event_id"], "notification_event_id"))
+            occurred_at = _parse_datetime(request.params["occurred_at"], "occurred_at")
+            attention_push_at = _parse_datetime(request.params["attention_push_at"], "attention_push_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if action not in {"attention", "resolution"} or state != "stalled":
+            return self._error(request, "invalid_request", "attention commit action or state is invalid")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.commit_apns_attention,
+            session_id=session_id,
+            action=action,
+            state=state,
+            notification_event_id=notification_event_id,
+            occurred_at=occurred_at,
+            attention_push_at=attention_push_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
@@ -3417,6 +3534,14 @@ def _validate_hash_batch(value: object, *, field: str) -> tuple[str, ...]:
 def _bounded_text(value: object, field: str, maximum_bytes: int) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
+    if len(value.encode("utf-8")) > maximum_bytes:
+        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
+    return value
+
+
+def _bounded_text_allow_empty(value: object, field: str, maximum_bytes: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
     if len(value.encode("utf-8")) > maximum_bytes:
         raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
     return value

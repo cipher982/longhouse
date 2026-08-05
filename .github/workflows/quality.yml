@@ -17,7 +17,9 @@ on:
 
 jobs:
   build-frontend:
-    runs-on: cube
+    # Only protected-main code may execute on cube's privileged DinD lanes.
+    # Pull requests and branch pushes stay on GitHub-hosted infrastructure.
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     name: "🏗️ Build frontend once"
 
     steps:
@@ -73,7 +75,7 @@ jobs:
         working-directory: web
 
   bundle-size:
-    runs-on: cube
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     name: "📦 Bundle Size"
     needs: build-frontend
 
@@ -95,7 +97,7 @@ jobs:
         run: cd web && node ./scripts/check-bundle-size.mjs
 
   image-size:
-    runs-on: cube
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     name: "🖼️ Image Size Check"
 
     steps:

@@ -7650,33 +7650,18 @@ mod tests {
         )
         .unwrap()
         .expect("prepared media ship item");
-        let (media, source_line_ref) = match &prepared.actions[0] {
+        let media = match &prepared.actions[0] {
             PreparedAction::Ship(item) => {
                 assert_eq!(item.media_objects.len(), 1);
-                assert_eq!(item.source_line_refs.len(), 1);
-                (
-                    item.media_objects[0].clone(),
-                    item.source_line_refs[0].clone(),
-                )
+                item.media_objects[0].clone()
             }
             _ => panic!("expected ship action"),
         };
-        let source_claim_missing = json!({
-            "present": [],
-            "missing": [{
-                "source_path": path.to_string_lossy(),
-                "source_offset": source_line_ref.source_offset,
-                "line_hash": source_line_ref.line_hash,
-            }],
-            "rejected": [],
-        })
-        .to_string();
         let claim_body = format!(
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
             media.sha256
         );
         let (url, captured, handle) = spawn_http_sequence_server(&[
-            ("200 OK", &source_claim_missing),
             ("200 OK", &claim_body),
             ("200 OK", "{}"),
             ("200 OK", "{}"),
@@ -7691,16 +7676,16 @@ mod tests {
         assert!(outcome.fully_processed);
 
         let bodies = captured.lock().unwrap();
-        assert_eq!(bodies.len(), 4);
-        let claim: serde_json::Value = serde_json::from_slice(&bodies[1]).unwrap();
+        assert_eq!(bodies.len(), 3);
+        let claim: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
         assert_eq!(claim["items"][0]["sha256"], media.sha256);
         assert_eq!(claim["items"][0]["mime_type"], "image/png");
         assert_eq!(claim["items"][0]["source_offset"], 0);
         assert_eq!(claim["items"][0]["provider"], "codex");
-        assert_eq!(bodies[2], image_bytes);
-        assert_eq!(bodies[2], media.bytes);
+        assert_eq!(bodies[1], image_bytes);
+        assert_eq!(bodies[1], media.bytes);
 
-        let mut decoder = GzDecoder::new(&bodies[3][..]);
+        let mut decoder = GzDecoder::new(&bodies[2][..]);
         let mut ingest_json = String::new();
         decoder.read_to_string(&mut ingest_json).unwrap();
         assert!(ingest_json.contains("longhouse_media_ref:sha256="));
@@ -7788,14 +7773,11 @@ mod tests {
         )
         .unwrap()
         .expect("prepared media ship item");
-        let (source_line_ref, media) = match &prepared.actions[0] {
+        let media = match &prepared.actions[0] {
             PreparedAction::Ship(item) => {
                 assert_eq!(item.source_line_refs.len(), 1);
                 assert_eq!(item.media_objects.len(), 1);
-                (
-                    item.source_line_refs[0].clone(),
-                    item.media_objects[0].clone(),
-                )
+                item.media_objects[0].clone()
             }
             _ => panic!("expected ship action"),
         };
@@ -7804,16 +7786,6 @@ mod tests {
         spool
             .enqueue("codex", &path_str, 0, end_offset, Some(session_id))
             .unwrap();
-        let claim_body = json!({
-            "present": [{
-                "source_path": path_str,
-                "source_offset": source_line_ref.source_offset,
-                "line_hash": source_line_ref.line_hash,
-            }],
-            "missing": [],
-            "rejected": [],
-        })
-        .to_string();
         let media_claim_body = json!({
             "needed": [],
             "present": [media.sha256],
@@ -7821,7 +7793,7 @@ mod tests {
         })
         .to_string();
         let (url, captured, handle) =
-            spawn_http_sequence_server(&[("200 OK", &claim_body), ("200 OK", &media_claim_body)]);
+            spawn_http_sequence_server(&[("200 OK", &media_claim_body), ("200 OK", "{}")]);
         let client = make_test_client(&url);
 
         let replay = rt
@@ -7843,7 +7815,7 @@ mod tests {
         assert_eq!(captured.lock().unwrap().len(), 2);
         assert_eq!(replay.resolved, 1);
         assert_eq!(replay.failed, 0);
-        assert_eq!(replay.events_shipped, 0);
+        assert_eq!(replay.events_shipped, 1);
         assert_eq!(spool.pending_count().unwrap(), 0);
         assert_eq!(FileState::new(&conn).get_offset(&path_str).unwrap(), 0);
     }
@@ -7872,24 +7844,11 @@ mod tests {
         )
         .unwrap()
         .expect("prepared media ship item");
-        let (source_line_ref, media) = match &prepared.actions[0] {
-            PreparedAction::Ship(item) => (
-                item.source_line_refs[0].clone(),
-                item.media_objects[0].clone(),
-            ),
+        let media = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => item.media_objects[0].clone(),
             _ => panic!("expected ship action"),
         };
         let end_offset = prepared.new_offset;
-        let claim_body = json!({
-            "present": [{
-                "source_path": path_str,
-                "source_offset": source_line_ref.source_offset,
-                "line_hash": source_line_ref.line_hash,
-            }],
-            "missing": [],
-            "rejected": [],
-        })
-        .to_string();
         let media_claim_body = json!({
             "needed": [],
             "present": [media.sha256],
@@ -7897,7 +7856,7 @@ mod tests {
         })
         .to_string();
         let (url, captured, handle) =
-            spawn_http_sequence_server(&[("200 OK", &claim_body), ("200 OK", &media_claim_body)]);
+            spawn_http_sequence_server(&[("200 OK", &media_claim_body), ("200 OK", "{}")]);
         let client = make_test_client(&url);
 
         let outcome = rt
@@ -7906,7 +7865,7 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(captured.lock().unwrap().len(), 2);
-        assert_eq!(outcome.events_shipped, 0);
+        assert_eq!(outcome.events_shipped, 1);
         assert!(outcome.fully_processed);
         assert_eq!(
             FileState::new(&conn).get_offset(&path_str).unwrap(),
@@ -7915,7 +7874,7 @@ mod tests {
     }
 
     #[test]
-    fn test_archive_replay_missing_or_unavailable_source_line_claim_falls_through() {
+    fn test_archive_replay_media_claim_failure_stops_before_ingest() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
@@ -7938,11 +7897,8 @@ mod tests {
         )
         .unwrap()
         .expect("prepared media ship item");
-        let (source_line_ref, media) = match &prepared.actions[0] {
-            PreparedAction::Ship(item) => (
-                item.source_line_refs[0].clone(),
-                item.media_objects[0].clone(),
-            ),
+        let media = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => item.media_objects[0].clone(),
             _ => panic!("expected ship action"),
         };
         let end_offset = prepared.new_offset;
@@ -7950,25 +7906,17 @@ mod tests {
         spool
             .enqueue("codex", &path_str, 0, end_offset, Some(session_id))
             .unwrap();
-        let source_claim_missing = json!({
+        let media_claim_rejected = json!({
+            "needed": [],
             "present": [],
-            "missing": [{
-                "source_path": path_str,
-                "source_offset": source_line_ref.source_offset,
-                "line_hash": source_line_ref.line_hash,
+            "rejected": [{
+                "sha256": media.sha256,
+                "reason": "source unavailable",
             }],
-            "rejected": [],
         })
         .to_string();
-        let media_claim_present = format!(
-            r#"{{"needed":[],"present":["{}"],"rejected":[]}}"#,
-            media.sha256
-        );
-        let (url, captured, handle) = spawn_http_sequence_server(&[
-            ("200 OK", &source_claim_missing),
-            ("200 OK", &media_claim_present),
-            ("200 OK", "{}"),
-        ]);
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &media_claim_rejected)]);
         let client = make_test_client(&url);
 
         let replay = rt
@@ -7987,71 +7935,11 @@ mod tests {
             .unwrap();
         handle.join().unwrap();
 
-        assert_eq!(captured.lock().unwrap().len(), 3);
-        assert_eq!(replay.resolved, 1);
-        assert_eq!(replay.failed, 0);
-        assert_eq!(replay.events_shipped, 1);
-        assert_eq!(spool.pending_count().unwrap(), 0);
-
-        let fallback_session_id = "019c638d-0000-0000-0000-000000000561";
-        let path_fallback = dir.path().join(format!("{fallback_session_id}.jsonl"));
-        std::fs::write(&path_fallback, format!("{line}\n")).unwrap();
-        let fallback_path_str = path_fallback.to_string_lossy().to_string();
-        let fallback_prepared = prepare_file_batches(
-            &path_fallback,
-            "codex",
-            CompressionAlgo::Gzip,
-            &conn,
-            512 * 1024,
-            None,
-        )
-        .unwrap()
-        .expect("prepared fallback media ship item");
-        let fallback_end_offset = fallback_prepared.new_offset;
-        spool
-            .enqueue(
-                "codex",
-                &fallback_path_str,
-                0,
-                fallback_end_offset,
-                Some(fallback_session_id),
-            )
-            .unwrap();
-        let fallback_media = match &fallback_prepared.actions[0] {
-            PreparedAction::Ship(item) => item.media_objects[0].clone(),
-            _ => panic!("expected ship action"),
-        };
-        let fallback_media_claim_present = format!(
-            r#"{{"needed":[],"present":["{}"],"rejected":[]}}"#,
-            fallback_media.sha256
-        );
-        let (fallback_url, fallback_captured, fallback_handle) = spawn_http_sequence_server(&[
-            ("404 Not Found", r#"{"detail":"not found"}"#),
-            ("200 OK", &fallback_media_claim_present),
-            ("200 OK", "{}"),
-        ]);
-        let fallback_client = make_test_client(&fallback_url);
-
-        let fallback_replay = rt
-            .block_on(
-                replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
-                    &conn,
-                    &fallback_client,
-                    CompressionAlgo::Gzip,
-                    &path_fallback,
-                    10,
-                    512 * 1024,
-                    None,
-                    None,
-                ),
-            )
-            .unwrap();
-        fallback_handle.join().unwrap();
-
-        assert_eq!(fallback_captured.lock().unwrap().len(), 3);
-        assert_eq!(fallback_replay.resolved, 1);
-        assert_eq!(fallback_replay.failed, 0);
-        assert_eq!(fallback_replay.events_shipped, 1);
+        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert_eq!(replay.resolved, 0);
+        assert_eq!(replay.failed, 1);
+        assert_eq!(replay.events_shipped, 0);
+        assert_eq!(spool.pending_count().unwrap(), 1);
     }
 
     #[test]
@@ -8082,18 +7970,7 @@ mod tests {
             PreparedAction::Ship(item) => item.media_objects[0].clone(),
             _ => panic!("expected ship action"),
         };
-        let source_line = match &prepared.actions[0] {
-            PreparedAction::Ship(item) => item.source_line_refs[0].clone(),
-            _ => panic!("expected ship action"),
-        };
         let end_offset = prepared.new_offset;
-        let source_line_body = format!(
-            r#"{{"proof_version":"{}","present":[],"missing":[{{"source_path":"{}","source_offset":{},"line_hash":"{}"}}],"rejected":[]}}"#,
-            OPENCODE_DURABILITY_PROOF_VERSION,
-            path_str,
-            source_line.source_offset,
-            source_line.line_hash
-        );
         let claim_body = format!(
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
             media.sha256
@@ -8104,7 +7981,6 @@ mod tests {
             .unwrap();
         let entry_id = spool.pending_entries_for_path(&path_str, 1).unwrap()[0].id;
         let (url, captured, handle) = spawn_http_sequence_server(&[
-            ("200 OK", &source_line_body),
             ("200 OK", &claim_body),
             ("500 Internal Server Error", "upload down"),
         ]);
@@ -8126,7 +8002,7 @@ mod tests {
             .unwrap();
         handle.join().unwrap();
 
-        assert_eq!(captured.lock().unwrap().len(), 3);
+        assert_eq!(captured.lock().unwrap().len(), 2);
         assert_eq!(replay.resolved, 0);
         assert_eq!(replay.failed, 1);
         assert_eq!(spool.pending_count().unwrap(), 1);

@@ -28,7 +28,7 @@ concurrency:
 jobs:
   perf-proof:
     name: "Perf proof artifact"
-    runs-on: cube
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     if: ${{ github.repository == 'cipher982/longhouse' }}
     env:

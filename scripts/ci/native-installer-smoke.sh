@@ -69,6 +69,7 @@ installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$installed" ]]
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" local-health --fast --json >/dev/null
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" shipping inspect --json >/dev/null
 if [[ "$REMOTE_RELEASE" == "1" ]]; then
   identity="$(HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" build-identity --json)"
   LONGHOUSE_SMOKE_IDENTITY="$identity" LONGHOUSE_SMOKE_EXPECTED_COMMIT="$EXPECTED_COMMIT" LONGHOUSE_SMOKE_EXPECTED_VERSION="$EXPECTED_VERSION" \

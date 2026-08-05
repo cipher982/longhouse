@@ -286,6 +286,7 @@ async def test_machine_health_read_is_owner_scoped_latest_and_privacy_bounded(da
                         {
                             "archive_backlog": {"padding": "x" * (200 * 1024)},
                             "history_import": {"state": "unavailable"},
+                            "managed_launch_recovery": {"active_count": 1, "exhausted_count": 2},
                             "ship_attempts_10m": 4,
                             "private_source_path": "/private/source.jsonl",
                         }
@@ -322,11 +323,64 @@ async def test_machine_health_read_is_owner_scoped_latest_and_privacy_bounded(da
         assert len(heartbeat["raw_json"].encode("utf-8")) <= 32 * 1024
         assert projected_raw == {
             "history_import": {"state": "unavailable"},
+            "managed_launch_recovery": {"active_count": 1, "exhausted_count": 2},
             "ship_attempts_10m": 4,
         }
     finally:
         await client.close()
         await daemon.close()
+
+
+def test_machine_health_projection_preserves_critical_evidence_after_size_fallback():
+    row = _heartbeat(
+        device_id="cinder",
+        received_at=datetime.now(UTC),
+        digest="digest",
+    )
+    row["raw_json"] = json.dumps(
+        {
+            "archive_backlog": {"padding": "x" * (200 * 1024)},
+            "storage_v2_outbox": {
+                "pending_count": "giant-integer-placeholder",
+                "blocked_source_count": 2,
+                "unresolved_blocked_source_count": 1,
+                "error": "source conflict" * 10_000,
+            },
+            "managed_launch_recovery": {
+                "active_count": 1,
+                "exhausted_count": 2,
+                "scan_error": False,
+            },
+        }
+    ).replace('"giant-integer-placeholder"', "1" + "0" * 5000)
+    projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
+
+    assert projected["storage_v2_outbox"]["blocked_source_count"] == 2
+    assert projected["storage_v2_outbox"]["unresolved_blocked_source_count"] == 1
+    assert "pending_count" not in projected["storage_v2_outbox"]
+    assert len(projected["storage_v2_outbox"]["error"]) <= 1024
+    assert projected["managed_launch_recovery"] == {
+        "active_count": 1,
+        "exhausted_count": 2,
+        "scan_error": False,
+    }
+
+
+def test_machine_health_projection_sanitizes_nonfinite_json_numbers():
+    row = _heartbeat(
+        device_id="cinder",
+        received_at=datetime.now(UTC),
+        digest="digest",
+    )
+    row["raw_json"] = '{"storage_v2_outbox":{"pending_bytes":1e999,"blocked_bytes":NaN,"blocked_source_count":2}}'
+
+    projected = json.loads(catalog_store._machine_health_heartbeat_dto(row)["raw_json"])
+
+    assert projected["storage_v2_outbox"] == {
+        "blocked_bytes": None,
+        "blocked_source_count": 2,
+        "pending_bytes": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -408,11 +462,7 @@ async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(dae
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
         stamps = (
-            connection.execute(
-                LiveHeartbeatStamp.__table__.select().order_by(
-                    LiveHeartbeatStamp.device_id, LiveHeartbeatStamp.received_at
-                )
-            )
+            connection.execute(LiveHeartbeatStamp.__table__.select().order_by(LiveHeartbeatStamp.device_id, LiveHeartbeatStamp.received_at))
             .mappings()
             .all()
         )
@@ -425,13 +475,8 @@ async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(dae
         current_stamp = next(row for row in stamps if row["sessions_digest"] == "new-digest")
         assert len(current_stamp["request_sha256"]) == 64
         assert json.loads(current_stamp["catalog_result_json"])["commit_seq"] == "1"
-        leases = {
-            row["session_id"]: row["state"]
-            for row in connection.execute(LiveControlLease.__table__.select()).mappings()
-        }
-        sessions = {
-            row["session_id"]: row["state"] for row in connection.execute(LiveSession.__table__.select()).mappings()
-        }
+        leases = {row["session_id"]: row["state"] for row in connection.execute(LiveControlLease.__table__.select()).mappings()}
+        sessions = {row["session_id"]: row["state"] for row in connection.execute(LiveSession.__table__.select()).mappings()}
         assert leases == {current_id: "attached", missing_id: "missing"}
         assert sessions == {current_id: "attached", missing_id: "missing"}
     engine.dispose()

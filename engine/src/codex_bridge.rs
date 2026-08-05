@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -383,6 +383,7 @@ pub struct BridgeStartSummary {
     pub state_file: String,
     pub log_file: String,
     pub pid: u32,
+    pub process_start_time: Option<String>,
     pub ws_url: String,
     /// None until a thread exists, either from TUI attach or detached-UI `thread/start`.
     pub thread_id: Option<String>,
@@ -498,8 +499,13 @@ struct CodexRuntimeTracker {
     active_turn_started_at: Option<Instant>,
     last_provider_progress_at: Option<Instant>,
     stall_episode: Option<StallEpisode>,
+    stall_notification_pending: bool,
+    last_process_identity_match: ProcessIdentityMatch,
+    last_app_server_pid: Option<u32>,
+    last_app_server_pgid: Option<i32>,
     last_keepalive_at: Option<Instant>,
     last_rollout_len: Option<u64>,
+    last_rollout_growth_at: Option<Instant>,
     attention_state: Option<CodexAttentionState>,
     active_items: BTreeMap<String, ActiveCodexItem>,
     next_item_sequence: u64,
@@ -511,6 +517,24 @@ enum StallTrigger {
     StoppedProcess,
     /// Silence long enough to outlast any legitimate quiet command.
     ProlongedSilence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ProcessIdentityMatch {
+    Verified,
+    Mismatch,
+    #[default]
+    Unknown,
+}
+
+impl ProcessIdentityMatch {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Mismatch => "mismatch",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl StallTrigger {
@@ -530,6 +554,9 @@ struct StallEpisode {
     oldest_item: Option<ActiveCodexItem>,
     oldest_item_id: Option<String>,
     stopped_process: Option<StoppedProcessFact>,
+    process_identity_match: ProcessIdentityMatch,
+    app_server_pid: Option<u32>,
+    app_server_pgid: Option<i32>,
 }
 
 /// An owned subprocess found stopped or zombied while a command was in flight.
@@ -544,6 +571,12 @@ struct StoppedProcessFact {
     stat: String,
     command: String,
     matched_by: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoppedProcessProbe {
+    process_identity_match: ProcessIdentityMatch,
+    stopped_process: Option<StoppedProcessFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -668,8 +701,7 @@ const TERMINAL_REASON_BRIDGE_STOP: &str = "bridge_stop";
 const TERMINAL_REASON_USER_CLOSED: &str = "user_closed";
 const TERMINAL_REASON_PROVIDER_EXIT: &str = "provider_exit";
 const TERMINAL_REASON_PROCESS_GONE: &str = "process_gone";
-const TERMINAL_REASON_OWNER_GONE: &str =
-    crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE;
+const TERMINAL_REASON_OWNER_GONE: &str = crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE;
 const TERMINAL_REASON_PROVIDER_SIGNAL: &str = "provider_signal";
 const TERMINAL_REASON_UNKNOWN: &str = "unknown";
 const FAILURE_PROVIDER_TRANSPORT_LOST: &str = "provider_transport_lost";
@@ -1092,6 +1124,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
                 state_file: paths.state_file.display().to_string(),
                 log_file: paths.log_file.display().to_string(),
                 pid: state.pid,
+                process_start_time: state.bridge_process_start_time.clone(),
                 ws_url,
                 thread_id: state.thread_id.clone(),
                 thread_path: state.thread_path,
@@ -1116,8 +1149,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // Capture the wrapper's start time now, while it is certainly alive. Pids
     // are recycled; without this a later check could mistake an unrelated
     // process for a live owner and keep debris running forever.
-    let owner_process_start_time =
-        crate::turn_claims::process_start_time_for_pid(config.owner_pid);
+    let owner_process_start_time = crate::turn_claims::process_start_time_for_pid(config.owner_pid);
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
@@ -2311,12 +2343,8 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
                 "bridge state file is missing for session {}; attempting IPC stop via existing socket",
                 config.session_id
             );
-            return stop_via_ipc(
-                &sock_path,
-                &terminal_reason,
-                terminal_reason_raw.as_deref(),
-            )
-            .await;
+            return stop_via_ipc(&sock_path, &terminal_reason, terminal_reason_raw.as_deref())
+                .await;
         }
         bail!(
             "managed Codex session {} has no bridge state or live IPC socket; stop was not acknowledged",
@@ -2324,11 +2352,7 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
         );
     }
     if sock_path.exists() {
-        return stop_via_ipc(
-            &sock_path,
-            &terminal_reason,
-            terminal_reason_raw.as_deref(),
-        )
+        return stop_via_ipc(&sock_path, &terminal_reason, terminal_reason_raw.as_deref())
             .await
             .with_context(|| {
                 format!(
@@ -2531,8 +2555,26 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
 }
 
 pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
+    let mut command = codex_bridge_attach_command(&config)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let codex_bin = config.codex_bin.as_deref().unwrap_or("codex");
+        let err = command.exec();
+        return Err(anyhow!("failed to exec {codex_bin}: {err}"));
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = command.status().context("running codex --remote")?;
+        Ok(status.code().unwrap_or(1))
+    }
+}
+
+fn codex_bridge_attach_command(config: &BridgeAttachConfig) -> Result<std::process::Command> {
     let state = load_ready_state(&config.session_id, config.state_root.as_deref())?;
-    let _thread_id = state
+    state
         .thread_id
         .clone()
         .context("bridge state is missing thread_id")?;
@@ -2555,21 +2597,16 @@ pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
         .arg(&ws_url)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .current_dir(PathBuf::from(state.cwd));
+    Ok(command)
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = command.exec();
-        return Err(anyhow!("failed to exec {codex_bin}: {err}"));
-    }
-
-    #[cfg(not(unix))]
-    {
-        let status = command
-            .status()
-            .with_context(|| format!("running {codex_bin} --remote"))?;
-        Ok(status.code().unwrap_or(1))
-    }
+#[cfg(test)]
+fn run_codex_bridge_attach_for_test(config: BridgeAttachConfig) -> Result<i32> {
+    let mut command = codex_bridge_attach_command(&config)?;
+    let status = command
+        .status()
+        .context("running fake codex bridge attach")?;
+    Ok(status.code().unwrap_or(1))
 }
 
 fn resolve_bridge_paths(
@@ -3045,8 +3082,7 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
     tokio::spawn(async move {
         let detail = loop {
             let Some(message) = ws_read.next().await else {
-                break "remote app-server websocket stream ended without a close frame"
-                    .to_string();
+                break "remote app-server websocket stream ended without a close frame".to_string();
             };
             match message {
                 Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
@@ -4151,10 +4187,7 @@ fn update_thread_subscription_tracking(
     write_state_file(&context.state_file, &context.state)
 }
 
-fn tui_owns_startup_resume(
-    launch_mode: BridgeLaunchMode,
-    resume_thread_id: Option<&str>,
-) -> bool {
+fn tui_owns_startup_resume(launch_mode: BridgeLaunchMode, resume_thread_id: Option<&str>) -> bool {
     launch_mode == BridgeLaunchMode::Tui && resume_thread_id.is_some()
 }
 
@@ -4301,9 +4334,7 @@ fn subscribe_current_thread_without_path(
     }))
 }
 
-fn subscribe_current_thread(
-    context: &mut BridgeContext,
-) -> Result<Option<BridgeFollowup>> {
+fn subscribe_current_thread(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
     let Some(thread_id) = context.state.thread_id.clone() else {
         return Ok(None);
     };
@@ -4318,7 +4349,11 @@ fn loaded_thread_list_contains(response: &Value, thread_id: &str) -> bool {
     response
         .get("data")
         .and_then(Value::as_array)
-        .is_some_and(|threads| threads.iter().any(|value| value.as_str() == Some(thread_id)))
+        .is_some_and(|threads| {
+            threads
+                .iter()
+                .any(|value| value.as_str() == Some(thread_id))
+        })
 }
 
 fn complete_tui_owned_resume_if_loaded(
@@ -4334,10 +4369,7 @@ fn complete_tui_owned_resume_if_loaded(
     subscribe_current_thread(context)
 }
 
-fn expire_tui_owned_resume_if_needed(
-    context: &mut BridgeContext,
-    now: Instant,
-) -> Result<bool> {
+fn expire_tui_owned_resume_if_needed(context: &mut BridgeContext, now: Instant) -> Result<bool> {
     if !context.tui_owned_resume_pending
         || !context
             .tui_owned_resume_deadline
@@ -4591,6 +4623,11 @@ impl CodexRuntimeTracker {
         self.active_turn_started_at = Some(now);
         self.last_provider_progress_at = Some(now);
         self.stall_episode = None;
+        self.stall_notification_pending = false;
+        self.last_process_identity_match = ProcessIdentityMatch::Unknown;
+        self.last_app_server_pid = None;
+        self.last_app_server_pgid = None;
+        self.last_rollout_growth_at = None;
     }
 
     fn clear_active_turn(&mut self) {
@@ -4599,7 +4636,12 @@ impl CodexRuntimeTracker {
         self.active_turn_started_at = None;
         self.last_provider_progress_at = None;
         self.stall_episode = None;
+        self.stall_notification_pending = false;
+        self.last_process_identity_match = ProcessIdentityMatch::Unknown;
+        self.last_app_server_pid = None;
+        self.last_app_server_pgid = None;
         self.last_rollout_len = None;
+        self.last_rollout_growth_at = None;
     }
 
     /// Record real provider progress. Returns true when this cleared a live stall
@@ -4611,13 +4653,23 @@ impl CodexRuntimeTracker {
         let was_stalled = self.stall_episode.is_some();
         self.last_provider_progress_at = Some(Instant::now());
         self.stall_episode = None;
+        self.stall_notification_pending = false;
         was_stalled
     }
 
     /// Evidence for the current stall episode. Reports only checkable facts; it
     /// never asserts a cause.
-    fn stall_evidence(&self, provider_turn_id: Option<&str>) -> Option<Value> {
+    fn stall_evidence(
+        &self,
+        provider_turn_id: Option<&str>,
+        rollout_path: Option<&Path>,
+    ) -> Option<Value> {
         let episode = self.stall_episode.as_ref()?;
+        let rollout_metadata = rollout_path.and_then(|path| fs::metadata(path).ok());
+        let rollout_modified_at = rollout_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok())
+            .map(|modified| DateTime::<Utc>::from(modified).to_rfc3339());
         Some(json!({
             "turn_epoch": episode.turn_epoch,
             "provider_turn_id": provider_turn_id,
@@ -4635,6 +4687,21 @@ impl CodexRuntimeTracker {
                 .as_ref()
                 .map(|item| item.started_at.elapsed().as_millis() as u64),
             "active_item_count": self.active_items.len(),
+            "app_server": {
+                "pid": episode.app_server_pid,
+                "pgid": episode.app_server_pgid,
+                "identity_match": episode.process_identity_match.as_str(),
+            },
+            "rollout": {
+                "path": rollout_path.and_then(|path| path.to_str()),
+                "metadata_observed": rollout_metadata.is_some(),
+                "length": rollout_metadata.as_ref().map(|metadata| metadata.len()),
+                "modified_at": rollout_modified_at,
+                "growth_observed": self.last_rollout_growth_at.is_some(),
+                "seconds_since_observed_growth": self
+                    .last_rollout_growth_at
+                    .map(|at| at.elapsed().as_secs()),
+            },
             "stopped_process": episode.stopped_process.as_ref().map(|proc| json!({
                 "pid": proc.pid,
                 "ppid": proc.ppid,
@@ -4908,7 +4975,9 @@ impl CodexRuntimeTracker {
             self.last_rollout_len = Some(len);
             if grew {
                 self.last_provider_progress_at = Some(now);
+                self.last_rollout_growth_at = Some(now);
                 self.stall_episode = None;
+                self.stall_notification_pending = false;
                 return false;
             }
         }
@@ -4916,17 +4985,19 @@ impl CodexRuntimeTracker {
         // A late tick means the machine slept or the runtime was starved. Rebase
         // the silence clock and skip this evaluation; a stall must accumulate a
         // fresh continuous window after wake.
-        if previous_tick
-            .is_some_and(|prev| now.duration_since(prev) > Duration::from_millis(KEEPALIVE_LATE_TICK_MS))
-        {
+        if previous_tick.is_some_and(|prev| {
+            now.duration_since(prev) > Duration::from_millis(KEEPALIVE_LATE_TICK_MS)
+        }) {
             self.last_provider_progress_at = Some(now);
             self.stall_episode = None;
+            self.stall_notification_pending = false;
             return false;
         }
 
         // Waiting on the user is quiescent, not stalled.
         if self.attention_state.is_some() {
             self.stall_episode = None;
+            self.stall_notification_pending = false;
             return false;
         }
 
@@ -4959,8 +5030,27 @@ impl CodexRuntimeTracker {
             oldest_item,
             oldest_item_id,
             stopped_process,
+            process_identity_match: self.last_process_identity_match,
+            app_server_pid: self.last_app_server_pid,
+            app_server_pgid: self.last_app_server_pgid,
         });
+        self.stall_notification_pending = true;
         true
+    }
+
+    fn set_stall_probe_identity(
+        &mut self,
+        identity_match: ProcessIdentityMatch,
+        app_server_pid: Option<u32>,
+        app_server_pgid: Option<i32>,
+    ) {
+        self.last_process_identity_match = identity_match;
+        self.last_app_server_pid = app_server_pid;
+        self.last_app_server_pgid = app_server_pgid;
+    }
+
+    fn stall_notification_pending(&self) -> bool {
+        self.stall_notification_pending
     }
 
     fn primary_running_tool(&self) -> Option<String> {
@@ -5133,10 +5223,13 @@ async fn emit_runtime_updates(
                 let pause_request_still_pending = matches!(phase, "running" | "thinking")
                     && !context.pending_pause_requests.lock().await.is_empty();
                 let stall_evidence = (phase == "stalled").then(|| {
-                    context
-                        .runtime_tracker
-                        .stall_evidence(context.state.active_turn_id.as_deref())
+                    context.runtime_tracker.stall_evidence(
+                        context.state.active_turn_id.as_deref(),
+                        context.state.thread_path.as_deref().map(Path::new),
+                    )
                 });
+                let stall_notification =
+                    (phase == "stalled") && context.runtime_tracker.stall_notification_pending();
                 context
                     .runtime
                     .post_phase(
@@ -5149,6 +5242,7 @@ async fn emit_runtime_updates(
                         tool_name,
                         pause_request_still_pending,
                         stall_evidence.flatten(),
+                        stall_notification,
                     )
                     .await;
             }
@@ -5242,17 +5336,79 @@ fn observe_rollout_len(context: &BridgeContext) -> Option<u64> {
 /// requires the recorded app-server PID to still be the same process (guarding
 /// PID reuse) and the candidate to be either a descendant or a member of the
 /// app-server's recorded process group.
-fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcessFact> {
-    let app_server_pid = context.state.app_server_pid?;
-    let fact = crate::process_identity::try_collect_process_fact(app_server_pid)?;
-    if let Some(recorded) = context.state.app_server_process_start_time.as_deref() {
-        if !crate::process_identity::lstart_matches_recorded(&fact, recorded) {
-            // PID was reused by an unrelated process; this inventory proves nothing.
-            return None;
+fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcessProbe> {
+    let snapshots = crate::process_identity::try_collect_process_snapshots();
+    probe_stopped_owned_process_from_snapshots(
+        context.state.app_server_pid,
+        context.state.app_server_process_start_time.as_deref(),
+        context.state.app_server_pgid,
+        snapshots.as_ref(),
+    )
+}
+
+fn probe_stopped_owned_process_from_snapshots(
+    app_server_pid: Option<u32>,
+    recorded_start: Option<&str>,
+    app_server_pgid: Option<i32>,
+    snapshots: Option<&HashMap<u32, crate::process_identity::ProcessSnapshot>>,
+) -> Option<StoppedProcessProbe> {
+    let app_server_pid = app_server_pid?;
+    let snapshots = snapshots?;
+    let app_server = snapshots.get(&app_server_pid)?;
+    let process_identity_match = match recorded_start {
+        Some(recorded_start) if !recorded_start.trim().is_empty() => {
+            if crate::process_identity::lstart_matches_recorded(&app_server.fact, recorded_start) {
+                ProcessIdentityMatch::Verified
+            } else {
+                ProcessIdentityMatch::Mismatch
+            }
         }
+        _ => ProcessIdentityMatch::Unknown,
+    };
+    let mut entries = snapshots
+        .values()
+        .map(|snapshot| crate::process_identity::ProcessLineage {
+            pid: snapshot.fact.pid,
+            ppid: snapshot.ppid,
+            pgid: snapshot.pgid,
+            stat: snapshot.fact.stat.clone(),
+            command: snapshot.fact.command.clone(),
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.pid);
+    let stopped_process = if process_identity_match == ProcessIdentityMatch::Verified {
+        find_stopped_owned_process(
+            &app_server.fact,
+            recorded_start.unwrap_or_default(),
+            app_server_pgid,
+            &entries,
+        )
+    } else {
+        None
+    };
+    Some(StoppedProcessProbe {
+        process_identity_match,
+        stopped_process,
+    })
+}
+
+/// Find a stopped command only when the app-server identity is fully proven.
+/// Missing start identity is unknown, not corroboration: a recycled app-server
+/// pid must never turn an unrelated stopped process into a stall signal.
+fn find_stopped_owned_process(
+    app_server: &crate::process_identity::ProcessFact,
+    recorded_start: &str,
+    app_server_pgid: Option<i32>,
+    entries: &[crate::process_identity::ProcessLineage],
+) -> Option<StoppedProcessFact> {
+    if recorded_start.trim().is_empty()
+        || !crate::process_identity::lstart_matches_recorded(app_server, recorded_start)
+    {
+        // PID was reused by an unrelated process, or the launch did not retain
+        // enough identity to prove that it did not get reused.
+        return None;
     }
-    let entries = crate::process_identity::try_collect_process_lineage()?;
-    crate::process_identity::owned_processes(&entries, app_server_pid, context.state.app_server_pgid)
+    crate::process_identity::owned_processes(entries, app_server.pid, app_server_pgid)
         .into_iter()
         .find(|(entry, _)| entry.is_stopped_or_zombie())
         .map(|(entry, matched_by)| StoppedProcessFact {
@@ -5268,7 +5424,24 @@ fn probe_stopped_owned_process(context: &BridgeContext) -> Option<StoppedProcess
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
     let rollout_len = observe_rollout_len(context);
     let stopped_process = if context.runtime_tracker.stall_probe_needed() {
-        probe_stopped_owned_process(context)
+        match probe_stopped_owned_process(context) {
+            Some(probe) => {
+                context.runtime_tracker.set_stall_probe_identity(
+                    probe.process_identity_match,
+                    context.state.app_server_pid,
+                    context.state.app_server_pgid,
+                );
+                probe.stopped_process
+            }
+            None => {
+                context.runtime_tracker.set_stall_probe_identity(
+                    ProcessIdentityMatch::Unknown,
+                    context.state.app_server_pid,
+                    context.state.app_server_pgid,
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -5405,6 +5578,7 @@ impl BridgeRuntimeSink {
         tool_name: Option<String>,
         pause_request_still_pending: bool,
         stall_evidence: Option<Value>,
+        stall_notification: bool,
     ) {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
@@ -5431,6 +5605,7 @@ impl BridgeRuntimeSink {
                 "thread_id": self.thread_id,
                 "pause_request_still_pending": pause_request_still_pending,
                 "stall": stall_evidence,
+                "stall_notification": stall_notification,
             }
         })]);
     }
@@ -5876,11 +6051,7 @@ fn record_first_failure(state: &mut BridgeStateFile, kind: &str, detail: &str) {
 }
 
 fn mark_provider_transport_lost(context: &mut BridgeContext, detail: &str) -> Result<()> {
-    record_first_failure(
-        &mut context.state,
-        FAILURE_PROVIDER_TRANSPORT_LOST,
-        detail,
-    );
+    record_first_failure(&mut context.state, FAILURE_PROVIDER_TRANSPORT_LOST, detail);
     context.state.status = "degraded".to_string();
     context.state.last_error = Some(detail.to_string());
     write_state_file(&context.state_file, &context.state)
@@ -5929,7 +6100,9 @@ fn commit_bridge_terminal(
     exit_code: Option<i32>,
     exit_signal: Option<i32>,
 ) -> Result<()> {
-    context.runtime.persist_local_phase("finished", None, Utc::now());
+    context
+        .runtime
+        .persist_local_phase("finished", None, Utc::now());
     crate::codex_teardown::stamp_terminal_commit(
         &mut context.state,
         config.machine_name.as_deref(),
@@ -5979,11 +6152,7 @@ async fn commit_owned_child_exit(
     status: ExitStatus,
 ) -> Result<()> {
     let detail = format!("Codex app-server exited with status {status}");
-    record_first_failure(
-        &mut context.state,
-        TERMINAL_REASON_PROVIDER_EXIT,
-        &detail,
-    );
+    record_first_failure(&mut context.state, TERMINAL_REASON_PROVIDER_EXIT, &detail);
     let (exit_code, exit_signal) = exit_status_metadata(&status);
     fail_pending_pause_requests(
         context,
@@ -6555,7 +6724,7 @@ mod tests {
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
-        let exit_code = cmd_codex_bridge_attach(BridgeAttachConfig {
+        let exit_code = run_codex_bridge_attach_for_test(BridgeAttachConfig {
             session_id: session_id.to_string(),
             state_root: Some(temp.path().to_path_buf()),
             codex_bin: None,
@@ -7182,10 +7351,7 @@ mod tests {
         );
 
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
-        assert_eq!(
-            event["payload"]["terminal_reason"],
-            TERMINAL_REASON_UNKNOWN
-        );
+        assert_eq!(event["payload"]["terminal_reason"], TERMINAL_REASON_UNKNOWN);
         assert_eq!(
             event["payload"]["terminal_reason_raw"],
             "terminal_disconnected"
@@ -7911,14 +8077,20 @@ mod tests {
             state.first_failure_kind.as_deref(),
             Some(FAILURE_PROVIDER_TRANSPORT_LOST)
         );
-        assert_eq!(state.terminal_reason.as_deref(), Some(TERMINAL_REASON_PROVIDER_EXIT));
+        assert_eq!(
+            state.terminal_reason.as_deref(),
+            Some(TERMINAL_REASON_PROVIDER_EXIT)
+        );
         assert_eq!(state.app_server_exit_code, Some(17));
         let event = state.terminal_event.unwrap();
         assert_eq!(
             event["payload"]["first_failure_kind"],
             FAILURE_PROVIDER_TRANSPORT_LOST
         );
-        assert_eq!(event["payload"]["terminal_reason"], TERMINAL_REASON_PROVIDER_EXIT);
+        assert_eq!(
+            event["payload"]["terminal_reason"],
+            TERMINAL_REASON_PROVIDER_EXIT
+        );
         assert_eq!(event["payload"]["exit_code"], 17);
         assert_eq!(event["payload"]["app_server_pid"], 4242);
     }
@@ -7926,10 +8098,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn owned_child_exit_is_observed_while_the_transport_channel_remains_open() {
-        let child = Command::new("sh")
-            .args(["-c", "exit 17"])
-            .spawn()
-            .unwrap();
+        let child = Command::new("sh").args(["-c", "exit 17"]).spawn().unwrap();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
         let mut client = RpcClient {
@@ -7955,10 +8124,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn closed_transport_with_a_live_child_is_not_a_terminal_event() {
-        let child = Command::new("sh")
-            .args(["-c", "sleep 30"])
-            .spawn()
-            .unwrap();
+        let child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         drop(events_tx);
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
@@ -7983,10 +8149,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn detach_reconciliation_does_not_invent_exit_for_a_live_child() {
-        let child = Command::new("sh")
-            .args(["-c", "sleep 30"])
-            .spawn()
-            .unwrap();
+        let child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
         let (_events_tx, events_rx) = mpsc::unbounded_channel();
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
         let mut client = RpcClient {
@@ -8463,7 +8626,9 @@ mod tests {
             }),
         );
         assert_phase_update(
-            tracker.keepalive_update(None, None).expect("thinking keepalive"),
+            tracker
+                .keepalive_update(None, None)
+                .expect("thinking keepalive"),
             "thinking",
             None,
         );
@@ -8480,7 +8645,9 @@ mod tests {
             }),
         );
         assert_phase_update(
-            tracker.keepalive_update(None, None).expect("running keepalive"),
+            tracker
+                .keepalive_update(None, None)
+                .expect("running keepalive"),
             "running",
             Some("shell"),
         );
@@ -8542,15 +8709,88 @@ mod tests {
         }
     }
 
+    fn app_server_fact(lstart: &str) -> crate::process_identity::ProcessFact {
+        crate::process_identity::ProcessFact {
+            pid: 16956,
+            tty: "??".to_string(),
+            stat: "Ss".to_string(),
+            lstart: lstart.to_string(),
+            command: "codex app-server".to_string(),
+            start_time: None,
+        }
+    }
+
+    fn stopped_process_lineage() -> Vec<crate::process_identity::ProcessLineage> {
+        vec![
+            crate::process_identity::ProcessLineage {
+                pid: 16956,
+                ppid: 900,
+                pgid: 16956,
+                stat: "Ss".to_string(),
+                command: "codex app-server".to_string(),
+            },
+            crate::process_identity::ProcessLineage {
+                pid: 17210,
+                ppid: 1,
+                pgid: 16956,
+                stat: "Ts".to_string(),
+                command: "/bin/zsh -lc sleep 300".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn stopped_process_requires_complete_app_server_identity() {
+        let entries = stopped_process_lineage();
+        let fact = app_server_fact("Tue Aug 4 20:00:00 2026");
+
+        assert!(find_stopped_owned_process(&fact, "", Some(16956), &entries).is_none());
+        assert!(
+            find_stopped_owned_process(&fact, "Tue Aug 4 20:01:00 2026", Some(16956), &entries)
+                .is_none(),
+            "a reused app-server pid must not corroborate a stall"
+        );
+    }
+
+    #[test]
+    fn stopped_process_probe_treats_failed_or_incomplete_scan_as_unknown() {
+        assert!(probe_stopped_owned_process_from_snapshots(
+            Some(16956),
+            Some("Tue Aug 4 20:00:00 2026"),
+            Some(16956),
+            None,
+        )
+        .is_none());
+
+        let snapshots = HashMap::new();
+        assert!(probe_stopped_owned_process_from_snapshots(
+            Some(16956),
+            Some("Tue Aug 4 20:00:00 2026"),
+            Some(16956),
+            Some(&snapshots),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn stopped_process_accepts_reparented_member_of_verified_app_server_group() {
+        let entries = stopped_process_lineage();
+        let fact = app_server_fact("Tue Aug 4 20:00:00 2026");
+        let stopped =
+            find_stopped_owned_process(&fact, "Tue Aug 4 20:00:00 2026", Some(16956), &entries)
+                .expect("verified reparented process-group member");
+
+        assert_eq!(stopped.pid, 17210);
+        assert_eq!(stopped.ppid, 1);
+        assert_eq!(stopped.matched_by, "process_group");
+    }
+
     #[test]
     fn stall_tracking_survives_missing_provider_turn_id() {
         // `turn/started` assigns id and status independently, so a partial
         // notification leaves no provider turn id while a turn is genuinely live.
         let mut tracker = CodexRuntimeTracker::default();
-        tracker.handle_notification(
-            "turn/started",
-            &json!({"turn": {"status": "inProgress"}}),
-        );
+        tracker.handle_notification("turn/started", &json!({"turn": {"status": "inProgress"}}));
         assert!(tracker.active_turn_id.is_none());
         assert!(tracker.turn_epoch.is_some(), "local epoch must still start");
 
@@ -8569,7 +8809,7 @@ mod tests {
             "stalled",
             Some("shell"),
         );
-        let evidence = tracker.stall_evidence(None).expect("evidence");
+        let evidence = tracker.stall_evidence(None, None).expect("evidence");
         assert_eq!(evidence["turn_identity_missing"], json!(true));
     }
 
@@ -8595,6 +8835,7 @@ mod tests {
         let mut tracker = CodexRuntimeTracker::default();
         start_turn_with_command(&mut tracker);
         age_silence(&mut tracker, CORROBORATED_STALL_MS + 1_000);
+        tracker.set_stall_probe_identity(ProcessIdentityMatch::Verified, Some(16956), Some(16956));
 
         assert_phase_update(
             tracker
@@ -8603,10 +8844,17 @@ mod tests {
             "stalled",
             Some("shell"),
         );
-        let evidence = tracker.stall_evidence(Some("turn-1")).expect("evidence");
+        let evidence = tracker
+            .stall_evidence(Some("turn-1"), None)
+            .expect("evidence");
         assert_eq!(evidence["trigger"], json!("stopped_process"));
         assert_eq!(evidence["stopped_process"]["pid"], json!(17210));
-        assert_eq!(evidence["stopped_process"]["matched_by"], json!("process_group"));
+        assert_eq!(
+            evidence["stopped_process"]["matched_by"],
+            json!("process_group")
+        );
+        assert_eq!(evidence["app_server"]["identity_match"], json!("verified"));
+        assert_eq!(evidence["app_server"]["pid"], json!(16956));
     }
 
     #[test]
@@ -8623,7 +8871,9 @@ mod tests {
             Some("shell"),
         );
         assert_eq!(
-            tracker.stall_evidence(Some("turn-1")).expect("evidence")["trigger"],
+            tracker
+                .stall_evidence(Some("turn-1"), None)
+                .expect("evidence")["trigger"],
             json!("prolonged_silence")
         );
     }
@@ -8636,7 +8886,10 @@ mod tests {
         start_turn_with_command(&mut tracker);
         age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
         tracker.keepalive_update(Some(1_000), None);
-        assert!(tracker.stall_episode.is_some(), "first tick establishes baseline and stalls");
+        assert!(
+            tracker.stall_episode.is_some(),
+            "first tick establishes baseline and stalls"
+        );
 
         assert_phase_update(
             tracker
@@ -8681,7 +8934,9 @@ mod tests {
         age_silence(&mut tracker, PROLONGED_SILENCE_STALL_MS + 1_000);
 
         assert!(
-            tracker.keepalive_update(None, Some(stopped_fact())).is_none(),
+            tracker
+                .keepalive_update(None, Some(stopped_fact()))
+                .is_none(),
             "waiting on the user is quiescent, not stalled"
         );
         assert!(tracker.stall_episode.is_none());
@@ -8721,6 +8976,8 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "first evaluation enters the episode"
         );
+        assert!(tracker.stall_notification_pending());
+        assert!(tracker.stall_notification_pending());
         assert!(
             !tracker.refresh_stall_state(None, Some(stopped_fact())),
             "subsequent keepalives must not re-enter the same episode"
@@ -8736,7 +8993,11 @@ mod tests {
             tracker.refresh_stall_state(None, Some(stopped_fact())),
             "a later silence is a new episode"
         );
-        assert_eq!(tracker.stall_episode.as_ref().unwrap().turn_epoch, first_epoch);
+        assert!(tracker.stall_notification_pending());
+        assert_eq!(
+            tracker.stall_episode.as_ref().unwrap().turn_epoch,
+            first_epoch
+        );
     }
 
     #[test]
@@ -9885,7 +10146,10 @@ mod tests {
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::Subscribed.as_str())
         );
-        assert_eq!(context.state.thread_subscription_attempts, 2);
+        // Redirecting from the rejected subagent to its parent resets the
+        // per-thread attempt counter; the parent begins a fresh subscription
+        // identity rather than inheriting the child attempt history.
+        assert_eq!(context.state.thread_subscription_attempts, 0);
         assert_eq!(context.state.thread_subscription_last_error, None);
         assert!(context.rejected_thread_ids.contains("thr-child"));
 

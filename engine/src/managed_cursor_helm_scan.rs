@@ -34,6 +34,7 @@ pub struct CursorHelmObservation {
     pub cursor_process_start_time: Option<String>,
     pub started_at: String,
     pub updated_at: String,
+    pub reason_codes: Vec<String>,
     /// Identity-valid launcher process fact, independent of control readiness.
     pub launcher_alive: bool,
     /// Launcher pid is alive AND the control socket exists — the session is
@@ -72,6 +73,8 @@ struct CursorHelmStateFile {
     /// Missing/false must not produce a live remote-control lease.
     #[serde(default)]
     ready: Option<bool>,
+    #[serde(default)]
+    reason_codes: Vec<String>,
 }
 
 pub(crate) fn collect_observations_from_processes(
@@ -150,6 +153,7 @@ pub(crate) fn collect_observations_from_paths(
             cursor_process_start_time: state.cursor_process_start_time,
             started_at: state.started_at.unwrap_or_default(),
             updated_at: state.updated_at.unwrap_or_default(),
+            reason_codes: state.reason_codes,
             launcher_alive,
             live,
         });
@@ -340,6 +344,36 @@ mod tests {
             .find(|o| o.session_id == "sess-not-ready")
             .unwrap();
         assert!(!pending.live);
+    }
+
+    #[test]
+    fn control_degradation_reason_codes_survive_the_local_scan() {
+        let dir = tmp_dir();
+        let socket = dir.path().join("degraded.sock");
+        fs::File::create(&socket).unwrap();
+        let mut value = json!({
+            "session_id": "sess-degraded-control",
+            "socket_path": socket.to_string_lossy(),
+            "launcher_pid": std::process::id(),
+            "launcher_process_start_time": "Tue Jun 30 00:00:00 2026",
+            "cursor_pid": 99999,
+            "cursor_process_start_time": "Tue Jun 30 00:00:01 2026",
+            "ready": true,
+        });
+        value["reason_codes"] = json!(["managed_session_control_degraded"]);
+        fs::write(
+            dir.path().join("sess-degraded-control.json"),
+            value.to_string(),
+        )
+        .unwrap();
+
+        let observations =
+            collect_observations_from_processes(dir.path(), &launcher_facts(std::process::id()));
+
+        assert_eq!(
+            observations[0].reason_codes,
+            ["managed_session_control_degraded"]
+        );
     }
 
     #[test]

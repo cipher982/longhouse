@@ -139,6 +139,9 @@ fn read_next_lf_batch(
     maximum_batch_bytes: usize,
     maximum_record_bytes: usize,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
+    if start_offset == source_len {
+        return Ok(None);
+    }
     ensure_lf_boundary(path, &mut file, start_offset)?;
     file.seek(SeekFrom::Start(start_offset))
         .map_err(|source| read_error(path, source))?;

@@ -154,6 +154,15 @@ jobs:
             --configuration release)"
           cp "$PRODUCT_PATH" "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
           chmod +x "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
+          resource_bundle_count=0
+          while IFS= read -r -d '' RESOURCE_BUNDLE; do
+            cp -R "$RESOURCE_BUNDLE" "$RUNNER_TEMP/$(basename "$RESOURCE_BUNDLE")"
+            resource_bundle_count=$((resource_bundle_count + 1))
+          done < <(find "$(dirname "$PRODUCT_PATH")" -maxdepth 1 -type d -name '*.bundle' -print0)
+          test "$resource_bundle_count" -gt 0 || {
+            echo "The macOS menu-bar product has no resource bundle." >&2
+            exit 1
+          }
 
       - name: Configure macOS signing keychain
         id: macos_signing
@@ -289,6 +298,28 @@ jobs:
             --build-identity .build/build-identity.json \
             --lsuielement true
 
+      - name: Verify packaged macOS resources
+        run: |
+          shopt -s nullglob
+          staged_bundles=("$RUNNER_TEMP"/*.bundle)
+          test "${#staged_bundles[@]}" -gt 0 || {
+            echo "No staged Swift resource bundles were found." >&2
+            exit 1
+          }
+          for staged_bundle in "${staged_bundles[@]}"; do
+            packaged_bundle="$RUNNER_TEMP/macos-app-bundles/Longhouse.app/Contents/Resources/$(basename "$staged_bundle")"
+            test -d "$packaged_bundle" || {
+              echo "Packaged app is missing resource bundle: $packaged_bundle" >&2
+              exit 1
+            }
+            for required_file in LonghouseMenuIcon.png desktop-app-setup.sh; do
+              test -f "$packaged_bundle/$required_file" || {
+                echo "Packaged resource bundle is missing $required_file: $packaged_bundle" >&2
+                exit 1
+              }
+            done
+          done
+
       - name: Sign macOS desktop app bundle
         env:
           RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
@@ -304,6 +335,38 @@ jobs:
             --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
             --identity "$CODESIGN_IDENTITY" \
             --mode "$SIGNING_MODE"
+
+      - name: Launch-test signed macOS app bundle
+        run: |
+          python3 - \
+            "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
+            "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          if not executable.exists():
+              raise SystemExit(f"Missing packaged executable: {executable}")
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Signed macOS app launch smoke timed out: {exc}") from exc
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Signed macOS app launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
+          PY
 
       - name: Initialize macOS packaging manifest
         env:
@@ -475,6 +538,76 @@ jobs:
           manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
           PY
 
+      - name: Launch-test packaged macOS disk image
+        run: |
+          MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist binaries/Longhouse-macos-arm64.dmg)"
+          MOUNT_DEVICE="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              device = entity.get("dev-entry")
+              if device:
+                  print(device)
+                  break
+          else:
+              raise SystemExit("Unable to determine attached DMG device")
+          PY
+          )"
+          MOUNT_POINT=""
+          cleanup() {
+            if [[ -n "$MOUNT_POINT" ]]; then
+              hdiutil detach "$MOUNT_POINT" >/dev/null || hdiutil detach "$MOUNT_DEVICE" >/dev/null || true
+            else
+              hdiutil detach "$MOUNT_DEVICE" >/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              mount_point = entity.get("mount-point")
+              if mount_point:
+                  print(mount_point)
+                  break
+          else:
+              raise SystemExit("Unable to determine mounted DMG path")
+          PY
+          )"
+          python3 - \
+            "$MOUNT_POINT/Longhouse.app" \
+            "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          if not executable.exists():
+              raise SystemExit(f"Missing DMG executable: {executable}")
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Packaged DMG launch smoke timed out: {exc}") from exc
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Packaged DMG launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
+          PY
+
       - name: Submit macOS disk image for notarization
         if: ${{ steps.macos_notary.outputs.enabled == 'true' }}
         env:
@@ -527,6 +660,112 @@ jobs:
           payload = json.loads(manifest_path.read_text(encoding="utf-8"))
           payload["public_download_notarization_status"] = "notarized"
           manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Validate final macOS release artifacts
+        env:
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
+        run: |
+          APP_PATH="$RUNNER_TEMP/macos-app-bundles/Longhouse.app"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          if [[ "$RELEASE_TIER" == "stable" ]]; then
+            codesign --verify --strict --verbose=2 binaries/Longhouse-macos-arm64.dmg
+            spctl --assess --type execute --verbose=4 "$APP_PATH"
+            spctl --assess --type open --context context:primary-signature --verbose=4 binaries/Longhouse-macos-arm64.dmg
+            xcrun stapler validate "$APP_PATH"
+            xcrun stapler validate binaries/Longhouse-macos-arm64.dmg
+          fi
+          python3 - "$APP_PATH" "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Final macOS app launch smoke timed out: {exc}") from exc
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Final macOS app launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
+          PY
+
+          MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist binaries/Longhouse-macos-arm64.dmg)"
+          MOUNT_DEVICE="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              device = entity.get("dev-entry")
+              if device:
+                  print(device)
+                  break
+          else:
+              raise SystemExit("Unable to determine attached final DMG device")
+          PY
+          )"
+          MOUNT_POINT=""
+          cleanup() {
+            if [[ -n "$MOUNT_POINT" ]]; then
+              hdiutil detach "$MOUNT_POINT" || hdiutil detach "$MOUNT_DEVICE" || true
+            else
+              hdiutil detach "$MOUNT_DEVICE" || true
+            fi
+          }
+          trap cleanup EXIT
+          MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+          import os
+          import plistlib
+
+          payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+          for entity in payload.get("system-entities") or []:
+              mount_point = entity.get("mount-point")
+              if mount_point:
+                  print(mount_point)
+                  break
+          else:
+              raise SystemExit("Unable to determine mounted final DMG path")
+          PY
+          )"
+          if [[ "$RELEASE_TIER" == "stable" ]]; then
+            spctl --assess --type execute --verbose=4 "$MOUNT_POINT/Longhouse.app"
+          fi
+          python3 - "$MOUNT_POINT/Longhouse.app" "desktop/LonghouseMenuBarHarness/Fixtures/healthy.json" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app_path = Path(sys.argv[1])
+          fixture_path = Path(sys.argv[2])
+          executable = app_path / "Contents" / "MacOS" / "Longhouse"
+          try:
+              completed = subprocess.run(
+                  [str(executable), "--input", str(fixture_path), "--quit-after", "1"],
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired as exc:
+              raise SystemExit(f"Final DMG launch smoke timed out: {exc}") from exc
+          if completed.returncode != 0:
+              raise SystemExit(
+                  "Final DMG launch smoke failed:\n"
+                  f"exit={completed.returncode}\n"
+                  f"stdout={completed.stdout}\n"
+                  f"stderr={completed.stderr}"
+              )
           PY
 
       - name: Mark macOS disk image notarization pending

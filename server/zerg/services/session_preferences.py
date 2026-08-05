@@ -17,6 +17,7 @@ class SessionPreferences:
     notification_muted: bool = False
     user_hidden_from_timeline: bool = False
     last_read_at: datetime | None = None
+    read_through_rejected: bool = False
 
 
 def load_session_preferences(session_id: UUID | str, *, standalone_session=None) -> SessionPreferences:
@@ -102,6 +103,8 @@ async def update_session_preferences(
     )
     if result.get("found") is not True:
         return None
+    if result.get("read_through_rejected") is True:
+        return SessionPreferences(read_through_rejected=True)
     preferences = result.get("preferences")
     if not isinstance(preferences, dict):
         raise RuntimeError("Live session catalog returned invalid preferences")

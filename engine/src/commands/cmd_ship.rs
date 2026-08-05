@@ -1045,6 +1045,53 @@ mod tests {
         (format!("http://{}", addr), handle)
     }
 
+    fn spawn_http_response_server_sequence(
+        responses: &[(&str, &str)],
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = responses
+            .iter()
+            .map(|(status_line, body)| ((*status_line).to_string(), (*body).to_string()))
+            .collect::<Vec<_>>();
+        let handle = std::thread::spawn(move || {
+            for (status_line, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0_u8; 8192];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{}", addr), handle)
+    }
+
+    fn storage_v2_capabilities_body(machine_id: &str, cutover: bool) -> String {
+        serde_json::json!({
+            "protocol_version": 2,
+            "cutover": cutover,
+            "tenant_id": "test-tenant",
+            "machine_id": machine_id,
+            "ingest_path": "/api/agents/storage/v2/envelopes",
+            "max_wire_body_bytes": 12 * 1024 * 1024,
+            "max_raw_record_bytes": 4 * 1024 * 1024,
+            "max_records": 10_000,
+            "media_claim_path": "/api/agents/storage/v2/media/claims",
+            "media_upload_path_template": "/api/agents/storage/v2/media/{sha256}",
+            "max_media_bytes": 32 * 1024 * 1024,
+            "max_media_claims": 512,
+            "range_kinds": ["byte_offset", "record_ordinal"],
+            "lanes": ["live", "repair"],
+            "lane_header": "X-Longhouse-Storage-Lane",
+        })
+        .to_string()
+    }
+
     #[test]
     fn test_cmd_ship_file_dry_run_does_not_mutate_state() {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1223,7 +1270,9 @@ mod tests {
             )
             .unwrap();
 
-        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let capabilities = storage_v2_capabilities_body("test-machine", false);
+        let (url, handle) =
+            spawn_http_response_server_sequence(&[("200 OK", &capabilities), ("200 OK", "{}")]);
         rt.block_on(cmd_ship_file(
             &file,
             Some("claude"),
@@ -1236,7 +1285,7 @@ mod tests {
             None,
             None,
             false,
-            None,
+            Some("test-machine"),
         ))
         .unwrap();
         handle.join().unwrap();
@@ -1314,7 +1363,9 @@ mod tests {
         );
         let db_path = dir.path().join("engine.db");
         let file_len = std::fs::metadata(&file).unwrap().len();
-        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let capabilities = storage_v2_capabilities_body("test-machine", false);
+        let (url, handle) =
+            spawn_http_response_server_sequence(&[("200 OK", &capabilities), ("200 OK", "{}")]);
 
         rt.block_on(cmd_ship_file(
             &file,
@@ -1328,7 +1379,7 @@ mod tests {
             None,
             None,
             true,
-            None,
+            Some("test-machine"),
         ))
         .unwrap();
         handle.join().unwrap();

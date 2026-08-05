@@ -10,6 +10,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use std::time::SystemTime;
 
 const NATIVE_DEVICE_ENTRYPOINTS_JSON: &str =
@@ -22,6 +23,7 @@ const TRANSPORT_ERROR_DEGRADED_MIN_RATE: f64 = 0.25;
 const CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT: u64 = 2;
 const DEFAULT_FALLBACK_SCAN_SECS: u64 = 300;
 const DEFAULT_SPOOL_REPLAY_SECS: u64 = 30;
+const OUTCOME_RECOVERY_ACTIVE_GRACE: Duration = Duration::from_secs(10);
 const DEFAULT_COMPRESSION: &str = "zstd";
 const LAUNCHD_LABEL: &str = "com.longhouse.shipper";
 const SYSTEMD_UNIT: &str = "longhouse-shipper";
@@ -93,6 +95,7 @@ struct NativeFastLocalHealth {
     transport: NativeTransportStatus,
     spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
+    managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     control_channel: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,6 +142,13 @@ struct NativeManagedSessionsStatus {
     count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeManagedLaunchRecoveryStatus {
+    pub exhausted_count: usize,
+    pub active_count: usize,
+    pub scan_error: bool,
+}
+
 /// The envelope `longhouse local-health --fast --json` emits for Longhouse.app.
 ///
 /// The Desktop app decodes this into `HealthSnapshot`, whose `severity` and
@@ -160,6 +170,7 @@ struct NativeDesktopHealth {
     headline: String,
     reasons: Vec<String>,
     suggested_actions: Vec<String>,
+    suggested_action_ids: Vec<String>,
     engine_status: NativeDesktopEngineStatus,
     transport: NativeTransportStatus,
     spool: NativeSpoolStatus,
@@ -168,6 +179,7 @@ struct NativeDesktopHealth {
     #[serde(skip_serializing_if = "Option::is_none")]
     managed_sessions: Option<Vec<NativeDesktopSession>>,
     managed_summary: NativeDesktopManagedSummary,
+    managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
     /// Required before the app will open the Runtime Host projection stream.
     /// Without it `presentation` and `activity` stay null forever and every
     /// session renders activity-unknown.
@@ -631,6 +643,94 @@ fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth
     }
 }
 
+pub fn managed_launch_recovery_status() -> NativeManagedLaunchRecoveryStatus {
+    match config::get_agent_status_path() {
+        Ok(status_path) => collect_managed_launch_recovery(&status_path),
+        Err(_) => NativeManagedLaunchRecoveryStatus {
+            exhausted_count: 0,
+            active_count: 0,
+            scan_error: true,
+        },
+    }
+}
+
+fn collect_managed_launch_recovery(status_path: &Path) -> NativeManagedLaunchRecoveryStatus {
+    let Some(agent_dir) = status_path.parent() else {
+        return NativeManagedLaunchRecoveryStatus {
+            exhausted_count: 0,
+            active_count: 0,
+            scan_error: false,
+        };
+    };
+    let mut exhausted_count = 0usize;
+    let mut active_count = 0usize;
+    let mut scan_error = false;
+    for directory_name in ["registration-retries", "outcome-retries"] {
+        let directory = agent_dir.join("managed-local").join(directory_name);
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                scan_error = true;
+                continue;
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    scan_error = true;
+                    continue;
+                }
+            };
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let payload = match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                Some(Value::Object(payload)) => payload,
+                _ => {
+                    scan_error = true;
+                    continue;
+                }
+            };
+            let exhausted =
+                payload.get("recovery_exhausted").and_then(Value::as_bool) == Some(true);
+            if exhausted {
+                exhausted_count = exhausted_count.saturating_add(1);
+            } else if directory_name == "registration-retries"
+                || payload
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .and_then(|created_at| {
+                        chrono::DateTime::parse_from_rfc3339(created_at)
+                            .ok()
+                            .map(|created| {
+                                chrono::Utc::now()
+                                    .signed_duration_since(created.with_timezone(&chrono::Utc))
+                                    .to_std()
+                                    .map(|age| age >= OUTCOME_RECOVERY_ACTIVE_GRACE)
+                                    .unwrap_or(true)
+                            })
+                    })
+                    .unwrap_or(true)
+            {
+                // A successful launch leaves an outcome receipt briefly while
+                // the detached confirmer runs. Only surface an outcome retry
+                // as active recovery after that normal convergence grace.
+                active_count = active_count.saturating_add(1);
+            }
+        }
+    }
+    NativeManagedLaunchRecoveryStatus {
+        exhausted_count,
+        active_count,
+        scan_error,
+    }
+}
+
 fn native_fast_health_from_parts(
     status_path: &Path,
     exists: bool,
@@ -662,18 +762,71 @@ fn native_fast_health_from_parts(
         .and_then(|value| value.get("spool_dead_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let blocked_source_count = object
-        .and_then(|value| value.get("storage_v2_outbox"))
-        .and_then(Value::as_object)
+    let storage_outbox_value = object.and_then(|value| value.get("storage_v2_outbox"));
+    let storage_outbox = storage_outbox_value.and_then(Value::as_object);
+    let storage_counter_is_invalid = |key: &str| {
+        storage_outbox
+            .and_then(|value| value.get(key))
+            .is_some_and(|value| value.as_u64().is_none())
+    };
+    let blocked_source_count = storage_outbox
         .and_then(|value| value.get("blocked_source_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let unresolved_blocked_source_count = storage_outbox
+        .and_then(|value| value.get("unresolved_blocked_source_count"))
+        .and_then(Value::as_u64);
+    let storage_counter_proof_unknown = [
+        "blocked_source_count",
+        "reconciling_blocked_source_count",
+        "unresolved_blocked_source_count",
+    ]
+    .into_iter()
+    .any(storage_counter_is_invalid);
+    let storage_block_requires_repair = match unresolved_blocked_source_count {
+        Some(unresolved) => unresolved > 0,
+        // A legacy payload has no aggregate proof. The latest block kind
+        // cannot classify older retained sources without risking false green.
+        None => false,
+    };
+    let storage_block_proof_unknown = storage_counter_proof_unknown
+        || (unresolved_blocked_source_count.is_none() && blocked_source_count > 0);
+    let storage_outbox_unreadable = match storage_outbox_value {
+        Some(value) if !value.is_object() => true,
+        Some(_) => storage_outbox
+            .and_then(|value| value.get("error"))
+            .is_some_and(|error| match error {
+                Value::String(value) => !value.trim().is_empty(),
+                _ => !error.is_null(),
+            }),
+        None => false,
+    };
+    let archive_backlog = object
+        .and_then(|value| value.get("archive_backlog"))
+        .and_then(Value::as_object);
+    let archive_repair_paused = archive_backlog.is_some_and(|value| {
+        value.get("mode").and_then(Value::as_str) == Some("paused")
+            || value.get("state").and_then(Value::as_str) == Some("paused")
+    });
+    let archive_dead_lettered = archive_backlog.is_some_and(|value| {
+        value
+            .get("dead_ranges")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+            || value
+                .get("dead_bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+    });
     let transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let managed_launch_recovery = collect_managed_launch_recovery(status_path);
 
     let mut reasons = Vec::new();
     if error.is_some() {
@@ -713,8 +866,32 @@ fn native_fast_health_from_parts(
     if dead_count > 0 {
         reasons.push("spool_dead_letters".to_string());
     }
-    if blocked_source_count > 0 {
+    if archive_dead_lettered {
+        reasons.push("archive_dead_lettered".to_string());
+    }
+    if archive_repair_paused {
+        reasons.push("archive_repair_paused".to_string());
+    }
+    if blocked_source_count > 0 && !storage_block_requires_repair {
         reasons.push("storage_v2_sources_blocked".to_string());
+    }
+    if storage_block_proof_unknown {
+        reasons.push("storage_v2_sources_proof_unknown".to_string());
+    }
+    if storage_block_requires_repair {
+        reasons.push("storage_v2_sources_unresolved".to_string());
+    }
+    if storage_outbox_unreadable {
+        reasons.push("storage_v2_outbox_unreadable".to_string());
+    }
+    if managed_launch_recovery.exhausted_count > 0 {
+        reasons.push("managed_launch_recovery_exhausted".to_string());
+    }
+    if managed_launch_recovery.active_count > 0 {
+        reasons.push("managed_launch_recovery_active".to_string());
+    }
+    if managed_launch_recovery.scan_error {
+        reasons.push("managed_launch_recovery_unreadable".to_string());
     }
     if !matches!(
         transport.status_reason.as_str(),
@@ -729,10 +906,11 @@ fn native_fast_health_from_parts(
             reason.as_str(),
             "engine_status_unreadable"
                 | "engine_status_missing"
-                | "engine_status_stale"
                 | "payload_rejected"
                 | "payload_too_large"
-        )
+                | "storage_v2_outbox_unreadable"
+        ) || storage_block_requires_repair
+            || managed_launch_recovery.scan_error
     }) {
         "broken"
     } else if reasons.is_empty() {
@@ -742,10 +920,32 @@ fn native_fast_health_from_parts(
     }
     .to_string();
 
-    let headline = match health_state.as_str() {
-        "healthy" => "Longhouse native fast health is healthy",
-        "degraded" => "Longhouse native fast health needs attention",
-        _ => "Longhouse native fast health is broken",
+    let headline = if reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_sources_unresolved")
+    {
+        "Longhouse has unresolved durable source evidence"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_unreadable")
+    {
+        "Managed session recovery state is unreadable"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_outbox_unreadable")
+    {
+        "Source upload state unavailable"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_exhausted")
+    {
+        "Managed session recovery needs attention"
+    } else {
+        match health_state.as_str() {
+            "healthy" => "Longhouse native fast health is healthy",
+            "degraded" => "Longhouse native fast health needs attention",
+            _ => "Longhouse native fast health is broken",
+        }
     }
     .to_string();
 
@@ -785,6 +985,7 @@ fn native_fast_health_from_parts(
         managed_sessions: NativeManagedSessionsStatus {
             count: managed_session_count,
         },
+        managed_launch_recovery,
         control_channel: object
             .and_then(|value| value.get("control_channel"))
             .cloned(),
@@ -839,6 +1040,10 @@ fn native_desktop_health_from_parts(
         })
     });
 
+    let suggested_actions =
+        native_desktop_suggested_actions(engine_payload.as_ref(), &fast.reasons);
+    let suggested_action_ids = native_desktop_suggested_action_ids(&fast.reasons);
+
     NativeDesktopHealth {
         schema_version: 1,
         collection_tier: "native_fast",
@@ -847,9 +1052,8 @@ fn native_desktop_health_from_parts(
         severity,
         headline: fast.headline,
         reasons: fast.reasons,
-        // The rollup that produces real remediation text is `_classify_health`,
-        // which is not ported yet. Emit nothing rather than inventing advice.
-        suggested_actions: Vec::new(),
+        suggested_actions,
+        suggested_action_ids,
         engine_status: NativeDesktopEngineStatus {
             path: fast.engine_status.path,
             exists: fast.engine_status.exists,
@@ -866,11 +1070,213 @@ fn native_desktop_health_from_parts(
             degraded_count,
             latest_activity_at: None,
         },
+        managed_launch_recovery: fast.managed_launch_recovery,
         managed_sessions: session_rows,
         realtime,
         control_channel: fast.control_channel,
         build: fast.build,
     }
+}
+
+fn native_desktop_action_text(action_id: &str) -> String {
+    match action_id {
+        "inspect_local_health" => "Run: longhouse local-health --fast --json".to_string(),
+        "inspect_storage_source" => {
+            "Run: longhouse shipping inspect --json and inspect the retained source evidence."
+                .to_string()
+        }
+        "inspect_storage_outbox" => {
+            "Inspect the storage-v2 outbox with: longhouse local-health --fast --json".to_string()
+        }
+        "inspect_shipping" => {
+            "Inspect shipping evidence with: longhouse shipping inspect --json".to_string()
+        }
+        "inspect_transport" => {
+            "Inspect transport and retry state with: longhouse local-health --fast --json"
+                .to_string()
+        }
+        "inspect_managed_session" => {
+            "Inspect the affected managed session and local recovery files.".to_string()
+        }
+        "repair_machine" => "Run: longhouse machine repair --repair-service --json".to_string(),
+        "free_disk_space" => {
+            "Free local disk space, then rerun: longhouse local-health --fast --json".to_string()
+        }
+        "stop_managed_bridge" => "Inspect the exact managed bridge before stopping it.".to_string(),
+        "inspect_archive" => "Inspect archive repair state with: longhouse doctor".to_string(),
+        "inspect_provider" => {
+            "Inspect the installed provider and its supported Longhouse surface.".to_string()
+        }
+        _ => format!("Run the scoped Longhouse action: {action_id}"),
+    }
+}
+
+fn native_desktop_suggested_actions(
+    engine_payload: Option<&Value>,
+    reasons: &[String],
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    let has_storage_action = reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "storage_v2_sources_blocked"
+                | "storage_v2_sources_unresolved"
+                | "storage_v2_sources_proof_unknown"
+        )
+    });
+    let storage_proof_unknown = reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_sources_proof_unknown");
+    let has_storage_outbox_action = reasons
+        .iter()
+        .any(|reason| reason == "storage_v2_outbox_unreadable");
+    let has_managed_session_action = reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "managed_launch_recovery_exhausted"
+                | "managed_launch_recovery_active"
+                | "managed_launch_recovery_unreadable"
+        )
+    });
+    if has_storage_action {
+        let outbox = engine_payload
+            .and_then(|value| value.get("storage_v2_outbox"))
+            .and_then(Value::as_object);
+        let unresolved_count = outbox
+            .and_then(|value| value.get("unresolved_blocked_source_count"))
+            .and_then(Value::as_u64);
+        let source_epoch = outbox
+            .and_then(|value| {
+                if unresolved_count.unwrap_or(0) > 0 {
+                    value.get("latest_unresolved_block_source_epoch")
+                } else {
+                    value.get("latest_block_source_epoch")
+                }
+            })
+            .and_then(Value::as_str);
+        let inspect_command = source_epoch
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!("longhouse shipping inspect --source-epoch {value} --json"))
+            .unwrap_or_else(|| "longhouse shipping inspect --json".to_string());
+        actions.extend(match unresolved_count {
+            Some(unresolved) if unresolved > 0 => vec![
+                format!("Inspect retained source evidence with {inspect_command} before retrying or discarding it."),
+            ],
+            Some(_) if !storage_proof_unknown => vec![
+                format!("Inspect retained source evidence: {inspect_command}."),
+            ],
+            _ => vec![
+                "Update Longhouse and inspect the retained source evidence."
+                    .to_string(),
+            ],
+        });
+    }
+    if has_storage_outbox_action {
+        actions.extend([
+            "Run: longhouse local-health --fast --json".to_string(),
+            "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
+        ]);
+    }
+    if reasons
+        .iter()
+        .any(|reason| reason == "managed_launch_recovery_exhausted")
+    {
+        actions.push(
+            "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.".to_string(),
+        );
+    }
+    if reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "managed_launch_recovery_active" | "managed_launch_recovery_unreadable"
+        )
+    }) {
+        actions.push(
+            "Inspect the affected managed session and local recovery files while registration recovers."
+                .to_string(),
+        );
+    }
+    if !actions.is_empty() {
+        for action_id in native_desktop_suggested_action_ids(reasons) {
+            let already_explained = match action_id.as_str() {
+                "inspect_storage_source" => has_storage_action,
+                "inspect_storage_outbox" => has_storage_outbox_action,
+                "inspect_managed_session" => has_managed_session_action,
+                _ => false,
+            };
+            if !already_explained {
+                actions.push(native_desktop_action_text(&action_id));
+            }
+        }
+        return actions;
+    }
+    native_desktop_suggested_action_ids(reasons)
+        .into_iter()
+        .map(|action_id| native_desktop_action_text(&action_id))
+        .collect()
+}
+
+fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
+    let mut action_ids = Vec::new();
+    for reason in reasons {
+        let action_id = match reason.as_str() {
+            "service_stopped" => "repair_machine",
+            "engine_status_missing"
+            | "engine_status_unreadable"
+            | "engine_status_stale"
+            | "engine_status_age_unknown"
+            | "engine_status_aging"
+            | "engine_status_sessions_invalid"
+            | "engine_status_sessions_missing"
+            | "engine_evidence_stale"
+            | "engine_reconciliation_failed" => "inspect_local_health",
+            "storage_v2_sources_blocked"
+            | "storage_v2_sources_unresolved"
+            | "storage_v2_sources_proof_unknown" => "inspect_storage_source",
+            "storage_v2_outbox_unreadable" => "inspect_storage_outbox",
+            "reported_offline"
+            | "heartbeat_stale"
+            | "engine_offline"
+            | "transport_unavailable"
+            | "server_errors"
+            | "connect_errors"
+            | "rate_limited"
+            | "retryable_client_errors" => "inspect_transport",
+            "payload_rejected"
+            | "payload_too_large"
+            | "parse_errors"
+            | "consecutive_failures"
+            | "spool_dead"
+            | "spool_dead_letters"
+            | "outbox_stuck" => "inspect_shipping",
+            "archive_dead_lettered" | "archive_repair_paused" => "inspect_archive",
+            "disk_critically_low" | "disk_low" => "free_disk_space",
+            "managed_session_control_degraded"
+            | "managed_session_detached"
+            | "managed_unknown_phase"
+            | "managed_launch_recovery_exhausted"
+            | "managed_launch_recovery_active"
+            | "managed_launch_recovery_unreadable" => "inspect_managed_session",
+            "orphaned_managed_bridge" => "stop_managed_bridge",
+            "provider_cli_version_unknown"
+            | "provider_live_route_e2e_warning"
+            | "provider_release_blocked"
+            | "provider_support_needs_attention" => "inspect_provider",
+            "service_generation_mismatch"
+            | "service_machine_name_mismatch"
+            | "service_not_installed"
+            | "service_runner_name_mismatch"
+            | "service_state_hash_mismatch" => "repair_machine",
+            _ => continue,
+        };
+        if !action_ids.iter().any(|existing| existing == &action_id) {
+            action_ids.push(action_id.to_string());
+        }
+    }
+    if !reasons.is_empty() && action_ids.is_empty() {
+        action_ids.push("inspect_local_health".to_string());
+    }
+    action_ids
 }
 
 fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
@@ -903,13 +1309,16 @@ fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
             .and_then(|value| value.get("heartbeat_at"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        reason_codes: row.get("reason_codes").and_then(Value::as_array).map(|codes| {
-            codes
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        }),
+        reason_codes: row
+            .get("reason_codes")
+            .and_then(Value::as_array)
+            .map(|codes| {
+                codes
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            }),
     }
 }
 
@@ -1675,6 +2084,11 @@ fn machine_state_hash(
             .map(|value| Value::from(value.to_string()))
             .unwrap_or(Value::Null),
     );
+    // Only hosted installs need the migration signal. Self-hosted installs
+    // already use the historical drain default and should not hash-rotate.
+    if default_archive_repair_mode_for_url(runtime_url) == "trickle" {
+        payload.insert("archive_repair_mode", Value::from("trickle"));
+    }
     let encoded = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     format!("{:x}", Sha256::digest(encoded.as_bytes()))
 }
@@ -2112,7 +2526,7 @@ fn default_archive_repair_mode_for_url(url: &str) -> &'static str {
         .unwrap_or("")
         .trim_end_matches('.');
     if host == "longhouse.ai" || host.ends_with(".longhouse.ai") {
-        "paused"
+        "trickle"
     } else {
         "drain"
     }
@@ -3038,6 +3452,7 @@ fn print_native_fast_local_health(health: &NativeFastLocalHealth) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeSet;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -3105,7 +3520,127 @@ mod tests {
         assert_eq!(value["realtime"]["machine_name"], "cinder");
         assert_eq!(value["managed_summary"]["attached_count"], 1);
         // Never claimed, because this producer does not look for orphan bridges.
-        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+        assert!(value["managed_summary"]
+            .get("orphan_bridge_count")
+            .is_none());
+    }
+
+    #[test]
+    fn native_desktop_health_scopes_storage_actions_by_block_kind() {
+        let reconciling = serde_json::json!({
+            "storage_v2_outbox": {
+                "blocked_source_count": 1,
+                "unresolved_blocked_source_count": 0,
+                "latest_block_source_epoch": "01234567-89ab-cdef-0123-456789abcdef",
+                "latest_block_kind": "source_epoch_conflict"
+            }
+        });
+        let unresolved = serde_json::json!({
+            "storage_v2_outbox": {
+                "unresolved_blocked_source_count": 1,
+                "latest_block_source_epoch": "fedcba98-7654-3210-fedc-ba9876543210",
+                "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab",
+                "latest_block_kind": "source_epoch_conflict_unresolved"
+            }
+        });
+        let reasons = vec!["storage_v2_sources_blocked".to_string()];
+
+        let reconciling_actions = native_desktop_suggested_actions(Some(&reconciling), &reasons);
+        let unresolved_actions = native_desktop_suggested_actions(Some(&unresolved), &reasons);
+
+        assert_eq!(
+            reconciling_actions,
+            vec![
+                "Inspect retained source evidence: longhouse shipping inspect --source-epoch 01234567-89ab-cdef-0123-456789abcdef --json."
+            ]
+        );
+        assert_eq!(
+            unresolved_actions,
+            vec![
+                "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it."
+            ]
+        );
+        assert_eq!(
+            native_desktop_suggested_action_ids(&[
+                "storage_v2_sources_blocked".to_string(),
+                "storage_v2_sources_unresolved".to_string(),
+                "storage_v2_sources_proof_unknown".to_string(),
+            ]),
+            vec!["inspect_storage_source"]
+        );
+    }
+
+    #[test]
+    fn native_desktop_health_keeps_storage_and_recovery_actions() {
+        let unresolved = serde_json::json!({
+            "storage_v2_outbox": {
+                "unresolved_blocked_source_count": 1,
+                "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab"
+            }
+        });
+
+        assert_eq!(
+            native_desktop_suggested_actions(
+                Some(&unresolved),
+                &[
+                    "storage_v2_sources_unresolved".to_string(),
+                    "managed_launch_recovery_exhausted".to_string(),
+                    "engine_reconciliation_failed".to_string(),
+                ]
+            ),
+            vec![
+                "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it.",
+                "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.",
+                "Run: longhouse local-health --fast --json",
+            ]
+        );
+    }
+
+    #[test]
+    fn native_desktop_health_scopes_unresolved_storage_action_by_block_kind() {
+        let unresolved = serde_json::json!({
+            "storage_v2_outbox": {
+                "unresolved_blocked_source_count": 2,
+                "latest_unresolved_block_source_epoch": "f43d0939-160b-4725-82c9-02daaacf5516",
+                "latest_block_kind": "source_epoch_conflict_unresolved"
+            }
+        });
+
+        assert_eq!(
+            native_desktop_suggested_actions(
+                Some(&unresolved),
+                &["storage_v2_sources_unresolved".to_string()]
+            ),
+            vec![
+                "Inspect retained source evidence with longhouse shipping inspect --source-epoch f43d0939-160b-4725-82c9-02daaacf5516 --json before retrying or discarding it."
+            ]
+        );
+    }
+
+    #[test]
+    fn native_action_ids_match_canonical_health_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../schemas/health_action_ids.json")).unwrap();
+        let mapping = contract["reason_to_action"].as_object().unwrap();
+        let canonical_actions: BTreeSet<String> = mapping
+            .values()
+            .map(|action| action.as_str().unwrap().to_string())
+            .collect();
+        let native_actions: BTreeSet<String> = mapping
+            .keys()
+            .flat_map(|reason| native_desktop_suggested_action_ids(&[reason.clone()]))
+            .collect();
+        assert_eq!(
+            native_actions, canonical_actions,
+            "native action map must expose exactly the canonical action set"
+        );
+        for (reason, action) in mapping {
+            assert_eq!(
+                native_desktop_suggested_action_ids(&[reason.clone()]),
+                vec![action.as_str().unwrap().to_string()],
+                "native action mapping drifted for {reason}"
+            );
+        }
     }
 
     /// The canonical envelope both the Rust golden test and the Swift consumer
@@ -3195,7 +3730,10 @@ mod tests {
                 // Compare the element shape, not the element count, so a fixture
                 // with one session still pins the row structure.
                 Value::Array(items) => Value::Array(
-                    items.first().map(|item| vec![shape(item)]).unwrap_or_default(),
+                    items
+                        .first()
+                        .map(|item| vec![shape(item)])
+                        .unwrap_or_default(),
                 ),
                 Value::String(_) => Value::String("string".into()),
                 Value::Number(number) => {
@@ -3215,7 +3753,9 @@ mod tests {
             fixture_path.display()
         );
         // The false-negative the Desktop contract forbids must stay absent.
-        assert!(fixture["managed_summary"].get("orphan_bridge_count").is_none());
+        assert!(fixture["managed_summary"]
+            .get("orphan_bridge_count")
+            .is_none());
     }
 
     #[test]
@@ -3224,8 +3764,13 @@ mod tests {
             "runtime_url": "https://example.longhouse.ai",
             "machine_name": "cinder",
         });
-        let fast =
-            native_fast_health_from_parts(Path::new("/tmp/engine-status.json"), false, None, None, None);
+        let fast = native_fast_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            false,
+            None,
+            None,
+            None,
+        );
 
         let envelope = native_desktop_health_from_parts(
             fast,
@@ -3246,7 +3791,9 @@ mod tests {
         assert!(value["managed_summary"].get("attached_count").is_none());
         // And never a zero orphan-bridge count from a producer that does not
         // scan for orphaned bridges.
-        assert!(value["managed_summary"].get("orphan_bridge_count").is_none());
+        assert!(value["managed_summary"]
+            .get("orphan_bridge_count")
+            .is_none());
     }
 
     #[test]
@@ -3328,7 +3875,12 @@ mod tests {
             Some(json!({
                 "last_updated": "2026-06-29T00:00:00Z",
                 "daemon_pid": 1234,
-                "storage_v2_outbox": {"blocked_source_count": 2}
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2,
+                    "reconciling_blocked_source_count": 2,
+                    "unresolved_blocked_source_count": 0,
+                    "latest_block_kind": "source_epoch_conflict"
+                }
             })),
             None,
         );
@@ -3337,6 +3889,213 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_blocked".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_unreadable_storage_outbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {"error": "database locked"}
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_outbox_unreadable".to_string()));
+        assert_eq!(
+            native_desktop_suggested_action_ids(&health.reasons),
+            vec!["inspect_storage_outbox"]
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_prioritizes_broken_outbox_headline_over_exhausted_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let retry_dir = path
+            .parent()
+            .unwrap()
+            .join("managed-local")
+            .join("registration-retries");
+        std::fs::create_dir_all(&retry_dir).unwrap();
+        std::fs::write(
+            retry_dir.join("exhausted.json"),
+            r#"{"recovery_exhausted":true}"#,
+        )
+        .unwrap();
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {"error": "database locked"}
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert_eq!(health.headline, "Source upload state unavailable");
+        assert!(health
+            .reasons
+            .contains(&"managed_launch_recovery_exhausted".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_does_not_treat_malformed_storage_count_as_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2.0,
+                    "unresolved_blocked_source_count": 0
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert_eq!(
+            health.reasons,
+            vec!["storage_v2_sources_proof_unknown".to_string()]
+        );
+        assert_eq!(
+            native_desktop_suggested_actions(
+                Some(&json!({
+                    "storage_v2_outbox": {
+                        "blocked_source_count": 2.0,
+                        "unresolved_blocked_source_count": 0
+                    }
+                })),
+                &health.reasons
+            ),
+            vec!["Update Longhouse and inspect the retained source evidence.".to_string()]
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_explicit_archive_pause_without_backlog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "archive_backlog": {
+                    "state": "complete",
+                    "mode": "paused",
+                    "pending_ranges": 0,
+                    "pending_bytes": 0
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"archive_repair_paused".to_string()));
+        assert_eq!(
+            native_desktop_suggested_action_ids(&health.reasons),
+            vec!["inspect_archive"]
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_archive_dead_letters() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "archive_backlog": {
+                    "state": "dead_lettered",
+                    "mode": "trickle",
+                    "dead_ranges": 2,
+                    "dead_bytes": 4096
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"archive_dead_lettered".to_string()));
+        assert_eq!(
+            native_desktop_suggested_action_ids(&health.reasons),
+            vec!["inspect_archive"]
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_reports_unresolved_storage_sources_as_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {
+                    "blocked_source_count": 1,
+                    "unresolved_blocked_source_count": 1,
+                    "latest_block_kind": "source_epoch_conflict_unresolved"
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert!(!health
+            .reasons
+            .contains(&"storage_v2_sources_blocked".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_unresolved".to_string()));
+        assert_eq!(health.headline, "Longhouse has unresolved durable source evidence");
+    }
+
+    #[test]
+    fn native_fast_local_health_does_not_infer_legacy_source_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(2),
+            Some(json!({
+                "storage_v2_outbox": {
+                    "blocked_source_count": 2,
+                    "latest_block_kind": "source_epoch_conflict"
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_proof_unknown".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_blocked".to_string()));
+        assert!(!health
+            .reasons
+            .contains(&"storage_v2_sources_unresolved".to_string()));
     }
 
     #[test]
@@ -3364,7 +4123,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "broken");
+        assert_eq!(health.health_state, "degraded");
         assert!(!health.engine_status.fresh);
         assert!(health.reasons.contains(&"engine_status_stale".to_string()));
     }
@@ -3450,7 +4209,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "broken");
+        assert_eq!(health.health_state, "degraded");
         assert!(!health.engine_status.fresh);
         assert!(health.reasons.contains(&"engine_status_stale".to_string()));
     }
@@ -3647,6 +4406,43 @@ mod tests {
         assert_eq!(health.health_state, "broken");
         assert_eq!(health.transport.status_reason, "payload_rejected");
         assert!(health.reasons.contains(&"payload_rejected".to_string()));
+    }
+
+    #[test]
+    fn managed_launch_recovery_uses_persisted_creation_time_for_outcome_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let retry_dir = status_path
+            .parent()
+            .unwrap()
+            .join("managed-local")
+            .join("outcome-retries");
+        std::fs::create_dir_all(&retry_dir).unwrap();
+        let path = retry_dir.join("pending.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "recovery_exhausted": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let fresh = collect_managed_launch_recovery(&status_path);
+        assert_eq!(fresh.active_count, 0);
+
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "created_at": (chrono::Utc::now() - chrono::Duration::seconds(20)).to_rfc3339(),
+                "recovery_exhausted": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let aged = collect_managed_launch_recovery(&status_path);
+        assert_eq!(aged.active_count, 1);
     }
 
     #[test]
@@ -4790,7 +5586,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(content.contains("<string>com.longhouse.shipper</string>"));
         assert!(content.contains("<string>connect</string>"));
         assert!(content.contains("<string>--archive-repair-mode</string>"));
-        assert!(content.contains("<string>paused</string>"));
+        assert!(content.contains("<string>trickle</string>"));
         assert!(content.contains("<string>work-macbook-dev</string>"));
         assert!(content.contains("<key>LONGHOUSE_MACHINE_GENERATION</key>"));
         assert!(content.contains("<key>LONGHOUSE_MACHINE_STATE_HASH</key>"));

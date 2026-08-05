@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 
@@ -28,6 +30,10 @@ from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
+from zerg.services.apns_sender import APNSDeviceTarget
+from zerg.services.apns_sender import APNSTransientError
+from zerg.services.apns_sender import SessionAttentionPush
+from zerg.services.apns_sender import SessionAttentionResolutionPush
 from zerg.services.apns_sender import active_ios_targets_for_owner
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
@@ -36,6 +42,8 @@ from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
+from zerg.services.apns_sender import send_session_attention_push
+from zerg.services.apns_sender import send_session_attention_resolution_push
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
@@ -59,7 +67,225 @@ router = APIRouter(prefix="/agents/runtime", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
+_CATALOG_ATTENTION_REPLAY_INTERVAL_SECONDS = 15.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
+_catalog_attention_tasks: set[asyncio.Task] = set()
+
+
+@dataclass
+class _CatalogAttentionLockState:
+    lock: asyncio.Lock
+    references: int = 0
+
+
+_catalog_attention_locks: dict[str, _CatalogAttentionLockState] = {}
+
+
+@asynccontextmanager
+async def _catalog_attention_lock(session_id: str):
+    state = _catalog_attention_locks.get(session_id)
+    if state is None:
+        state = _CatalogAttentionLockState(lock=asyncio.Lock())
+        _catalog_attention_locks[session_id] = state
+    state.references += 1
+    try:
+        async with state.lock:
+            yield
+    finally:
+        state.references -= 1
+        if state.references == 0 and not state.lock.locked() and _catalog_attention_locks.get(session_id) is state:
+            _catalog_attention_locks.pop(session_id, None)
+
+
+def _catalog_attention_notification(action: dict) -> SessionAttentionPush | SessionAttentionResolutionPush:
+    targets = tuple(
+        APNSDeviceTarget(
+            device_token=str(target["device_token"]),
+            push_environment=str(target["push_environment"]),
+        )
+        for target in action.get("targets", [])
+    )
+    occurred_at = datetime.fromisoformat(str(action["occurred_at"]))
+    session_id = str(action["session_id"])
+    kind = action.get("kind")
+    if kind == "resolution":
+        return SessionAttentionResolutionPush(
+            session_id=session_id,
+            previous_state="stalled",
+            current_state=str(action.get("current_state") or "unknown"),
+            occurred_at=occurred_at,
+            attention_push_at=datetime.fromisoformat(str(action["attention_push_at"])),
+            collapse_id=f"lh-attn-resolved-{session_id}",
+            targets=targets,
+        )
+    if kind != "attention":
+        raise ValueError(f"unknown catalog attention action kind: {kind!r}")
+    return SessionAttentionPush(
+        session_id=session_id,
+        state="stalled",
+        occurred_at=occurred_at,
+        title=str(action.get("title") or "Managed session"),
+        summary=str(action.get("summary") or action.get("title") or "Managed session"),
+        project=action.get("project"),
+        provider=action.get("provider"),
+        tool_name=action.get("tool_name"),
+        alert_title="May be stalled",
+        alert_body="No provider progress; inspect the session",
+        collapse_id=f"lh-attn-{session_id}",
+        targets=targets,
+        event_type="session_stalled",
+        stamp_state="stalled",
+    )
+
+
+async def _dispatch_catalog_attention_actions(actions: list[dict], catalogd) -> None:
+    for action in actions:
+        session_id = str(action.get("session_id") or "")
+        if not session_id:
+            logging.getLogger(__name__).error("Ignoring catalog APNs action without a session id")
+            continue
+        async with _catalog_attention_lock(session_id):
+            try:
+                notification = _catalog_attention_notification(action)
+                notification_event_id = str(action["notification_event_id"])
+            except (KeyError, TypeError, ValueError) as exc:
+                logging.getLogger(__name__).error(
+                    "Ignoring malformed catalog APNs action for session %s: %s",
+                    session_id,
+                    exc,
+                )
+                continue
+
+            action_name = "resolution" if isinstance(notification, SessionAttentionResolutionPush) else "attention"
+            attention_push_at = (
+                notification.attention_push_at if isinstance(notification, SessionAttentionResolutionPush) else notification.occurred_at
+            )
+            validation_params = {
+                "session_id": notification.session_id,
+                "action": action_name,
+                "state": "stalled",
+                "notification_event_id": notification_event_id,
+                "attention_push_at": attention_push_at.isoformat(),
+            }
+            try:
+                validation = await catalogd.call("notification.apns.attention.validate.v2", validation_params)
+            except Exception:
+                # Do not send from a snapshot that could not be revalidated.
+                logging.getLogger(__name__).exception(
+                    "Catalog APNs attention validation failed for session %s",
+                    notification.session_id,
+                )
+                continue
+            if not bool(validation.get("valid")):
+                logging.getLogger(__name__).info(
+                    "Skipping stale catalog APNs attention action for session %s: %s",
+                    notification.session_id,
+                    validation.get("reason"),
+                )
+                continue
+            accepted = False
+            transient_failure = False
+            try:
+                if isinstance(notification, SessionAttentionResolutionPush):
+                    accepted = await send_session_attention_resolution_push(notification, raise_on_transient=True)
+                else:
+                    accepted = await send_session_attention_push(notification, raise_on_transient=True)
+            except APNSTransientError:
+                transient_failure = True
+                logging.getLogger(__name__).warning(
+                    "Catalog APNs attention delivery was transiently unavailable for session %s; retaining pending action",
+                    notification.session_id,
+                )
+            except Exception:
+                transient_failure = True
+                logging.getLogger(__name__).exception(
+                    "Catalog APNs attention dispatch failed for session %s",
+                    notification.session_id,
+                )
+            rpc_params = {
+                "session_id": notification.session_id,
+                "action": action_name,
+                "state": "stalled",
+                "previous_state": str(action.get("previous_state") or ""),
+                "notification_event_id": notification_event_id,
+                "occurred_at": notification.occurred_at.isoformat(),
+                "attention_push_at": attention_push_at.isoformat(),
+            }
+            if accepted:
+                try:
+                    result = await catalogd.call("notification.apns.attention.commit.v2", rpc_params)
+                    if not bool(result.get("committed")):
+                        logging.getLogger(__name__).warning(
+                            "Catalog APNs attention commit was stale for session %s",
+                            notification.session_id,
+                        )
+                except Exception:
+                    # Keep the pending stamp. The replay loop and the next
+                    # provider keepalive retry the same event and APNs collapse
+                    # key until the durable commit succeeds.
+                    logging.getLogger(__name__).exception(
+                        "Catalog APNs attention commit failed for session %s",
+                        notification.session_id,
+                    )
+                continue
+            if transient_failure:
+                continue
+            try:
+                await catalogd.call("notification.apns.attention.rollback.v2", rpc_params)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Catalog APNs attention rollback failed for session %s",
+                    notification.session_id,
+                )
+
+
+def _retain_catalog_attention_task(task: asyncio.Task) -> None:
+    _catalog_attention_tasks.add(task)
+
+    def _finish(done: asyncio.Task) -> None:
+        _catalog_attention_tasks.discard(done)
+        if not done.cancelled():
+            exception = done.exception()
+            if exception is not None:
+                logging.getLogger(__name__).exception("Catalog APNs attention task failed", exc_info=exception)
+
+    task.add_done_callback(_finish)
+
+
+async def stop_catalog_attention_tasks() -> None:
+    """Drain in-flight APNs dispatches before catalogd shuts down."""
+
+    tasks = tuple(_catalog_attention_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _catalog_attention_tasks.difference_update(tasks)
+
+
+async def run_catalog_attention_replay_loop() -> None:
+    """Replay APNs actions whose dispatch or commit was interrupted."""
+
+    while True:
+        try:
+            catalogd = get_catalogd_client()
+            result = await catalogd.call(
+                "notification.apns.attention.pending.list.v2",
+                {
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "limit": 100,
+                },
+            )
+            actions = result.get("actions", [])
+            if not isinstance(actions, list):
+                raise ValueError("Catalog returned invalid pending attention actions")
+            if actions:
+                await _dispatch_catalog_attention_actions(actions, catalogd)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("Catalog APNs attention replay tick failed")
+        await asyncio.sleep(_CATALOG_ATTENTION_REPLAY_INTERVAL_SECONDS)
 
 
 def _no_runtime_db():
@@ -133,9 +359,17 @@ async def ingest_runtime_observation_batch(
         live_transcript_only = bool(events) and all(_is_bridge_live_transcript_event(ev) for ev in events)
         # Pick first non-empty tool_name per session for attention push context.
         tool_by_session: dict = {}
+        stall_notification_by_session: dict = {}
         for ev in events:
             if ev.session_id is not None and ev.tool_name:
                 tool_by_session.setdefault(ev.session_id, ev.tool_name)
+            if (
+                ev.session_id is not None
+                and ev.kind == "phase_signal"
+                and isinstance(ev.payload, dict)
+                and ev.payload.get("stall_notification") is True
+            ):
+                stall_notification_by_session[ev.session_id] = True
 
         if live_transcript_only:
             _publish_live_transcript_previews(events, now=now_utc)
@@ -170,6 +404,7 @@ async def ingest_runtime_observation_batch(
                 {
                     "session_id": sid,
                     "tool": tool_by_session.get(sid),
+                    "stall_notification": stall_notification_by_session.get(sid, False),
                     "auto_resume": any(
                         ev.session_id == sid
                         and ev.runtime_key in updated_runtime_keys
@@ -343,6 +578,23 @@ async def ingest_runtime_observation_batch(
                                 pause_request=active_pause_request,
                                 previous_state=previous_attention_state,
                                 occurred_at=now_utc,
+                                targets=ios_targets,
+                            )
+                        elif canonical_state == "stalled" and not context.get("stall_notification"):
+                            # A stalled phase is only alertable when the
+                            # provider-local detector supplied its episode
+                            # evidence. Keep ordinary phase projections from
+                            # manufacturing a user-facing stall alert.
+                            attention_push = None
+                        elif context.get("stall_notification") and canonical_state == "stalled":
+                            attention_push = prepare_session_attention_push(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                previous_state=previous_attention_state,
+                                current_state=canonical_state,
+                                occurred_at=now_utc,
+                                current_tool_name=context.get("tool"),
                                 targets=ios_targets,
                             )
                         else:
@@ -528,6 +780,9 @@ async def ingest_runtime_observation_batch(
                             turn=next_turn,
                             client=catalogd,
                         )
+            attention_actions = raw_result.pop("attention_actions", [])
+            if not isinstance(attention_actions, list):
+                attention_actions = []
             commit_seq = raw_result.pop("commit_seq", None)
             if not isinstance(commit_seq, str) or not commit_seq.isdecimal():
                 raise HTTPException(
@@ -544,6 +799,9 @@ async def ingest_runtime_observation_batch(
             response.headers["X-Catalog-Commit-Seq"] = commit_seq
             response.headers["X-Runtime-Label"] = "catalogd-runtime-state"
             _publish_runtime_updates(result, catalog_commit_seq=commit_seq)
+            if attention_actions:
+                task = asyncio.create_task(_dispatch_catalog_attention_actions(attention_actions, catalogd))
+                _retain_catalog_attention_task(task)
             return result
 
         if live_store_configured():
@@ -780,7 +1038,9 @@ def _preview_seq(preview: dict) -> int:
 
 def _previous_attention_state_from_session(session: AgentSession) -> str | None:
     value = str(session.last_attention_push_state or "").strip()
+    if value.endswith(":resolved"):
+        return None
     base = value.split(":", 1)[0]
-    if base in {"blocked", "needs_user", "needs_answer"}:
+    if base in {"blocked", "stalled", "needs_user", "needs_answer"}:
         return base
     return None

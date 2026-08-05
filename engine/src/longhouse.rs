@@ -16,10 +16,12 @@ mod managed_terminal;
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use managed_launch_lifecycle::{
-    register_managed_launch, register_managed_launch_with_timeout, ManagedLaunchResponse,
+    register_managed_launch, register_managed_launch_with_timeout,
+    spawn_managed_launch_registration_retry, ManagedLaunchRegistrationRetry, ManagedLaunchResponse,
     ManagedLaunchTransaction,
 };
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::ffi::OsString;
@@ -29,7 +31,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::time::Duration;
@@ -59,6 +61,11 @@ enum Commands {
     Machine {
         #[command(subcommand)]
         command: MachineCommand,
+    },
+    /// Inspect retained durable shipping evidence without invoking Python.
+    Shipping {
+        #[command(subcommand)]
+        command: ShippingCommand,
     },
     /// Configure native Longhouse hooks for Claude.
     #[command(args_conflicts_with_subcommands = true)]
@@ -101,6 +108,8 @@ enum Commands {
 struct ManagedProviderTrampolineArgs {
     #[arg(long)]
     release_fd: i32,
+    #[arg(long)]
+    exec_status_fd: i32,
     #[arg(value_name = "PROGRAM")]
     program: OsString,
     #[arg(trailing_var_arg = true)]
@@ -202,6 +211,12 @@ enum MachineCommand {
     Repair(MachineRepairArgs),
 }
 
+#[derive(Subcommand)]
+enum ShippingCommand {
+    /// Inspect retained source evidence for a blocked or pending upload.
+    Inspect(ShippingInspectArgs),
+}
+
 #[derive(Args)]
 struct MachineRepairArgs {
     #[arg(long)]
@@ -210,6 +225,22 @@ struct MachineRepairArgs {
     repair_service: bool,
     #[arg(long)]
     json: bool,
+    #[arg(long)]
+    state_root: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct ShippingInspectArgs {
+    /// Inspect one exact source epoch.
+    #[arg(long)]
+    source_epoch: Option<String>,
+    /// Maximum source intents to show (bounded to keep the repair surface responsive).
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
+    /// Emit machine-readable evidence.
+    #[arg(long)]
+    json: bool,
+    /// Longhouse home override for diagnostics and tests.
     #[arg(long)]
     state_root: Option<PathBuf>,
 }
@@ -268,8 +299,8 @@ struct OpencodeLaunchArgs {
     /// Resume an ended managed OpenCode Helm session without changing its provider session.
     #[arg(long)]
     resume_session: Option<String>,
-    #[arg(long, alias = "config-dir")]
-    claude_dir: Option<PathBuf>,
+    #[arg(long = "config-dir", alias = "claude-dir")]
+    config_dir: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -310,8 +341,8 @@ struct OpencodeAttachArgs {
     session_id: String,
     #[arg(long)]
     opencode_bin: Option<String>,
-    #[arg(long, alias = "config-dir")]
-    claude_dir: Option<PathBuf>,
+    #[arg(long = "config-dir", alias = "claude-dir")]
+    config_dir: Option<PathBuf>,
 }
 #[derive(Args)]
 struct OpencodeStopArgs {
@@ -356,6 +387,10 @@ struct MachineState {
 struct BridgeStartResponse {
     ws_url: String,
     thread_id: Option<String>,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    process_start_time: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -389,31 +424,30 @@ struct BridgeState {
 }
 
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
-    if let Some(override_path) = std::env::var_os("LONGHOUSE_ENGINE_BIN") {
-        return Ok(PathBuf::from(override_path));
-    }
-    let exe = std::fs::canonicalize(
-        std::env::current_exe().context("resolve native longhouse executable")?,
-    )
-    .context("resolve native longhouse executable path")?;
-    let dir = exe
-        .parent()
-        .context("native longhouse executable has no parent")?;
-    Ok(dir.join(if cfg!(windows) {
-        "longhouse-engine.exe"
+    let path = if let Some(override_path) = std::env::var_os("LONGHOUSE_ENGINE_BIN") {
+        PathBuf::from(override_path)
     } else {
-        "longhouse-engine"
-    }))
+        let exe = std::fs::canonicalize(
+            std::env::current_exe().context("resolve native longhouse executable")?,
+        )
+        .context("resolve native longhouse executable path")?;
+        let dir = exe
+            .parent()
+            .context("native longhouse executable has no parent")?;
+        dir.join(if cfg!(windows) {
+            "longhouse-engine.exe"
+        } else {
+            "longhouse-engine"
+        })
+    };
+    if !path.is_file() {
+        anyhow::bail!("paired longhouse-engine not found at {}", path.display());
+    }
+    Ok(path)
 }
 
 fn pair_identity() -> anyhow::Result<PairIdentity> {
     let engine_path = paired_engine_path()?;
-    if !engine_path.is_file() {
-        anyhow::bail!(
-            "paired longhouse-engine not found at {}",
-            engine_path.display()
-        );
-    }
     let output = Command::new(&engine_path)
         .args(["build-identity", "--json"])
         .output()
@@ -539,7 +573,11 @@ fn shell_quote_path(path: &Path) -> String {
 
 fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
     let _ = args.fast;
-    let mut command = Command::new(paired_engine_path()?);
+    let engine = paired_engine_path()?;
+    if !engine.is_file() {
+        anyhow::bail!("paired longhouse-engine not found at {}", engine.display());
+    }
+    let mut command = Command::new(engine);
     command.args(["device", "local-health"]);
     if args.json {
         command.arg("--json");
@@ -719,6 +757,174 @@ fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
+    Ok(())
+}
+
+/// Resolve the shipper database without creating it or running schema
+/// migrations. This command is used by repair UI, so inspection must remain
+/// safe while the Machine Agent owns the live database.
+fn shipping_database_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
+    let home = state_root
+        .map(Path::to_path_buf)
+        .unwrap_or(longhouse_home()?);
+    Ok(home.join("agent/longhouse-shipper.db"))
+}
+
+fn read_shipping_source_rows(
+    state_root: Option<&Path>,
+    source_epoch: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<(PathBuf, Vec<serde_json::Value>)> {
+    if !(1..=500).contains(&limit) {
+        anyhow::bail!("--limit must be between 1 and 500");
+    }
+    let database = shipping_database_path(state_root)?;
+    if !database.is_file() {
+        return Ok((database, Vec::new()));
+    }
+
+    let connection = Connection::open_with_flags(
+        &database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("open shipping database read-only: {}", database.display()))?;
+    connection
+        .busy_timeout(Duration::from_secs(1))
+        .context("configure shipping inspection read timeout")?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT pending.source_epoch,
+               pending.source_path,
+               pending.range_start,
+               pending.range_end,
+               pending.envelope_id,
+               pending.raw_bytes,
+               pending.event_count,
+               pending.has_reply_evidence,
+               pending.created_at,
+               pending.attempt_count,
+               pending.last_attempt_at,
+               pending.blocked_at,
+               pending.block_kind,
+               pending.block_detail,
+               epoch.provider,
+               epoch.opaque_source_id
+        FROM pending_source_envelope AS pending
+        LEFT JOIN source_epoch_registry AS epoch
+          ON epoch.source_epoch = pending.source_epoch
+        WHERE (?1 IS NULL OR pending.source_epoch = ?1)
+        ORDER BY pending.blocked_at IS NOT NULL DESC, pending.created_at, pending.source_epoch
+        LIMIT ?2
+        "#,
+    )?;
+    let rows = statement
+        .query_map(rusqlite::params![source_epoch, limit as i64], |row| {
+            Ok(json!({
+                "source_epoch": row.get::<_, String>(0)?,
+                "source_path": row.get::<_, String>(1)?,
+                "range_start": row.get::<_, i64>(2)?,
+                "range_end": row.get::<_, i64>(3)?,
+                "envelope_id": row.get::<_, String>(4)?,
+                "raw_bytes": row.get::<_, i64>(5)?,
+                "event_count": row.get::<_, i64>(6)?,
+                "has_reply_evidence": row.get::<_, i64>(7)?,
+                "created_at": row.get::<_, String>(8)?,
+                "attempt_count": row.get::<_, i64>(9)?,
+                "last_attempt_at": row.get::<_, Option<String>>(10)?,
+                "blocked_at": row.get::<_, Option<String>>(11)?,
+                "block_kind": row.get::<_, Option<String>>(12)?,
+                "block_detail": row.get::<_, Option<String>>(13)?,
+                "provider": row.get::<_, Option<String>>(14)?,
+                "opaque_source_id": row.get::<_, Option<String>>(15)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((database, rows))
+}
+
+fn native_shipping_inspect(args: ShippingInspectArgs) -> anyhow::Result<()> {
+    let (database, rows) = read_shipping_source_rows(
+        args.state_root.as_deref(),
+        args.source_epoch.as_deref(),
+        args.limit,
+    )?;
+    let database_exists = database.is_file();
+    let payload = json!({
+        "schema_version": 1,
+        "action_id": "inspect_storage_source",
+        "read_only": true,
+        "database_exists": database_exists,
+        "database": database,
+        "source_epoch": args.source_epoch,
+        "rows": rows,
+        "note": "Rows are retained source evidence. Safe metadata conflicts are reconciled by the Machine Agent; unresolved event-bearing rows must not be retried or discarded blindly.",
+    });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    let rows = payload
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    println!("Durable shipping source evidence (read-only)");
+    println!("  database: {}", database.display());
+    if !database_exists {
+        println!("  Database is not present; no local source evidence was inspected.");
+        return Ok(());
+    }
+    println!("  rows: {}", rows.len());
+    if rows.is_empty() {
+        println!("  No retained source intents matched the requested scope.");
+        return Ok(());
+    }
+    for row in rows {
+        let provider = row
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let source = row
+            .get("opaque_source_id")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| row.get("source_path").and_then(serde_json::Value::as_str))
+            .unwrap_or("unknown");
+        let block_kind = row
+            .get("block_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("pending");
+        let risk = if !matches!(
+            block_kind,
+            "pending" | "source_epoch_conflict" | "render_generation_revision_conflict"
+        ) {
+            "unresolved evidence risk"
+        } else {
+            "metadata/reconciliation work"
+        };
+        println!(
+            "  {provider} {source} epoch={} range={}..{} kind={block_kind}",
+            row.get("source_epoch")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            row.get("range_start")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+            row.get("range_end")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+        );
+        println!(
+            "    risk: {risk}; attempts={}; detail={}",
+            row.get("attempt_count")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+            row.get("block_detail")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-"),
+        );
+    }
+    println!("  action: inspect this evidence before retrying or discarding it");
     Ok(())
 }
 
@@ -925,124 +1131,6 @@ impl DeferredNotices {
     }
 }
 
-struct ClaudeRegistrationRetry {
-    provider_alive: Arc<AtomicBool>,
-    cancel: Arc<AtomicBool>,
-}
-
-impl Drop for ClaudeRegistrationRetry {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
-    }
-}
-
-fn spawn_claude_registration_retry(
-    url: &str,
-    token: &str,
-    payload: serde_json::Value,
-    session_id: &str,
-    notices: DeferredNotices,
-) -> ClaudeRegistrationRetry {
-    let url = url.to_string();
-    let token = token.to_string();
-    let session_id = session_id.to_string();
-    let provider_alive = Arc::new(AtomicBool::new(false));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let provider_alive_for_thread = Arc::clone(&provider_alive);
-    let cancel_for_thread = Arc::clone(&cancel);
-    std::thread::spawn(move || {
-        for attempt in 0..5 {
-            if cancel_for_thread.load(Ordering::Acquire) {
-                return;
-            }
-            let Ok(runtime) = tokio::runtime::Runtime::new() else {
-                return;
-            };
-            match register_managed_launch_with_timeout(
-                &runtime,
-                &url,
-                &token,
-                "Claude degraded",
-                &payload,
-                Some(&session_id),
-                Duration::from_secs(2),
-            ) {
-                Ok(response) => {
-                    if response.provider_session_id.as_deref()
-                        != payload.get("provider_session_id").and_then(|value| value.as_str())
-                    {
-                        notices.push(
-                            "Longhouse warning: degraded Claude registration returned a different provider identity"
-                                .to_string(),
-                        );
-                        let _transaction = ManagedLaunchTransaction::new(
-                            &runtime,
-                            &url,
-                            &token,
-                            &response.session_id,
-                            &response.run_id,
-                        );
-                    } else {
-                        let mut transaction = ManagedLaunchTransaction::new(
-                            &runtime,
-                            &url,
-                            &token,
-                            &response.session_id,
-                            &response.run_id,
-                        );
-                        for _ in 0..100 {
-                            if cancel_for_thread.load(Ordering::Acquire) {
-                                return;
-                            }
-                            if provider_alive_for_thread.load(Ordering::Acquire) {
-                                if let Err(error) = transaction.confirm() {
-                                    notices.push(format!(
-                                        "Longhouse warning: recovered Claude registration could not be confirmed: {error:#}"
-                                    ));
-                                }
-                                return;
-                            }
-                            std::thread::sleep(Duration::from_millis(100));
-                        }
-                        notices.push(
-                            "Longhouse warning: Claude exited before recovered registration became ready"
-                                .to_string(),
-                        );
-                    }
-                    return;
-                }
-                Err(error) if attempt < 4 => {
-                    // Surface the outage before sleeping so the transient notice
-                    // reads in order. The final attempt's error is the most
-                    // recent and is reported by the failure arm below.
-                    if attempt == 0 {
-                        notices.push(
-                            "Longhouse warning: Runtime Host is still unavailable; Claude is running locally and registration will retry"
-                                .to_string(),
-                        );
-                    }
-                    let _ = error;
-                    for _ in 0..2_u64.pow(attempt) {
-                        if cancel_for_thread.load(Ordering::Acquire) {
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-                }
-                Err(error) => {
-                    notices.push(format!(
-                        "Longhouse warning: could not recover Claude Helm registration: {error:#}"
-                    ));
-                }
-            }
-        }
-    });
-    ClaudeRegistrationRetry {
-        provider_alive,
-        cancel,
-    }
-}
-
 fn claude_registration_issue(
     response: &ManagedLaunchResponse,
     expected_provider_session_id: Option<&str>,
@@ -1165,16 +1253,20 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         payload["session_id"] = json!(Uuid::new_v4().to_string());
         payload["provider_session_id"] = json!(Uuid::new_v4().to_string());
     }
-    let mut degraded_registration: Option<ClaudeRegistrationRetry> = None;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
     // Deferred degradation/recovery notices: the retry thread must not write
     // directly to the caller's terminal while the provider TUI owns the
     // alternate screen, so route them through a buffer drained only after the
     // child exits and the terminal is restored.
     let deferred_notices = DeferredNotices::default();
     let expected_session_id = if resume_target.is_some() {
-        resume_target.as_ref().map(|target| target.session_id.as_str())
+        resume_target
+            .as_ref()
+            .map(|target| target.session_id.as_str())
     } else {
-        payload.get("session_id").and_then(serde_json::Value::as_str)
+        payload
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
     };
     let registration = register_managed_launch_with_timeout(
         &runtime,
@@ -1193,12 +1285,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     );
     let mut response: Option<ManagedLaunchResponse> = match registration {
         Ok(response) => Some(response),
-        Err(error) => {
+        Err(error) if resume_target.is_none() && !args.remote_approve => {
             eprintln!(
                 "Longhouse warning: starting Claude without Longhouse control because registration failed ({error:#})"
             );
             None
         }
+        Err(error) => return Err(error),
     };
     let expected_provider_session_id = resume_target
         .as_ref()
@@ -1226,18 +1319,24 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
             .context("Claude degraded launch lost its client-minted session identity")?;
-        degraded_registration = Some(spawn_claude_registration_retry(
+        degraded_registration = Some(spawn_managed_launch_registration_retry(
             &url,
             &token,
+            "Claude",
             payload.clone(),
             session_id,
-            deferred_notices.clone(),
-        ));
+            "claude_channel_bridge",
+        )?);
     }
     let session_id = response
         .as_ref()
         .map(|response| response.session_id.clone())
-        .or_else(|| payload.get("session_id").and_then(|value| value.as_str()).map(str::to_owned))
+        .or_else(|| {
+            payload
+                .get("session_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
         .context("degraded Claude launch has no session identity")?;
     let run_id = response
         .as_ref()
@@ -1256,7 +1355,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     )
         .context("Longhouse did not return a Claude provider session")?;
     let mut launch_transaction = response.as_ref().map(|response| {
-        ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
+        ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        )
     });
     let permission_mode = response
         .as_ref()
@@ -1326,15 +1431,20 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let degraded_provider_alive_for_spawn = degraded_registration
-        .as_ref()
-        .map(|registration| Arc::clone(&registration.provider_alive));
-    let run_result = run_foreground_command_after_spawn(&mut command, || {
-        if let Some(provider_alive) = degraded_provider_alive_for_spawn {
-            provider_alive.store(true, Ordering::Release);
+    let degraded_provider_registration_for_spawn = degraded_registration.as_ref().cloned();
+    let run_result = run_foreground_command_after_spawn(&mut command, |provider_pid| {
+        if let Some(registration) = degraded_provider_registration_for_spawn {
+            registration.record_provider_owner(
+                provider_pid,
+                crate::managed_launch_lifecycle::process_start_identity(provider_pid),
+            );
+            registration.mark_provider_ready();
         }
         match launch_transaction.as_mut() {
-            Some(transaction) => transaction.confirm(),
+            Some(transaction) => {
+                transaction.confirm_in_background();
+                Ok(())
+            }
             None => Ok(()),
         }
     });
@@ -1342,7 +1452,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         Ok(exit) => exit,
         Err(error) => {
             if let Some(registration) = &degraded_registration {
-                registration.provider_alive.store(false, Ordering::Release);
+                registration.mark_provider_failed();
             }
             if !retained_contract_existed {
                 let _ = std::fs::remove_file(&contract_path);
@@ -1351,7 +1461,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         }
     };
     if let Some(registration) = &degraded_registration {
-        registration.provider_alive.store(false, Ordering::Release);
+        registration.mark_provider_exited();
     }
     drop(degraded_registration);
     // The child has exited and the terminal is restored; surface any deferred
@@ -1410,7 +1520,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             ("resume_attempt_id", json!(Uuid::new_v4().to_string())),
             ("provider_thread_id", json!(target.provider_session_id)),
         ],
-        None => vec![],
+        None => vec![("session_id", json!(Uuid::new_v4().to_string()))],
     };
     let mut payload = ManagedLaunchRegistration {
         provider: "opencode",
@@ -1432,28 +1542,64 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         payload["launch_surface"] = json!(surface);
     }
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(
-        &runtime,
-        &url,
-        &token,
-        if resume_target.is_some() {
-            "OpenCode resume"
-        } else {
-            "OpenCode"
-        },
-        &payload,
-        resume_target
-            .as_ref()
-            .map(|target| target.session_id.as_str()),
-    )?;
-    let mut launch_transaction = ManagedLaunchTransaction::new(
-        &runtime,
-        &url,
-        &token,
-        &response.session_id,
-        &response.run_id,
-    );
-    let coordination_token = response.require_authority("OpenCode", "opencode_server_bridge")?;
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .context("OpenCode launch lost its session identity")?;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
+    let response = if resume_target.is_some() {
+        register_managed_launch(
+            &runtime,
+            &url,
+            &token,
+            "OpenCode resume",
+            &payload,
+            Some(expected_session_id),
+        )?
+    } else {
+        match register_managed_launch_with_timeout(
+            &runtime,
+            &url,
+            &token,
+            "OpenCode",
+            &payload,
+            Some(expected_session_id),
+            Duration::from_millis(750),
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                degraded_registration = Some(spawn_managed_launch_registration_retry(
+                    &url,
+                    &token,
+                    "OpenCode",
+                    payload.clone(),
+                    expected_session_id,
+                    "opencode_server_bridge",
+                )?);
+                eprintln!(
+                    "Longhouse warning: starting OpenCode in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration after this wrapper returns ({error:#})"
+                );
+                ManagedLaunchResponse::degraded_from_payload(
+                    &payload,
+                    "OpenCode",
+                    "opencode_server_bridge",
+                )?
+            }
+        }
+    };
+    response.validate_transport("OpenCode", "opencode_server_bridge")?;
+    let mut launch_transaction = if degraded_registration.is_none() {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ))
+    } else {
+        None
+    };
+    let coordination_token = response.coordination_token().map(str::to_owned);
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -1480,12 +1626,16 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             } else {
                 "detached"
             },
-        ])
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        ]);
+    if let Some(coordination_token) = coordination_token.as_deref() {
+        start.env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+    } else {
+        start.env_remove("LONGHOUSE_COORDINATION_TOKEN");
+    }
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
     }
-    if let Some(dir) = &args.claude_dir {
+    if let Some(dir) = &args.config_dir {
         start.arg("--claude-dir").arg(dir);
     }
     if let Some(target) = &resume_target {
@@ -1495,7 +1645,10 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     let output = start.output().context("start native OpenCode bridge")?;
     if !output.status.success() {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        if let Some(registration) = &degraded_registration {
+            registration.mark_provider_failed();
+        }
+        let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
         anyhow::bail!(
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -1506,7 +1659,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     {
         Ok(response) => response,
         Err(error) => {
-            let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+            let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
             return Err(error);
         }
     };
@@ -1514,22 +1667,33 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
     {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
-        return Err(error);
+    if let Some(registration) = &degraded_registration {
+        if let Some(pid) = bridge_response.pid {
+            registration.record_provider_owner(pid, bridge_response.process_start_time.clone());
+        }
+        registration.mark_provider_ready();
     }
-    println!(
-        "Managed OpenCode ready\n→ {}/s/{}",
-        url.trim_end_matches('/'),
-        response
-            .session_id
-            .split('-')
-            .next()
-            .unwrap_or(&response.session_id)
-    );
+    if let Some(transaction) = launch_transaction.as_mut() {
+        transaction.confirm_in_background();
+    }
+    if degraded_registration.is_some() {
+        println!(
+            "Managed OpenCode started in degraded Helm mode\n→ local provider ownership is active; Runtime Host registration is pending"
+        );
+    } else {
+        println!(
+            "Managed OpenCode ready\n→ {}/s/{}",
+            url.trim_end_matches('/'),
+            response
+                .session_id
+                .split('-')
+                .next()
+                .unwrap_or(&response.session_id)
+        );
+    }
     let attached = args.attach
         && !args.no_attach
         && std::io::stdin().is_terminal()
@@ -1551,9 +1715,12 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         &opencode_bin,
     ]);
     let run_result = run_foreground_command(&mut attach);
-    let stop_result = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
-    let exit = run_result?;
-    stop_result?;
+    let stop_result = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+    let exit = finish_managed_opencode_attach(run_result, stop_result, || {
+        if let Some(registration) = &degraded_registration {
+            registration.mark_provider_exited();
+        }
+    })?;
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -1561,9 +1728,27 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn finish_managed_opencode_attach(
+    run_result: anyhow::Result<i32>,
+    stop_result: anyhow::Result<()>,
+    mark_provider_exited: impl FnOnce(),
+) -> anyhow::Result<i32> {
+    // Teardown errors must not strand a ready provider as a live retry owner.
+    // Record the provider exit before propagating either foreground or cleanup
+    // error so restart reconciliation sees the true post-hoc lifecycle.
+    mark_provider_exited();
+    let exit = run_result?;
+    stop_result?;
+    Ok(exit)
+}
+
 #[derive(Deserialize)]
 struct OpencodeBridgeStartResponse {
     provider_session_id: String,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    process_start_time: Option<String>,
 }
 
 struct OpencodeResumeTarget {
@@ -1636,7 +1821,7 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     if let Some(bin) = args.opencode_bin {
         command.args(["--opencode-bin", &bin]);
     }
-    if let Some(dir) = args.claude_dir {
+    if let Some(dir) = args.config_dir {
         command.arg("--claude-dir").arg(dir);
     }
     let run_result = run_foreground_command(&mut command);
@@ -1654,11 +1839,11 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
 /// terminal indefinitely on exit.
 const OPENCODE_STOP_DEADLINE: Duration = Duration::from_secs(10);
 
-fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
+fn stop_opencode_bridge(session_id: &str, config_dir: Option<PathBuf>) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
     let mut command = Command::new(paired_engine_path()?);
     command.args(["opencode-bridge", "stop", "--session-id", session_id]);
-    if let Some(dir) = claude_dir {
+    if let Some(dir) = config_dir {
         command.arg("--claude-dir").arg(dir);
     }
     let mut child = command
@@ -1973,19 +2158,67 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         } else {
             PermissionMode::ProviderLocal
         },
-        extra: vec![],
+        extra: vec![("session_id", json!(Uuid::new_v4().to_string()))],
     }
     .to_json();
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(&runtime, &url, &token, "Codex", &payload, None)?;
-    let mut launch_transaction = ManagedLaunchTransaction::new(
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .context("Codex launch lost its client-minted session identity")?;
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
+    let response = match register_managed_launch_with_timeout(
         &runtime,
         &url,
         &token,
-        &response.session_id,
-        &response.run_id,
-    );
-    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
+        "Codex",
+        &payload,
+        Some(expected_session_id),
+        Duration::from_millis(750),
+    ) {
+        Ok(response) => Some(response),
+        Err(error) => {
+            let response = ManagedLaunchResponse::degraded_from_payload(
+                &payload,
+                "Codex",
+                "codex_app_server",
+            )?;
+            degraded_registration = Some(spawn_managed_launch_registration_retry(
+                &url,
+                &token,
+                "Codex",
+                payload.clone(),
+                expected_session_id,
+                "codex_app_server",
+            )?);
+            eprintln!(
+                "Longhouse warning: starting Codex in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration after this wrapper returns ({error:#})"
+            );
+            Some(response)
+        }
+    };
+    if let Some(response) = response.as_ref() {
+        if let Some(registered) = response.managed_transport.as_deref() {
+            if registered != "codex_app_server" {
+                anyhow::bail!(
+                    "Runtime Host returned an unsupported managed-local transport for Codex (expected codex_app_server, got {registered})"
+                );
+            }
+        }
+    }
+    let response = response.context("Codex launch has no local session identity")?;
+    let mut launch_transaction = if degraded_registration.is_none() {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ))
+    } else {
+        None
+    };
+    let coordination_token = response.coordination_token().map(str::to_owned);
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
@@ -2013,8 +2246,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             launch_mode,
             "--json",
         ])
-        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token)
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token);
+    if let Some(coordination_token) = coordination_token.as_deref() {
+        bridge.env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+    } else {
+        bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN");
+    }
     if !attach {
         bridge.arg("--create-initial-thread");
     }
@@ -2026,6 +2263,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     }
     let output = bridge.output().context("start native Codex bridge")?;
     if !output.status.success() {
+        if let Some(registration) = &degraded_registration {
+            registration.mark_provider_failed();
+        }
         anyhow::bail!(
             "Codex bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -2046,23 +2286,30 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        let _ = stop_codex_bridge(
-            &response.session_id,
-            Some(response.run_id.as_str()),
-            "launch_confirmation_failed",
-        );
-        return Err(error);
+    if let Some(registration) = &degraded_registration {
+        if let Some(pid) = bridge.pid {
+            registration.record_provider_owner(pid, bridge.process_start_time.clone());
+        }
+        registration.mark_provider_ready();
     }
-    println!(
-        "Managed Codex ready\n→ {}/s/{}",
-        url.trim_end_matches('/'),
-        response
-            .session_id
-            .split('-')
-            .next()
-            .unwrap_or(&response.session_id)
-    );
+    if let Some(transaction) = launch_transaction.as_mut() {
+        transaction.confirm_in_background();
+    }
+    if degraded_registration.is_some() {
+        println!(
+            "Managed Codex started in degraded Helm mode\n→ local provider ownership is active; Runtime Host registration is pending"
+        );
+    } else {
+        println!(
+            "Managed Codex ready\n→ {}/s/{}",
+            url.trim_end_matches('/'),
+            response
+                .session_id
+                .split('-')
+                .next()
+                .unwrap_or(&response.session_id)
+        );
+    }
     if !attach {
         if args.attach && !args.no_attach {
             eprintln!("Skipping auto-attach because stdin/stdout are not TTYs.");
@@ -2071,6 +2318,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "Attach: longhouse codex attach --session-id {}",
             response.session_id
         );
+        // The bridge owns the provider after this process exits. The Machine
+        // Agent owns the durable registration intent and will retry it after
+        // this wrapper returns.
         return Ok(());
     }
     if let Err(error) = record_codex_contract(
@@ -2094,12 +2344,16 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    finish_codex_tui_session(
+    let result = finish_codex_tui_session(
         tui_result,
         &response.session_id,
         Some(response.run_id.as_str()),
         Some(&machine_name),
-    )
+    );
+    if let Some(registration) = &degraded_registration {
+        registration.mark_provider_exited();
+    }
+    result
 }
 
 fn launch_managed_codex_resume(
@@ -2203,10 +2457,7 @@ fn launch_managed_codex_resume(
         stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
         anyhow::bail!("Codex resumed a different provider thread; the new run was stopped");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
-        return Err(error);
-    }
+    launch_transaction.confirm_in_background();
     if let Err(error) = record_codex_contract(
         &response.session_id,
         cwd,
@@ -2746,6 +2997,20 @@ fn interactive_stdio() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
+#[cfg(unix)]
+fn terminal_foreground_available(stdin_fd: libc::c_int, parent_pgrp: libc::pid_t) -> bool {
+    // Probe the operation that the normal handoff needs while the wrapper
+    // still owns the terminal. If it cannot make its own process group
+    // foreground, start the provider in the wrapper's existing group instead
+    // of creating a background group that would receive SIGTTIN.
+    let previous_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
+    let available = unsafe { libc::tcsetpgrp(stdin_fd, parent_pgrp) == 0 };
+    unsafe {
+        libc::signal(libc::SIGTTOU, previous_sigttou);
+    }
+    available
+}
+
 fn wait_for_child_or_signal(
     child: &mut std::process::Child,
     signal: &Arc<AtomicUsize>,
@@ -2763,9 +3028,8 @@ fn wait_for_child_or_signal(
             }
 
             let mut raw_status = 0;
-            let waited = unsafe {
-                libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED)
-            };
+            let waited =
+                unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED) };
             if waited == pid {
                 if libc::WIFEXITED(raw_status) {
                     return Ok(libc::WEXITSTATUS(raw_status));
@@ -2781,7 +3045,11 @@ fn wait_for_child_or_signal(
                     // outcome. This also makes a Ctrl-C recover a provider
                     // that was stopped by SIGTTOU/SIGTTIN during startup.
                     unsafe {
-                        libc::kill(-process_group.unwrap_or(pid), libc::SIGCONT);
+                        if let Some(group) = process_group {
+                            libc::kill(-group, libc::SIGCONT);
+                        } else {
+                            libc::kill(pid, libc::SIGCONT);
+                        }
                     }
                     notices.push(format!(
                         "Longhouse warning: provider stopped by signal {stop_signal}; resuming it"
@@ -2827,10 +3095,7 @@ fn terminate_child(child: &mut std::process::Child, process_group: Option<libc::
 }
 
 #[cfg(unix)]
-fn terminate_and_reap_child(
-    child: &mut std::process::Child,
-    process_group: Option<libc::pid_t>,
-) {
+fn terminate_and_reap_child(child: &mut std::process::Child, process_group: Option<libc::pid_t>) {
     terminate_child(child, process_group);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -2900,6 +3165,11 @@ fn run_managed_provider_trampoline(args: ManagedProviderTrampolineArgs) -> anyho
     if release_fd < 0 {
         anyhow::bail!("managed provider release fd is invalid");
     }
+    let exec_status_fd = RawFd::try_from(args.exec_status_fd)
+        .map_err(|_| anyhow::anyhow!("managed provider exec status fd is invalid"))?;
+    if exec_status_fd < 0 {
+        anyhow::bail!("managed provider exec status fd is invalid");
+    }
     let mut byte = [0_u8; 1];
     loop {
         let result = unsafe {
@@ -2915,39 +3185,134 @@ fn run_managed_provider_trampoline(args: ManagedProviderTrampolineArgs) -> anyho
         if result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
             continue;
         }
+        let read_error = std::io::Error::last_os_error();
         unsafe {
             libc::close(release_fd);
+            // The parent is waiting for a byte-or-EOF result. Every
+            // trampoline failure before provider exec must send a byte;
+            // EOF is reserved for a successful exec image replacement.
+            let code = [1_u8; 1];
+            libc::write(
+                exec_status_fd,
+                code.as_ptr().cast::<libc::c_void>(),
+                code.len(),
+            );
+            libc::close(exec_status_fd);
         }
         if result == 0 {
             anyhow::bail!("managed provider release barrier closed before handoff");
         }
-        return Err(std::io::Error::last_os_error().into());
+        return Err(read_error.into());
     }
     unsafe {
         libc::close(release_fd);
     }
 
+    // The trampoline must keep this descriptor open for its own exec, then
+    // close it automatically when the provider image replaces the trampoline.
+    // The status pipe remains open through provider exec. A failure byte is
+    // written for every pre-exec failure; successful exec closes it via
+    // FD_CLOEXEC, so the parent sees EOF only after the provider is installed.
+    let flags = unsafe { libc::fcntl(exec_status_fd, libc::F_GETFD) };
+    if flags < 0
+        || unsafe { libc::fcntl(exec_status_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            let code = [1_u8; 1];
+            libc::write(
+                exec_status_fd,
+                code.as_ptr().cast::<libc::c_void>(),
+                code.len(),
+            );
+            libc::close(exec_status_fd);
+        }
+        return Err(error.into());
+    }
     let mut command = Command::new(args.program);
     command.args(args.args);
-    Err(command.exec().into())
+    let error = command.exec();
+    unsafe {
+        // The status pipe write end is close-on-exec. A byte therefore means
+        // the provider failed before exec; EOF means the provider image was
+        // successfully installed in this PID.
+        let code = [1_u8; 1];
+        libc::write(
+            exec_status_fd,
+            code.as_ptr().cast::<libc::c_void>(),
+            code.len(),
+        );
+        libc::close(exec_status_fd);
+    }
+    Err(error.into())
 }
 
 #[cfg(not(unix))]
-fn run_managed_provider_trampoline(
-    _args: ManagedProviderTrampolineArgs,
-) -> anyhow::Result<()> {
+fn run_managed_provider_trampoline(_args: ManagedProviderTrampolineArgs) -> anyhow::Result<()> {
     anyhow::bail!("managed provider terminal handoff is unsupported on this platform")
 }
 
 #[cfg(unix)]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
-    run_foreground_command_after_spawn(command, || Ok(()))
+    run_foreground_command_after_spawn(command, |_| Ok(()))
+}
+
+#[cfg(unix)]
+fn wait_for_provider_exec(fd: std::os::unix::io::RawFd) -> anyhow::Result<()> {
+    wait_for_provider_exec_with_timeout(fd, Duration::from_secs(10))
+}
+
+#[cfg(unix)]
+fn wait_for_provider_exec_with_timeout(
+    fd: std::os::unix::io::RawFd,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let mut byte = [0_u8; 1];
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("managed provider did not complete exec within {timeout:?}");
+        }
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as libc::c_int;
+        let mut poll_fd = libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
+        if poll_result == 0 {
+            anyhow::bail!("managed provider did not complete exec within {timeout:?}");
+        }
+        if poll_result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if poll_fd.revents & libc::POLLNVAL != 0 {
+            anyhow::bail!("managed provider exec status pipe is invalid");
+        }
+        let result =
+            unsafe { libc::read(fd, byte.as_mut_ptr().cast::<libc::c_void>(), byte.len()) };
+        if result == 0 {
+            return Ok(());
+        }
+        if result == 1 {
+            anyhow::bail!("managed provider failed before exec");
+        }
+        if result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        return Err(std::io::Error::last_os_error().into());
+    }
 }
 
 #[cfg(unix)]
 fn run_foreground_command_after_spawn(
     command: &mut Command,
-    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+    after_spawn: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
@@ -2979,12 +3344,49 @@ fn run_foreground_command_after_spawn(
         return Err(error.into());
     }
     let child_release_write = release_fds[1];
+    let mut exec_status_fds = [-1; 2];
+    if unsafe { libc::pipe(exec_status_fds.as_mut_ptr()) } != 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(release_fds[0]);
+            libc::close(release_fds[1]);
+        }
+        return Err(error.into());
+    }
+    let exec_status_flags = unsafe { libc::fcntl(exec_status_fds[1], libc::F_GETFD) };
+    if exec_status_flags < 0
+        || unsafe {
+            libc::fcntl(
+                exec_status_fds[1],
+                libc::F_SETFD,
+                exec_status_flags | libc::FD_CLOEXEC,
+            )
+        } < 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(release_fds[0]);
+            libc::close(release_fds[1]);
+            libc::close(exec_status_fds[0]);
+            libc::close(exec_status_fds[1]);
+        }
+        return Err(error.into());
+    }
+    let child_exec_status_read = exec_status_fds[0];
+    let child_exec_status_write = exec_status_fds[1];
+    let interactive = interactive_stdio();
+    let stdin_fd = if interactive {
+        Some(std::io::stdin().as_raw_fd())
+    } else {
+        None
+    };
+    let parent_pgrp = unsafe { libc::getpgrp() };
+    let create_child_process_group = stdin_fd
+        .map(|fd| terminal_foreground_available(fd, parent_pgrp))
+        .unwrap_or(true);
 
     let program = command.get_program().to_os_string();
-    let provider_args = command
-        .get_args()
-        .map(OsString::from)
-        .collect::<Vec<_>>();
+    let provider_args = command.get_args().map(OsString::from).collect::<Vec<_>>();
     let provider_env = command
         .get_envs()
         .map(|(key, value)| (key.to_os_string(), value.map(OsString::from)))
@@ -3005,6 +3407,8 @@ fn run_foreground_command_after_spawn(
         .arg("__managed-provider-trampoline")
         .arg("--release-fd")
         .arg(release_fds[0].to_string())
+        .arg("--exec-status-fd")
+        .arg(child_exec_status_write.to_string())
         .arg("--")
         .arg(program)
         .args(provider_args);
@@ -3031,7 +3435,18 @@ fn run_foreground_command_after_spawn(
                 libc::signal(signal, libc::SIG_DFL);
             }
             libc::close(child_release_write);
-            if libc::setpgid(0, 0) != 0 {
+            libc::close(child_exec_status_read);
+            let flags = libc::fcntl(child_exec_status_write, libc::F_GETFD);
+            if flags < 0
+                || libc::fcntl(
+                    child_exec_status_write,
+                    libc::F_SETFD,
+                    flags & !libc::FD_CLOEXEC,
+                ) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            if create_child_process_group && libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -3043,12 +3458,15 @@ fn run_foreground_command_after_spawn(
             unsafe {
                 libc::close(release_fds[0]);
                 libc::close(release_fds[1]);
+                libc::close(exec_status_fds[0]);
+                libc::close(exec_status_fds[1]);
             }
             return Err(error.into());
         }
     };
     unsafe {
         libc::close(release_fds[0]);
+        libc::close(exec_status_fds[1]);
     }
     release_fds[0] = -1;
     let signal = match install_tui_signal_flag() {
@@ -3056,40 +3474,52 @@ fn run_foreground_command_after_spawn(
         Err(error) => {
             unsafe {
                 libc::close(release_fds[1]);
+                libc::close(child_exec_status_read);
             }
             let child_pgrp = child.id() as libc::pid_t;
-            terminate_and_reap_child(&mut child, Some(child_pgrp));
+            terminate_and_reap_child(&mut child, create_child_process_group.then_some(child_pgrp));
             return Err(error);
         }
     };
     let child_pgrp = child.id() as libc::pid_t;
-    unsafe {
-        libc::setpgid(child_pgrp, child_pgrp);
-    }
-    if let Err(error) = after_spawn() {
+    let child_process_group = if create_child_process_group {
+        // The trampoline normally establishes this group before exec. Keep
+        // the parent-side call as a race-tolerant reinforcement, but never
+        // create a new group after the terminal preflight selected the
+        // wrapper's existing group as the degraded fallback.
         unsafe {
-            libc::close(release_fds[1]);
+            libc::setpgid(child_pgrp, child_pgrp);
         }
-        terminate_and_reap_child(&mut child, Some(child_pgrp));
-        return Err(error);
-    }
-    // Buffer notices raised while the provider child owns the terminal (e.g.
-    // "provider stopped by signal") and surface them only after the terminal
-    // is restored, so raw text never lands inside the provider's alternate
-    // screen. Shared by every provider launch through this helper.
+        Some(child_pgrp)
+    } else {
+        None
+    };
+    // Buffer notices raised while the provider child owns the terminal and
+    // surface them only after the terminal is restored.
     let notices = DeferredNotices::default();
-    if !interactive_stdio() {
+    if !interactive {
         unsafe {
             libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
             libc::close(release_fds[1]);
         }
-        let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp), &notices);
+        let exec_result = wait_for_provider_exec(child_exec_status_read);
+        if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+            unsafe {
+                libc::close(child_exec_status_read);
+            }
+            terminate_and_reap_child(&mut child, child_process_group);
+            return Err(error);
+        }
+        unsafe {
+            libc::close(child_exec_status_read);
+        }
+        let status = wait_for_child_or_signal(&mut child, &signal, child_process_group, &notices);
         for message in notices.drain() {
             eprintln!("{message}");
         }
         return status;
     }
-    let stdin_fd = std::io::stdin().as_raw_fd();
+    let stdin_fd = stdin_fd.expect("interactive managed provider requires stdin");
     let saved_termios = {
         let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
         if unsafe { libc::tcgetattr(stdin_fd, &mut termios) } == 0 {
@@ -3104,60 +3534,75 @@ fn run_foreground_command_after_spawn(
     };
     let old_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
     let parent_pgrp = unsafe { libc::tcgetpgrp(stdin_fd) };
-    if parent_pgrp < 0 {
-        let error = std::io::Error::last_os_error();
-        if matches!(
-            error.raw_os_error(),
+    let no_controlling_terminal = parent_pgrp < 0
+        && matches!(
+            std::io::Error::last_os_error().raw_os_error(),
             Some(code) if code == libc::ENOTTY || code == libc::EINVAL
-        ) {
-            // A nested automation PTY can be a TTY for stdio without being a
-            // controlling terminal for this process. There is no foreground
-            // process group to switch in that case, but the child still owns
-            // the inherited PTY streams. Keep the mode explicit and continue
-            // with the same bounded process-group wait used after handoff.
-            eprintln!(
-                "Longhouse notice: terminal has no controlling process group; using inherited PTY mode"
-            );
-            unsafe {
-                libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
-                libc::close(release_fds[1]);
-                libc::signal(libc::SIGTTOU, old_sigttou);
-            }
-            let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp), &notices);
-            if let Some(termios) = saved_termios {
-                if unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) } != 0 {
-                    eprintln!(
-                        "Longhouse warning: could not restore terminal attributes: {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
-            }
-            for message in notices.drain() {
-                eprintln!("{message}");
-            }
-            return status;
-        }
+        );
+    if parent_pgrp < 0 && !no_controlling_terminal {
+        let error = std::io::Error::last_os_error();
         unsafe {
             libc::close(release_fds[1]);
+            libc::close(child_exec_status_read);
             libc::signal(libc::SIGTTOU, old_sigttou);
         }
-        terminate_and_reap_child(&mut child, Some(child_pgrp));
+        terminate_and_reap_child(&mut child, child_process_group);
         return Err(error).context("inspect terminal foreground process group");
     }
-    let handed_off = unsafe { libc::tcsetpgrp(stdin_fd, child_pgrp) == 0 };
-    if !handed_off {
+    let inherited_pty = no_controlling_terminal || child_process_group.is_none();
+    if inherited_pty {
+        eprintln!(
+            "Longhouse notice: terminal foreground handoff unavailable; using inherited PTY mode"
+        );
+    }
+    let handed_off = if inherited_pty {
+        false
+    } else {
+        child_process_group
+            .map(|group| unsafe { libc::tcsetpgrp(stdin_fd, group) == 0 })
+            .unwrap_or(false)
+    };
+    if !handed_off && !inherited_pty {
+        eprintln!(
+            "Longhouse warning: could not hand the terminal to the managed provider; stopping the provider to avoid a background terminal hang"
+        );
         unsafe {
             libc::close(release_fds[1]);
+            libc::close(child_exec_status_read);
             libc::signal(libc::SIGTTOU, old_sigttou);
         }
-        terminate_and_reap_child(&mut child, Some(child_pgrp));
-        anyhow::bail!("could not hand the terminal to the managed provider");
+        if let Some(termios) = saved_termios {
+            unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) };
+        }
+        terminate_and_reap_child(&mut child, child_process_group);
+        anyhow::bail!(
+            "could not hand the terminal to the managed provider; provider was stopped safely"
+        );
     }
     unsafe {
         libc::write(release_fds[1], [0_u8].as_ptr().cast::<libc::c_void>(), 1);
         libc::close(release_fds[1]);
     }
-    let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp), &notices);
+    let exec_result = wait_for_provider_exec(child_exec_status_read);
+    unsafe {
+        libc::close(child_exec_status_read);
+    }
+    if let Err(error) = exec_result.and_then(|_| after_spawn(child.id())) {
+        unsafe {
+            if handed_off {
+                libc::tcsetpgrp(stdin_fd, parent_pgrp);
+            }
+            libc::signal(libc::SIGTTOU, old_sigttou);
+        }
+        if let Some(termios) = saved_termios {
+            unsafe {
+                libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios);
+            }
+        }
+        terminate_and_reap_child(&mut child, child_process_group);
+        return Err(error);
+    }
+    let status = wait_for_child_or_signal(&mut child, &signal, child_process_group, &notices);
     if handed_off {
         if unsafe { libc::tcsetpgrp(stdin_fd, parent_pgrp) } != 0 {
             eprintln!(
@@ -3185,16 +3630,16 @@ fn run_foreground_command_after_spawn(
 
 #[cfg(not(unix))]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
-    run_foreground_command_after_spawn(command, || Ok(()))
+    run_foreground_command_after_spawn(command, |_| Ok(()))
 }
 
 #[cfg(not(unix))]
 fn run_foreground_command_after_spawn(
     command: &mut Command,
-    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+    after_spawn: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     let mut child = command.spawn()?;
-    if let Err(error) = after_spawn() {
+    if let Err(error) = after_spawn(child.id()) {
         terminate_child(&mut child, None);
         let _ = child.wait();
         return Err(error);
@@ -3601,6 +4046,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Machine { command } => match command {
             MachineCommand::Repair(args) => native_machine_repair(args)?,
         },
+        Commands::Shipping { command } => match command {
+            ShippingCommand::Inspect(args) => native_shipping_inspect(args)?,
+        },
         Commands::Claude { command, launch } => match command {
             Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
             None => launch_managed_claude(launch)?,
@@ -3638,7 +4086,7 @@ mod tests {
     // Regression guard for the degraded-mode PTY corruption: the thread-spawn
     // notice sink must drain its buffered messages exactly once, in order.
     // Raw eprintln! inside thread bodies is prevented structurally by routing
-    // thread notices through DeferredNotices (see spawn_claude_registration_retry).
+    // thread notices through DeferredNotices (see the shared managed-launch retry).
     #[test]
     fn deferred_notices_drain_is_fifo_and_consuming() {
         let notices = DeferredNotices::default();
@@ -3712,6 +4160,117 @@ mod tests {
         assert!(command.is_none());
         assert!(launch.no_attach);
         assert!(launch.attach);
+    }
+
+    #[test]
+    fn shipping_parser_preserves_the_menu_bar_repair_command() {
+        let cli = Cli::try_parse_from([
+            "longhouse",
+            "shipping",
+            "inspect",
+            "--source-epoch",
+            "epoch-1",
+            "--limit",
+            "7",
+            "--json",
+        ])
+        .unwrap();
+        let Commands::Shipping { command } = cli.command.unwrap() else {
+            panic!("expected shipping command");
+        };
+        let ShippingCommand::Inspect(args) = command;
+        assert_eq!(args.source_epoch.as_deref(), Some("epoch-1"));
+        assert_eq!(args.limit, 7);
+        assert!(args.json);
+    }
+
+    #[test]
+    fn shipping_inspection_reads_source_evidence_without_writing_the_database() {
+        let root = tempfile::tempdir().unwrap();
+        let agent = root.path().join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let database = agent.join("longhouse-shipper.db");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE source_epoch_registry (
+                    source_epoch TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    opaque_source_id TEXT NOT NULL
+                );
+                CREATE TABLE pending_source_envelope (
+                    source_epoch TEXT PRIMARY KEY,
+                    source_path TEXT NOT NULL,
+                    range_start INTEGER NOT NULL,
+                    range_end INTEGER NOT NULL,
+                    envelope_id TEXT NOT NULL,
+                    raw_bytes INTEGER NOT NULL,
+                    event_count INTEGER NOT NULL,
+                    has_reply_evidence INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL,
+                    last_attempt_at TEXT,
+                    blocked_at TEXT,
+                    block_kind TEXT,
+                    block_detail TEXT
+                );
+                INSERT INTO source_epoch_registry VALUES ('epoch-1', 'claude', 'source-1');
+                INSERT INTO pending_source_envelope VALUES (
+                    'epoch-1', '/tmp/transcript.jsonl', 10, 20, 'envelope-1',
+                    100, 2, 1, '2026-08-04T00:00:00Z', 3, NULL,
+                    '2026-08-04T00:01:00Z', 'source_epoch_conflict', 'metadata changed'
+                );",
+            )
+            .unwrap();
+        drop(connection);
+        let size_before = std::fs::metadata(&database).unwrap().len();
+
+        let (resolved, rows) =
+            read_shipping_source_rows(Some(root.path()), Some("epoch-1"), 50).unwrap();
+
+        assert_eq!(resolved, database);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["source_epoch"], "epoch-1");
+        assert_eq!(rows[0]["provider"], "claude");
+        assert_eq!(rows[0]["block_kind"], "source_epoch_conflict");
+        assert_eq!(std::fs::metadata(&database).unwrap().len(), size_before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_exec_barrier_times_out_when_trampoline_stalls() {
+        let mut fds = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let error = wait_for_provider_exec_with_timeout(fds[0], Duration::from_millis(25))
+            .expect_err("an open but silent exec barrier must time out");
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        assert!(error.to_string().contains("did not complete exec"));
+    }
+
+    #[test]
+    fn opencode_teardown_marks_provider_exited_before_propagating_errors() {
+        let mut marked = false;
+        let error = finish_managed_opencode_attach(
+            Ok(0),
+            Err(anyhow::anyhow!("bridge stop failed")),
+            || marked = true,
+        )
+        .expect_err("cleanup failure should still be returned");
+        assert!(marked);
+        assert_eq!(error.to_string(), "bridge stop failed");
+
+        marked = false;
+        let error = finish_managed_opencode_attach(
+            Err(anyhow::anyhow!("provider attach failed")),
+            Ok(()),
+            || marked = true,
+        )
+        .expect_err("attach failure should still be returned");
+        assert!(marked);
+        assert_eq!(error.to_string(), "provider attach failed");
     }
 
     #[test]
@@ -4117,6 +4676,23 @@ mod tests {
     }
 
     #[test]
+    fn every_native_delegate_reports_the_missing_paired_engine() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-longhouse-engine");
+        temp_env::with_var(
+            "LONGHOUSE_ENGINE_BIN",
+            Some(missing.display().to_string()),
+            || {
+                let error = paired_engine_path().unwrap_err();
+                assert_eq!(
+                    format!("{error:#}"),
+                    format!("paired longhouse-engine not found at {}", missing.display())
+                );
+            },
+        );
+    }
+
+    #[test]
     fn claude_mcp_config_is_private_scoped_and_ephemeral() {
         let temp = tempfile::tempdir().unwrap();
         let engine = temp.path().join("longhouse-engine");
@@ -4170,6 +4746,19 @@ mod tests {
         };
         assert!(command.is_none());
         assert_eq!(launch.claude_dir.unwrap(), PathBuf::from("/tmp/claude"));
+    }
+
+    #[test]
+    fn opencode_parser_uses_provider_neutral_config_dir() {
+        for flag in ["--config-dir", "--claude-dir"] {
+            let cli =
+                Cli::try_parse_from(["longhouse", "opencode", flag, "/tmp/opencode"]).unwrap();
+            let Commands::Opencode { command, launch } = cli.command.unwrap() else {
+                panic!("expected opencode command");
+            };
+            assert!(command.is_none());
+            assert_eq!(launch.config_dir.unwrap(), PathBuf::from("/tmp/opencode"));
+        }
     }
 
     #[test]

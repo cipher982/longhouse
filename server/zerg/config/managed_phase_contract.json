@@ -25,7 +25,7 @@
     {
       "raw_phase": "stalled",
       "display_label": "stalled",
-      "attention": "idle"
+      "attention": "blocked"
     },
     {
       "raw_phase": "idle",

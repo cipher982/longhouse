@@ -11,6 +11,7 @@ on:
 
 jobs:
   test:
+    if: ${{ github.ref == 'refs/heads/main' && (inputs.runner_label == '' || inputs.runner_label == 'cube' || inputs.runner_label == 'cube-fast' || inputs.runner_label == 'cube-browser' || inputs.runner_label == 'cube-maint') }}
     runs-on: ${{ inputs.runner_label || 'cube' }}
     steps:
       - name: System info

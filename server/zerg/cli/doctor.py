@@ -514,6 +514,36 @@ def _check_shipper() -> list[CheckResult]:
     return results
 
 
+def _check_local_health() -> list[CheckResult]:
+    """Summarize the same machine health contract shown by local-health."""
+    try:
+        from zerg.services.local_health import collect_local_health
+
+        snapshot = collect_local_health(fast=True)
+    except Exception as exc:
+        return [CheckResult(FAIL, "Local health could not be collected", str(exc))]
+
+    health_state = str(snapshot.get("health_state") or "unknown")
+    severity = str(snapshot.get("severity") or "gray")
+    headline = str(snapshot.get("headline") or "Local health is unknown")
+    reasons = ", ".join(str(item) for item in list(snapshot.get("reasons") or [])[:4])
+    actions = list(snapshot.get("suggested_actions") or [])
+    action_ids = list(snapshot.get("suggested_action_ids") or [])
+    detail_parts = [f"state={health_state}"]
+    if reasons:
+        detail_parts.append(f"reasons={reasons}")
+    if action_ids:
+        detail_parts.append(f"action_id={action_ids[0]}")
+    if actions:
+        detail_parts.append(f"action={actions[0]}")
+    detail = "; ".join(detail_parts)
+    if severity == "red" or health_state == "broken":
+        return [CheckResult(FAIL, headline, detail)]
+    if severity in {"yellow", "gray"} or health_state in {"degraded", "uninstalled"}:
+        return [CheckResult(WARN, headline, detail)]
+    return [CheckResult(PASS, headline, detail)]
+
+
 def _check_config() -> list[CheckResult]:
     """Config checks: data dir writable, config file, port availability."""
     results: list[CheckResult] = []
@@ -825,6 +855,7 @@ def doctor(
         ("Install", _check_install(check_updates=check_updates)),
         ("Local Runtime", _check_server()),
         ("Machine Agent", _check_shipper()),
+        ("Local Health", _check_local_health()),
         ("Provider Support", _check_provider_support()),
         ("Provider Route E2E", _check_provider_live_route_e2e()),
         ("Provider Binding", _check_provider_binding()),

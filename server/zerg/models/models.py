@@ -238,6 +238,7 @@ class RunnerHealthIncident(Base):
     resolved_at = Column(DateTime, nullable=True)
 
     alert_sent_at = Column(DateTime, nullable=True)
+    alert_claimed_at = Column(DateTime, nullable=True)
     alert_channel = Column(String, nullable=True)
     alert_count = Column(Integer, nullable=False, default=0)
 

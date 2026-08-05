@@ -35,6 +35,7 @@ def build_machine_health_item_response(item: MachineTransportHealthSummary) -> M
         status_reason=item.status_reason,
         status_summary=item.status_summary,
         reasons=list(item.reasons),
+        suggested_action_ids=list(item.suggested_action_ids),
         last_ship_at=item.last_ship_at,
         last_ship_attempt_at=item.last_ship_attempt_at,
         last_ship_result=item.last_ship_result,

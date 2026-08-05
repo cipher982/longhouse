@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 240,
+  "file_count": 243,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -289,6 +289,13 @@
       ]
     },
     {
+      "path": "engine/src/watcher.rs",
+      "providers": [
+        "codex",
+        "cursor"
+      ]
+    },
+    {
       "path": "engine/tests/adversarial_parser.rs",
       "providers": [
         "claude",
@@ -442,6 +449,15 @@
       "path": "scripts/qa/check-no-python-device-path.py",
       "providers": [
         "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/installed-managed-launch-fault-matrix.py",
+      "providers": [
         "claude",
         "codex",
         "cursor",
@@ -873,6 +889,15 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_launch_reliability_measurements.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
       ]
     },
     {

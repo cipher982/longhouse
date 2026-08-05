@@ -447,8 +447,8 @@ public struct MenuBarPanelView: View {
     }
 
     private var repairGuidance: String {
-        if snapshot.storageBlockedCount > 0 {
-            return "Local source evidence is retained. Inspect the source conflict before retrying or discarding it."
+        if snapshot.storageBlockRequiresRepair {
+            return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
         }
         if snapshot.isSetupRequired {
             return "Finish setup to install the local agent and connect this Mac."
@@ -829,11 +829,77 @@ public struct MenuBarPanelView: View {
 
     private var watchingActions: some View {
         VStack(spacing: 8) {
-            Button {
-                perform(.repairInstall)
-            } label: {
-                Label("Repair", systemImage: "wrench.and.screwdriver")
-                    .frame(maxWidth: .infinity)
+            Group {
+                if snapshot.storageBlockRequiresRepair
+                    || snapshot.storageBlockProofUnknown
+                    || snapshot.suggestedActionIds?.contains("inspect_storage_source") == true
+                {
+                    Button {
+                        perform(.inspectStorageSource)
+                    } label: {
+                        Label("Inspect source evidence", systemImage: "doc.text.magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("stop_managed_bridge") == true,
+                          !backgroundBridgeBulkStopTargets.isEmpty {
+                    Button {
+                        if let action = backgroundBridgeStopAllAction() {
+                            action()
+                        }
+                    } label: {
+                        Label("Stop orphaned processes", systemImage: "stop.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_managed_session") == true {
+                    Button {
+                        perform(.openLonghouse)
+                    } label: {
+                        Label("Inspect managed session", systemImage: "arrow.up.forward.square")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_storage_outbox") == true {
+                    Button {
+                        perform(.runDoctor)
+                    } label: {
+                        Label("Inspect storage outbox", systemImage: "externaldrive.badge.questionmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_local_health") == true {
+                    Button {
+                        perform(.runDoctor)
+                    } label: {
+                        Label("Inspect local health", systemImage: "stethoscope")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("free_disk_space") == true {
+                    Button {
+                        perform(.freeDiskSpace)
+                    } label: {
+                        Label("Free disk space", systemImage: "internaldrive")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("repair_machine") == true {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Repair machine", systemImage: "wrench.and.screwdriver")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if !(snapshot.suggestedActionIds ?? []).isEmpty {
+                    Button {
+                        perform(.openLogs)
+                    } label: {
+                        Label("Inspect logs", systemImage: "doc.text.magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Repair", systemImage: "wrench.and.screwdriver")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)

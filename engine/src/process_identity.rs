@@ -33,10 +33,7 @@ impl ProcessFact {
     /// rather than a backgrounded or detached process.
     pub fn is_foreground_tty(&self) -> bool {
         let tty = self.tty.trim();
-        !tty.is_empty()
-            && tty != "??"
-            && !self.is_stopped_or_zombie()
-            && self.stat.contains('+')
+        !tty.is_empty() && tty != "??" && !self.is_stopped_or_zombie() && self.stat.contains('+')
     }
 
     /// A stopped provider is still present in `ps`, but it cannot make
@@ -263,6 +260,17 @@ pub struct ProcessLineage {
     pub command: String,
 }
 
+/// One coherent process observation carrying both identity and ownership
+/// fields. Stall corroboration uses this instead of combining a targeted
+/// identity read with a later lineage read, which could straddle a process
+/// exit or PID/PGID reuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSnapshot {
+    pub fact: ProcessFact,
+    pub ppid: u32,
+    pub pgid: i32,
+}
+
 impl ProcessLineage {
     /// True for a process stopped by a signal (`T`) or reaped-but-unwaited (`Z`).
     /// Either state under a live parent means work that will never finish on its
@@ -275,24 +283,72 @@ impl ProcessLineage {
     }
 }
 
-/// Collect one coherent parent/process-group inventory. `None` distinguishes a
-/// failed `ps` from a genuinely empty result, so callers never read a scan
-/// failure as evidence of anything.
-pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
-    let output = Command::new("ps")
-        .args(["-axo", "pid=,ppid=,pgid=,stat=,command="])
-        .output()
-        .ok()?;
+/// Collect one timeout-bounded process snapshot containing identity and
+/// parent/process-group lineage in the same `ps` result.
+pub fn try_collect_process_snapshots() -> Option<HashMap<u32, ProcessSnapshot>> {
+    let mut command = Command::new("ps");
+    command.args(["-axo", "pid=,ppid=,pgid=,tty=,stat=,lstart=,command="]);
+    let output = match output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT) {
+        Some(output) => output,
+        None => {
+            tracing::warn!("managed stall process snapshot unavailable: ps timed out or failed");
+            return None;
+        }
+    };
     if !output.status.success() {
+        tracing::warn!(status = ?output.status.code(), "managed stall process snapshot unavailable: ps failed");
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let line_count = text.lines().filter(|line| !line.trim().is_empty()).count();
-    let entries: Vec<ProcessLineage> = text.lines().filter_map(parse_process_lineage).collect();
-    if entries.len() != line_count || !entries.iter().any(|e| e.pid == std::process::id()) {
+    let snapshots = text
+        .lines()
+        .filter_map(parse_process_snapshot)
+        .map(|snapshot| (snapshot.fact.pid, snapshot))
+        .collect::<HashMap<_, _>>();
+    if snapshots.len() != line_count || !snapshots.contains_key(&std::process::id()) {
+        tracing::warn!(
+            parsed = snapshots.len(),
+            lines = line_count,
+            current_pid = std::process::id(),
+            "managed stall process snapshot rejected: incomplete inventory"
+        );
         return None;
     }
-    Some(entries)
+    Some(snapshots)
+}
+
+/// Parse one `ps -axo pid=,ppid=,pgid=,tty=,stat=,lstart=,command=` line.
+pub fn parse_process_snapshot(line: &str) -> Option<ProcessSnapshot> {
+    let trimmed = line.trim_start();
+    let (pid_text, rest) = trimmed.split_once(char::is_whitespace)?;
+    let (ppid_text, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+    let (pgid_text, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+    let (tty, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+    let (stat, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+    let rest = rest.trim_start();
+    if rest.len() <= 24 {
+        return None;
+    }
+    let (lstart_raw, command) = rest.split_at(24);
+    let lstart = lstart_raw.trim().to_string();
+    let command = command.trim().to_string();
+    if command.is_empty() {
+        return None;
+    }
+    let pid = pid_text.parse::<u32>().ok()?;
+    Some(ProcessSnapshot {
+        fact: ProcessFact {
+            pid,
+            tty: tty.to_string(),
+            stat: stat.to_string(),
+            lstart: lstart.clone(),
+            command,
+            start_time: parse_lstart(&lstart),
+        },
+        ppid: ppid_text.parse().ok()?,
+        pgid: pgid_text.parse().ok()?,
+    })
 }
 
 /// Parse one `ps -axo pid=,ppid=,pgid=,stat=,command=` line. `command` stays last
@@ -414,11 +470,10 @@ mod tests {
                 .1;
         assert!(!background.is_foreground_tty());
 
-        let stopped = parse_process_fact(
-            "  104 ttys003  T+   Mon May  5 11:58:00 2026 claude --resume",
-        )
-        .unwrap()
-        .1;
+        let stopped =
+            parse_process_fact("  104 ttys003  T+   Mon May  5 11:58:00 2026 claude --resume")
+                .unwrap()
+                .1;
         assert!(stopped.is_stopped_or_zombie());
         assert!(!stopped.is_foreground_tty());
     }
@@ -504,14 +559,48 @@ mod tests {
 
     #[test]
     fn parse_process_lineage_keeps_command_with_spaces() {
-        let entry =
-            parse_process_lineage("17210     1 16956 Ts   /bin/zsh -lc for n in {1..10}; do x; done")
-                .unwrap();
+        let entry = parse_process_lineage(
+            "17210     1 16956 Ts   /bin/zsh -lc for n in {1..10}; do x; done",
+        )
+        .unwrap();
         assert_eq!(entry.pid, 17210);
         assert_eq!(entry.ppid, 1);
         assert_eq!(entry.pgid, 16956);
         assert_eq!(entry.stat, "Ts");
         assert_eq!(entry.command, "/bin/zsh -lc for n in {1..10}; do x; done");
+    }
+
+    #[test]
+    fn parse_process_snapshot_keeps_identity_and_lineage_together() {
+        let snapshot = parse_process_snapshot(
+            "17210     1 16956 ?? Ts   Tue Aug  4 20:00:00 2026 /bin/zsh -lc sleep 300",
+        )
+        .unwrap();
+        assert_eq!(snapshot.fact.pid, 17210);
+        assert_eq!(snapshot.ppid, 1);
+        assert_eq!(snapshot.pgid, 16956);
+        assert_eq!(snapshot.fact.stat, "Ts");
+        assert_eq!(snapshot.fact.lstart, "Tue Aug  4 20:00:00 2026");
+        assert_eq!(snapshot.fact.command, "/bin/zsh -lc sleep 300");
+    }
+
+    #[test]
+    fn parse_process_snapshot_inventory_fixture_preserves_all_rows() {
+        let fixture = [
+            "16956   900 16956 ?? Ss   Tue Aug  4 20:00:00 2026 codex app-server",
+            "17210     1 16956 ?? Ts   Tue Aug  4 20:01:00 2026 /bin/zsh -lc sleep 300",
+            "17300 16956 16956 ?? S    Tue Aug  4 20:02:00 2026 /bin/sh -c echo done",
+        ];
+        let snapshots = fixture
+            .iter()
+            .filter_map(|line| parse_process_snapshot(line))
+            .map(|snapshot| (snapshot.fact.pid, snapshot))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(snapshots.len(), fixture.len());
+        assert_eq!(snapshots[&17210].ppid, 1);
+        assert_eq!(snapshots[&17300].pgid, 16956);
+        assert_eq!(snapshots[&16956].fact.command, "codex app-server");
     }
 
     #[test]

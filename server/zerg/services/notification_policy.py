@@ -147,20 +147,29 @@ def recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at:
         return False
 
 
-def evaluate_tier1_delivery(
+def evaluate_tier1_delivery_with_facts(
     db: Session,
     *,
     user: User | None,
-    session: AgentSession | None,
+    session_muted: bool,
+    visible_web_client: bool,
     occurred_at: datetime,
     event_type: str,
 ) -> AttentionDeliveryDecision:
+    """Apply Tier 1 policy when the caller owns the live-session facts.
+
+    Archive-mode callers resolve session and browser presence through their
+    normal ORM helpers. Catalogd already owns those facts in its hot database,
+    so it supplies the same facts without recursively calling the catalog
+    gateway from inside the catalog writer.
+    """
+
     if not user_apns_notifications_enabled(user):
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "apns_disabled")
-    if session_notifications_muted(session):
+    if session_muted:
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "session_muted")
 
-    if user_notify_only_when_away(user) and recent_visible_web_client_exists(db, owner_id=int(user.id), occurred_at=occurred_at):
+    if user_notify_only_when_away(user) and visible_web_client:
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "web_presence")
 
     if in_quiet_hours(user, occurred_at):
@@ -175,6 +184,26 @@ def evaluate_tier1_delivery(
                 return AttentionDeliveryDecision(AttentionDeliveryAction.QUEUE, "quiet_hours", queue_until)
 
     return AttentionDeliveryDecision(AttentionDeliveryAction.DELIVER)
+
+
+def evaluate_tier1_delivery(
+    db: Session,
+    *,
+    user: User | None,
+    session: AgentSession | None,
+    occurred_at: datetime,
+    event_type: str,
+) -> AttentionDeliveryDecision:
+    return evaluate_tier1_delivery_with_facts(
+        db,
+        user=user,
+        session_muted=session_notifications_muted(session),
+        visible_web_client=recent_visible_web_client_exists(db, owner_id=int(user.id), occurred_at=occurred_at)
+        if user is not None
+        else False,
+        occurred_at=occurred_at,
+        event_type=event_type,
+    )
 
 
 def evaluate_tier2_delivery(

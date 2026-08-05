@@ -36,7 +36,7 @@ from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
 
-ATTENTION_PUSH_STATES = {"blocked", "needs_answer"}
+ATTENTION_PUSH_STATES = {"blocked", "stalled", "needs_answer"}
 RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 BLOCKED_REMINDER_DELAY = timedelta(minutes=15)
@@ -46,6 +46,7 @@ LIVE_ACTIVITY_PUSH_DEBOUNCE = timedelta(seconds=15)
 ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 NOTIFICATION_EVENT_SESSION_BLOCKED = "session_blocked"
+NOTIFICATION_EVENT_SESSION_STALLED = "session_stalled"
 NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER = "session_blocked_reminder"
 NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER = "session_needs_answer"
 NOTIFICATION_CHANNEL_APNS_IOS = "apns_ios"
@@ -60,6 +61,10 @@ _cached_provider_token_expires_at: datetime | None = None
 _TARGETS_SENTINEL: object = object()
 
 
+class APNSTransientError(RuntimeError):
+    """APNs could not be reached and the durable action should be retried."""
+
+
 @dataclass(frozen=True)
 class APNSDeviceTarget:
     device_token: str
@@ -69,7 +74,7 @@ class APNSDeviceTarget:
 @dataclass(frozen=True)
 class SessionAttentionPush:
     session_id: str
-    state: Literal["blocked", "needs_user", "needs_answer"]
+    state: Literal["blocked", "stalled", "needs_user", "needs_answer"]
     occurred_at: datetime
     title: str
     summary: str
@@ -92,7 +97,7 @@ class SessionAttentionPush:
 @dataclass(frozen=True)
 class SessionAttentionResolutionPush:
     session_id: str
-    previous_state: Literal["needs_user", "blocked", "needs_answer"]
+    previous_state: Literal["needs_user", "blocked", "stalled", "needs_answer"]
     current_state: str
     occurred_at: datetime
     attention_push_at: datetime
@@ -416,6 +421,7 @@ def _mark_attention_events_resolved(
             NotificationEvent.event_type.in_(
                 [
                     NOTIFICATION_EVENT_SESSION_BLOCKED,
+                    NOTIFICATION_EVENT_SESSION_STALLED,
                     NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
                     NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
                     "long_run_waiting",
@@ -477,7 +483,7 @@ def prepare_session_attention_push(
     current_tool_name: str | None = None,
     targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
 ) -> SessionAttentionPush | None:
-    if owner_id is None or current_state != "blocked" or previous_state == current_state:
+    if owner_id is None or current_state not in {"blocked", "stalled"} or previous_state == current_state:
         return None
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -487,22 +493,24 @@ def prepare_session_attention_push(
         return None
 
     last_attention_push_at = _as_aware_utc(session.last_attention_push_at)
-    last_attention_push_state = _base_attention_state(session.last_attention_push_state)
-    is_repeat_attention_state = last_attention_push_state == current_state
+    raw_last_attention_push_state = str(session.last_attention_push_state or "").strip()
+    last_attention_push_state = _base_attention_state(raw_last_attention_push_state)
+    is_repeat_attention_state = last_attention_push_state == current_state and not raw_last_attention_push_state.endswith(":resolved")
     if (
         is_repeat_attention_state
         and last_attention_push_at is not None
-        and (occurred_at - last_attention_push_at) < ATTENTION_PUSH_DEBOUNCE
+        and (current_state == "stalled" or (occurred_at - last_attention_push_at) < ATTENTION_PUSH_DEBOUNCE)
     ):
         return None
 
     collapse_id = _attention_collapse_id(str(session.id))
+    event_type = NOTIFICATION_EVENT_SESSION_STALLED if current_state == "stalled" else NOTIFICATION_EVENT_SESSION_BLOCKED
     state_key = f"{current_state}:{occurred_at.isoformat()}"
     if not _tier1_policy_allows_delivery(
         db,
         owner_id=owner_id,
         session=session,
-        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+        event_type=event_type,
         state_key=state_key,
         collapse_key=collapse_id,
         occurred_at=occurred_at,
@@ -516,7 +524,7 @@ def prepare_session_attention_push(
             db,
             owner_id=owner_id,
             session_id=str(session.id),
-            event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+            event_type=event_type,
             state_key=state_key,
             collapse_key=collapse_id,
             occurred_at=occurred_at,
@@ -536,7 +544,7 @@ def prepare_session_attention_push(
         db,
         owner_id=owner_id,
         session_id=str(session.id),
-        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+        event_type=event_type,
         state_key=f"{current_state}:{occurred_at.isoformat()}",
         collapse_key=collapse_id,
         occurred_at=occurred_at,
@@ -565,7 +573,7 @@ def prepare_session_attention_push(
         alert_body=alert_body,
         collapse_id=collapse_id,
         targets=targets,
-        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+        event_type=event_type,
         notification_event_id=str(notification_event.id),
         previous_stamp_state=last_attention_push_state,
         previous_stamp_at=last_attention_push_at,
@@ -1111,7 +1119,7 @@ async def send_presence_pushes(
             await execute_post_write(ws, _clear_live, db, label=f"{dispatch_label_prefix}-live-clear")
 
 
-async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
+async def send_session_attention_push(notification: SessionAttentionPush, *, raise_on_transient: bool = False) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
         return False
@@ -1121,6 +1129,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
     payload = build_session_attention_payload(notification)
     expiration = str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()))
     accepted = False
+    transport_failed = False
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -1139,6 +1148,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
             try:
                 response = await client.post(url, headers=headers, json=payload)
             except Exception as exc:  # noqa: BLE001
+                transport_failed = True
                 logger.warning("APNs send failed for session %s: %s", notification.session_id, exc)
                 continue
             if response.status_code >= 300:
@@ -1151,10 +1161,16 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
                 )
             else:
                 accepted = True
+    if raise_on_transient and not accepted and transport_failed:
+        raise APNSTransientError(f"APNs attention send failed for session {notification.session_id}")
     return accepted
 
 
-async def send_session_attention_resolution_push(notification: SessionAttentionResolutionPush) -> bool:
+async def send_session_attention_resolution_push(
+    notification: SessionAttentionResolutionPush,
+    *,
+    raise_on_transient: bool = False,
+) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
         return False
@@ -1164,6 +1180,7 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
     payload = build_session_attention_resolution_payload(notification)
     expiration = str(int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp()))
     accepted = False
+    transport_failed = False
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -1180,6 +1197,7 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
             try:
                 response = await client.post(url, headers=headers, json=payload)
             except Exception as exc:  # noqa: BLE001
+                transport_failed = True
                 logger.warning("APNs resolution push failed for session %s: %s", notification.session_id, exc)
                 continue
             if response.status_code >= 300:
@@ -1192,6 +1210,8 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
                 )
             else:
                 accepted = True
+    if raise_on_transient and not accepted and transport_failed:
+        raise APNSTransientError(f"APNs resolution send failed for session {notification.session_id}")
     return accepted
 
 
@@ -1471,6 +1491,8 @@ def _session_project(session: AgentSession) -> str | None:
 
 
 def _attention_alert_title(*, state: str, provider: str | None) -> str:
+    if state == "stalled":
+        return "May be stalled"
     return "Needs permission"
 
 
@@ -1480,6 +1502,8 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
         parts.append(project)
     if state == "blocked":
         parts.append(f"Blocked on {tool_name}" if tool_name else "Blocked")
+    elif state == "stalled":
+        parts.append("No provider progress; inspect the session")
     parts.append(title)
     return _trim_alert_text(" · ".join(parts))
 

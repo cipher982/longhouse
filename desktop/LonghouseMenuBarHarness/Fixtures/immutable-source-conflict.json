@@ -5,7 +5,10 @@
   "severity": "yellow",
   "headline": "Source upload conflict",
   "reasons": ["storage_v2_sources_blocked"],
-  "suggested_actions": ["Inspect the blocked source proof in engine-status.json"],
+  "suggested_actions": [
+    "Inspect retained source evidence: longhouse shipping inspect --source-epoch 01234567-89ab-cdef-0123-456789abcdef --json."
+  ],
+  "suggested_action_ids": ["inspect_storage_source"],
   "service": { "status": "running" },
   "engine_status": {
     "exists": true,
@@ -20,8 +23,10 @@
         "pending_bytes": 4096,
         "blocked_source_count": 1,
         "blocked_bytes": 2048,
+        "latest_block_source_epoch": "01234567-89ab-cdef-0123-456789abcdef",
         "latest_block_kind": "source_epoch_conflict",
         "latest_block_detail": "hosted prefix does not match local source",
+        "unresolved_blocked_source_count": 0,
         "byte_limit": 1073741824
       }
     }

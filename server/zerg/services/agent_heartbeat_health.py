@@ -32,6 +32,67 @@ _STATE_SORT_ORDER = {
     "healthy": 3,
 }
 
+_MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
+    "heartbeat_stale": "inspect_transport",
+    "engine_offline": "inspect_transport",
+    "reported_offline": "inspect_transport",
+    "connect_errors": "inspect_transport",
+    "server_errors": "inspect_transport",
+    "rate_limited": "inspect_transport",
+    "retryable_client_errors": "inspect_transport",
+    "payload_rejected": "inspect_shipping",
+    "payload_too_large": "inspect_shipping",
+    "parse_errors": "inspect_shipping",
+    "consecutive_failures": "inspect_shipping",
+    "spool_dead": "inspect_shipping",
+    "spool_dead_letters": "inspect_shipping",
+    "outbox_stuck": "inspect_shipping",
+    "archive_dead_lettered": "inspect_archive",
+    "archive_repair_paused": "inspect_archive",
+    "disk_critically_low": "free_disk_space",
+    "disk_low": "free_disk_space",
+    "engine_status_missing": "inspect_local_health",
+    "engine_status_unreadable": "inspect_local_health",
+    "engine_status_stale": "inspect_local_health",
+    "engine_status_age_unknown": "inspect_local_health",
+    "engine_status_aging": "inspect_local_health",
+    "engine_status_sessions_invalid": "inspect_local_health",
+    "engine_status_sessions_missing": "inspect_local_health",
+    "engine_evidence_stale": "inspect_local_health",
+    "engine_reconciliation_failed": "inspect_local_health",
+    "storage_v2_sources_blocked": "inspect_storage_source",
+    "storage_v2_sources_unresolved": "inspect_storage_source",
+    "storage_v2_sources_proof_unknown": "inspect_storage_source",
+    "storage_v2_outbox_unreadable": "inspect_storage_outbox",
+    "managed_session_control_degraded": "inspect_managed_session",
+    "managed_session_detached": "inspect_managed_session",
+    "managed_unknown_phase": "inspect_managed_session",
+    "orphaned_managed_bridge": "stop_managed_bridge",
+    "provider_cli_version_unknown": "inspect_provider",
+    "provider_live_route_e2e_warning": "inspect_provider",
+    "provider_release_blocked": "inspect_provider",
+    "provider_support_needs_attention": "inspect_provider",
+    "service_generation_mismatch": "repair_machine",
+    "service_machine_name_mismatch": "repair_machine",
+    "service_not_installed": "repair_machine",
+    "service_runner_name_mismatch": "repair_machine",
+    "service_state_hash_mismatch": "repair_machine",
+    "managed_launch_recovery_exhausted": "inspect_managed_session",
+    "managed_launch_recovery_active": "inspect_managed_session",
+    "managed_launch_recovery_unreadable": "inspect_managed_session",
+}
+
+
+def suggested_action_ids_for_machine_reasons(reasons: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    action_ids: list[str] = []
+    for reason in reasons:
+        action_id = _MACHINE_ACTION_IDS_BY_REASON.get(reason)
+        if action_id is not None and action_id not in action_ids:
+            action_ids.append(action_id)
+    if reasons and not action_ids:
+        action_ids.append("inspect_transport")
+    return tuple(action_ids)
+
 
 @dataclass(frozen=True)
 class MachineTransportHealthSummary:
@@ -45,6 +106,7 @@ class MachineTransportHealthSummary:
     status_reason: str
     status_summary: str
     reasons: tuple[str, ...]
+    suggested_action_ids: tuple[str, ...]
     last_ship_at: datetime | None
     last_ship_attempt_at: datetime | None
     last_ship_result: str | None
@@ -235,6 +297,7 @@ def build_machine_transport_health_summary(
     spool_pending = sample.spool_pending
     spool_dead = sample.spool_dead
     archive_repair = _archive_repair_from_heartbeat(row, spool_pending=spool_pending)
+    local_facts = _local_health_facts_from_heartbeat(row)
     history_import = _history_import_from_heartbeat(row)
     parse_errors_1h = sample.parse_errors_1h
     consecutive_failures = sample.consecutive_failures
@@ -260,6 +323,7 @@ def build_machine_transport_health_summary(
         ),
         archive_repair=archive_repair,
     )
+    reasons = _overlay_local_health_reasons(reasons, local_facts)
     heartbeat_status, heartbeat_status_reason, heartbeat_status_summary = _overlay_heartbeat_status(
         transport=transport,
         is_stale=is_stale,
@@ -271,6 +335,13 @@ def build_machine_transport_health_summary(
         heartbeat_status_summary,
         archive_repair=archive_repair,
     )
+    status, status_reason, status_summary = _overlay_local_health_status(
+        status,
+        status_reason,
+        status_summary,
+        local_facts=local_facts,
+    )
+    suggested_action_ids = suggested_action_ids_for_machine_reasons(reasons)
 
     return MachineTransportHealthSummary(
         device_id=row.device_id,
@@ -283,6 +354,7 @@ def build_machine_transport_health_summary(
         status_reason=status_reason,
         status_summary=status_summary,
         reasons=tuple(reasons),
+        suggested_action_ids=suggested_action_ids,
         last_ship_at=normalize_utc(row.last_ship_at),
         last_ship_attempt_at=normalize_utc(row.last_ship_attempt_at),
         last_ship_result=row.last_ship_result,
@@ -319,15 +391,7 @@ def build_machine_transport_health_summary(
 
 
 def _archive_repair_from_heartbeat(row: AgentHeartbeat, *, spool_pending: int) -> dict[str, Any]:
-    raw_json = getattr(row, "raw_json", None)
-    raw: dict[str, Any] = {}
-    if raw_json:
-        try:
-            parsed = json.loads(raw_json)
-            if isinstance(parsed, dict):
-                raw = parsed
-        except (TypeError, ValueError):
-            raw = {}
+    raw = _heartbeat_payload(row)
     archive_backlog = raw.get("archive_backlog")
     if isinstance(archive_backlog, dict):
         return normalize_archive_backlog(archive_backlog, source="heartbeat")
@@ -335,6 +399,148 @@ def _archive_repair_from_heartbeat(row: AgentHeartbeat, *, spool_pending: int) -
     if spool_pending > 0:
         fallback.update({"state": "pending", "mode": "trickle", "pending_ranges": int(spool_pending)})
     return fallback
+
+
+def _heartbeat_payload(row: Any) -> dict[str, Any]:
+    raw_json = getattr(row, "raw_json", None)
+    if not raw_json:
+        return {}
+    try:
+        parsed = json.loads(raw_json)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _nonnegative_int(value: Any) -> int:
+    if value is None or isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _counter_is_malformed(value: Any, *, present: bool) -> bool:
+    return present and _optional_nonnegative_int(value) is None
+
+
+def _storage_outbox_error(value: Any, *, present: bool) -> str | None:
+    """Treat non-string producer errors as unreadable evidence, not as clear."""
+    if not present or value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    return "storage_v2_outbox error is not a string"
+
+
+def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
+    """Reduce local health facts shipped in a heartbeat for hosted readers.
+
+    The machine API is a second consumer of the same engine evidence as the
+    local CLI/Desktop. It must not report healthy while durable source work or
+    managed-launch recovery is already known to be broken on the owner host.
+    """
+    raw = _heartbeat_payload(row)
+    storage_present = "storage_v2_outbox" in raw
+    storage_value = raw.get("storage_v2_outbox")
+    storage = storage_value if isinstance(storage_value, dict) else None
+    recovery = raw.get("managed_launch_recovery")
+    recovery = recovery if isinstance(recovery, dict) else None
+    reasons: list[str] = []
+    broken_reasons: list[str] = []
+    degraded_reasons: list[str] = []
+
+    if storage is None and storage_present:
+        reasons.append("storage_v2_outbox_unreadable")
+        broken_reasons.append("storage_v2_outbox_unreadable")
+    elif storage is not None:
+        blocked_value = storage.get("blocked_source_count")
+        unresolved_value = storage.get("unresolved_blocked_source_count")
+        reconciling_value = storage.get("reconciling_blocked_source_count")
+        blocked = _nonnegative_int(blocked_value)
+        unresolved = _optional_nonnegative_int(unresolved_value)
+        proof_unknown = (
+            _counter_is_malformed(
+                blocked_value,
+                present="blocked_source_count" in storage,
+            )
+            or _counter_is_malformed(
+                unresolved_value,
+                present="unresolved_blocked_source_count" in storage,
+            )
+            or _counter_is_malformed(
+                reconciling_value,
+                present="reconciling_blocked_source_count" in storage,
+            )
+            or (unresolved is None and blocked > 0)
+        )
+        if blocked > 0 and (unresolved is None or unresolved == 0):
+            reasons.append("storage_v2_sources_blocked")
+            degraded_reasons.append("storage_v2_sources_blocked")
+        if unresolved is not None and unresolved > 0:
+            reasons.append("storage_v2_sources_unresolved")
+            broken_reasons.append("storage_v2_sources_unresolved")
+        if proof_unknown:
+            reasons.append("storage_v2_sources_proof_unknown")
+            degraded_reasons.append("storage_v2_sources_proof_unknown")
+        if _storage_outbox_error(storage.get("error"), present="error" in storage):
+            reasons.append("storage_v2_outbox_unreadable")
+            broken_reasons.append("storage_v2_outbox_unreadable")
+
+    if recovery is not None:
+        if _nonnegative_int(recovery.get("exhausted_count")) > 0:
+            reasons.append("managed_launch_recovery_exhausted")
+            degraded_reasons.append("managed_launch_recovery_exhausted")
+        if _nonnegative_int(recovery.get("active_count")) > 0:
+            reasons.append("managed_launch_recovery_active")
+            degraded_reasons.append("managed_launch_recovery_active")
+        if bool(recovery.get("scan_error")):
+            reasons.append("managed_launch_recovery_unreadable")
+            broken_reasons.append("managed_launch_recovery_unreadable")
+
+    return {
+        "reasons": tuple(reasons),
+        "broken_reasons": tuple(broken_reasons),
+        "degraded_reasons": tuple(degraded_reasons),
+    }
+
+
+def _overlay_local_health_reasons(
+    reasons: tuple[str, ...],
+    local_facts: dict[str, Any],
+) -> tuple[str, ...]:
+    result = list(reasons)
+    for reason in local_facts.get("reasons", ()):
+        if reason not in result:
+            result.append(reason)
+    return tuple(result)
+
+
+def _overlay_local_health_status(
+    status: str,
+    status_reason: str,
+    status_summary: str,
+    *,
+    local_facts: dict[str, Any],
+) -> tuple[str, str, str]:
+    # A stale heartbeat is already explicitly offline; do not turn old local
+    # facts into a stronger current claim. For a live/degraded heartbeat,
+    # durable local failures must dominate a false healthy result.
+    broken_reasons = tuple(local_facts.get("broken_reasons", ()))
+    degraded_reasons = tuple(local_facts.get("degraded_reasons", ()))
+    if status != "offline" and broken_reasons and status != "broken":
+        reason = broken_reasons[0]
+        return "broken", reason, f"Local machine recovery requires attention: {reason}."
+    if status == "healthy" and degraded_reasons:
+        reason = degraded_reasons[0]
+        return "degraded", reason, f"Local machine health is degraded: {reason}."
+    return status, status_reason, status_summary
 
 
 def _history_import_from_heartbeat(row: AgentHeartbeat) -> HistoryImportSnapshot:
@@ -381,14 +587,20 @@ def _archive_dead_letter_summary(archive_repair: dict[str, Any]) -> str:
     return "Archive repair has dead-lettered work."
 
 
+def _archive_repair_is_paused(archive_repair: dict[str, Any]) -> bool:
+    return str(archive_repair.get("mode") or "").strip() == "paused" or str(archive_repair.get("state") or "").strip() == "paused"
+
+
 def _overlay_archive_repair_reasons(
     reasons: tuple[str, ...],
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, ...]:
-    if not _archive_has_dead_letters(archive_repair) or "archive_dead_lettered" in reasons:
-        return reasons
-    return (*reasons, "archive_dead_lettered")
+    if _archive_has_dead_letters(archive_repair) and "archive_dead_lettered" not in reasons:
+        reasons = (*reasons, "archive_dead_lettered")
+    if _archive_repair_is_paused(archive_repair) and "archive_repair_paused" not in reasons:
+        reasons = (*reasons, "archive_repair_paused")
+    return reasons
 
 
 def _overlay_archive_repair_status(
@@ -398,13 +610,19 @@ def _overlay_archive_repair_status(
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, str, str]:
-    if not _archive_has_dead_letters(archive_repair) or status != "healthy":
-        return status, status_reason, status_summary
-    return (
-        "degraded",
-        "archive_dead_lettered",
-        _archive_dead_letter_summary(archive_repair),
-    )
+    if status == "healthy" and _archive_has_dead_letters(archive_repair):
+        return (
+            "degraded",
+            "archive_dead_lettered",
+            _archive_dead_letter_summary(archive_repair),
+        )
+    if status == "healthy" and _archive_repair_is_paused(archive_repair):
+        return (
+            "degraded",
+            "archive_repair_paused",
+            "Archive repair is paused; inspect the local archive state.",
+        )
+    return status, status_reason, status_summary
 
 
 def _overlay_heartbeat_staleness(

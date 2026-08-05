@@ -295,8 +295,10 @@ jobs:
             /tmp/longhouse-onboarding/onboarding-diagnostics
 
   self-hosted-cube-linux-x64:
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
-    runs-on: cube
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted)) }}
+    # Only protected-main code may execute on cube's privileged DinD lanes.
+    # Pull requests and branch pushes stay on GitHub-hosted infrastructure.
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     name: "self-hosted-onboarding--linux-x64--cube"
 
@@ -358,7 +360,7 @@ jobs:
             qa-oss-server.log
 
   self-hosted-linux-x64:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 && inputs.linux_x64_runner_label != '' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 && inputs.linux_x64_runner_label != '' && inputs.linux_x64_runner_label != 'longhouse-release-qualification' }}
     runs-on: ${{ inputs.linux_x64_runner_label }}
     timeout-minutes: 30
     name: "self-hosted-onboarding--linux-x64--${{ inputs.linux_x64_runner_label }}"
@@ -421,7 +423,7 @@ jobs:
             qa-oss-server.log
 
   self-hosted-macos-arm64:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_macos_self_hosted && inputs.macos_runner_label != '' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.run_macos_self_hosted && inputs.macos_runner_label != '' && inputs.macos_runner_label != 'longhouse-release-qualification' }}
     runs-on: ${{ inputs.macos_runner_label }}
     timeout-minutes: 30
     name: "self-hosted-onboarding--macos-arm64--${{ inputs.macos_runner_label }}"

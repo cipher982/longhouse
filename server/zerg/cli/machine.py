@@ -64,6 +64,9 @@ def _render_health_summary(snapshot: dict[str, object]) -> None:
         typer.echo("  reasons: " + ", ".join(reasons))
 
     actions = [str(item) for item in list(snapshot.get("suggested_actions") or []) if str(item).strip()]
+    action_ids = [str(item) for item in list(snapshot.get("suggested_action_ids") or []) if str(item).strip()]
+    if action_ids:
+        typer.echo("  action ids: " + ", ".join(action_ids))
     if actions:
         typer.echo("  next: " + actions[0])
 

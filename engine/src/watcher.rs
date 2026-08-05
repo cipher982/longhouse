@@ -5,7 +5,7 @@
 //! interval (throttle pattern, not debounce) to handle rapid JSONL appends
 //! without starving.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -47,6 +47,7 @@ pub struct SessionWatcher {
     // Must stay alive — dropping stops the watcher.
     _watcher: RecommendedWatcher,
     rx: mpsc::Receiver<WatcherEvent>,
+    watched_provider_roots: HashSet<PathBuf>,
 }
 
 /// A filesystem change after provider/session filtering.
@@ -65,76 +66,70 @@ impl SessionWatcher {
         let dropped_clone = dropped_events.clone();
 
         let watcher_tx = tx.clone();
-        let mut watcher = notify::recommended_watcher(
-            move |res: notify::Result<notify::Event>| {
-                let event = match res {
-                    Ok(e) => e,
-                    Err(_) => return,
-                };
+        let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            let event = match res {
+                Ok(e) => e,
+                Err(_) => return,
+            };
 
-                // Filter to content-change events only
-                match event.kind {
-                    EventKind::Modify(ModifyKind::Data(
-                        DataChange::Content | DataChange::Size | DataChange::Any,
-                    ))
-                    | EventKind::Modify(ModifyKind::Data(_))
-                    | EventKind::Create(CreateKind::File | CreateKind::Any)
-                    | EventKind::Modify(ModifyKind::Name(_)) => {}
-                    // Accept Any (some backends don't differentiate)
-                    EventKind::Modify(ModifyKind::Any) => {}
-                    _ => return,
+            // Filter to content-change events only
+            match event.kind {
+                EventKind::Modify(ModifyKind::Data(
+                    DataChange::Content | DataChange::Size | DataChange::Any,
+                ))
+                | EventKind::Modify(ModifyKind::Data(_))
+                | EventKind::Create(CreateKind::File | CreateKind::Any)
+                | EventKind::Modify(ModifyKind::Name(_)) => {}
+                // Accept Any (some backends don't differentiate)
+                EventKind::Modify(ModifyKind::Any) => {}
+                _ => return,
+            }
+
+            for path in event.paths {
+                // Filter by extension
+                if !has_session_extension(&path) {
+                    tracing::debug!(path = %path.display(), "Skipping watcher event path without session extension");
+                    continue;
                 }
 
-                for path in event.paths {
-                    // Filter by extension
-                    if !has_session_extension(&path) {
-                        tracing::debug!(path = %path.display(), "Skipping watcher event path without session extension");
-                        continue;
-                    }
+                // Skip temp files
+                if is_temp_file(&path) {
+                    tracing::debug!(path = %path.display(), "Skipping temporary watcher event path");
+                    continue;
+                }
 
-                    // Skip temp files
-                    if is_temp_file(&path) {
-                        tracing::debug!(path = %path.display(), "Skipping temporary watcher event path");
-                        continue;
-                    }
-
-                    // Bounded send. If the OS watcher floods, reconciliation
-                    // scan repairs missed files.
-                    let observed_at_ms = chrono::Utc::now().timestamp_millis();
-                    let watcher_event = WatcherEvent {
-                        path,
-                        observed_at_ms,
-                        latest_observed_at_ms: observed_at_ms,
-                    };
-                    if watcher_tx.try_send(watcher_event).is_err() {
-                        let n =
-                            dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        // Warn once per 1000 drops
-                        if n % 1000 == 0 {
-                            eprintln!(
+                // Bounded send. If the OS watcher floods, reconciliation
+                // scan repairs missed files.
+                let observed_at_ms = chrono::Utc::now().timestamp_millis();
+                let watcher_event = WatcherEvent {
+                    path,
+                    observed_at_ms,
+                    latest_observed_at_ms: observed_at_ms,
+                };
+                if watcher_tx.try_send(watcher_event).is_err() {
+                    let n = dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    // Warn once per 1000 drops
+                    if n % 1000 == 0 {
+                        eprintln!(
                                 "[engine] WARNING: watcher channel full, {} events dropped (reconciliation scan will repair)",
                                 n
                             );
-                        }
                     }
                 }
-            },
-        )?;
-
-        // Watch all provider root directories recursively
-        for provider in providers {
-            if provider.root.exists() {
-                watcher.watch(&provider.root, RecursiveMode::Recursive)?;
-                tracing::info!(
-                    "Watching {} for {} sessions",
-                    provider.root.display(),
-                    provider.name
-                );
             }
-        }
+        })?;
+
+        let mut session_watcher = Self {
+            _watcher: watcher,
+            rx,
+            watched_provider_roots: HashSet::new(),
+        };
+        session_watcher.watch_provider_roots(providers)?;
         for state_dir in managed_state_dirs {
             if state_dir.exists() && !provider_owns_root(providers, state_dir) {
-                watcher.watch(state_dir, RecursiveMode::Recursive)?;
+                session_watcher
+                    ._watcher
+                    .watch(state_dir, RecursiveMode::Recursive)?;
                 tracing::info!(
                     path = %state_dir.display(),
                     "Watching managed provider state"
@@ -142,10 +137,29 @@ impl SessionWatcher {
             }
         }
 
-        Ok(Self {
-            _watcher: watcher,
-            rx,
-        })
+        Ok(session_watcher)
+    }
+
+    /// Add provider roots that appeared after daemon startup. Providers often
+    /// create their session directory lazily, so a startup-only watcher would
+    /// miss the first transcript until the next daemon restart.
+    pub fn watch_provider_roots(&mut self, providers: &[ProviderConfig]) -> Result<bool> {
+        let mut added = false;
+        for provider in providers {
+            if !provider.root.exists() || self.watched_provider_roots.contains(&provider.root) {
+                continue;
+            }
+            self._watcher
+                .watch(&provider.root, RecursiveMode::Recursive)?;
+            self.watched_provider_roots.insert(provider.root.clone());
+            tracing::info!(
+                "Watching {} for {} sessions",
+                provider.root.display(),
+                provider.name
+            );
+            added = true;
+        }
+        Ok(added)
     }
 
     /// Await the next filesystem event from the OS watcher thread.
@@ -203,6 +217,7 @@ fn coalesced_batch_to_events(batch: HashMap<PathBuf, (i64, i64)>) -> Vec<Watcher
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -289,5 +304,27 @@ mod tests {
         assert!(has_session_extension(std::path::Path::new(
             "opencode.db-shm"
         )));
+    }
+
+    #[test]
+    fn provider_root_can_be_added_after_watcher_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let initial_root = directory.path().join("initial");
+        let late_root = directory.path().join("late");
+        fs::create_dir_all(&initial_root).unwrap();
+        let initial = ProviderConfig {
+            name: "codex",
+            root: initial_root,
+            extension: "jsonl",
+        };
+        let late = ProviderConfig {
+            name: "cursor",
+            root: late_root.clone(),
+            extension: "db",
+        };
+        let mut watcher = SessionWatcher::new(&[initial], &[]).unwrap();
+        fs::create_dir_all(&late_root).unwrap();
+        assert!(watcher.watch_provider_roots(&[late.clone()]).unwrap());
+        assert!(!watcher.watch_provider_roots(&[late]).unwrap());
     }
 }

@@ -414,6 +414,25 @@
     flex-wrap: wrap;
   }
 
+  .observability-machine-actions {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .observability-machine-actions__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .observability-machine-action {
+    padding: 3px 8px;
+    border: 1px solid color-mix(in srgb, var(--color-intent-warning) 45%, var(--color-border-primary));
+    border-radius: 999px;
+    color: var(--color-text-primary);
+    font-size: 0.76rem;
+  }
+
   .observability-machine-stats {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

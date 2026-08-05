@@ -164,6 +164,30 @@ async def test_mark_read_is_a_max_write(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mark_read_without_console_result_is_allowed(tmp_path, monkeypatch):
+    import zerg.database as database_module
+    from zerg.routers.agents_sessions import mark_session_read
+    from zerg.services.session_views import SessionReadRequest
+
+    db = _db(tmp_path)
+    session = _session(db)
+    observed = datetime.now(timezone.utc)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
+
+    response = await mark_session_read(
+        session_id=session.id,
+        body=SessionReadRequest(read_through=observed),
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+    db.refresh(session)
+    assert response.last_read_at is not None
+    assert session.last_console_result_at is None
+
+
+@pytest.mark.asyncio
 async def test_mark_read_clears_unread_only_up_to_observed_result(tmp_path, monkeypatch):
     import zerg.database as database_module
     from zerg.routers.agents_sessions import mark_session_read
@@ -192,6 +216,34 @@ async def test_mark_read_clears_unread_only_up_to_observed_result(tmp_path, monk
     db.commit()
     db.refresh(session)
     assert _unread(last_console_result_at=session.last_console_result_at, last_read_at=session.last_read_at) is True
+
+
+@pytest.mark.asyncio
+async def test_mark_read_rejects_timestamp_beyond_latest_result(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+
+    import zerg.database as database_module
+    from zerg.routers.agents_sessions import mark_session_read
+    from zerg.services.session_views import SessionReadRequest
+
+    db = _db(tmp_path)
+    session = _session(db)
+    _run_console_turn_to(db, session, outcome="completed")
+    db.refresh(session)
+
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
+    with pytest.raises(HTTPException) as error:
+        await mark_session_read(
+            session_id=session.id,
+            body=SessionReadRequest(read_through=session.last_console_result_at + timedelta(seconds=1)),
+            db=db,
+            _auth=None,
+            _single=None,
+        )
+
+    assert error.value.status_code == 400
+    db.refresh(session)
+    assert session.last_read_at is None
 
 
 # ---------------------------------------------------------------------------

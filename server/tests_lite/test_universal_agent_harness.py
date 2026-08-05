@@ -2684,9 +2684,10 @@ def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp
         )
     )
 
-    assert payload["verdict"] == "green"
+    assert payload["verdict"] == "yellow"
     for result in payload["results"]:
-        assert result["status"] == "pass"
+        assert result["status"] == "blocked"
+        assert result["failure_code"] == "answer_pause_provider_delivery_unproven"
         data = result["data"]
         assert data["longhouse_response_service"]["status"] == "pass"
         assert data["managed_answer_dispatch"]["status"] == "pass"
