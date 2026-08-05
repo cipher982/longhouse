@@ -206,6 +206,28 @@ def test_cursor_longhouse_timeout_is_not_provider_output() -> None:
     assert _MODULE.provider_native_output_observed("cursor", "cursor-agent: ready")
 
 
+def test_cursor_missing_account_timeout_does_not_require_launch_intent() -> None:
+    result = {
+        "provider": "cursor",
+        "startup_failure": "provider exited before startup marker: 1",
+        "degraded_marker_seen": True,
+        "launch_intent_created": False,
+        "provider_output_observed": False,
+        "cursor_harness_timeout": True,
+        "timed_out": False,
+    }
+    cursor_auth = {
+        "status": "missing",
+        "precondition_failure": "cursor_account_session_not_authenticated",
+    }
+
+    _MODULE.classify_cursor_startup_failure(result, cursor_auth)
+
+    assert result["qualification"] == "harness_precondition_unmet"
+    assert result["qualification_detail"] == "cursor_account_session_not_authenticated"
+    assert result["qualification_basis"] == "cursor_status_probe_missing_and_no_provider_output"
+
+
 def test_source_provenance_uses_identity_compiled_into_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     binary = tmp_path / "longhouse"
     binary.write_bytes(b"stale binary")

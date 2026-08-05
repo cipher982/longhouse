@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 import errno
 import hashlib
 import json
@@ -29,9 +27,9 @@ import re
 import secrets
 import select
 import shutil
-import sqlite3
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -39,12 +37,14 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
+from typing import Callable
 
 PROVIDERS = ("claude", "codex", "opencode", "cursor")
 DEVICE_ID = "11111111-1111-4111-8111-111111111111"
@@ -1798,6 +1798,33 @@ def provider_native_output_observed(provider: str, output: str) -> bool:
     )
 
 
+def classify_cursor_startup_failure(
+    result: dict[str, Any], cursor_auth: dict[str, Any]
+) -> None:
+    attributable_timeout = (
+        result.get("degraded_marker_seen") is True
+        and result.get("provider_output_observed") is False
+        and (
+            result.get("timed_out") is True
+            or result.get("cursor_harness_timeout") is True
+        )
+    )
+    result["qualification"] = (
+        "harness_precondition_unmet"
+        if attributable_timeout
+        else "provider_owned_start_failure"
+    )
+    result["qualification_detail"] = (
+        cursor_auth.get("precondition_failure")
+        if attributable_timeout
+        else "cursor_startup_failure_not_attributable_to_missing_account_session"
+    )
+    if attributable_timeout:
+        result["qualification_basis"] = (
+            "cursor_status_probe_missing_and_no_provider_output"
+        )
+
+
 def bootstrap_provider_auth(
     provider: str,
     *,
@@ -2536,29 +2563,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         if cursor_auth and cursor_auth.get("status") == "missing":
             for result in results:
                 if result.get("provider") == "cursor" and result.get("startup_failure"):
-                    attributable_timeout = (
-                        result.get("degraded_marker_seen") is True
-                        and result.get("launch_intent_created") is True
-                        and result.get("provider_output_observed") is False
-                        and (
-                            result.get("timed_out") is True
-                            or result.get("cursor_harness_timeout") is True
-                        )
-                    )
-                    result["qualification"] = (
-                        "harness_precondition_unmet"
-                        if attributable_timeout
-                        else "provider_owned_start_failure"
-                    )
-                    result["qualification_detail"] = (
-                        cursor_auth.get("precondition_failure")
-                        if attributable_timeout
-                        else "cursor_startup_failure_not_attributable_to_missing_account_session"
-                    )
-                    if attributable_timeout:
-                        result["qualification_basis"] = (
-                            "cursor_status_probe_missing_and_no_provider_output"
-                        )
+                    classify_cursor_startup_failure(result, cursor_auth)
         provider_failures = [
             result for result in results if result.get("startup_failure") is not None
         ]
