@@ -498,11 +498,12 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
         reasons.append("managed_launch_recovery_unreadable")
         broken_reasons.append("managed_launch_recovery_unreadable")
     elif recovery is not None:
-        malformed = any(
-            _counter_is_malformed(recovery.get(field), present=field in recovery) for field in ("exhausted_count", "active_count")
+        required_fields = ("exhausted_count", "active_count", "scan_error")
+        malformed = any(field not in recovery for field in required_fields) or any(
+            _counter_is_malformed(recovery.get(field), present=True) for field in ("exhausted_count", "active_count")
         )
         scan_error = recovery.get("scan_error")
-        if "scan_error" in recovery and not isinstance(scan_error, bool):
+        if not isinstance(scan_error, bool):
             malformed = True
         if malformed:
             reasons.append("managed_launch_recovery_unreadable")
@@ -513,7 +514,7 @@ def _local_health_facts_from_heartbeat(row: Any) -> dict[str, Any]:
         if _nonnegative_int(recovery.get("active_count")) > 0:
             reasons.append("managed_launch_recovery_active")
             degraded_reasons.append("managed_launch_recovery_active")
-        if scan_error is True:
+        if scan_error is True and "managed_launch_recovery_unreadable" not in reasons:
             reasons.append("managed_launch_recovery_unreadable")
             broken_reasons.append("managed_launch_recovery_unreadable")
 

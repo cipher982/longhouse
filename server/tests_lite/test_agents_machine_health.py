@@ -53,9 +53,7 @@ def test_machine_action_ids_cover_local_health_reason_aliases():
 
 
 def test_machine_action_ids_match_local_orphan_bridge_action():
-    assert machine_health_service.suggested_action_ids_for_machine_reasons(
-        ["orphaned_managed_bridge"]
-    ) == ("stop_managed_bridge",)
+    assert machine_health_service.suggested_action_ids_for_machine_reasons(["orphaned_managed_bridge"]) == ("stop_managed_bridge",)
 
 
 def test_hosted_machine_health_projects_storage_and_managed_recovery_facts():
@@ -136,12 +134,12 @@ def test_hosted_machine_health_keeps_malformed_storage_counts_degraded():
 
 def test_hosted_machine_health_fails_closed_on_malformed_managed_recovery():
     for payload in (
+        {"managed_launch_recovery": {}},
+        {"managed_launch_recovery": {"active_count": 0}},
         {"managed_launch_recovery": {"active_count": "0"}},
         {"managed_launch_recovery": []},
     ):
-        facts = machine_health_service._local_health_facts_from_heartbeat(
-            SimpleNamespace(raw_json=json.dumps(payload))
-        )
+        facts = machine_health_service._local_health_facts_from_heartbeat(SimpleNamespace(raw_json=json.dumps(payload)))
 
         assert facts["reasons"] == ("managed_launch_recovery_unreadable",)
         assert facts["broken_reasons"] == ("managed_launch_recovery_unreadable",)
@@ -150,11 +148,7 @@ def test_hosted_machine_health_fails_closed_on_malformed_managed_recovery():
 
 def test_hosted_machine_health_surfaces_unreadable_storage_outbox():
     facts = machine_health_service._local_health_facts_from_heartbeat(
-        SimpleNamespace(
-            raw_json=json.dumps(
-                {"storage_v2_outbox": {"error": "database locked"}}
-            )
-        )
+        SimpleNamespace(raw_json=json.dumps({"storage_v2_outbox": {"error": "database locked"}}))
     )
 
     assert facts["reasons"] == ("storage_v2_outbox_unreadable",)
@@ -163,9 +157,7 @@ def test_hosted_machine_health_surfaces_unreadable_storage_outbox():
 
 
 def test_hosted_machine_health_surfaces_null_storage_outbox():
-    facts = machine_health_service._local_health_facts_from_heartbeat(
-        SimpleNamespace(raw_json=json.dumps({"storage_v2_outbox": None}))
-    )
+    facts = machine_health_service._local_health_facts_from_heartbeat(SimpleNamespace(raw_json=json.dumps({"storage_v2_outbox": None})))
 
     assert facts["reasons"] == ("storage_v2_outbox_unreadable",)
     assert facts["broken_reasons"] == ("storage_v2_outbox_unreadable",)
@@ -174,9 +166,7 @@ def test_hosted_machine_health_surfaces_null_storage_outbox():
 
 def test_hosted_machine_health_surfaces_non_string_storage_outbox_error():
     facts = machine_health_service._local_health_facts_from_heartbeat(
-        SimpleNamespace(
-            raw_json=json.dumps({"storage_v2_outbox": {"error": False}})
-        )
+        SimpleNamespace(raw_json=json.dumps({"storage_v2_outbox": {"error": False}}))
     )
 
     assert facts["reasons"] == ("storage_v2_outbox_unreadable",)
