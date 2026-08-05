@@ -215,6 +215,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--workflow", default=DEFAULT_WORKFLOW)
+    parser.add_argument(
+        "--resolve-only",
+        action="store_true",
+        help="Resolve the release tag without requiring a qualification artifact.",
+    )
     parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL", DEFAULT_API_URL))
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
     return parser
@@ -226,6 +231,13 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("launch reliability release gate: GITHUB_TOKEN or GH_TOKEN is required")
     api = GitHubAPI(args.token, api_url=args.api_url)
     try:
+        if args.resolve_only:
+            result = {
+                "release_tag": args.release_tag,
+                "release_sha": _resolve_tag_sha(api, args.repository, args.release_tag),
+            }
+            print(json.dumps(result, sort_keys=True))
+            return 0
         result = find_qualifying_attestation(
             api,
             repository=args.repository,

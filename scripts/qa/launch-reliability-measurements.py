@@ -534,23 +534,29 @@ def _matrix_freshness_exclusion_reason(
     return None
 
 
-def _retry_backoff_exclusion_reason(artifact: dict[str, Any]) -> str | None:
-    """Require measured retry cadence before a run can qualify externally."""
+def _retry_delay_floor_seconds(attempts: int) -> float:
+    return float(min(2 ** min(attempts, 8), 300))
+
+
+def _retry_backoff_evidence(
+    artifact: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Recompute retry cadence from observations before a run can qualify."""
 
     cold_restart = artifact.get("machine_agent_cold_restart")
     if not isinstance(cold_restart, dict):
-        return "missing_cold_restart_retry_evidence"
+        return None, "missing_cold_restart_retry_evidence"
     observations = cold_restart.get("retry_backoff_observations")
-    cadence = cold_restart.get("retry_backoff_cadence")
+    declared_cadence = cold_restart.get("retry_backoff_cadence")
     if not isinstance(observations, list) or not observations:
-        return "missing_retry_backoff_observations"
-    if not isinstance(cadence, dict) or not cadence:
-        return "missing_retry_backoff_cadence"
+        return None, "missing_retry_backoff_observations"
+    if not isinstance(declared_cadence, dict) or not declared_cadence:
+        return None, "missing_retry_backoff_cadence"
 
-    observation_counts: dict[str, int] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for observation in observations:
         if not isinstance(observation, dict):
-            return "malformed_retry_backoff_observations"
+            return None, "malformed_retry_backoff_observations"
         session_id = observation.get("session_id")
         attempts = observation.get("attempts")
         observed = observation.get("observed_monotonic_seconds")
@@ -562,35 +568,77 @@ def _retry_backoff_exclusion_reason(artifact: dict[str, Any]) -> str | None:
             or not isinstance(observed, (int, float))
             or not math.isfinite(float(observed))
         ):
-            return "malformed_retry_backoff_observations"
-        observation_counts[session_id] = observation_counts.get(session_id, 0) + 1
+            return None, "malformed_retry_backoff_observations"
+        grouped.setdefault(session_id, []).append(observation)
 
-    for session_id, intervals in cadence.items():
+    if set(declared_cadence) != set(grouped):
+        return None, "malformed_retry_backoff_cadence"
+    derived_cadence: dict[str, list[dict[str, float | int]]] = {}
+    for session_id, session_observations in grouped.items():
         if (
-            not isinstance(session_id, str)
-            or not session_id
-            or not isinstance(intervals, list)
-            or not intervals
-            or observation_counts.get(session_id, 0) < 2
+            len(session_observations) < 2
         ):
-            return "malformed_retry_backoff_cadence"
-        for interval in intervals:
-            if not isinstance(interval, dict):
-                return "malformed_retry_backoff_cadence"
-            elapsed = interval.get("elapsed_seconds")
-            minimum = interval.get("minimum_seconds")
-            from_attempt = interval.get("from_attempt")
+            return None, "malformed_retry_backoff_cadence"
+        intervals: list[dict[str, float | int]] = []
+        for previous, current in zip(
+            session_observations, session_observations[1:]
+        ):
+            previous_attempts = int(previous["attempts"])
+            current_attempts = int(current["attempts"])
+            previous_observed = float(previous["observed_monotonic_seconds"])
+            current_observed = float(current["observed_monotonic_seconds"])
             if (
-                not isinstance(from_attempt, int)
-                or from_attempt < 1
-                or not isinstance(elapsed, (int, float))
-                or not math.isfinite(float(elapsed))
-                or not isinstance(minimum, (int, float))
-                or not math.isfinite(float(minimum))
-                or float(elapsed) < float(minimum)
+                current_attempts != previous_attempts + 1
+                or current_observed <= previous_observed
             ):
-                return "invalid_retry_backoff_cadence"
-    return None
+                return None, "malformed_retry_backoff_observations"
+            elapsed = current_observed - previous_observed
+            minimum = _retry_delay_floor_seconds(previous_attempts)
+            tolerance = max(0.25, minimum * 0.25)
+            if elapsed + tolerance < minimum:
+                return None, "invalid_retry_backoff_cadence"
+            intervals.append(
+                {
+                    "from_attempt": previous_attempts,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "minimum_seconds": minimum,
+                }
+            )
+        derived_cadence[session_id] = intervals
+
+    for session_id, expected_intervals in derived_cadence.items():
+        declared_intervals = declared_cadence.get(session_id)
+        if not isinstance(declared_intervals, list) or len(declared_intervals) != len(
+            expected_intervals
+        ):
+            return None, "retry_backoff_cadence_mismatch"
+        for declared, expected in zip(declared_intervals, expected_intervals):
+            if not isinstance(declared, dict):
+                return None, "retry_backoff_cadence_mismatch"
+            if (
+                declared.get("from_attempt") != expected["from_attempt"]
+                or not isinstance(declared.get("elapsed_seconds"), (int, float))
+                or not math.isclose(
+                    float(declared["elapsed_seconds"]),
+                    float(expected["elapsed_seconds"]),
+                    abs_tol=0.001,
+                )
+                or not isinstance(declared.get("minimum_seconds"), (int, float))
+                or not math.isclose(
+                    float(declared["minimum_seconds"]),
+                    float(expected["minimum_seconds"]),
+                    abs_tol=0.001,
+                )
+            ):
+                return None, "retry_backoff_cadence_mismatch"
+    return {
+        "observations": observations,
+        "cadence": derived_cadence,
+    }, None
+
+
+def _retry_backoff_exclusion_reason(artifact: dict[str, Any]) -> str | None:
+    return _retry_backoff_evidence(artifact)[1]
 
 
 def _measured_run(
@@ -1947,6 +1995,11 @@ def build_report(
     for path, artifact in measured:
         cleanup = _cleanup_statuses(artifact)
         measurements = artifact.get("measurements") or {}
+        retry_evidence, retry_reason = _retry_backoff_evidence(artifact)
+        if retry_reason is not None or retry_evidence is None:
+            raise ValueError(
+                f"measured artifact lost retry-backoff evidence: {path} ({retry_reason})"
+            )
         history.append(
             {
                 "path": str(path),
@@ -1957,6 +2010,7 @@ def build_report(
                     "before": artifact.get("retry_intents_before_recovery"),
                     "after": artifact.get("retry_intents_after_recovery"),
                 },
+                "retry_backoff_evidence": retry_evidence,
                 "cleanup": {"pass": cleanup.count("pass"), "total": len(cleanup)},
                 "auth_gaps": _auth_gaps(artifact),
                 "startup_failures": _startup_failure_counts(artifact),

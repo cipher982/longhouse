@@ -14,6 +14,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import re
 import secrets
 from datetime import UTC
@@ -26,6 +27,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from zerg.services.managed_provider_contracts import factory_provider_names
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -178,6 +180,13 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         or matrix_summary["successful_recovery_count"] < 1
     ):
         raise ValueError("attestation subject has no successful recovery evidence")
+    retry_evidence = matrix_summary.get("retry_backoff_evidence")
+    if not isinstance(retry_evidence, list) or len(retry_evidence) != len(
+        matrix_source_shas
+    ):
+        raise ValueError("attestation subject has incomplete retry-backoff evidence")
+    for evidence in retry_evidence:
+        _validate_retry_backoff_evidence(evidence)
     dogfood = subject.get("dogfood_series")
     if not isinstance(dogfood, dict) or dogfood.get("input_status") != "valid":
         raise ValueError("attestation subject dogfood input is not valid")
@@ -210,6 +219,73 @@ def _stable_measure(measure: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return stable
+
+
+def _retry_delay_floor_seconds(attempts: int) -> float:
+    return float(min(2 ** min(attempts, 8), 300))
+
+
+def _validate_retry_backoff_evidence(evidence: Any) -> None:
+    if not isinstance(evidence, dict):
+        raise ValueError("retry-backoff evidence is malformed")
+    observations = evidence.get("observations")
+    cadence = evidence.get("cadence")
+    if not isinstance(observations, list) or not observations:
+        raise ValueError("retry-backoff observations are missing")
+    if not isinstance(cadence, dict) or not cadence:
+        raise ValueError("retry-backoff cadence is missing")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for observation in observations:
+        if not isinstance(observation, dict):
+            raise ValueError("retry-backoff observation is malformed")
+        session_id = observation.get("session_id")
+        attempts = observation.get("attempts")
+        observed = observation.get("observed_monotonic_seconds")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(attempts, int)
+            or attempts < 1
+            or not isinstance(observed, (int, float))
+            or not math.isfinite(float(observed))
+        ):
+            raise ValueError("retry-backoff observation is malformed")
+        grouped.setdefault(session_id, []).append(observation)
+    if set(grouped) != set(cadence):
+        raise ValueError("retry-backoff cadence does not cover observations")
+    for session_id, session_observations in grouped.items():
+        if len(session_observations) < 2:
+            raise ValueError("retry-backoff evidence has fewer than two observations")
+        intervals = cadence.get(session_id)
+        if not isinstance(intervals, list) or len(intervals) != len(session_observations) - 1:
+            raise ValueError("retry-backoff cadence interval count is invalid")
+        for previous, current, interval in zip(
+            session_observations, session_observations[1:], intervals
+        ):
+            if not isinstance(interval, dict):
+                raise ValueError("retry-backoff cadence interval is malformed")
+            previous_attempts = previous["attempts"]
+            if current["attempts"] != previous_attempts + 1:
+                raise ValueError("retry-backoff attempts are not sequential")
+            previous_observed = float(previous["observed_monotonic_seconds"])
+            current_observed = float(current["observed_monotonic_seconds"])
+            elapsed = current_observed - previous_observed
+            minimum = _retry_delay_floor_seconds(previous_attempts)
+            tolerance = max(0.25, minimum * 0.25)
+            if elapsed <= 0 or elapsed + tolerance < minimum:
+                raise ValueError("retry-backoff observations are below policy floor")
+            if (
+                interval.get("from_attempt") != previous_attempts
+                or not isinstance(interval.get("elapsed_seconds"), (int, float))
+                or not math.isclose(
+                    float(interval["elapsed_seconds"]), round(elapsed, 3), abs_tol=0.001
+                )
+                or not isinstance(interval.get("minimum_seconds"), (int, float))
+                or not math.isclose(
+                    float(interval["minimum_seconds"]), minimum, abs_tol=0.001
+                )
+            ):
+                raise ValueError("retry-backoff cadence does not match observations")
 
 
 def build_subject(
@@ -271,6 +347,7 @@ def build_subject(
     matrix_source_shas = []
     matrix_generated_at = []
     matrix_implementations = []
+    retry_backoff_evidence = []
     for history in matrix_history:
         if not isinstance(history, dict):
             raise ValueError("report matrix history is malformed")
@@ -322,6 +399,9 @@ def build_subject(
                 "provider_binaries": provider_binaries,
             }
         )
+        evidence = history.get("retry_backoff_evidence")
+        _validate_retry_backoff_evidence(evidence)
+        retry_backoff_evidence.append(evidence)
     subjects = dogfood.get("attestation_subjects")
     if not isinstance(subjects, list) or not subjects:
         raise ValueError("report has no dogfood sampled-binary subjects")
@@ -369,6 +449,7 @@ def build_subject(
         "report_provenance": required_provenance,
         "matrix": {
             "successful_recovery_count": matrix["successful_recovery_count"],
+            "retry_backoff_evidence": retry_backoff_evidence,
         },
         "matrix_generated_at": matrix_generated_at,
         "matrix_source_shas": matrix_source_shas,

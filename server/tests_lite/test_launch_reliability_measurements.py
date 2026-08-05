@@ -672,6 +672,26 @@ def test_invalid_retry_cadence_evidence_is_not_measured(tmp_path: Path):
 
     assert report["matrix"]["measured_clean_run_count"] == 0
     assert report["matrix"]["excluded_full_runs"] == [
+        {"path": str(matrix), "reason": "retry_backoff_cadence_mismatch"}
+    ]
+
+
+def test_retry_cadence_is_recomputed_from_raw_observations(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["machine_agent_cold_restart"]["retry_backoff_observations"][1][
+        "observed_monotonic_seconds"
+    ] = 0.1
+    payload["machine_agent_cold_restart"]["retry_backoff_cadence"]["session-1"][0].update(
+        {"elapsed_seconds": 0.0, "minimum_seconds": 0.0}
+    )
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
         {"path": str(matrix), "reason": "invalid_retry_backoff_cadence"}
     ]
 
@@ -1358,7 +1378,34 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
             "harness_file_dirty": False,
             "sha256": "b" * 64,
         },
-        "matrix": {"successful_recovery_count": 1},
+        "matrix": {
+            "successful_recovery_count": 1,
+            "retry_backoff_evidence": [
+                {
+                    "observations": [
+                        {
+                            "session_id": "session-1",
+                            "attempts": 1,
+                            "observed_monotonic_seconds": 0.0,
+                        },
+                        {
+                            "session_id": "session-1",
+                            "attempts": 2,
+                            "observed_monotonic_seconds": 2.2,
+                        },
+                    ],
+                    "cadence": {
+                        "session-1": [
+                            {
+                                "from_attempt": 1,
+                                "elapsed_seconds": 2.2,
+                                "minimum_seconds": 2.0,
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
         "matrix_source_shas": ["a" * 40],
         "matrix_generated_at": ["2026-08-05T03:00:00Z"],
         "matrix_implementations": [

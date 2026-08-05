@@ -45,11 +45,12 @@ def _artifact_zip(source_sha: str) -> bytes:
 
 def test_finds_newest_source_bound_receipt():
     source_sha = "a" * 40
+    verified: list[tuple[Path, Path]] = []
     result = MODULE.find_qualifying_attestation(
         FakeAPI(release_sha=source_sha, artifact_zip=_artifact_zip(source_sha)),
         repository="cipher982/longhouse",
         release_tag="v0.1.33",
-        verifier=lambda receipt, subject: None,
+        verifier=lambda receipt, subject: verified.append((receipt, subject)),
     )
 
     assert result == {
@@ -59,6 +60,33 @@ def test_finds_newest_source_bound_receipt():
         "run_url": "https://example/run/42",
         "artifact_id": 99,
         "artifact_name": "launch-reliability-attestation-42",
+    }
+    assert len(verified) == 1
+    assert verified[0][0].name == MODULE.RECEIPT_NAME
+    assert verified[0][1].name == MODULE.SUBJECT_NAME
+
+
+def test_resolve_only_returns_the_tag_commit(monkeypatch, capsys):
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_tag_sha",
+        lambda api, repository, tag: "a" * 40,
+    )
+
+    assert MODULE.main(
+        [
+            "--repository",
+            "cipher982/longhouse",
+            "--release-tag",
+            "v0.1.33",
+            "--resolve-only",
+        ]
+    ) == 0
+
+    assert json.loads(capsys.readouterr().out) == {
+        "release_sha": "a" * 40,
+        "release_tag": "v0.1.33",
     }
 
 

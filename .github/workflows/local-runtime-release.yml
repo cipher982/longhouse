@@ -22,16 +22,76 @@ permissions:
   id-token: write
 
 jobs:
-  build-engine-linux-x64:
+  require-launch-reliability-attestation:
+    name: Require source-bound launch qualification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      release_sha: ${{ steps.resolve.outputs.release_sha }}
+      qualification_run_id: ${{ steps.resolve.outputs.qualification_run_id }}
+
+    steps:
+      - name: Classify release tier
+        id: release_tier
+        run: |
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tier=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier=smoke" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require protected-main dispatch for stable manual releases
+        if: ${{ steps.release_tier.outputs.tier == 'stable' && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "Stable manual releases must be dispatched from protected main." >&2
+          exit 1
+
+      - name: Checkout trusted gate source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-release-gate
+          persist-credentials: false
+
+      - name: Resolve and qualify the release source
+        id: resolve
+        working-directory: trusted-release-gate
+        run: |
+          args=(
+            --repository "${{ github.repository }}"
+            --release-tag "$RELEASE_TAG"
+          )
+          if [[ "${{ steps.release_tier.outputs.tier }}" != "stable" ]]; then
+            args+=(--resolve-only)
+          fi
+          result="$(python3 scripts/ci/require-launch-reliability-attestation.py "${args[@]}")"
+          release_sha="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["release_sha"])' "$result")"
+          printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
+          if [[ "${{ steps.release_tier.outputs.tier }}" == "stable" ]]; then
+            qualification_run_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["run_id"])' "$result")"
+            printf 'qualification_run_id=%s\n' "$qualification_run_id" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-engine-linux-x64:
+    needs: require-launch-reliability-attestation
+    permissions:
+      contents: read
+      actions: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      RELEASE_SHA: ${{ needs.require-launch-reliability-attestation.outputs.release_sha }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_SHA }}
 
       - name: Generate build identity
         run: env -u GITHUB_SHA GITHUB_REF="refs/tags/${RELEASE_TAG}" python3 scripts/build/generate_build_identity.py
@@ -65,15 +125,20 @@ jobs:
           retention-days: 7
 
   build-engine-linux-arm64:
+    needs: require-launch-reliability-attestation
+    permissions:
+      contents: read
+      actions: write
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      RELEASE_SHA: ${{ needs.require-launch-reliability-attestation.outputs.release_sha }}
     runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_SHA }}
 
       - name: Generate build identity
         run: env -u GITHUB_SHA GITHUB_REF="refs/tags/${RELEASE_TAG}" python3 scripts/build/generate_build_identity.py
@@ -107,17 +172,22 @@ jobs:
           retention-days: 7
 
   build-macos:
+    needs: require-launch-reliability-attestation
+    permissions:
+      contents: read
+      actions: write
     runs-on: macos-latest
     timeout-minutes: 360
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      RELEASE_SHA: ${{ needs.require-launch-reliability-attestation.outputs.release_sha }}
       LONGHOUSE_NOTARY_WAIT_TIMEOUT: ${{ inputs.notary_wait_timeout || '330m' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_SHA }}
 
       - name: Generate build identity
         run: env -u GITHUB_SHA GITHUB_REF="refs/tags/${RELEASE_TAG}" python3 scripts/build/generate_build_identity.py
@@ -809,44 +879,6 @@ jobs:
           path: binaries/*
           retention-days: 7
 
-  require-launch-reliability-attestation:
-    name: Require source-bound launch qualification
-    needs:
-      - build-engine-linux-x64
-      - build-macos
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
-      GH_TOKEN: ${{ github.token }}
-
-    steps:
-      - name: Classify release tier
-        id: release_tier
-        run: |
-          if [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "tier=stable" >> "$GITHUB_OUTPUT"
-          else
-            echo "tier=smoke" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout release source
-        if: ${{ steps.release_tier.outputs.tier == 'stable' }}
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-          persist-credentials: false
-
-      - name: Require exact source-bound launch qualification
-        if: ${{ steps.release_tier.outputs.tier == 'stable' }}
-        run: |
-          python3 scripts/ci/require-launch-reliability-attestation.py \
-            --repository "${{ github.repository }}" \
-            --release-tag "$RELEASE_TAG"
-
-      - name: Allow smoke release without stable qualification
-        if: ${{ steps.release_tier.outputs.tier != 'stable' }}
-        run: echo "Smoke release; stable launch-reliability qualification is not required."
-
   release:
     needs:
       - build-engine-linux-x64
@@ -855,7 +887,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      EXPECTED_RELEASE_SHA: ${{ needs.require-launch-reliability-attestation.outputs.release_sha }}
       GH_TOKEN: ${{ github.token }}
+    permissions:
+      contents: write
+      actions: read
+      attestations: write
+      id-token: write
 
     steps:
       - name: Classify release tier
@@ -883,6 +921,14 @@ jobs:
 
       - name: List runtime artifacts
         run: ls -la binaries
+
+      - name: Assert release tag still points to the qualified source
+        run: |
+          actual_sha="$(gh api "repos/${{ github.repository }}/commits/${RELEASE_TAG}" --jq .sha)"
+          test "$actual_sha" = "$EXPECTED_RELEASE_SHA" || {
+            echo "Release tag moved after qualification: expected $EXPECTED_RELEASE_SHA, got $actual_sha." >&2
+            exit 1
+          }
 
       - name: Generate checksums
         run: |
