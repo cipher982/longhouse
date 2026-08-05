@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 240,
+  "file_count": 241,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -889,6 +889,14 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_installed_managed_launch_fault_matrix.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
       ]
     },
     {

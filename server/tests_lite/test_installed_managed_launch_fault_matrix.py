@@ -384,6 +384,84 @@ def test_finish_live_command_rejects_provider_cleanup_without_identity(
     assert result["status"] == "fail"
 
 
+def test_finish_owned_live_provider_uses_provider_stop_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stop_calls: list[dict[str, object]] = []
+    finish_calls: list[dict[str, object]] = []
+    cleanup_scope = {
+        "provider_home": str(tmp_path / "provider-home"),
+        "provider_config_root": str(tmp_path / "provider-config" / "codex"),
+    }
+
+    def fake_stop(provider: str, session_id: str, **kwargs: object) -> dict[str, object]:
+        stop_calls.append({"provider": provider, "session_id": session_id, **kwargs})
+        return {"status": "pass", "remaining_process_groups": []}
+
+    def fake_finish(command: object, **kwargs: object) -> dict[str, object]:
+        finish_calls.append({"command": command, **kwargs})
+        return {"status": "pass", "returncode": 0}
+
+    monkeypatch.setattr(_MODULE, "cleanup_detached_provider", fake_stop)
+    monkeypatch.setattr(_MODULE, "finish_live_command", fake_finish)
+
+    result = _MODULE.finish_owned_live_provider(
+        {
+            "provider": "codex",
+            "session_id_observed": "session-1",
+            "provider_pid": 123,
+            "provider_process_start_time": "start-1",
+            "cleanup_scope": cleanup_scope,
+        },
+        "live-command",
+        longhouse_bin=tmp_path / "longhouse",
+        engine_bin=tmp_path / "longhouse-engine",
+    )
+
+    assert result["status"] == "pass"
+    assert result["owned_stop"]["status"] == "pass"
+    assert stop_calls[0]["provider"] == "codex"
+    assert stop_calls[0]["session_id"] == "session-1"
+    assert finish_calls[0]["command"] == "live-command"
+
+
+def test_finish_owned_live_provider_rejects_forced_owned_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        _MODULE,
+        "cleanup_detached_provider",
+        lambda *args, **kwargs: {
+            "status": "forced_cleanup",
+            "remaining_process_groups": [],
+        },
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "finish_live_command",
+        lambda *args, **kwargs: {"status": "pass", "returncode": 0},
+    )
+
+    result = _MODULE.finish_owned_live_provider(
+        {
+            "provider": "opencode",
+            "session_id_observed": "session-2",
+            "cleanup_scope": {
+                "provider_home": str(tmp_path / "provider-home"),
+                "provider_config_root": str(tmp_path / "provider-config" / "opencode"),
+            },
+        },
+        "live-command",
+        longhouse_bin=tmp_path / "longhouse",
+        engine_bin=tmp_path / "longhouse-engine",
+    )
+
+    assert result["status"] == "fail"
+    assert "owned_stop_failure" in result
+
+
 def test_run_tty_command_uses_pty_interrupt_without_direct_group_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -892,6 +892,71 @@ def cleanup_detached_provider(
     }
 
 
+def provider_cleanup_environment(
+    cleanup_scope: dict[str, Any], *, engine_bin: Path
+) -> dict[str, str]:
+    """Rebuild the disposable provider environment for an owned stop command."""
+
+    provider_home = Path(str(cleanup_scope["provider_home"]))
+    profile_root = Path(str(cleanup_scope["provider_config_root"]))
+    temporary_root = profile_root.parent.parent
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(provider_home),
+            "XDG_CONFIG_HOME": str(provider_home / "config"),
+            "XDG_DATA_HOME": str(provider_home / "data"),
+            "XDG_STATE_HOME": str(provider_home / "state"),
+            "XDG_CACHE_HOME": str(provider_home / "cache"),
+            "CODEX_HOME": str(profile_root),
+            "LONGHOUSE_HOME": str(temporary_root / "longhouse"),
+            "LONGHOUSE_ENGINE_BIN": str(engine_bin),
+        }
+    )
+    return env
+
+
+def finish_owned_live_provider(
+    result: dict[str, Any],
+    live: LiveCommand,
+    *,
+    longhouse_bin: Path,
+    engine_bin: Path,
+) -> dict[str, Any]:
+    """Stop detached bridges through Longhouse before asserting exact cleanup."""
+
+    provider = str(result.get("provider", "")).lower()
+    session_id = result.get("session_id_observed")
+    if provider in {"codex", "opencode"} and session_id:
+        cleanup_scope = result.get("cleanup_scope")
+        if not isinstance(cleanup_scope, dict):
+            raise ProcessScanFailure(
+                f"{provider} live cleanup has no verified cleanup scope"
+            )
+        owned_stop = cleanup_detached_provider(
+            provider,
+            str(session_id),
+            longhouse_bin=longhouse_bin,
+            env=provider_cleanup_environment(cleanup_scope, engine_bin=engine_bin),
+        )
+    else:
+        owned_stop = {"status": "not_applicable", "remaining_process_groups": []}
+
+    cleanup = finish_live_command(
+        live,
+        provider_pid=result.get("provider_pid"),
+        provider_process_start_time=result.get("provider_process_start_time"),
+        cleanup_scope=result.get("cleanup_scope"),
+    )
+    cleanup["owned_stop"] = owned_stop
+    if owned_stop["status"] not in {"pass", "not_applicable"}:
+        cleanup["status"] = "fail"
+        cleanup["owned_stop_failure"] = (
+            "Longhouse-owned detached provider stop did not complete naturally"
+        )
+    return cleanup
+
+
 def wait_status(pid: int, timeout: float) -> int | None:
     deadline = time.monotonic() + timeout
     while True:
@@ -2589,13 +2654,11 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 if durable_ready is True:
                     remaining_live_commands.append((result, live))
                     continue
-                cleanup = finish_live_command(
+                cleanup = finish_owned_live_provider(
+                    result,
                     live,
-                    provider_pid=result.get("provider_pid"),
-                    provider_process_start_time=result.get(
-                        "provider_process_start_time"
-                    ),
-                    cleanup_scope=result.get("cleanup_scope"),
+                    longhouse_bin=longhouse_bin,
+                    engine_bin=engine_bin,
                 )
                 if cleanup["status"] not in {"pass", "not_started"}:
                     raise RuntimeError(
@@ -2941,11 +3004,11 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
             args._last_launch_states = last_launch_states
             assert_unready_absent()
         for result, live in live_commands:
-            cleanup = finish_live_command(
+            cleanup = finish_owned_live_provider(
+                result,
                 live,
-                provider_pid=result.get("provider_pid"),
-                provider_process_start_time=result.get("provider_process_start_time"),
-                cleanup_scope=result.get("cleanup_scope"),
+                longhouse_bin=longhouse_bin,
+                engine_bin=engine_bin,
             )
             if cleanup["status"] != "pass":
                 raise RuntimeError(
@@ -3031,13 +3094,11 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     {},
                 )
-                cleanup = finish_live_command(
+                cleanup = finish_owned_live_provider(
+                    result,
                     live,
-                    provider_pid=result.get("provider_pid"),
-                    provider_process_start_time=result.get(
-                        "provider_process_start_time"
-                    ),
-                    cleanup_scope=result.get("cleanup_scope"),
+                    longhouse_bin=longhouse_bin,
+                    engine_bin=engine_bin,
                 )
                 if cleanup["status"] not in {"pass", "not_started"}:
                     cleanup_errors.append(
