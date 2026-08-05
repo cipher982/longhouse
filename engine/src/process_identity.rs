@@ -90,7 +90,7 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     Some(facts)
 }
 
-fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
     #[cfg(unix)]
     {
         // Keep descendants in a private process group. A command such as
@@ -102,13 +102,18 @@ fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output
     }
     let mut child = command
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = thread::spawn(move || {
+    let mut stderr = child.stderr.take()?;
+    let stdout_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         stdout.read_to_end(&mut bytes).map(|_| bytes).ok()
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes).ok()
     });
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -133,16 +138,18 @@ fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output
             }
             let _ = child.kill();
             let _ = child.wait();
-            let _ = reader.join();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
             return None;
         }
         thread::sleep(Duration::from_millis(5));
     };
-    let stdout = reader.join().ok()??;
+    let stdout = stdout_reader.join().ok()??;
+    let stderr = stderr_reader.join().ok()??;
     Some(Output {
         status,
         stdout,
-        stderr: Vec::new(),
+        stderr,
     })
 }
 

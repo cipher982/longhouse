@@ -39,6 +39,8 @@ use std::sync::{
 use std::time::Duration;
 use uuid::Uuid;
 
+const MANAGED_PROVIDER_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Parser)]
 #[command(name = "longhouse", about = "Native Longhouse device CLI")]
 struct Cli {
@@ -1562,7 +1564,18 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             .arg("--resume-provider-session-id")
             .arg(&target.provider_session_id);
     }
-    let output = start.output().context("start native OpenCode bridge")?;
+    let output =
+        match crate::process_identity::output_with_timeout(start, MANAGED_PROVIDER_COMMAND_TIMEOUT)
+        {
+            Some(output) => output,
+            None => {
+                if let Some(registration) = &degraded_registration {
+                    registration.mark_provider_failed();
+                }
+                let _ = stop_opencode_bridge(&response.session_id, args.config_dir.clone());
+                anyhow::bail!("native OpenCode bridge start timed out after 10 seconds");
+            }
+        };
     if !output.status.success() {
         if let Some(registration) = &degraded_registration {
             registration.mark_provider_failed();
@@ -2034,10 +2047,11 @@ fn resolve_provider_binary(
 }
 
 fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
-    let output = Command::new(binary)
-        .args(["auth", "status", "--json"])
-        .output()
-        .with_context(|| format!("run {binary} auth status"))?;
+    let mut command = Command::new(binary);
+    command.args(["auth", "status", "--json"]);
+    let output =
+        crate::process_identity::output_with_timeout(command, MANAGED_PROVIDER_COMMAND_TIMEOUT)
+            .with_context(|| format!("run {binary} auth status timed out"))?;
     if !output.status.success() {
         anyhow::bail!(
             "Claude native channels unavailable: `claude auth status` exited {}",
@@ -2186,7 +2200,23 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if let Some(effort) = &args.model_reasoning_effort {
         bridge.args(["--model-reasoning-effort", effort]);
     }
-    let output = bridge.output().context("start native Codex bridge")?;
+    let output = match crate::process_identity::output_with_timeout(
+        bridge,
+        MANAGED_PROVIDER_COMMAND_TIMEOUT,
+    ) {
+        Some(output) => output,
+        None => {
+            if let Some(registration) = &degraded_registration {
+                registration.mark_provider_failed();
+            }
+            let _ = stop_codex_bridge(
+                &response.session_id,
+                Some(response.run_id.as_str()),
+                "bridge_start_timed_out",
+            );
+            anyhow::bail!("native Codex bridge start timed out after 10 seconds");
+        }
+    };
     if !output.status.success() {
         if let Some(registration) = &degraded_registration {
             registration.mark_provider_failed();
@@ -2212,18 +2242,25 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
     if let Some(registration) = &degraded_registration {
-        if let Some(pid) = bridge.pid {
-            if let Err(error) =
-                registration.record_provider_owner(pid, bridge.process_start_time.clone())
-            {
-                registration.mark_provider_failed();
-                let _ = stop_codex_bridge(
-                    &response.session_id,
-                    Some(response.run_id.as_str()),
-                    "managed_readiness_persistence_failed",
-                );
-                return Err(error.context("persist managed Codex provider ownership"));
-            }
+        let Some(pid) = bridge.pid else {
+            registration.mark_provider_failed();
+            let _ = stop_codex_bridge(
+                &response.session_id,
+                Some(response.run_id.as_str()),
+                "managed_provider_identity_missing",
+            );
+            anyhow::bail!("native Codex bridge did not return its provider PID");
+        };
+        if let Err(error) =
+            registration.record_provider_owner(pid, bridge.process_start_time.clone())
+        {
+            registration.mark_provider_failed();
+            let _ = stop_codex_bridge(
+                &response.session_id,
+                Some(response.run_id.as_str()),
+                "managed_readiness_persistence_failed",
+            );
+            return Err(error.context("persist managed Codex provider ownership"));
         }
         if let Err(error) = registration.mark_provider_ready() {
             registration.mark_provider_failed();
@@ -2379,9 +2416,16 @@ fn launch_managed_codex_resume(
     if let Some(effort) = &target.model_reasoning_effort {
         bridge_command.args(["--model-reasoning-effort", effort]);
     }
-    let output = bridge_command
-        .output()
-        .context("resume native Codex bridge")?;
+    let output = match crate::process_identity::output_with_timeout(
+        bridge_command,
+        MANAGED_PROVIDER_COMMAND_TIMEOUT,
+    ) {
+        Some(output) => output,
+        None => {
+            stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
+            anyhow::bail!("resumed native Codex bridge timed out after 10 seconds");
+        }
+    };
     if !output.status.success() {
         stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
         anyhow::bail!(
@@ -2623,15 +2667,7 @@ fn recorded_process_exists(pid: Option<u32>, recorded_start: Option<&str>) -> bo
 }
 
 fn process_start_identity(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then_some(value)
+    crate::process_identity::try_collect_process_fact(pid).map(|fact| fact.lstart)
 }
 
 fn run_codex_tui(
@@ -3854,10 +3890,11 @@ fn record_codex_contract(
 }
 
 fn codex_binary_version(codex_bin: &str) -> anyhow::Result<String> {
-    let output = Command::new(codex_bin)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("read Codex version from {codex_bin}"))?;
+    let mut command = Command::new(codex_bin);
+    command.arg("--version");
+    let output =
+        crate::process_identity::output_with_timeout(command, MANAGED_PROVIDER_COMMAND_TIMEOUT)
+            .with_context(|| format!("read Codex version from {codex_bin} timed out"))?;
     if !output.status.success() {
         anyhow::bail!("Codex --version exited {}", output.status);
     }

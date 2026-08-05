@@ -321,10 +321,10 @@ fn resolve_bin(explicit: Option<String>) -> anyhow::Result<String> {
     anyhow::bail!("cursor-agent executable not found. Install Cursor's CLI or set --cursor-bin.")
 }
 fn cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String> {
-    let output = std::process::Command::new(bin)
-        .arg("create-chat")
-        .current_dir(cwd)
-        .output()?;
+    let mut command = std::process::Command::new(bin);
+    command.arg("create-chat").current_dir(cwd);
+    let output = crate::process_identity::output_with_timeout(command, Duration::from_secs(10))
+        .context("cursor-agent create-chat timed out")?;
     if !output.status.success() {
         anyhow::bail!(
             "cursor-agent create-chat failed: {}",
@@ -553,7 +553,10 @@ fn coordination_token_status(
         url.trim_end_matches('/')
     );
     let result = tokio::runtime::Runtime::new()?.block_on(async {
-        let response = reqwest::Client::new()
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        let response = client
             .post(endpoint)
             .header("X-Agents-Token", device_token)
             .send()
@@ -934,11 +937,19 @@ fn serve(
     // Accepted sockets inherit nonblocking mode on macOS. Read one bounded
     // newline-framed message with a deadline; partial reads are never commands.
     let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(8)));
+    let read_deadline = Instant::now() + Duration::from_secs(8);
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(8)));
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
+        let remaining = read_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return response(
+                &mut stream,
+                json!({"ok":false,"error":{"code":"bad_request","message":"request deadline expired"}}),
+            );
+        }
+        let _ = stream.set_read_timeout(Some(remaining));
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(count) => {
@@ -1582,8 +1593,30 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
             }
             if observed == 0 {
+                libc::kill(pid, libc::SIGTERM);
+                for _ in 0..25 {
+                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+                    if observed != 0 {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+            if observed == 0 {
                 libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, &mut status, 0);
+                for _ in 0..25 {
+                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+                    if observed != 0 {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+                if observed == 0 {
+                    // A process stuck in uninterruptible kernel work may not
+                    // be reapable yet. Return a bounded terminal result and
+                    // let the kernel reap it when that work completes.
+                    status = libc::SIGKILL;
+                }
             }
         }
         if libc::WIFEXITED(status) {
