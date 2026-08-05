@@ -84,36 +84,40 @@ fn process_start_time(pid: libc::pid_t) -> Option<String> {
         .map(|fact| fact.lstart)
 }
 
-fn terminate_and_reap_pid_bounded(pid: libc::pid_t) {
+fn terminate_and_reap_pid_bounded(pid: libc::pid_t) -> Option<libc::c_int> {
     let mut status = 0;
     let mut observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
     for _ in 0..25 {
         if observed != 0 {
-            return;
+            return (observed == pid).then_some(status);
         }
         thread::sleep(Duration::from_millis(10));
         observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
     }
     unsafe {
+        libc::kill(-pid, libc::SIGTERM);
         libc::kill(pid, libc::SIGTERM);
     }
     for _ in 0..25 {
         observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         if observed != 0 {
-            return;
+            return (observed == pid).then_some(status);
         }
         thread::sleep(Duration::from_millis(10));
     }
     unsafe {
+        libc::kill(-pid, libc::SIGKILL);
         libc::kill(pid, libc::SIGKILL);
     }
     for _ in 0..25 {
         observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         if observed != 0 {
-            return;
+            return (observed == pid).then_some(status);
         }
         thread::sleep(Duration::from_millis(10));
     }
+    crate::process_identity::reap_pid_later(pid);
+    None
 }
 fn phase(dir: &Path, session_id: &str, conversation: &str, launch_id: &str) -> Option<Value> {
     let value: Value =
@@ -1626,53 +1630,17 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             libc::close(slave_hold);
         }
     }
-    let exit_code = unsafe {
-        let mut status = reaped_status.unwrap_or(0);
-        if reaped_status.is_none() {
-            // A relay error can leave the provider alive. Never wait
-            // forever for a child whose PTY relay has already stopped;
-            // terminate it through the same bounded ladder as an explicit
-            // user stop.
-            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            for _ in 0..25 {
-                if observed != 0 {
-                    break;
-                }
-                thread::sleep(std::time::Duration::from_millis(10));
-                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            }
-            if observed == 0 {
-                libc::kill(pid, libc::SIGTERM);
-                for _ in 0..25 {
-                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-                    if observed != 0 {
-                        break;
-                    }
-                    thread::sleep(std::time::Duration::from_millis(10));
-                }
-            }
-            if observed == 0 {
-                libc::kill(pid, libc::SIGKILL);
-                for _ in 0..25 {
-                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-                    if observed != 0 {
-                        break;
-                    }
-                    thread::sleep(std::time::Duration::from_millis(10));
-                }
-                if observed == 0 {
-                    // A process stuck in uninterruptible kernel work may not
-                    // be reapable yet. Return a bounded terminal result and
-                    // let the kernel reap it when that work completes.
-                    status = libc::SIGKILL;
-                }
-            }
-        }
+    let status = reaped_status.or_else(|| terminate_and_reap_pid_bounded(pid));
+    let exit_code = if let Some(status) = status {
         if libc::WIFEXITED(status) {
             libc::WEXITSTATUS(status)
         } else {
             128 + libc::WTERMSIG(status)
         }
+    } else {
+        // A process stuck in uninterruptible kernel work may not be reapable
+        // yet. The bounded helper retained it for the deferred reaper.
+        128 + libc::SIGKILL
     };
     enqueue_terminal_event(
         &config,

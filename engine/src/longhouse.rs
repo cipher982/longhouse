@@ -1816,16 +1816,21 @@ fn stop_opencode_bridge(session_id: &str, config_dir: Option<PathBuf>) -> anyhow
         .context("start managed OpenCode bridge cleanup")?;
     let deadline = std::time::Instant::now() + OPENCODE_STOP_DEADLINE;
     loop {
-        match child.try_wait()? {
-            Some(status) if status.success() => return Ok(()),
-            Some(status) => {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
                 anyhow::bail!("failed to stop native OpenCode bridge: helper exited with {status}")
             }
-            None => {}
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                crate::process_identity::reap_child_later(child);
+                return Err(error).context("observe managed OpenCode bridge cleanup");
+            }
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
-            let _ = child.wait();
+            crate::process_identity::reap_child_later(child);
             anyhow::bail!(
                 "managed OpenCode bridge did not stop within {}s",
                 OPENCODE_STOP_DEADLINE.as_secs()

@@ -144,52 +144,41 @@ fn reap_after_timeout(mut child: Child) {
     reap_child_later(child);
 }
 
-fn reaper_sender() -> &'static Sender<Child> {
-    static REAPER: OnceLock<Sender<Child>> = OnceLock::new();
+enum DeferredReap {
+    Child {
+        child: Child,
+        error_count: u8,
+    },
+    #[cfg(unix)]
+    Pid {
+        pid: libc::pid_t,
+        error_count: u8,
+    },
+}
+
+fn reaper_sender() -> &'static Sender<DeferredReap> {
+    static REAPER: OnceLock<Sender<DeferredReap>> = OnceLock::new();
     REAPER.get_or_init(|| {
-        let (sender, receiver) = std::sync::mpsc::channel::<Child>();
+        let (sender, receiver) = std::sync::mpsc::channel::<DeferredReap>();
         thread::Builder::new()
             .name("longhouse-process-reaper".to_string())
             .spawn(move || {
-                let mut children = Vec::<(Child, u8)>::new();
+                let mut deferred = Vec::new();
                 loop {
-                    while let Ok(child) = receiver.try_recv() {
-                        children.push((child, 0));
+                    while let Ok(item) = receiver.try_recv() {
+                        deferred.push(item);
                     }
                     let mut index = 0;
-                    while index < children.len() {
-                        match children[index].0.try_wait() {
-                            Ok(Some(_)) => {
-                                children.swap_remove(index);
-                            }
-                            Ok(None) => {
-                                children[index].1 = 0;
-                                index += 1;
-                            }
-                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                                index += 1;
-                            }
-                            Err(error) if is_already_reaped_error(&error) => {
-                                // ECHILD means the kernel has no child for
-                                // this handle to reap anymore.
-                                children.swap_remove(index);
-                            }
-                            Err(_) if children[index].1 >= 100 => {
-                                // Keep the worker bounded when an unexpected
-                                // platform error persists. The provider was
-                                // already killed before this handoff; there
-                                // is no safe blocking wait to use here.
-                                children.swap_remove(index);
-                            }
-                            Err(_) => {
-                                children[index].1 += 1;
-                                index += 1;
-                            }
+                    while index < deferred.len() {
+                        if poll_deferred_reap(&mut deferred[index]) {
+                            deferred.swap_remove(index);
+                        } else {
+                            index += 1;
                         }
                     }
-                    if children.is_empty() {
+                    if deferred.is_empty() {
                         match receiver.recv() {
-                            Ok(child) => children.push((child, 0)),
+                            Ok(item) => deferred.push(item),
                             Err(_) => break,
                         }
                     } else {
@@ -200,6 +189,46 @@ fn reaper_sender() -> &'static Sender<Child> {
             .expect("spawn Longhouse process reaper");
         sender
     })
+}
+
+fn poll_deferred_reap(item: &mut DeferredReap) -> bool {
+    match item {
+        DeferredReap::Child { child, error_count } => match child.try_wait() {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                *error_count = 0;
+                false
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => false,
+            Err(error) if is_already_reaped_error(&error) => true,
+            Err(_) if *error_count >= 100 => true,
+            Err(_) => {
+                *error_count += 1;
+                false
+            }
+        },
+        #[cfg(unix)]
+        DeferredReap::Pid { pid, error_count } => {
+            let mut status = 0;
+            let observed = unsafe { libc::waitpid(*pid, &mut status, libc::WNOHANG) };
+            if observed == *pid {
+                return true;
+            }
+            if observed == 0 {
+                *error_count = 0;
+                return false;
+            }
+            let error = std::io::Error::last_os_error();
+            if is_already_reaped_error(&error)
+                || error.kind() == std::io::ErrorKind::Interrupted
+                || *error_count >= 100
+            {
+                return is_already_reaped_error(&error) || *error_count >= 100;
+            }
+            *error_count += 1;
+            false
+        }
+    }
 }
 
 fn is_already_reaped_error(error: &std::io::Error) -> bool {
@@ -214,7 +243,18 @@ fn is_already_reaped_error(error: &std::io::Error) -> bool {
 }
 
 pub(crate) fn reap_child_later(child: Child) {
-    let _ = reaper_sender().send(child);
+    let _ = reaper_sender().send(DeferredReap::Child {
+        child,
+        error_count: 0,
+    });
+}
+
+#[cfg(unix)]
+pub(crate) fn reap_pid_later(pid: libc::pid_t) {
+    let _ = reaper_sender().send(DeferredReap::Pid {
+        pid,
+        error_count: 0,
+    });
 }
 
 #[cfg(unix)]
