@@ -23,6 +23,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-playwright-install
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
+.PHONY: qa-ui-baseline-mobile
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
