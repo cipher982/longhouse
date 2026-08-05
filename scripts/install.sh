@@ -10,6 +10,7 @@
 #   LONGHOUSE_INSTALL_VERSION Pin the native release version (for release gates/debugging)
 #   LONGHOUSE_NATIVE_BIN_DIR  Explicit directory containing paired longhouse
 #                             and longhouse-engine binaries (local/dev only)
+#   LONGHOUSE_DESKTOP_APP_SOURCE Local Longhouse.app bundle for macOS smoke tests
 #
 set -euo pipefail
 
@@ -402,6 +403,22 @@ install_macos_app() {
         exit 1
     fi
 
+    if [[ -n "${LONGHOUSE_DESKTOP_APP_SOURCE:-}" ]]; then
+        if [[ ! -d "$LONGHOUSE_DESKTOP_APP_SOURCE" ]]; then
+            error "LONGHOUSE_DESKTOP_APP_SOURCE is not a directory: $LONGHOUSE_DESKTOP_APP_SOURCE"
+            record_install_failure 1
+            exit 1
+        fi
+        rm -rf "/Applications/Longhouse.app"
+        if ! ditto "$LONGHOUSE_DESKTOP_APP_SOURCE" "/Applications/Longhouse.app"; then
+            error "Could not copy local Longhouse.app into /Applications"
+            record_install_failure 1
+            exit 1
+        fi
+        success "Longhouse.app installed in /Applications"
+        return 0
+    fi
+
     if [[ -z "$INSTALL_RELEASE_VERSION" ]]; then
         info "Skipping Longhouse.app for an explicit local native binary pair"
         return 0
@@ -519,7 +536,7 @@ verify_installation() {
         info "claude: not installed (optional)"
     fi
 
-    if [[ "$(uname -s)" == "Darwin" && -n "$INSTALL_RELEASE_VERSION" ]]; then
+    if [[ "$(uname -s)" == "Darwin" && ( -n "$INSTALL_RELEASE_VERSION" || -n "${LONGHOUSE_DESKTOP_APP_SOURCE:-}" ) ]]; then
         if [[ -d "/Applications/Longhouse.app" ]]; then
             success "Longhouse.app: /Applications/Longhouse.app"
         else

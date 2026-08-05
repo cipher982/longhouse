@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert that an installed Longhouse CLI reports the expected build identity."""
+"""Assert that an installed native Longhouse CLI reports the expected build identity."""
 
 from __future__ import annotations
 
@@ -31,23 +31,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def load_installed_build(longhouse_bin: str) -> dict[str, Any]:
     proc = subprocess.run(
-        [longhouse_bin, "version", "--json"],
+        [longhouse_bin, "build-identity", "--json"],
         check=False,
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(f"{longhouse_bin} version --json failed: {detail}")
+        raise RuntimeError(f"{longhouse_bin} build-identity --json failed: {detail}")
     try:
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{longhouse_bin} version --json did not emit JSON: {exc}") from exc
+        raise RuntimeError(f"{longhouse_bin} build-identity --json did not emit JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        raise RuntimeError(f"{longhouse_bin} version --json emitted a non-object payload")
-    build = payload.get("build")
+        raise RuntimeError(f"{longhouse_bin} build-identity --json emitted a non-object payload")
+    build = payload.get("facade")
     if not isinstance(build, dict):
-        raise RuntimeError(f"{longhouse_bin} version --json payload missing build object")
+        raise RuntimeError(f"{longhouse_bin} build-identity --json payload missing facade object")
     return build
 
 

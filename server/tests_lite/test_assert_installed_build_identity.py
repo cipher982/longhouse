@@ -20,8 +20,7 @@ def _load_module():
 def test_accepts_matching_full_commit_and_version(monkeypatch, capsys):
     mod = _load_module()
     payload = {
-        "installed_version": "0.1.17 (3b403158)",
-        "build": {
+        "facade": {
             "version": "0.1.17",
             "commit": "3b40315871558fe77984c90423851d0194337923",
         },
@@ -49,7 +48,7 @@ def test_accepts_matching_full_commit_and_version(monkeypatch, capsys):
 def test_rejects_truncated_installed_commit(monkeypatch, capsys):
     mod = _load_module()
     payload = {
-        "build": {
+        "facade": {
             "version": "0.1.17",
             "commit": "3b403158",
         }
@@ -70,7 +69,7 @@ def test_rejects_truncated_installed_commit(monkeypatch, capsys):
 def test_fails_on_commit_mismatch(monkeypatch, capsys):
     mod = _load_module()
     payload = {
-        "build": {
+        "facade": {
             "version": "0.1.16",
             "commit": "a1160df0704b72763ed8e5cf252d2fc2819b5e5b",
         }
@@ -88,7 +87,7 @@ def test_fails_on_commit_mismatch(monkeypatch, capsys):
     assert "commit mismatch" in capsys.readouterr().err
 
 
-def test_fails_when_version_json_is_unavailable(monkeypatch, capsys):
+def test_fails_when_build_identity_is_unavailable(monkeypatch, capsys):
     mod = _load_module()
 
     monkeypatch.setattr(
@@ -100,4 +99,4 @@ def test_fails_when_version_json_is_unavailable(monkeypatch, capsys):
     result = mod.main(["--expected-commit", "3b403158"])
 
     assert result == 1
-    assert "version --json failed" in capsys.readouterr().err
+    assert "build-identity --json failed" in capsys.readouterr().err

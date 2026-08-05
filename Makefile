@@ -438,11 +438,12 @@ test-install: ## Installer syntax + first-run smoke
 	@bash -n scripts/install.sh
 	@bash scripts/ci/native-installer-smoke.sh
 
-test-install-first-run: ## @internal Disposable first-run installer smoke
-	@./scripts/ci/installer-first-run.sh
+test-install-first-run: ## @internal Disposable native installer smoke (compatibility target)
+	@bash scripts/ci/native-installer-smoke.sh
 
-test-install-macos-ambient: ## @internal Disposable macOS first-run smoke with menu bar install
-	@./scripts/ci/installer-first-run.sh --menubar
+test-install-macos-ambient: ## @internal macOS native installer plus runtime app packaging smoke
+	@$(MAKE) test-runtime-packaging-macos
+	@bash scripts/ci/native-installer-smoke.sh
 
 test-install-runner: ## @internal Install-runner script tests
 	@bash scripts/tests/install-runner.test.sh
