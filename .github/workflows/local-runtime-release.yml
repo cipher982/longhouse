@@ -154,6 +154,15 @@ jobs:
             --configuration release)"
           cp "$PRODUCT_PATH" "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
           chmod +x "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
+          resource_bundle_count=0
+          while IFS= read -r -d '' RESOURCE_BUNDLE; do
+            cp -R "$RESOURCE_BUNDLE" "$RUNNER_TEMP/$(basename "$RESOURCE_BUNDLE")"
+            resource_bundle_count=$((resource_bundle_count + 1))
+          done < <(find "$(dirname "$PRODUCT_PATH")" -maxdepth 1 -type d -name '*.bundle' -print0)
+          test "$resource_bundle_count" -gt 0 || {
+            echo "The macOS menu-bar product has no resource bundle." >&2
+            exit 1
+          }
 
       - name: Configure macOS signing keychain
         id: macos_signing
