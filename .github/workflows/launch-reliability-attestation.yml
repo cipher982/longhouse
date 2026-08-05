@@ -16,27 +16,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sign:
-    name: Sign launch reliability report
-    # The report and sampled binaries remain on the protected qualification
-    # runner. Do not move this job to a general hosted runner: the signer is
-    # only useful when it is separated from the operator who collected the
-    # report.
+  measure:
+    name: Measure retained launch evidence
+    # This runner may access the retained evidence and the measured source,
+    # but it never receives the release signing secret.
     runs-on: [self-hosted, longhouse-release-qualification]
-    environment: longhouse-release-attestation
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
-      ATTESTATION_KEY_ID: longhouse-ci-2026
       SOURCE_SHA: ${{ inputs.source_sha }}
       EVIDENCE_ROOT: /var/lib/longhouse/qualification
     steps:
-      - name: Checkout the reviewed workflow source
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          path: trusted-source
-
       - name: Checkout the measured source
         uses: actions/checkout@v6
         with:
@@ -50,18 +39,13 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      - name: Rebuild the report from retained evidence
+      - name: Snapshot evidence and rebuild the report
         id: measure
         shell: bash
         run: |
-          trusted_root="$GITHUB_WORKSPACE/trusted-source"
           measured_root="$GITHUB_WORKSPACE/measured-source"
-          test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_SHA" || {
-            echo "Trusted checkout does not match the workflow commit." >&2
-            exit 1
-          }
           test "$(git -C "$measured_root" rev-parse HEAD)" = "$SOURCE_SHA" || {
-            echo "Checked-out source does not match the requested source SHA." >&2
+            echo "Measured checkout does not match the requested source SHA." >&2
             exit 1
           }
           run_root="$EVIDENCE_ROOT/$SOURCE_SHA"
@@ -90,7 +74,7 @@ jobs:
           test "${#dogfood[@]}" = "${#challenges[@]}" || { echo "Dogfood episode/challenge counts differ." >&2; exit 1; }
           report_path="$RUNNER_TEMP/launch-reliability-measurements.json"
           subject_path="$RUNNER_TEMP/launch-reliability-attestation-subject.json"
-          rm -f -- "$report_path" "$subject_path"
+          rm -f -- "$report_path" "$subject_path" "$RUNNER_TEMP/report.sha256"
           umask 077
           args=(
             --matrix-root "$matrix_root"
@@ -105,23 +89,68 @@ jobs:
           uv run --project "$measured_root/server" python \
             "$measured_root/scripts/qa/launch-reliability-measurements.py" "${args[@]}"
           test -s "$report_path" || { echo "Report generation produced no report." >&2; exit 1; }
-          test -s "$subject_path" || {
-            echo "Report did not produce a qualifying attestation subject." >&2
-            exit 1
-          }
-          echo "report_sha256=$(sha256sum "$report_path" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          test -s "$subject_path" || { echo "No qualifying attestation subject was produced." >&2; exit 1; }
+          sha256sum "$report_path" > "$RUNNER_TEMP/report.sha256"
 
-      - name: Sign and verify the regenerated report
+      - name: Upload measured report for the isolated signer
+        uses: actions/upload-artifact@v7
+        with:
+          name: launch-reliability-measurement-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/launch-reliability-measurements.json
+            ${{ runner.temp }}/launch-reliability-attestation-subject.json
+            ${{ runner.temp }}/report.sha256
+
+  sign:
+    name: Sign the measured report
+    needs: measure
+    # This is a separate protected runner. The measured checkout and its
+    # dependencies are never present in the key-bearing job.
+    runs-on: [self-hosted, longhouse-release-signer]
+    environment: longhouse-release-attestation
+    timeout-minutes: 10
+    env:
+      ATTESTATION_KEY_ID: longhouse-ci-2026
+      SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - name: Checkout the reviewed signer source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: trusted-source
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Download the measured report
+        uses: actions/download-artifact@v5
+        with:
+          name: launch-reliability-measurement-${{ github.run_id }}
+          path: ${{ runner.temp }}/launch-reliability-measurement
+
+      - name: Sign and independently verify the report
         shell: bash
         env:
           KEY_PATH: ${{ runner.temp }}/longhouse-attestation-private-key.pem
           PRIVATE_KEY_PEM: ${{ secrets.LONGHOUSE_DOGFOOD_ATTESTATION_PRIVATE_KEY_PEM }}
         run: |
-          report_path="$RUNNER_TEMP/launch-reliability-measurements.json"
-          subject_path="$RUNNER_TEMP/launch-reliability-attestation-subject.json"
+          trusted_root="$GITHUB_WORKSPACE/trusted-source"
+          input_root="$RUNNER_TEMP/launch-reliability-measurement"
+          report_path="$input_root/launch-reliability-measurements.json"
+          measured_subject_path="$input_root/launch-reliability-attestation-subject.json"
           receipt_path="$RUNNER_TEMP/launch-reliability-attestation.json"
-          test "$(sha256sum "$report_path" | cut -d' ' -f1)" = "${{ steps.measure.outputs.report_sha256 }}" || {
-            echo "The report changed between measurement and signing." >&2
+          trusted_subject_path="$RUNNER_TEMP/trusted-launch-reliability-attestation-subject.json"
+          test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_SHA" || {
+            echo "Trusted checkout does not match the workflow commit." >&2
+            exit 1
+          }
+          test "$(sha256sum "$report_path" | cut -d' ' -f1)" = "$(cut -d' ' -f1 "$input_root/report.sha256")" || {
+            echo "The measured report changed during artifact transfer." >&2
             exit 1
           }
           test -n "$PRIVATE_KEY_PEM" || {
@@ -130,19 +159,25 @@ jobs:
           }
           umask 077
           printf '%s' "$PRIVATE_KEY_PEM" > "$KEY_PATH"
-          trusted_root="$GITHUB_WORKSPACE/trusted-source"
           cd "$trusted_root"
-          uv run --project server python scripts/qa/launch-reliability-attestation.py \
+          uv run --project "$trusted_root/server" python \
+            "$trusted_root/scripts/qa/launch-reliability-attestation.py" \
             create-from-report \
             --report "$report_path" \
             --private-key "$KEY_PATH" \
-            --subject-output "$subject_path" \
+            --subject-output "$trusted_subject_path" \
             --output "$receipt_path" \
-            --key-id "$ATTESTATION_KEY_ID"
-          uv run --project server python scripts/qa/launch-reliability-attestation.py \
+            --key-id "$ATTESTATION_KEY_ID" \
+            --expected-source-sha "$SOURCE_SHA"
+          cmp "$trusted_subject_path" "$measured_subject_path" || {
+            echo "Trusted subject derivation differs from measured subject." >&2
+            exit 1
+          }
+          uv run --project "$trusted_root/server" python \
+            "$trusted_root/scripts/qa/launch-reliability-attestation.py" \
             verify \
             --receipt "$receipt_path" \
-            --subject "$subject_path"
+            --subject "$trusted_subject_path"
 
       - name: Remove the signing key from the self-hosted runner
         if: ${{ always() }}
@@ -157,6 +192,7 @@ jobs:
           name: launch-reliability-attestation-${{ github.run_id }}
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/launch-reliability-measurements.json
-            ${{ runner.temp }}/launch-reliability-attestation-subject.json
+            ${{ runner.temp }}/launch-reliability-measurement/launch-reliability-measurements.json
+            ${{ runner.temp }}/launch-reliability-measurement/launch-reliability-attestation-subject.json
+            ${{ runner.temp }}/trusted-launch-reliability-attestation-subject.json
             ${{ runner.temp }}/launch-reliability-attestation.json

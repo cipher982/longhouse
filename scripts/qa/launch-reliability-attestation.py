@@ -125,15 +125,19 @@ def _stable_measure(measure: dict[str, Any]) -> dict[str, Any]:
     stable = dict(measure)
     source = stable.get("source")
     if isinstance(source, list):
-        stable["source"] = [
-            value.get("sha256")
-            for value in source
-            if isinstance(value, dict) and isinstance(value.get("sha256"), str)
-        ]
+        stable["source"] = sorted(
+            {
+                value.get("sha256")
+                for value in source
+                if isinstance(value, dict) and isinstance(value.get("sha256"), str)
+            }
+        )
     return stable
 
 
-def build_subject(report: dict[str, Any]) -> dict[str, Any]:
+def build_subject(
+    report: dict[str, Any], *, expected_source_sha: str | None = None
+) -> dict[str, Any]:
     """Return the stable, externally attestable portion of a report."""
 
     if report.get("report_status") != "ok":
@@ -154,6 +158,8 @@ def build_subject(report: dict[str, Any]) -> dict[str, Any]:
     }
     if not isinstance(required_provenance["git_sha"], str) or len(required_provenance["git_sha"]) != 40:
         raise ValueError("report provenance has no full source SHA")
+    if expected_source_sha is not None and required_provenance["git_sha"] != expected_source_sha:
+        raise ValueError("report source SHA does not match the expected source SHA")
     if required_provenance["repository_dirty"] is not False or required_provenance["harness_file_dirty"] is not False:
         raise ValueError("report provenance is dirty")
     matrix = report.get("matrix")
@@ -333,11 +339,12 @@ def create_receipt_from_report(
     key_id: str,
     keys_path: Path | None = None,
     now: datetime | None = None,
+    expected_source_sha: str | None = None,
 ) -> dict[str, Any]:
     """Derive and sign a report subject in one release-owned operation."""
 
     report = _read_object(report_path, label="launch reliability report")
-    subject = build_subject(report)
+    subject = build_subject(report, expected_source_sha=expected_source_sha)
     subject_output_path.parent.mkdir(parents=True, exist_ok=True)
     subject_output_path.write_text(
         json.dumps(subject, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -434,6 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_from_report.add_argument("--subject-output", type=Path, required=True)
     create_from_report.add_argument("--key-id", required=True)
     create_from_report.add_argument("--keys", type=Path, default=TRUSTED_KEYS_PATH)
+    create_from_report.add_argument("--expected-source-sha")
     verify = subparsers.add_parser("verify")
     verify.add_argument("--receipt", type=Path, required=True)
     verify.add_argument("--subject", type=Path, required=True)
@@ -461,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.subject_output,
                 key_id=args.key_id,
                 keys_path=args.keys,
+                expected_source_sha=args.expected_source_sha,
             )
             print(args.output)
         else:
