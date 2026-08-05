@@ -296,9 +296,9 @@ jobs:
 
   self-hosted-cube-linux-x64:
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
-    # This job is dispatch/schedule-only in practice; keep any future PR
-    # activation off the privileged cube runner lane.
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'cube' }}
+    # Only protected-main code may execute on cube's privileged DinD lanes.
+    # Pull requests and branch pushes stay on GitHub-hosted infrastructure.
+    runs-on: ${{ github.ref == 'refs/heads/main' && 'cube' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     name: "self-hosted-onboarding--linux-x64--cube"
 

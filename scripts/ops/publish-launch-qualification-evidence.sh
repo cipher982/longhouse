@@ -55,23 +55,38 @@ done < <(find -P "$INPUT_ROOT/matrix" "$INPUT_ROOT/native-health" \
     "$INPUT_ROOT/dogfood/challenges" -type f -print0)
 
 target="$REMOTE_ROOT/$SOURCE_SHA"
-ssh "$REMOTE_HOST" "
+staging="$(ssh "$REMOTE_HOST" "
     set -eu
-    test ! -e '$target'
     sudo install -d -o root -g root -m 0755 '$REMOTE_ROOT'
-    sudo install -d -o root -g root -m 0755 '$target'
-"
+    sudo mktemp -d '$REMOTE_ROOT/.incoming.$SOURCE_SHA.XXXXXX'
+")"
+
+cleanup() {
+    if [[ -n "$staging" ]]; then
+        ssh "$REMOTE_HOST" "sudo rm -rf -- '$staging'" || true
+    fi
+}
+trap cleanup EXIT
 
 if ! tar -C "$INPUT_ROOT" -cf - matrix native-health provider-harness dogfood \
-    | ssh "$REMOTE_HOST" "sudo tar -C '$target' -xf -"; then
-    ssh "$REMOTE_HOST" "sudo rm -rf -- '$target'" || true
+    | ssh "$REMOTE_HOST" "sudo tar -C '$staging' -xf -"; then
     exit 1
 fi
 
 ssh "$REMOTE_HOST" "
-    sudo find '$target' -type d -exec chmod 0755 {} +
-    sudo find '$target' -type f -exec chmod 0644 {} +
-    test \"\$(find -P '$target' -type f | wc -l)\" -gt 0
+    set -eu
+    for relative in matrix native-health provider-harness dogfood/episodes dogfood/challenges; do
+        path='$staging'/\$relative
+        test -d \"\$path\"
+        test \"\$(find -P \"\$path\" -type f | wc -l)\" -gt 0
+        test -z \"\$(find -P \"\$path\" -type l -print -quit)\"
+    done
+    sudo find '$staging' -type d -exec chmod 0755 {} +
+    sudo find '$staging' -type f -exec chmod 0644 {} +
+    test ! -e '$target'
+    sudo mv -- '$staging' '$target'
 "
+staging=""
+trap - EXIT
 
 echo "published qualification evidence for $SOURCE_SHA to $REMOTE_HOST:$target"
