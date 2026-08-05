@@ -3020,13 +3020,19 @@ fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) 
         "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID={}",
         serde_json::to_string(&config.session_id).expect("session id is serializable")
     )));
-    if let Ok(token) = std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
-        if !token.trim().is_empty() {
+    match std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
+        Ok(token) if !token.trim().is_empty() => {
             args.push(OsString::from("-c"));
             args.push(OsString::from(format!(
                 "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN={}",
                 serde_json::to_string(&token).expect("coordination token is serializable")
             )));
+        }
+        _ => {
+            args.push(OsString::from("-c"));
+            args.push(OsString::from(
+                "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_RECOVERY=\"1\"",
+            ));
         }
     }
     if let Some(effort) = config.model_reasoning_effort.as_deref() {
@@ -6971,6 +6977,8 @@ mod tests {
         expected.extend([
             "-c".to_string(),
             "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID=\"session-123\"".to_string(),
+            "-c".to_string(),
+            "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_RECOVERY=\"1\"".to_string(),
         ]);
         expected.extend([
             "--ask-for-approval".to_string(),

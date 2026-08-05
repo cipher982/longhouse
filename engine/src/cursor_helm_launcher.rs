@@ -30,8 +30,9 @@ use sha2::Digest;
 use uuid::Uuid;
 
 use crate::managed_launch_lifecycle::{
-    register_managed_launch_with_timeout, spawn_managed_launch_registration_retry,
-    ManagedLaunchRegistrationRetry, ManagedLaunchResponse,
+    clear_managed_launch_recovery, clear_managed_launch_recovery_at, read_managed_launch_recovery,
+    read_managed_launch_recovery_at, register_managed_launch_with_timeout,
+    spawn_managed_launch_registration_retry, ManagedLaunchRegistrationRetry, ManagedLaunchResponse,
 };
 
 const STATE_DIR: &str = "managed-local/cursor-helm";
@@ -388,11 +389,13 @@ fn cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String> {
             .map(|_| id)
             .context("cursor-agent create-chat returned invalid id")
     });
-    if child.try_wait()?.is_none() {
-        let process_group = child.id() as libc::pid_t;
-        if unsafe { libc::killpg(process_group, libc::SIGKILL) } != 0 {
-            let _ = child.kill();
-        }
+    let process_group = child.id() as libc::pid_t;
+    // The helper shell may have already exited after handing its stdout pipe
+    // to a provider child. Kill the private process group even in that case;
+    // checking only the leader leaves the pipe open until the provider's
+    // natural exit and turns a UUID read into a 30-second wait.
+    if unsafe { libc::killpg(process_group, libc::SIGKILL) } != 0 {
+        let _ = child.kill();
     }
     let status = child.wait()?;
     let _ = stdout_reader.join();
@@ -501,23 +504,50 @@ struct CursorProjectHooksState {
 
 impl Drop for CursorProjectHooks {
     fn drop(&mut self) {
-        let Ok(lock) = mcp_config_lock(&self.state_path) else {
-            return;
+        let lock = match mcp_config_lock(&self.state_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!(
+                    "Longhouse warning: could not lock Cursor project hooks for cleanup: {error:#}"
+                );
+                return;
+            }
         };
         let _lock = lock;
-        let Ok(mut state) = read_cursor_project_hooks_state(&self.state_path) else {
-            return;
+        let mut state = match read_cursor_project_hooks_state(&self.state_path) {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!(
+                    "Longhouse warning: could not read Cursor project hooks cleanup state: {error}"
+                );
+                return;
+            }
         };
         state.sessions.remove(&self.session_id);
         state.sessions.retain(|_, owner| owner.is_live());
         if state.sessions.is_empty() {
-            let _ = restore_cursor_project_hooks(&self.path, state.original.as_deref());
-            let _ = fs::remove_file(&self.state_path);
+            if let Err(error) = restore_cursor_project_hooks(&self.path, state.original.as_deref())
+            {
+                eprintln!(
+                    "Longhouse warning: could not restore Cursor project hooks after Helm exit: {error}"
+                );
+            }
+            if let Err(error) = fs::remove_file(&self.state_path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "Longhouse warning: could not remove Cursor project hooks cleanup state: {error}"
+                    );
+                }
+            }
         } else {
-            let _ = write_json(
+            if let Err(error) = write_json(
                 &self.state_path,
                 &serde_json::to_value(state).unwrap_or_default(),
-            );
+            ) {
+                eprintln!(
+                    "Longhouse warning: could not persist Cursor project hooks cleanup state: {error:#}"
+                );
+            }
         }
     }
 }
@@ -691,23 +721,45 @@ fn configure_cursor_project_hooks(
 
 impl Drop for CursorMcpConfig {
     fn drop(&mut self) {
-        let Ok(lock) = mcp_config_lock(&self.state_path) else {
-            return;
+        let lock = match mcp_config_lock(&self.state_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Longhouse warning: could not lock Cursor MCP config for cleanup: {error:#}");
+                return;
+            }
         };
         let _lock = lock;
-        let Ok(mut state) = read_mcp_config_state(&self.state_path) else {
-            return;
+        let mut state = match read_mcp_config_state(&self.state_path) {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!("Longhouse warning: could not read Cursor MCP cleanup state: {error}");
+                return;
+            }
         };
         state.sessions.remove(&self.session_id);
         state.sessions.retain(|_, owner| owner.is_live());
         if state.sessions.is_empty() {
-            let _ = restore_mcp_config(&self.path, state.original.as_deref());
-            let _ = fs::remove_file(&self.state_path);
+            if let Err(error) = restore_mcp_config(&self.path, state.original.as_deref()) {
+                eprintln!(
+                    "Longhouse warning: could not restore Cursor MCP config after Helm exit: {error}"
+                );
+            }
+            if let Err(error) = fs::remove_file(&self.state_path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "Longhouse warning: could not remove Cursor MCP cleanup state: {error}"
+                    );
+                }
+            }
         } else {
-            let _ = write_json(
+            if let Err(error) = write_json(
                 &self.state_path,
                 &serde_json::to_value(state).unwrap_or_default(),
-            );
+            ) {
+                eprintln!(
+                    "Longhouse warning: could not persist Cursor MCP cleanup state: {error:#}"
+                );
+            }
         }
     }
 }
@@ -792,7 +844,10 @@ fn coordination_token_status(
         url.trim_end_matches('/')
     );
     let result = tokio::runtime::Runtime::new()?.block_on(async {
-        let response = reqwest::Client::new()
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()?;
+        let response = client
             .post(endpoint)
             .header("X-Agents-Token", device_token)
             .send()
@@ -861,13 +916,17 @@ fn write_cursor_mcp_config(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => new_mcp_config_state(&path)?,
         Err(error) => return Err(error.into()),
     };
-    let mut config: Value = state
-        .original
-        .as_deref()
-        .map(serde_json::from_str)
-        .transpose()
-        .context("Cursor MCP config is not valid JSON")?
-        .unwrap_or_else(|| json!({}));
+    let mut config: Value = match fs::read_to_string(&path) {
+        Ok(current) => serde_json::from_str(&current).context("Cursor MCP config is not valid JSON")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => state
+            .original
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .context("Cursor MCP config is not valid JSON")?
+            .unwrap_or_else(|| json!({})),
+        Err(error) => return Err(error.into()),
+    };
     let servers = config
         .as_object_mut()
         .context("Cursor MCP config must be an object")?
@@ -941,6 +1000,18 @@ fn new_mcp_config_state(path: &Path) -> anyhow::Result<CursorMcpConfigState> {
     })
 }
 
+fn is_longhouse_coordination_server(value: &Value) -> bool {
+    value
+        .get("args")
+        .and_then(Value::as_array)
+        .is_some_and(|args| {
+            args.iter().any(|arg| arg.as_str() == Some("cursor-helm"))
+                && args
+                    .iter()
+                    .any(|arg| arg.as_str() == Some("coordination-mcp"))
+        })
+}
+
 fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()> {
     let current = match fs::read_to_string(path) {
         Ok(current) => current,
@@ -956,7 +1027,12 @@ fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()
         return Ok(());
     };
     if let Some(servers) = config.get_mut("mcpServers").and_then(Value::as_object_mut) {
-        servers.remove("longhouse-coordination");
+        if servers
+            .get("longhouse-coordination")
+            .is_some_and(is_longhouse_coordination_server)
+        {
+            servers.remove("longhouse-coordination");
+        }
     }
     let original_value = original.and_then(|value| serde_json::from_str::<Value>(value).ok());
     if original_value.as_ref() == Some(&config) {
@@ -1234,8 +1310,18 @@ fn serve(
             json!({"ok":false,"error":{"code":"bad_request","message":"invalid JSON"}}),
         );
     };
+    let recovered_coordination_token = dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(|home| read_managed_launch_recovery_at(home, session_id))
+        .or_else(|| read_managed_launch_recovery(session_id))
+        .filter(|recovery| recovery.provider_name.eq_ignore_ascii_case("cursor"))
+        .and_then(|recovery| recovery.coordination_token);
+    let effective_coordination_token = recovered_coordination_token
+        .as_deref()
+        .or(coordination_token);
     match request.get("kind").and_then(Value::as_str) {
-        Some("coordination-token") => match coordination_token {
+        Some("coordination-token") => match effective_coordination_token {
             Some(token) => response(&mut stream, json!({"ok":true,"coordination_token":token})),
             None => response(
                 &mut stream,
@@ -1383,7 +1469,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         .write(true)
         .create(true)
         .open(dir.join(format!("{session_id}.lock")))?;
-    if fs2_lock(&lock).is_err() {
+    if try_fs2_lock(&lock).is_err() {
         anyhow::bail!("Cursor Helm session {session_id} is already attached");
     }
     let launch_id = Uuid::new_v4().to_string();
@@ -1394,8 +1480,18 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         &permission_mode,
         resume_conversation.as_deref(),
     )?;
+    let recovery_cleared = dir
+        .parent()
+        .and_then(Path::parent)
+        .map(|home| clear_managed_launch_recovery_at(home, &session_id))
+        .unwrap_or_else(|| clear_managed_launch_recovery(&session_id));
+    if let Err(error) = recovery_cleared {
+        eprintln!(
+            "Longhouse warning: could not clear stale managed launch recovery before Cursor start: {error:#}"
+        );
+    }
     let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
-    let registered = if config.resume_session.is_some() {
+    let registered = match if config.resume_session.is_some() {
         register(
             &config,
             &cwd,
@@ -1403,47 +1499,42 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             &permission_mode,
             resume_conversation.as_deref(),
             Duration::from_secs(10),
-        )?
+        )
     } else {
-        match registration_credentials(&config) {
-            Ok((url, token, _)) => match register(
-                &config,
-                &cwd,
-                &session_id,
-                &permission_mode,
-                resume_conversation.as_deref(),
-                Duration::from_millis(750),
-            ) {
-                Ok(response) => response,
-                Err(error) => {
-                    degraded_registration = Some(spawn_managed_launch_registration_retry(
-                        &url,
-                        &token,
-                        "Cursor",
-                        payload.clone(),
-                        &session_id,
-                        crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
-                    )?);
-                    eprintln!(
-                        "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive ({error:#})"
-                    );
-                    ManagedLaunchResponse::degraded_from_payload(
-                        &payload,
-                        "Cursor",
-                        crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
-                    )?
-                }
-            },
-            Err(error) => {
-                eprintln!(
-                    "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and registration is unavailable ({error:#})"
-                );
-                ManagedLaunchResponse::degraded_from_payload(
-                    &payload,
+        register(
+            &config,
+            &cwd,
+            &session_id,
+            &permission_mode,
+            resume_conversation.as_deref(),
+            Duration::from_millis(750),
+        )
+    } {
+        Ok(response) => response,
+        Err(error) => {
+            if let Ok((url, token, _)) = registration_credentials(&config) {
+                match spawn_managed_launch_registration_retry(
+                    &url,
+                    &token,
                     "Cursor",
+                    payload.clone(),
+                    &session_id,
                     crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
-                )?
+                ) {
+                    Ok(retry) => degraded_registration = Some(retry),
+                    Err(retry_error) => eprintln!(
+                        "Longhouse warning: Cursor degraded launch could not persist local recovery: {retry_error:#}"
+                    ),
+                }
             }
+            eprintln!(
+                "Longhouse warning: starting Cursor in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive ({error:#})"
+            );
+            ManagedLaunchResponse::degraded_from_payload(
+                &payload,
+                "Cursor",
+                crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+            )?
         }
     };
     registered.validate_transport("Cursor", crate::cursor_helm_control::CURSOR_HELM_TRANSPORT)?;
@@ -1493,7 +1584,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             .filter(|value| !value.is_empty())
             .is_none()
     {
-        anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
+        eprintln!(
+            "Longhouse warning: Cursor remote approval is fail-closed until managed registration recovers"
+        );
     }
     let coordination_status = coordination_token_status(&config, Some(&registered), &session_id)?;
     let coordination_token = coordination_status.token.clone();
@@ -1871,6 +1964,16 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
 
 fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
     unsafe {
+        if libc::flock(std::os::fd::AsRawFd::as_raw_fd(file), libc::LOCK_EX) == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+}
+
+fn try_fs2_lock(file: &fs::File) -> std::io::Result<()> {
+    unsafe {
         if libc::flock(
             std::os::fd::AsRawFd::as_raw_fd(file),
             libc::LOCK_EX | libc::LOCK_NB,
@@ -2053,6 +2156,29 @@ mod tests {
     }
 
     #[test]
+    fn mcp_config_cleanup_preserves_user_replacement_of_managed_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let config = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let path = root.path().join(".cursor/mcp.json");
+        let mut current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        current["mcpServers"]["longhouse-coordination"] =
+            json!({"command":"user-owned-coordination"});
+        fs::write(&path, serde_json::to_vec_pretty(&current).unwrap()).unwrap();
+
+        drop(config);
+        let restored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            restored["mcpServers"]["longhouse-coordination"]["command"],
+            "user-owned-coordination"
+        );
+    }
+
+    #[test]
     fn concurrent_mcp_configs_do_not_remove_live_authority_or_leave_tokens() {
         let root = tempfile::tempdir().unwrap();
         let first = write_cursor_mcp_config(
@@ -2061,26 +2187,33 @@ mod tests {
             "11111111-1111-4111-8111-111111111111",
         )
         .unwrap();
+        let path = root.path().join(".cursor/mcp.json");
+        let mut current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        current["mcpServers"]["user-added-during-helm"] = json!({"command":"user-server"});
+        fs::write(&path, serde_json::to_vec_pretty(&current).unwrap()).unwrap();
         let second = write_cursor_mcp_config(
             &root.path().join("state"),
             root.path(),
             "22222222-2222-4222-8222-222222222222",
         )
         .unwrap();
-        let path = root.path().join(".cursor/mcp.json");
 
         drop(first);
         let while_second_is_live = fs::read_to_string(&path)
             .expect("the second session must retain its MCP configuration");
         assert!(while_second_is_live.contains("coordination-mcp"));
+        assert!(while_second_is_live.contains("user-added-during-helm"));
         assert!(!while_second_is_live.contains("first-session-secret"));
         assert!(!while_second_is_live.contains("second-session-secret"));
 
         drop(second);
-        assert!(
-            !path.exists(),
-            "the injected config must be removed after both sessions exit"
-        );
+        let restored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(restored["mcpServers"]
+            .get("longhouse-coordination")
+            .is_none());
+        assert!(restored["mcpServers"]
+            .get("user-added-during-helm")
+            .is_some());
     }
 
     #[test]
@@ -2313,6 +2446,43 @@ mod tests {
     }
 
     #[test]
+    fn coordination_mcp_uses_recovered_authority_after_registration() {
+        let root = tempfile::tempdir().unwrap();
+        let state_root = root.path().join("managed-local/cursor-helm");
+        let recovery_dir = root.path().join("managed-local/registration-recovery");
+        fs::create_dir_all(&state_root).unwrap();
+        fs::create_dir_all(&recovery_dir).unwrap();
+        fs::write(
+            recovery_dir.join("session-id.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "provider_name": "Cursor",
+                "session_id": "session-id",
+                "run_id": "run-id",
+                "provider_session_id": "conversation-id",
+                "permission_mode": "provider_local",
+                "hook_token": null,
+                "coordination_token": "recovered-coordination-token",
+                "recovered_at": "2026-08-05T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (response, _, _) = serve_request(
+            &state_root,
+            -1,
+            0,
+            json!({"kind": "coordination-token"}),
+        );
+        assert_eq!(response["ok"], true);
+        assert_eq!(
+            response["coordination_token"],
+            "recovered-coordination-token"
+        );
+    }
+
+    #[test]
     fn resume_retains_recorded_policy_and_rejects_conflicts() {
         let root = tempfile::tempdir().unwrap();
         let session_id = observed_claim(root.path(), Some("remote_human"));
@@ -2490,7 +2660,7 @@ mod tests {
             .open(&lock_path)
             .unwrap();
         fs2_lock(&first).unwrap();
-        assert!(fs2_lock(&second).is_err());
+        assert!(try_fs2_lock(&second).is_err());
 
         let mut source_master = 0;
         let mut source_slave = 0;

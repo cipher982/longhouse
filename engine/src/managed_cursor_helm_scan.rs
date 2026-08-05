@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use crate::cursor_helm_control::default_cursor_helm_state_dir;
+use crate::managed_launch_lifecycle::read_managed_launch_recovery;
 use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +136,13 @@ pub(crate) fn collect_observations_from_paths(
         });
         let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
         let ready = state.ready.unwrap_or(false);
+        let recovered = read_managed_launch_recovery(&session_id)
+            .filter(|recovery| recovery.provider_name.eq_ignore_ascii_case("cursor"))
+            .is_some_and(|recovery| recovery.coordination_token.is_some());
+        let mut reason_codes = state.reason_codes;
+        if recovered {
+            reason_codes.retain(|reason| reason != "managed_session_control_degraded");
+        }
         // A provider process can remain healthy while Longhouse control is
         // unavailable. Keep that observation for degraded health, but never
         // project it as an attached/controllable lease.
@@ -142,7 +150,7 @@ pub(crate) fn collect_observations_from_paths(
             && cursor_pid.is_some()
             && socket_present
             && ready
-            && state.reason_codes.is_empty();
+            && reason_codes.is_empty();
         out.push(CursorHelmObservation {
             session_id,
             provider_session_id: state
@@ -160,7 +168,7 @@ pub(crate) fn collect_observations_from_paths(
             cursor_process_start_time: state.cursor_process_start_time,
             started_at: state.started_at.unwrap_or_default(),
             updated_at: state.updated_at.unwrap_or_default(),
-            reason_codes: state.reason_codes,
+            reason_codes,
             launcher_alive,
             live,
         });
@@ -381,6 +389,54 @@ mod tests {
             observations[0].reason_codes,
             ["managed_session_control_degraded"]
         );
+    }
+
+    #[test]
+    fn recovered_registration_clears_control_degradation_for_the_live_scan() {
+        let home = tmp_dir();
+        temp_env::with_var("LONGHOUSE_HOME", Some(home.path().display().to_string()), || {
+            let recovery_dir = home.path().join("managed-local/registration-recovery");
+            fs::create_dir_all(&recovery_dir).unwrap();
+            fs::write(
+                recovery_dir.join("sess-recovered.json"),
+                json!({
+                    "schema_version": 1,
+                    "provider_name": "Cursor",
+                    "session_id": "sess-recovered",
+                    "run_id": "run-recovered",
+                    "coordination_token": "recovered-token",
+                    "recovered_at": "2026-08-05T00:00:00Z"
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            let dir = tmp_dir();
+            let socket = dir.path().join("recovered.sock");
+            fs::File::create(&socket).unwrap();
+            let mut value = json!({
+                "session_id": "sess-recovered",
+                "socket_path": socket.to_string_lossy(),
+                "launcher_pid": std::process::id(),
+                "launcher_process_start_time": "Tue Jun 30 00:00:00 2026",
+                "cursor_pid": 99999,
+                "cursor_process_start_time": "Tue Jun 30 00:00:01 2026",
+                "ready": true,
+            });
+            value["reason_codes"] = json!(["managed_session_control_degraded"]);
+            fs::write(
+                dir.path().join("sess-recovered.json"),
+                value.to_string(),
+            )
+            .unwrap();
+
+            let observations = collect_observations_from_processes(
+                dir.path(),
+                &launcher_facts(std::process::id()),
+            );
+            assert!(observations[0].live);
+            assert!(observations[0].reason_codes.is_empty());
+        });
     }
 
     #[test]

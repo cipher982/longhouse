@@ -184,6 +184,7 @@ fn coordination_mcp_enabled() -> bool {
     std::env::var("LONGHOUSE_COORDINATION_TOKEN")
         .ok()
         .is_some_and(|token| !token.trim().is_empty())
+        || std::env::var("LONGHOUSE_COORDINATION_RECOVERY").as_deref() == Ok("1")
 }
 
 async fn handle_rpc_line(
@@ -409,10 +410,19 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         match std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
             Ok(token) if !token.trim().is_empty() => token,
             _ => {
-                return tool_result(
-                    id,
-                    json!({"error":"coordination authority is unavailable for this managed session"}),
-                )
+                match session_id
+                    .as_deref()
+                    .and_then(crate::managed_launch_lifecycle::read_managed_launch_recovery)
+                    .and_then(|recovery| recovery.coordination_token)
+                {
+                    Some(token) if !token.trim().is_empty() => token,
+                    _ => {
+                        return tool_result(
+                            id,
+                            json!({"error":"coordination authority is unavailable for this managed session"}),
+                        )
+                    }
+                }
             }
         }
     } else {
@@ -1231,6 +1241,17 @@ mod tests {
 
     fn state_path(root: &Path) -> PathBuf {
         root.join("sessions").join(format!("{SESSION_ID}.json"))
+    }
+
+    #[test]
+    fn recovery_marker_keeps_coordination_surface_available_before_authority() {
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_COORDINATION_TOKEN", None),
+                ("LONGHOUSE_COORDINATION_RECOVERY", Some("1")),
+            ],
+            || assert!(coordination_mcp_enabled()),
+        );
     }
 
     async fn read_json_line<R>(reader: &mut R) -> Value

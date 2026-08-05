@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -48,11 +48,25 @@ impl ManagedLaunchResponse {
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .with_context(|| format!("degraded {provider_name} launch has no session identity"))?;
-        let run_id = uuid::Uuid::new_v5(
-            &uuid::Uuid::NAMESPACE_URL,
-            format!("longhouse:managed-local-run:{session_id}").as_bytes(),
-        )
-        .to_string();
+        let run_id = payload
+            .get("resume_attempt_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(|attempt_id| {
+                uuid::Uuid::new_v5(
+                    &uuid::Uuid::NAMESPACE_URL,
+                    format!("longhouse:managed-local-resume:{session_id}:{attempt_id}")
+                        .as_bytes(),
+                )
+                .to_string()
+            })
+            .unwrap_or_else(|| {
+                uuid::Uuid::new_v5(
+                    &uuid::Uuid::NAMESPACE_URL,
+                    format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+                )
+                .to_string()
+            });
         Ok(Self {
             session_id: session_id.to_owned(),
             run_id,
@@ -102,6 +116,25 @@ impl ManagedLaunchResponse {
     }
 }
 
+const RECOVERY_SCHEMA_VERSION: u32 = 1;
+const RECOVERY_DIRECTORY: &str = "managed-local/registration-recovery";
+
+/// The exact Runtime Host response published after a degraded launch recovers.
+/// It is private owner-local state: provider bridges use it to acquire newly
+/// issued authority without restarting the provider process.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ManagedLaunchRecovery {
+    pub schema_version: u32,
+    pub provider_name: String,
+    pub session_id: String,
+    pub run_id: String,
+    pub provider_session_id: Option<String>,
+    pub permission_mode: Option<String>,
+    pub hook_token: Option<String>,
+    pub coordination_token: Option<String>,
+    pub recovered_at: String,
+}
+
 const RETRY_SCHEMA_VERSION: u32 = 1;
 const RETRY_DIRECTORY: &str = "managed-local/registration-retries";
 const OUTCOME_RETRY_DIRECTORY: &str = "managed-local/outcome-retries";
@@ -109,6 +142,105 @@ const RETRY_MAX_ATTEMPTS: u32 = 288;
 const RETRY_TTL: ChronoDuration = ChronoDuration::hours(24);
 const PRE_READY_TTL: ChronoDuration = ChronoDuration::minutes(10);
 const EXHAUSTED_RETENTION: ChronoDuration = ChronoDuration::days(7);
+
+fn managed_launch_recovery_home() -> anyhow::Result<PathBuf> {
+    std::env::var_os("LONGHOUSE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|value| PathBuf::from(value).join(".longhouse"))
+        })
+        .context("HOME is not set for managed launch recovery")
+}
+
+pub fn managed_launch_recovery_path(session_id: &str) -> anyhow::Result<PathBuf> {
+    let home = managed_launch_recovery_home()?;
+    managed_launch_recovery_path_at(&home, session_id)
+}
+
+pub(crate) fn managed_launch_recovery_path_at(
+    home: &Path,
+    session_id: &str,
+) -> anyhow::Result<PathBuf> {
+    if session_id.trim().is_empty()
+        || !session_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+        })
+    {
+        anyhow::bail!("managed launch recovery has an unsafe session identity");
+    }
+    Ok(home
+        .join(RECOVERY_DIRECTORY)
+        .join(format!("{session_id}.json")))
+}
+
+pub fn clear_managed_launch_recovery(session_id: &str) -> anyhow::Result<()> {
+    let home = managed_launch_recovery_home()?;
+    clear_managed_launch_recovery_at(&home, session_id)
+}
+
+pub(crate) fn clear_managed_launch_recovery_at(
+    home: &Path,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let path = managed_launch_recovery_path_at(home, session_id)?;
+    remove_managed_launch_recovery(&path)
+}
+
+#[allow(dead_code)] // Used by the provider facade and Machine Agent binaries.
+pub fn read_managed_launch_recovery(session_id: &str) -> Option<ManagedLaunchRecovery> {
+    let home = managed_launch_recovery_home().ok()?;
+    read_managed_launch_recovery_at(&home, session_id)
+}
+
+#[allow(dead_code)] // Used by the Cursor launcher in the Machine Agent binary.
+pub(crate) fn read_managed_launch_recovery_at(
+    home: &Path,
+    session_id: &str,
+) -> Option<ManagedLaunchRecovery> {
+    let path = managed_launch_recovery_path_at(home, session_id).ok()?;
+    let bytes = fs::read(path).ok()?;
+    let recovery = serde_json::from_slice::<ManagedLaunchRecovery>(&bytes).ok()?;
+    (recovery.schema_version == RECOVERY_SCHEMA_VERSION
+        && recovery.session_id == session_id)
+    .then_some(recovery)
+}
+
+fn publish_managed_launch_recovery(
+    intent: &ManagedLaunchRetryIntent,
+    response: &ManagedLaunchResponse,
+) -> anyhow::Result<()> {
+    let path = managed_launch_recovery_path(&intent.expected_session_id)?;
+    let recovery = ManagedLaunchRecovery {
+        schema_version: RECOVERY_SCHEMA_VERSION,
+        provider_name: intent.provider_name.clone(),
+        session_id: response.session_id.clone(),
+        run_id: response.run_id.clone(),
+        provider_session_id: response.provider_session_id.clone(),
+        permission_mode: response.permission_mode.clone(),
+        hook_token: response.hook_token.clone(),
+        coordination_token: response.coordination_token.clone(),
+        recovered_at: Utc::now().to_rfc3339(),
+    };
+    let directory = path
+        .parent()
+        .context("managed launch recovery path has no parent")?;
+    fs::create_dir_all(directory)?;
+    set_private_directory_permissions(directory)?;
+    let bytes = serde_json::to_vec_pretty(&recovery).context("encode managed launch recovery")?;
+    let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    write_private_file(&temporary, &bytes)?;
+    fs::rename(&temporary, &path)?;
+    set_private_file_permissions(&path)?;
+    Ok(())
+}
+
+fn remove_managed_launch_recovery(path: &std::path::Path) -> anyhow::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
+    }
+}
 
 /// A durable owner-local recovery intent for an initially unreachable Runtime
 /// Host. It never owns the provider process and only confirms the exact
@@ -178,6 +310,7 @@ struct ManagedLaunchRetryState {
     provider_alive: Arc<AtomicBool>,
     keep_intent: Arc<AtomicBool>,
     intent_path: PathBuf,
+    recovery_path: PathBuf,
 }
 
 impl Drop for ManagedLaunchRegistrationRetry {
@@ -190,6 +323,7 @@ impl Drop for ManagedLaunchRegistrationRetry {
             && !self.state.keep_intent.load(Ordering::Acquire)
         {
             let _ = remove_retry_intent_if_present(&self.state.intent_path);
+            let _ = remove_managed_launch_recovery(&self.state.recovery_path);
         }
     }
 }
@@ -216,6 +350,7 @@ impl ManagedLaunchRegistrationRetry {
         }
         self.state.keep_intent.store(false, Ordering::Release);
         let _ = remove_retry_intent_if_present(&self.state.intent_path);
+        let _ = remove_managed_launch_recovery(&self.state.recovery_path);
     }
 
     /// Retain a ready launch after the foreground wrapper exits. The provider
@@ -226,8 +361,10 @@ impl ManagedLaunchRegistrationRetry {
         if !self.state.provider_alive.swap(false, Ordering::AcqRel) {
             self.state.keep_intent.store(false, Ordering::Release);
             let _ = remove_retry_intent_if_present(&self.state.intent_path);
+            let _ = remove_managed_launch_recovery(&self.state.recovery_path);
             return;
         }
+        let _ = remove_managed_launch_recovery(&self.state.recovery_path);
         self.state.keep_intent.store(true, Ordering::Release);
         if let Err(error) = update_retry_intent(&self.state.intent_path, |intent| {
             intent.provider_ready = true;
@@ -280,12 +417,14 @@ pub fn spawn_managed_launch_registration_retry(
         provider_exited: false,
     };
     let intent_path = persist_retry_intent(&intent)?;
+    let recovery_path = managed_launch_recovery_path(expected_session_id)?;
     let provider_alive = Arc::new(AtomicBool::new(false));
     Ok(ManagedLaunchRegistrationRetry {
         state: Arc::new(ManagedLaunchRetryState {
             provider_alive,
             keep_intent: Arc::new(AtomicBool::new(false)),
             intent_path,
+            recovery_path,
         }),
     })
 }
@@ -1254,12 +1393,7 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             tracing::warn!(path = %path.display(), error = %error, "Managed launch retry returned an invalid transport");
             continue;
         }
-        if let Some(expected_provider_session_id) = intent
-            .payload
-            .get("provider_session_id")
-            .and_then(Value::as_str)
-            .filter(|value: &&str| !value.trim().is_empty())
-        {
+        if let Some(expected_provider_session_id) = expected_provider_identity(&intent.payload) {
             if response.provider_session_id.as_deref() != Some(expected_provider_session_id) {
                 intent.last_error =
                     Some("Runtime Host returned a different provider identity".into());
@@ -1304,6 +1438,23 @@ pub async fn reconcile_managed_launch_retries() -> anyhow::Result<usize> {
             }
         };
         let post_hoc_exit = intent.provider_exited || provider_exited_during_registration;
+        if post_hoc_exit {
+            if let Ok(recovery_path) =
+                managed_launch_recovery_path(&intent.expected_session_id)
+            {
+                let _ = remove_managed_launch_recovery(&recovery_path);
+            }
+        } else if let Err(error) = publish_managed_launch_recovery(&intent, &response) {
+            intent.attempts = intent.attempts.saturating_add(1);
+            intent.last_error = Some(truncate(&format!("{error:#}"), 1000));
+            intent.next_attempt_at = Some(
+                (Utc::now() + retry_delay(intent.attempts, &intent.expected_session_id))
+                    .to_rfc3339(),
+            );
+            let _ = persist_retry_intent_with_owner_merge(&path, &mut intent);
+            tracing::warn!(path = %path.display(), error = %error, "Could not publish managed launch recovery state");
+            continue;
+        }
         let post_hoc_error = post_hoc_exit.then(|| {
             anyhow::anyhow!(
                 "provider exited before Runtime Host confirmed managed launch readiness"
@@ -1357,6 +1508,14 @@ fn validate_launch_identity(
         anyhow::bail!("Runtime Host returned a mismatched {provider_name} session identity");
     }
     Ok(response)
+}
+
+fn expected_provider_identity(payload: &Value) -> Option<&str> {
+    payload
+        .get("provider_session_id")
+        .or_else(|| payload.get("provider_thread_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 impl Drop for ManagedLaunchTransaction<'_> {
@@ -1446,6 +1605,8 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn response(session_id: &str, run_id: &str) -> ManagedLaunchResponse {
         ManagedLaunchResponse {
@@ -1535,6 +1696,84 @@ mod tests {
             .to_string()
         );
         assert!(!response.run_id.is_empty());
+    }
+
+    #[test]
+    fn degraded_resume_response_uses_the_client_minted_attempt_identity() {
+        let payload = serde_json::json!({
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "resume_attempt_id": "33333333-3333-4333-8333-333333333333",
+            "provider_thread_id": "thread-1",
+            "permission_mode": "provider_local"
+        });
+        let response =
+            ManagedLaunchResponse::degraded_from_payload(&payload, "Claude", "claude_channel_bridge")
+                .unwrap();
+        assert_eq!(
+            response.run_id,
+            uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_URL,
+                b"longhouse:managed-local-resume:11111111-1111-4111-8111-111111111111:33333333-3333-4333-8333-333333333333",
+            )
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn retry_identity_accepts_provider_thread_id_for_resume_payloads() {
+        let payload = serde_json::json!({
+            "provider_thread_id": "provider-thread"
+        });
+        assert_eq!(expected_provider_identity(&payload), Some("provider-thread"));
+    }
+
+    #[test]
+    fn recovery_record_round_trips_the_exact_authority_response() {
+        let home = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(home.path().display().to_string()), || {
+            let intent = ManagedLaunchRetryIntent {
+                schema_version: RETRY_SCHEMA_VERSION,
+                provider_name: "Cursor".to_string(),
+                url: "http://127.0.0.1:1".to_string(),
+                token: "device-token".to_string(),
+                payload: serde_json::json!({"session_id": "session-1"}),
+                expected_session_id: "session-1".to_string(),
+                expected_transport: "cursor_helm".to_string(),
+                provider_ready: true,
+                attempts: 1,
+                next_attempt_at: None,
+                last_error: None,
+                created_at: "2026-08-05T00:00:00Z".to_string(),
+                recovery_exhausted: false,
+                exhausted_at: None,
+                provider_pid: None,
+                provider_process_start_time: None,
+                launcher_pid: None,
+                launcher_process_start_time: None,
+                provider_exited: false,
+            };
+            let mut response = response("session-1", "run-1");
+            response.provider_session_id = Some("provider-1".to_string());
+            response.permission_mode = Some("remote_approve".to_string());
+            response.hook_token = Some("hook-1".to_string());
+            response.coordination_token = Some("coordination-1".to_string());
+
+            publish_managed_launch_recovery(&intent, &response).unwrap();
+            let stored = read_managed_launch_recovery("session-1").unwrap();
+            assert_eq!(stored.run_id, "run-1");
+            assert_eq!(
+                stored.coordination_token.as_deref(),
+                Some("coordination-1")
+            );
+            assert_eq!(
+                std::fs::metadata(managed_launch_recovery_path("session-1").unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        });
     }
 
     #[test]

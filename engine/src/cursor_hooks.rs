@@ -183,7 +183,10 @@ pub fn lifecycle(event: &str) {
             .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
             .is_some_and(|state| {
                 state.get("registration").and_then(Value::as_str) == Some("registered")
-            });
+            })
+        || crate::managed_launch_lifecycle::read_managed_launch_recovery(&session_id)
+            .filter(|recovery| recovery.provider_name.eq_ignore_ascii_case("cursor"))
+            .is_some_and(|recovery| recovery.coordination_token.is_some());
     if registration_ready && claim.get("status").and_then(Value::as_str) == Some("pending") {
         let mut observed = claim.clone();
         observed["status"] = json!("observed");

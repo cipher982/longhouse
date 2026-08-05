@@ -16,7 +16,7 @@ mod managed_terminal;
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use managed_launch_lifecycle::{
-    register_managed_launch, register_managed_launch_with_timeout,
+    clear_managed_launch_recovery, register_managed_launch_with_timeout,
     spawn_managed_launch_registration_retry, ManagedLaunchRegistrationRetry, ManagedLaunchResponse,
     ManagedLaunchTransaction,
 };
@@ -1101,6 +1101,15 @@ fn write_claude_degraded_mcp_config(session_id: &str) -> anyhow::Result<PrivateT
                 "env": {
                     "LONGHOUSE_MANAGED_SESSION_ID": session_id,
                 },
+            },
+            "longhouse-coordination": {
+                "type": "stdio",
+                "command": paired_engine_path()?,
+                "args": ["claude-channel", "serve"],
+                "env": {
+                    "LONGHOUSE_COORDINATION_RECOVERY": "1",
+                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+                },
             }
         }
     });
@@ -1268,6 +1277,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
     };
+    if let Some(session_id) = expected_session_id {
+        if let Err(error) = clear_managed_launch_recovery(session_id) {
+            eprintln!(
+                "Longhouse warning: could not clear stale managed launch recovery before Claude start: {error:#}"
+            );
+        }
+    }
     let registration = register_managed_launch_with_timeout(
         &runtime,
         &url,
@@ -1366,10 +1382,15 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|response| response.permission_mode.as_deref())
         .unwrap_or(if args.remote_approve {
-            "provider_local"
+            "remote_approve"
         } else {
             "bypass"
         });
+    if args.remote_approve && response.is_none() {
+        eprintln!(
+            "Longhouse warning: Claude remote approval is fail-closed until managed registration recovers"
+        );
+    }
     let hook_token = response
         .as_ref()
         .and_then(|response| response.hook_token.as_deref())
@@ -1545,45 +1566,48 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .get("session_id")
         .and_then(serde_json::Value::as_str)
         .context("OpenCode launch lost its session identity")?;
+    if let Err(error) = clear_managed_launch_recovery(expected_session_id) {
+        eprintln!(
+            "Longhouse warning: could not clear stale managed launch recovery before OpenCode start: {error:#}"
+        );
+    }
     let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
-    let response = if resume_target.is_some() {
-        register_managed_launch(
-            &runtime,
-            &url,
-            &token,
-            "OpenCode resume",
-            &payload,
-            Some(expected_session_id),
-        )?
-    } else {
-        match register_managed_launch_with_timeout(
-            &runtime,
-            &url,
-            &token,
-            "OpenCode",
-            &payload,
-            Some(expected_session_id),
-            Duration::from_millis(750),
-        ) {
-            Ok(response) => response,
-            Err(error) => {
-                degraded_registration = Some(spawn_managed_launch_registration_retry(
-                    &url,
-                    &token,
-                    "OpenCode",
-                    payload.clone(),
-                    expected_session_id,
-                    "opencode_server_bridge",
-                )?);
-                eprintln!(
-                    "Longhouse warning: starting OpenCode in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration after this wrapper returns ({error:#})"
-                );
-                ManagedLaunchResponse::degraded_from_payload(
-                    &payload,
-                    "OpenCode",
-                    "opencode_server_bridge",
-                )?
+    let response = match register_managed_launch_with_timeout(
+        &runtime,
+        &url,
+        &token,
+        if resume_target.is_some() {
+            "OpenCode resume"
+        } else {
+            "OpenCode"
+        },
+        &payload,
+        Some(expected_session_id),
+        Duration::from_secs(2),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            match spawn_managed_launch_registration_retry(
+                &url,
+                &token,
+                "OpenCode",
+                payload.clone(),
+                expected_session_id,
+                "opencode_server_bridge",
+            ) {
+                Ok(retry) => degraded_registration = Some(retry),
+                Err(retry_error) => eprintln!(
+                    "Longhouse warning: OpenCode degraded launch could not persist local recovery: {retry_error:#}"
+                ),
             }
+            eprintln!(
+                "Longhouse warning: starting OpenCode in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive ({error:#})"
+            );
+            ManagedLaunchResponse::degraded_from_payload(
+                &payload,
+                "OpenCode",
+                "opencode_server_bridge",
+            )?
         }
     };
     response.validate_transport("OpenCode", "opencode_server_bridge")?;
@@ -2165,6 +2189,11 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         .get("session_id")
         .and_then(serde_json::Value::as_str)
         .context("Codex launch lost its client-minted session identity")?;
+    if let Err(error) = clear_managed_launch_recovery(expected_session_id) {
+        eprintln!(
+            "Longhouse warning: could not clear stale managed launch recovery before Codex start: {error:#}"
+        );
+    }
     let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
     let response = match register_managed_launch_with_timeout(
         &runtime,
@@ -2390,17 +2419,58 @@ fn launch_managed_codex_resume(
     }
     .to_json();
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(
+    if let Err(error) = clear_managed_launch_recovery(session_id) {
+        eprintln!(
+            "Longhouse warning: could not clear stale managed launch recovery before Codex resume: {error:#}"
+        );
+    }
+    let mut degraded_registration: Option<ManagedLaunchRegistrationRetry> = None;
+    let response = match register_managed_launch_with_timeout(
         &runtime,
         url,
         token,
         "Codex resume",
         &payload,
         Some(session_id),
-    )?;
-    let mut launch_transaction =
-        ManagedLaunchTransaction::new(&runtime, url, token, &response.session_id, &response.run_id);
-    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
+        Duration::from_secs(2),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            match spawn_managed_launch_registration_retry(
+                url,
+                token,
+                "Codex",
+                payload.clone(),
+                session_id,
+                "codex_app_server",
+            ) {
+                Ok(retry) => degraded_registration = Some(retry),
+                Err(retry_error) => eprintln!(
+                    "Longhouse warning: Codex degraded resume could not persist local recovery: {retry_error:#}"
+                ),
+            }
+            eprintln!(
+                "Longhouse warning: starting Codex resume in degraded Helm mode; local provider ownership is active and the Machine Agent will retry registration while the provider remains alive ({error:#})"
+            );
+            ManagedLaunchResponse::degraded_from_payload(
+                &payload,
+                "Codex",
+                "codex_app_server",
+            )?
+        }
+    };
+    let mut launch_transaction = if degraded_registration.is_none() {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            url,
+            token,
+            &response.session_id,
+            &response.run_id,
+        ))
+    } else {
+        None
+    };
+    let coordination_token = response.coordination_token().map(str::to_owned);
     let engine = paired_engine_path()?;
     let mut bridge_command = Command::new(&engine);
     bridge_command
@@ -2428,7 +2498,17 @@ fn launch_managed_codex_resume(
             "--json",
         ])
         .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", token)
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        .envs(
+            coordination_token
+                .as_deref()
+                .map(|value| [("LONGHOUSE_COORDINATION_TOKEN", value)])
+                .into_iter()
+                .flatten(),
+        )
+        .env(
+            "LONGHOUSE_COORDINATION_RECOVERY",
+            if coordination_token.is_none() { "1" } else { "0" },
+        );
     if let Some(model) = &target.model {
         bridge_command.args(["--model", model]);
     }
@@ -2456,7 +2536,15 @@ fn launch_managed_codex_resume(
         stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
         anyhow::bail!("Codex resumed a different provider thread; the new run was stopped");
     }
-    launch_transaction.confirm_in_background();
+    if let Some(registration) = &degraded_registration {
+        if let Some(pid) = bridge.pid {
+            registration.record_provider_owner(pid, bridge.process_start_time.clone());
+        }
+        registration.mark_provider_ready();
+    }
+    if let Some(transaction) = launch_transaction.as_mut() {
+        transaction.confirm_in_background();
+    }
     if let Err(error) = record_codex_contract(
         &response.session_id,
         cwd,
@@ -2490,12 +2578,16 @@ fn launch_managed_codex_resume(
         target.model_reasoning_effort.as_deref(),
         target.bypass,
     );
-    finish_codex_tui_session(
+    let result = finish_codex_tui_session(
         tui_result,
         &response.session_id,
         Some(response.run_id.as_str()),
         Some(machine_name),
-    )
+    );
+    if let Some(registration) = &degraded_registration {
+        registration.mark_provider_exited();
+    }
+    result
 }
 
 struct CodexResumeTarget {

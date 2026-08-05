@@ -229,6 +229,8 @@ fn opencode_mcp_config(
     });
     if let Some(token) = coordination_token {
         environment["LONGHOUSE_COORDINATION_TOKEN"] = json!(token);
+    } else {
+        environment["LONGHOUSE_COORDINATION_RECOVERY"] = json!("1");
     }
     let mut config = json!({
         "mcp": {
