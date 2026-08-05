@@ -5701,6 +5701,10 @@ export interface components {
             ship_scheduler?: {
                 [key: string]: unknown;
             } | null;
+            /** Update */
+            update?: {
+                [key: string]: unknown;
+            } | null;
             history_import?: components["schemas"]["HistoryImportSnapshot-Input"] | null;
             /**
              * Parse Error Count 1H
