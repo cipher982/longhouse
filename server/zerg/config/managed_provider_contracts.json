@@ -489,7 +489,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "31389ad520a337aafe19a3aa57aafadd809c7d3f440edad1ec4ecd46dab769b4"
+      "adapter_digest": "fcd378504913d9800127adf5e426651d47ab10f6750a072dd85b754f67bcec84"
     },
     {
       "provider": "claude",

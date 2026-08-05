@@ -169,6 +169,45 @@ def test_implementation_stability_rejects_replaced_binary() -> None:
         _MODULE.assert_implementation_stable(before, after)
 
 
+def test_finish_live_command_waits_before_forcing_provider_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class NaturalProcess:
+        pid = 123
+        returncode = 0
+        stdout = None
+
+        def poll(self) -> int:
+            events.append("poll")
+            return 0
+
+    monkeypatch.setattr(_MODULE, "process_start_identity", lambda pid: "start-1")
+    monkeypatch.setattr(
+        _MODULE,
+        "kill_group",
+        lambda *args, **kwargs: events.append("kill"),
+    )
+
+    result = _MODULE.finish_live_command(
+        _MODULE.LiveCommand(
+            process=NaturalProcess(),
+            output_fd=-1,
+            output=bytearray(),
+            is_tty=False,
+            provider_ready_observed=True,
+        ),
+        provider_pid=456,
+        provider_process_start_time="start-1",
+    )
+
+    assert result["status"] == "pass"
+    assert result["natural_cleanup_observed"] is True
+    assert result["provider_process_group_cleanup"] == "natural"
+    assert "kill" not in events
+
+
 def test_run_matrix_records_completion_after_teardown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[str] = []
     provider_root: Path | None = None

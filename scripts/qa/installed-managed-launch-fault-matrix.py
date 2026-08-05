@@ -1232,12 +1232,12 @@ def finish_live_command(
     """
 
     provider_kill_status = "not_observed"
+    provider_cleanup_pid: int | None = None
     if provider_pid is not None and (
         provider_process_start_time is None
         or process_start_identity(provider_pid) == provider_process_start_time
     ):
-        kill_group(provider_pid, grace=0.2)
-        provider_kill_status = "attempted"
+        provider_cleanup_pid = provider_pid
     elif provider_pid is not None:
         provider_kill_status = "identity_mismatch"
     elif (
@@ -1291,6 +1291,12 @@ def finish_live_command(
     forced_cleanup = not launcher_reaped_naturally or bool(natural_remaining)
     if forced_cleanup and command.process.poll() is None:
         kill_group(command.process, grace=0.2)
+    if provider_cleanup_pid is not None:
+        if forced_cleanup:
+            kill_group(provider_cleanup_pid, grace=0.2)
+            provider_kill_status = "attempted"
+        else:
+            provider_kill_status = "natural"
 
     if cleanup_scope is not None:
         # Re-scan after the normal signals. Detached provider bridges are

@@ -2046,6 +2046,16 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
 const IPC_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const IPC_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const CHILD_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(500);
+const CHILD_REAP_TIMEOUT: Duration = Duration::from_millis(250);
+
+fn defer_child_reap(mut child: Child) {
+    // The bridge must not keep the user's stop request waiting on a kernel
+    // child that ignores SIGKILL. Keep the Tokio Child owned by a background
+    // waiter so it is still reaped when the process becomes waitable.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+}
 
 #[cfg(unix)]
 async fn send_via_ipc(
@@ -6192,11 +6202,24 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
             }
         }
     }
-    if let Some(ref mut child) = client.child {
-        if child.try_wait()?.is_none() {
-            let _ = child.start_kill();
+    if let Some(mut child) = client.child.take() {
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let _ = child.start_kill();
+            }
+            Err(error) => {
+                let _ = child.start_kill();
+                defer_child_reap(child);
+                return Err(error.into());
+            }
         }
-        let _ = child.wait().await;
+        match tokio::time::timeout(CHILD_REAP_TIMEOUT, child.wait()).await {
+            Ok(status) => {
+                let _ = status?;
+            }
+            Err(_) => defer_child_reap(child),
+        }
     }
     Ok(())
 }
