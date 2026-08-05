@@ -1681,6 +1681,8 @@ def _health_measurements(
                 or harness.get("repository_git_sha") != report_source_sha
                 or harness.get("repository_dirty") is not False
                 or harness.get("harness_file_dirty") is not False
+                or not isinstance(harness.get("sha256"), str)
+                or len(harness["sha256"]) != 64
             ):
                 raise ValueError(
                     "health harness provenance is not a clean report-source checkout"

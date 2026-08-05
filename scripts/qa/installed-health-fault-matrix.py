@@ -20,10 +20,11 @@ import subprocess
 import sys
 import tempfile
 import traceback
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
-
 
 CASES = (
     "missing_engine_status",
@@ -127,6 +128,7 @@ def harness_provenance() -> dict[str, Any]:
     )
     return {
         "path": str(path),
+        "sha256": sha256_file(path),
         "repository": str(repository),
         "repository_git_sha": (
             revision.stdout.strip() if revision.returncode == 0 else None
@@ -146,7 +148,12 @@ def verified_harness_provenance() -> dict[str, Any]:
     provenance = harness_provenance()
     missing = [
         key
-        for key in ("repository_git_sha", "repository_dirty", "harness_file_dirty")
+        for key in (
+            "repository_git_sha",
+            "repository_dirty",
+            "harness_file_dirty",
+            "sha256",
+        )
         if provenance.get(key) is None
     ]
     if missing:

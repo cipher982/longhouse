@@ -425,6 +425,7 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
             "repository_git_sha": _current_repo_sha(),
             "repository_dirty": False,
             "harness_file_dirty": False,
+            "sha256": "fedcba" * 10 + "fedc",
         },
         "scenarios": list(HEALTH_CASES),
         "results": normalized_results,
@@ -802,6 +803,23 @@ def test_dirty_health_harness_is_invalid(tmp_path: Path):
     health = tmp_path / "health.json"
     payload = _health_artifact([])
     payload["harness"]["repository_dirty"] = True
+    health.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([], health_paths=[health])
+
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {
+            "path": str(health),
+            "error": "health harness provenance is not a clean report-source checkout",
+        }
+    ]
+
+
+def test_health_harness_requires_file_digest(tmp_path: Path):
+    health = tmp_path / "health.json"
+    payload = _health_artifact([])
+    payload["harness"].pop("sha256")
     health.write_text(json.dumps(payload))
 
     report = MODULE.build_report([], health_paths=[health])

@@ -772,6 +772,7 @@ def test_run_matrix_records_completion_after_teardown(monkeypatch: pytest.Monkey
             "repository_git_sha": "test-sha",
             "repository_dirty": False,
             "harness_file_dirty": False,
+            "sha256": "d" * 64,
         },
     )
     monkeypatch.setattr(_MODULE.shutil, "rmtree", tracked_rmtree)
