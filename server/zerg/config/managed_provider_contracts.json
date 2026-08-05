@@ -19,7 +19,11 @@
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
-        "engine/src/codex_ws_relay.rs"
+        "engine/src/codex_ws_relay.rs",
+        "engine/src/longhouse.rs",
+        "engine/src/managed_launch_lifecycle.rs",
+        "engine/src/managed_launch_payload.rs",
+        "engine/src/process_identity.rs"
       ],
       "wire_families": [
         "codex_jsonl",
@@ -485,7 +489,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "aa59b539fc3c03d11ec69468ae05f39d3c8722a326483ea12367ab4b09a9f70d"
+      "adapter_digest": "88fdcbd15363fd2730279fc59411e1ebf3396247d71da01222c4a48c705966c9"
     },
     {
       "provider": "claude",
@@ -500,7 +504,12 @@
       "control_plane_aliases": [],
       "adapter_sources": [
         "server/zerg/services/shipper/hooks.py",
-        "engine/src/claude_print.rs"
+        "engine/src/claude_print.rs",
+        "engine/src/longhouse.rs",
+        "engine/src/managed_claude_scan.rs",
+        "engine/src/managed_launch_lifecycle.rs",
+        "engine/src/managed_launch_payload.rs",
+        "engine/src/process_identity.rs"
       ],
       "wire_families": [
         "claude_jsonl",
@@ -1071,7 +1080,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "a767801eeec8e2da2824fade298a32d98807dbe13cdc941ed089c4fdf7455918"
+      "adapter_digest": "0f458af75f82c4bc316b256cd9c3d8c61d3129be13ab3263ac36967f31067c8c"
     },
     {
       "provider": "opencode",
@@ -1086,8 +1095,13 @@
       "control_plane_aliases": [],
       "adapter_sources": [
         "server/zerg/mcp_server/server.py",
+        "engine/src/longhouse.rs",
+        "engine/src/managed_launch_lifecycle.rs",
+        "engine/src/managed_launch_payload.rs",
         "engine/src/opencode_control.rs",
-        "engine/src/opencode_run.rs"
+        "engine/src/opencode_bridge.rs",
+        "engine/src/opencode_run.rs",
+        "engine/src/process_identity.rs"
       ],
       "wire_families": [
         "opencode_storage",
@@ -1499,7 +1513,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "7c069b7ab62807d96e5de71227216406d9cf3c8e9f1ed6ea14373bdf735dc901"
+      "adapter_digest": "a89135eb4f257ee405f67a86ccd2db42573875fe743cd59e48260d3eaa5fc212"
     },
     {
       "provider": "antigravity",
@@ -1813,7 +1827,11 @@
         "engine/src/cursor_hooks.rs",
         "server/zerg/services/managed_local_control.py",
         "engine/src/cursor_helm_control.rs",
-        "engine/src/cursor_print.rs"
+        "engine/src/cursor_print.rs",
+        "engine/src/longhouse.rs",
+        "engine/src/managed_launch_lifecycle.rs",
+        "engine/src/managed_launch_payload.rs",
+        "engine/src/process_identity.rs"
       ],
       "wire_families": [
         "cursor_agent_jsonl",
@@ -2210,7 +2228,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "7c70cce172da31a91657ac1f52040c819282b964cb88094150617c3947079db6"
+      "adapter_digest": "cdda3b32ae23e1f5c30a1f947ca738c6a0f62b65bf6ffec20270964150ce8512"
     }
   ]
 }

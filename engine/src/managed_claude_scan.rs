@@ -14,6 +14,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -227,10 +228,9 @@ fn process_cwd(pid: u32) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn process_cwd_via_lsof(pid: u32) -> Option<String> {
-    let output = Command::new("lsof")
-        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
-        .output()
-        .ok()?;
+    let mut command = Command::new("lsof");
+    command.args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"]);
+    let output = crate::process_identity::output_with_timeout(command, Duration::from_secs(2))?;
     if !output.status.success() {
         return None;
     }

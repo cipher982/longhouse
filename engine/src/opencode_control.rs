@@ -13,6 +13,8 @@ use uuid::Uuid;
 const DEFAULT_USERNAME: &str = "opencode";
 const MAX_READABLE_STATE_SCHEMA_VERSION: u64 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const PROCESS_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
+const PROCESS_STOP_GRACE: Duration = Duration::from_secs(2);
 pub const OPENCODE_SERVER_BRIDGE_TRANSPORT: &str = "opencode_server_bridge";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +32,7 @@ pub struct OpenCodeStopResult {
 struct OpenCodeControlState {
     session_id: String,
     run_id: Option<String>,
-    provider_session_id: String,
+    provider_session_id: Option<String>,
     server_url: String,
     cwd: Option<String>,
     username: String,
@@ -38,6 +40,15 @@ struct OpenCodeControlState {
     pid: Option<u32>,
     process_start_time: String,
     process_command: String,
+}
+
+impl OpenCodeControlState {
+    fn require_provider_session_id(&self) -> Result<&str> {
+        self.provider_session_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .context("OpenCode bridge is still starting and has no provider session")
+    }
 }
 
 pub(crate) struct OpenCodeAttachState {
@@ -54,7 +65,7 @@ pub(crate) fn read_for_bridge(
 ) -> Result<OpenCodeAttachState> {
     let state = read_bridge_state(session_id, state_dir)?;
     Ok(OpenCodeAttachState {
-        provider_session_id: state.provider_session_id,
+        provider_session_id: state.require_provider_session_id()?.to_owned(),
         server_url: state.server_url,
         cwd: state
             .cwd
@@ -89,7 +100,7 @@ pub async fn send_text(session_id: &str, text: &str) -> Result<OpenCodeControlRe
     let state = read_bridge_state(session_id, None)?;
     post_prompt_async(&state, text).await?;
     Ok(OpenCodeControlResult {
-        provider_session_id: state.provider_session_id,
+        provider_session_id: state.require_provider_session_id()?.to_owned(),
     })
 }
 
@@ -97,7 +108,7 @@ pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
     let state = read_bridge_state(session_id, None)?;
     post_abort(&state).await?;
     Ok(OpenCodeControlResult {
-        provider_session_id: state.provider_session_id,
+        provider_session_id: state.require_provider_session_id()?.to_owned(),
     })
 }
 
@@ -122,7 +133,7 @@ pub async fn permission_reply(
     }
     request_opencode_permission_reply(&state, request_id, payload).await?;
     Ok(OpenCodeControlResult {
-        provider_session_id: state.provider_session_id,
+        provider_session_id: state.require_provider_session_id()?.to_owned(),
     })
 }
 
@@ -137,7 +148,7 @@ pub fn stop_server_bridge_at(
     let state = read_bridge_state(session_id, state_dir)?;
     let pid = state.pid;
     let stopped = terminate_recorded_opencode_server(&state)?;
-    if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
+    if stopped || pid.is_none_or(|pid| pid_is_running(pid) == Some(false)) {
         let outbox = crate::config::get_longhouse_home()?.join("agent/runtime-events-outbox");
         enqueue_terminal_event(&state, &outbox)?;
         let directory = state_dir
@@ -162,6 +173,9 @@ fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result
     else {
         return Ok(false);
     };
+    let Some(provider_session_id) = state.require_provider_session_id().ok() else {
+        return Ok(false);
+    };
     let runtime_key = format!("opencode:{}", state.session_id);
     let device_id = std::env::var("HOSTNAME").ok();
     let event = crate::managed_terminal::ManagedTerminalEvent {
@@ -170,7 +184,7 @@ fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result
         run_id,
         provider: "opencode",
         managed_transport: OPENCODE_SERVER_BRIDGE_TRANSPORT,
-        provider_session_id: Some(&state.provider_session_id),
+        provider_session_id: Some(provider_session_id),
         device_id: device_id.as_deref(),
         source: "opencode_server_bridge",
         dedupe_prefix: "opencode-terminal",
@@ -235,7 +249,7 @@ fn read_bridge_state_from_path(
         .to_string();
     let server_url = payload.server_url.unwrap_or_default().trim().to_string();
     let password = payload.password.unwrap_or_default().trim().to_string();
-    if provider_session_id.is_empty() || server_url.is_empty() || password.is_empty() {
+    if server_url.is_empty() || password.is_empty() {
         bail!("OpenCode server bridge state is incomplete");
     }
     let username = payload
@@ -259,7 +273,7 @@ fn read_bridge_state_from_path(
             .run_id
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
-        provider_session_id,
+        provider_session_id: (!provider_session_id.is_empty()).then_some(provider_session_id),
         server_url,
         cwd,
         username,
@@ -278,37 +292,43 @@ fn read_bridge_state_from_path(
     })
 }
 
-fn pid_is_running(pid: u32) -> bool {
+fn pid_is_running(pid: u32) -> Option<bool> {
     if pid == 0 || pid > i32::MAX as u32 {
-        return false;
+        return Some(false);
     }
     let rc = unsafe { libc::kill(pid as i32, 0) };
     if rc == 0 {
         // A terminated child can remain a zombie until its owner reaps it.
         // `kill(pid, 0)` still succeeds for that state, but a zombie server
         // cannot accept control traffic and must not block bridge cleanup.
-        let state = std::process::Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
-        return !state.is_some_and(|state| state.starts_with('Z'));
+        let mut command = std::process::Command::new("ps");
+        command.args(["-o", "stat=", "-p", &pid.to_string()]);
+        let output = crate::process_identity::output_with_timeout(command, PROCESS_PROBE_TIMEOUT)?;
+        if !output.status.success() {
+            return None;
+        }
+        let state = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        return Some(!state.starts_with('Z'));
     }
     let err = std::io::Error::last_os_error();
-    matches!(err.raw_os_error(), Some(code) if code == libc::EPERM)
+    Some(match err.raw_os_error() {
+        Some(code) if code == libc::ESRCH => false,
+        Some(code) if code == libc::EPERM => true,
+        _ => return None,
+    })
 }
 
 fn process_identity(pid: u32) -> Option<(String, String)> {
     if pid == 0 {
         return None;
     }
-    let output = std::process::Command::new("ps")
+    let mut command = std::process::Command::new("ps");
+    command
         .arg("-o")
         .arg("lstart=,command=")
         .arg("-p")
-        .arg(pid.to_string())
-        .output()
-        .ok()?;
+        .arg(pid.to_string());
+    let output = crate::process_identity::output_with_timeout(command, PROCESS_PROBE_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
@@ -329,7 +349,7 @@ fn pid_matches_strict_opencode_identity(state: &OpenCodeControlState) -> bool {
     let Some(pid) = state.pid else {
         return false;
     };
-    if !pid_is_running(pid) {
+    if pid_is_running(pid) != Some(true) {
         return false;
     }
     let recorded_start = state.process_start_time.trim();
@@ -356,11 +376,25 @@ fn terminate_recorded_opencode_server(state: &OpenCodeControlState) -> Result<bo
     if !pid_matches_strict_opencode_identity(state) {
         return Ok(false);
     }
-    terminate_recorded_process_group(pid)
+    if !terminate_recorded_process_group(pid, libc::SIGTERM)? {
+        return Ok(false);
+    }
+    if wait_for_process_exit(pid) == Some(true) {
+        return Ok(true);
+    }
+    // Revalidate the recorded identity before escalating. A PID that was
+    // reused or became uninspectable must remain protected from SIGKILL.
+    if !pid_matches_strict_opencode_identity(state) {
+        return Ok(false);
+    }
+    if !terminate_recorded_process_group(pid, libc::SIGKILL)? {
+        return Ok(false);
+    }
+    Ok(wait_for_process_exit(pid) == Some(true))
 }
 
 #[cfg(unix)]
-fn terminate_recorded_process_group(pid: u32) -> Result<bool> {
+fn terminate_recorded_process_group(pid: u32, signal: libc::c_int) -> Result<bool> {
     let pid_i = pid as i32;
     unsafe {
         let pgid = libc::getpgid(pid_i);
@@ -376,7 +410,7 @@ fn terminate_recorded_process_group(pid: u32) -> Result<bool> {
         if pgid != pid_i {
             return Ok(false);
         }
-        let rc = libc::killpg(pid_i, libc::SIGTERM);
+        let rc = libc::killpg(pid_i, signal);
         if rc == 0 {
             return Ok(true);
         }
@@ -388,8 +422,23 @@ fn terminate_recorded_process_group(pid: u32) -> Result<bool> {
     }
 }
 
+fn wait_for_process_exit(pid: u32) -> Option<bool> {
+    let deadline = std::time::Instant::now() + PROCESS_STOP_GRACE;
+    loop {
+        match pid_is_running(pid) {
+            Some(false) => return Some(true),
+            None if std::time::Instant::now() >= deadline => return None,
+            Some(true) | None => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return Some(false);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[cfg(not(unix))]
-fn terminate_recorded_process_group(_pid: u32) -> Result<bool> {
+fn terminate_recorded_process_group(_pid: u32, _signal: libc::c_int) -> Result<bool> {
     Ok(false)
 }
 
@@ -524,7 +573,7 @@ fn opencode_action_url(state: &OpenCodeControlState, action: &str) -> Result<Url
         segments
             .clear()
             .push("session")
-            .push(&state.provider_session_id)
+            .push(state.require_provider_session_id()?)
             .push(action);
     }
     url.set_fragment(None);
@@ -792,7 +841,7 @@ mod tests {
 
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
-        assert!(pid_is_running(pid));
+        assert_eq!(pid_is_running(pid), Some(true));
         terminate_pid(pid).unwrap();
         wait_until_pid_stops(pid).await;
         let _ = child.wait();
@@ -809,7 +858,7 @@ mod tests {
         write_stop_state(temp.path(), pid, "Sun Jan  1 00:00:00 2000", &command);
         let wrong_start = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
         assert!(!wrong_start.stopped);
-        assert!(pid_is_running(pid));
+        assert_eq!(pid_is_running(pid), Some(true));
 
         write_stop_state(
             temp.path(),
@@ -819,7 +868,7 @@ mod tests {
         );
         let wrong_command = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
         assert!(!wrong_command.stopped);
-        assert!(pid_is_running(pid));
+        assert_eq!(pid_is_running(pid), Some(true));
 
         terminate_pid(pid).unwrap();
         wait_until_pid_stops(pid).await;
@@ -839,7 +888,7 @@ mod tests {
 
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
-        assert!(pid_is_running(pid));
+        assert_eq!(pid_is_running(pid), Some(true));
         child.kill().unwrap();
         let _ = child.wait();
 
@@ -850,7 +899,7 @@ mod tests {
         let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
-        assert!(pid_is_running(pid));
+        assert_eq!(pid_is_running(pid), Some(true));
         terminate_pid(pid).unwrap();
         wait_until_pid_stops(pid).await;
         let _ = child.wait();
@@ -920,7 +969,7 @@ mod tests {
         let state = read_bridge_state(session_id, Some(state_dir))?;
         post_prompt_async(&state, text).await?;
         Ok(OpenCodeControlResult {
-            provider_session_id: state.provider_session_id,
+            provider_session_id: state.require_provider_session_id()?.to_owned(),
         })
     }
 
@@ -931,7 +980,7 @@ mod tests {
         let state = read_bridge_state(session_id, Some(state_dir))?;
         post_abort(&state).await?;
         Ok(OpenCodeControlResult {
-            provider_session_id: state.provider_session_id,
+            provider_session_id: state.require_provider_session_id()?.to_owned(),
         })
     }
 
@@ -1091,7 +1140,7 @@ mod tests {
 
     async fn wait_until_pid_stops(pid: u32) {
         for _ in 0..30 {
-            if !pid_is_running(pid) {
+            if pid_is_running(pid) == Some(false) {
                 return;
             }
             sleep(Duration::from_millis(100)).await;

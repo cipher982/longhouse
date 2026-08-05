@@ -50,7 +50,7 @@ pub struct StartResult {
 struct ExistingState {
     run_id: String,
     pid: u32,
-    provider_session_id: String,
+    provider_session_id: Option<String>,
     server_url: String,
     #[serde(default)]
     process_start_time: Option<String>,
@@ -90,13 +90,16 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             fs::remove_file(&state_path)?;
         } else if let Some(existing) = existing {
             if existing.run_id == run_id {
-                return Ok(StartResult {
-                    session_id,
-                    provider_session_id: existing.provider_session_id,
-                    server_url: existing.server_url,
-                    pid: existing.pid,
-                    process_start_time: existing.process_start_time,
-                });
+                if let Some(provider_session_id) = existing.provider_session_id {
+                    return Ok(StartResult {
+                        session_id,
+                        provider_session_id,
+                        server_url: existing.server_url,
+                        pid: existing.pid,
+                        process_start_time: existing.process_start_time,
+                    });
+                }
+                bail!("managed OpenCode bridge startup is already in progress for {session_id}");
             }
             bail!(
                 "managed OpenCode bridge already has a live state for {session_id}; stop it before starting again"
@@ -159,6 +162,28 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
+    let (process_start_time, process_command) =
+        process_identity(pid).context("could not establish OpenCode provider process identity")?;
+    let now = chrono::Utc::now().to_rfc3339();
+    // Persist ownership as soon as the provider is ready to accept requests,
+    // before session creation. If the outer facade deadline fires during that
+    // request, the control path can still find and terminate this server.
+    if let Err(error) = write_private_json(
+        &state_path,
+        &json!({
+            "schema_version": 1, "session_id": session_id, "run_id": run_id,
+            "connection_id": Uuid::new_v4().to_string(), "lease_generation": Uuid::new_v4().to_string(),
+            "provider_session_id": Value::Null, "server_url": server_url.clone(),
+            "pid": pid, "cwd": cwd.clone(), "username": USERNAME, "password": password.clone(),
+            "log_path": log_path.clone(), "started_at": now, "updated_at": now,
+            "process_start_time": process_start_time.clone(), "process_command": process_command.clone(),
+            "launch_mode": config.launch_mode.clone(), "provider_binary": binary.clone(),
+            "owner_wrapper_pid": 0, "owner_wrapper_start_time": ""
+        }),
+    ) {
+        let _ = stop_pid(pid);
+        return Err(error);
+    }
     let result = (|| -> Result<StartResult> {
         let runtime = tokio::runtime::Runtime::new()?;
         let provider_session_id = match config.resume_provider_session_id.as_deref() {
@@ -178,7 +203,6 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
                 config.display_name.as_deref(),
             ))?,
         };
-        let (process_start_time, process_command) = process_identity(pid).unwrap_or_default();
         let now = chrono::Utc::now().to_rfc3339();
         let payload = json!({
             "schema_version": 1, "session_id": session_id, "run_id": run_id,
@@ -197,11 +221,12 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             provider_session_id,
             server_url,
             pid,
-            process_start_time: process_identity(pid).map(|(start, _)| start),
+            process_start_time: Some(process_start_time),
         })
     })();
     if result.is_err() {
         let _ = stop_pid(pid);
+        let _ = fs::remove_file(&state_path);
     }
     result
 }
@@ -849,26 +874,36 @@ fn write_private_json(path: &Path, payload: &serde_json::Value) -> Result<()> {
 }
 
 fn process_identity(pid: u32) -> Option<(String, String)> {
-    let output = Command::new("ps")
-        .args(["-o", "lstart=,command=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
+    let mut command = Command::new("ps");
+    command.args(["-o", "lstart=,command=", "-p", &pid.to_string()]);
+    let output = crate::process_identity::output_with_timeout(command, Duration::from_millis(750))?;
     let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (line.len() > 24).then(|| (line[..24].trim().to_owned(), line[24..].trim().to_owned()))
 }
 
 fn stop_pid(pid: u32) -> Result<()> {
     #[cfg(unix)]
-    {
-        if unsafe { libc::killpg(pid as i32, libc::SIGTERM) } == 0 {
-            return Ok(());
-        }
+    unsafe {
+        let _ = libc::killpg(pid as i32, libc::SIGTERM);
+        let _ = libc::kill(pid as i32, libc::SIGTERM);
     }
-    if unsafe { libc::kill(pid as i32, libc::SIGTERM) } == 0 {
-        Ok(())
-    } else {
-        Ok(())
+    let grace_deadline = Instant::now() + Duration::from_secs(2);
+    while pid_alive(pid) && Instant::now() < grace_deadline {
+        thread::sleep(Duration::from_millis(25));
     }
+    if !pid_alive(pid) {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::killpg(pid as i32, libc::SIGKILL);
+        let _ = libc::kill(pid as i32, libc::SIGKILL);
+    }
+    let reap_deadline = Instant::now() + Duration::from_secs(2);
+    while pid_alive(pid) && Instant::now() < reap_deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
 }
 
 fn pid_alive(pid: u32) -> bool {

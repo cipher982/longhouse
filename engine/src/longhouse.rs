@@ -1364,10 +1364,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let degraded_provider_registration_for_spawn = degraded_registration.as_ref().cloned();
     let run_result = run_foreground_command_after_spawn(&mut command, |provider_pid| {
         if let Some(registration) = degraded_provider_registration_for_spawn {
-            registration.record_provider_owner(
+            let process_start_time = crate::managed_launch_lifecycle::process_start_identity(
                 provider_pid,
-                crate::managed_launch_lifecycle::process_start_identity(provider_pid),
-            )?;
+            )
+            .ok_or_else(|| anyhow::anyhow!("managed Claude provider identity probe failed"))?;
+            registration.record_provider_owner(provider_pid, Some(process_start_time))?;
             registration.mark_provider_ready()?;
         }
         match launch_transaction.as_mut() {
@@ -2250,9 +2251,20 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             );
             anyhow::bail!("native Codex bridge did not return its provider PID");
         };
-        if let Err(error) =
-            registration.record_provider_owner(pid, bridge.process_start_time.clone())
-        {
+        let Some(process_start_time) = bridge
+            .process_start_time
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            registration.mark_provider_failed();
+            let _ = stop_codex_bridge(
+                &response.session_id,
+                Some(response.run_id.as_str()),
+                "managed_provider_identity_missing",
+            );
+            anyhow::bail!("native Codex bridge did not return its process identity");
+        };
+        if let Err(error) = registration.record_provider_owner(pid, Some(process_start_time)) {
             registration.mark_provider_failed();
             let _ = stop_codex_bridge(
                 &response.session_id,

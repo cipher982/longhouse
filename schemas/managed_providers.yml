@@ -21,6 +21,10 @@ providers:
   - engine/src/codex_bridge_ownership.rs
   - engine/src/codex_exec.rs
   - engine/src/codex_ws_relay.rs
+  - engine/src/longhouse.rs
+  - engine/src/managed_launch_lifecycle.rs
+  - engine/src/managed_launch_payload.rs
+  - engine/src/process_identity.rs
   wire_families: [codex_jsonl, codex_app_server]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: codex
@@ -338,6 +342,11 @@ providers:
   adapter_sources:
   - server/zerg/services/shipper/hooks.py
   - engine/src/claude_print.rs
+  - engine/src/longhouse.rs
+  - engine/src/managed_claude_scan.rs
+  - engine/src/managed_launch_lifecycle.rs
+  - engine/src/managed_launch_payload.rs
+  - engine/src/process_identity.rs
   wire_families: [claude_jsonl, claude_hooks, claude_channel]
   observation_sources: [native_archive, hooks, managed_bridge]
   normalization_ruleset: claude
@@ -642,8 +651,13 @@ providers:
   control_plane_aliases: []
   adapter_sources:
   - server/zerg/mcp_server/server.py
+  - engine/src/longhouse.rs
+  - engine/src/managed_launch_lifecycle.rs
+  - engine/src/managed_launch_payload.rs
   - engine/src/opencode_control.rs
+  - engine/src/opencode_bridge.rs
   - engine/src/opencode_run.rs
+  - engine/src/process_identity.rs
   wire_families: [opencode_storage, opencode_server_events]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: opencode
@@ -1100,6 +1114,10 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/cursor_helm_control.rs
   - engine/src/cursor_print.rs
+  - engine/src/longhouse.rs
+  - engine/src/managed_launch_lifecycle.rs
+  - engine/src/managed_launch_payload.rs
+  - engine/src/process_identity.rs
   wire_families: [cursor_agent_jsonl, cursor_helm]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: cursor

@@ -1,12 +1,16 @@
 //! Shared process identity helpers for PID-reuse-safe liveness checks.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+#[cfg(not(unix))]
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -91,13 +95,63 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     Some(facts)
 }
 
+#[cfg(unix)]
+fn set_nonblocking<T: AsRawFd>(stream: &T) -> bool {
+    let fd = stream.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    flags >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0
+}
+
+#[cfg(unix)]
+fn drain_nonblocking<R: Read>(reader: &mut R, output: &mut Vec<u8>) -> Option<bool> {
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return Some(true),
+            Ok(count) => output.extend_from_slice(&buffer[..count]),
+            Err(error) if error.kind() == ErrorKind::WouldBlock => return Some(false),
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_group(child: &mut Child) {
+    if let Ok(process_group) = i32::try_from(child.id()) {
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn reap_after_timeout(mut child: Child) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => break,
+            Ok(None) => thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    // SIGKILL normally makes the bounded loop above observe exit immediately.
+    // If the kernel still withholds that observation, finish the reap away
+    // from the launch/control caller so a zombie cannot persist indefinitely.
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+#[cfg(unix)]
 pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
     #[cfg(unix)]
     {
         // Keep descendants in a private process group. A command such as
         // `sh -c "sleep 1"` can leave a descendant holding stdout open after
-        // the shell is killed; reaping the whole group keeps the timeout
-        // bounded through the reader join below.
+        // the shell is killed; reaping the whole group keeps the final pipe
+        // drain bounded too.
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
@@ -108,58 +162,66 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
         .ok()?;
     let mut stdout = child.stdout.take()?;
     let mut stderr = child.stderr.take()?;
-    let (stdout_sender, stdout_receiver) = mpsc::sync_channel(1);
-    let (stderr_sender, stderr_receiver) = mpsc::sync_channel(1);
-    let _stdout_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout_sender.send(stdout.read_to_end(&mut bytes).map(|_| bytes).ok());
-    });
-    let _stderr_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stderr_sender.send(stderr.read_to_end(&mut bytes).map(|_| bytes).ok());
-    });
+    if !set_nonblocking(&stdout) || !set_nonblocking(&stderr) {
+        kill_process_group(&mut child);
+        reap_after_timeout(child);
+        return None;
+    }
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_closed = false;
+    let mut stderr_closed = false;
     let deadline = Instant::now() + timeout;
     let status = loop {
+        if !stdout_closed {
+            stdout_closed = drain_nonblocking(&mut stdout, &mut stdout_bytes)?;
+        }
+        if !stderr_closed {
+            stderr_closed = drain_nonblocking(&mut stderr, &mut stderr_bytes)?;
+        }
         if let Some(status) = child.try_wait().ok()? {
-            #[cfg(unix)]
-            if let Ok(process_group) = i32::try_from(child.id()) {
-                // The direct child may have exited while a descendant still
-                // owns stdout. Reap the private group before joining the
-                // reader so a successful probe cannot hang either.
-                unsafe {
-                    libc::kill(-process_group, libc::SIGKILL);
-                }
-            }
+            // The direct child may have exited while a descendant still owns
+            // stdout. Reap the private group before the bounded final drain.
+            kill_process_group(&mut child);
             break status;
         }
         if Instant::now() >= deadline {
-            #[cfg(unix)]
-            if let Ok(process_group) = i32::try_from(child.id()) {
-                unsafe {
-                    libc::kill(-process_group, libc::SIGKILL);
-                }
-            }
-            let _ = child.kill();
-            let _ = child.try_wait();
+            kill_process_group(&mut child);
+            reap_after_timeout(child);
             return None;
         }
         thread::sleep(Duration::from_millis(5));
     };
     // A descendant may retain either pipe after the direct child exits. Drain
-    // briefly after killing the private group, then return rather than
-    // joining a reader forever on an uninterruptible process.
+    // briefly after killing the private group, then return partial output if a
+    // descendant escaped that group. This is a command-output failure, not a
+    // launch timeout; callers can report the parse/error path accurately.
     let drain_deadline = Instant::now() + Duration::from_millis(250);
-    let stdout = stdout_receiver
-        .recv_timeout(drain_deadline.saturating_duration_since(Instant::now()))
-        .ok()??;
-    let stderr = stderr_receiver
-        .recv_timeout(drain_deadline.saturating_duration_since(Instant::now()))
-        .ok()??;
+    while !(stdout_closed && stderr_closed) && Instant::now() < drain_deadline {
+        if !stdout_closed {
+            stdout_closed = drain_nonblocking(&mut stdout, &mut stdout_bytes)?;
+        }
+        if !stderr_closed {
+            stderr_closed = drain_nonblocking(&mut stderr, &mut stderr_bytes)?;
+        }
+        if !(stdout_closed && stderr_closed) {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
     Some(Output {
         status,
-        stdout,
-        stderr,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
     })
+}
+
+#[cfg(not(unix))]
+pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(command.output());
+    });
+    receiver.recv_timeout(timeout).ok()?.ok()
 }
 
 /// Parse one `ps -axo pid=,tty=,stat=,lstart=,command=` line.
@@ -462,6 +524,16 @@ mod tests {
         let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"ready");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_output_drains_large_pipes_without_blocking() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "dd if=/dev/zero bs=4096 count=64 2>/dev/null"]);
+        let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 64 * 4096);
     }
 
     #[test]
