@@ -155,37 +155,61 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _binary_build_identity(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        result = subprocess.run(
+            [str(path), "build-identity", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"build identity probe failed: {type(error).__name__}: {error}"
+    if result.returncode != 0 or not result.stdout.strip():
+        detail = (result.stderr or result.stdout or "no output").strip()[-500:]
+        return None, f"build identity probe exited {result.returncode}: {detail}"
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        return None, f"build identity probe returned invalid JSON: {error}"
+    if not isinstance(payload, dict):
+        return None, "build identity probe returned a non-object JSON value"
+    identity = payload.get("facade") if isinstance(payload.get("facade"), dict) else payload
+    commit = identity.get("commit")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return None, "build identity probe returned an invalid commit"
+    if not isinstance(identity.get("dirty"), bool):
+        return None, "build identity probe returned an invalid dirty flag"
+    return payload, None
+
+
 def source_provenance(path: Path) -> dict[str, Any]:
-    """Bind an installed binary to its source worktree when one is present."""
+    """Bind an installed binary to the identity compiled into that binary."""
 
     path = path.resolve()
-    repository = next(
-        (candidate for candidate in path.parents if (candidate / ".git").exists()),
-        None,
+    identity, identity_error = _binary_build_identity(path)
+    reported_identity = (
+        identity.get("facade")
+        if isinstance(identity, dict) and isinstance(identity.get("facade"), dict)
+        else identity
     )
-    revision = None
-    dirty = None
-    if repository is not None:
-        result = subprocess.run(
-            ["git", "-C", str(repository), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        revision = result.stdout.strip() if result.returncode == 0 else None
-        status = subprocess.run(
-            ["git", "-C", str(repository), "status", "--short"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        dirty = bool(status.stdout.strip()) if status.returncode == 0 else None
     return {
         "path": str(path),
         "sha256": sha256_file(path),
-        "source_worktree": str(repository) if repository is not None else None,
-        "source_git_sha": revision,
-        "source_dirty": dirty,
+        "source_worktree": None,
+        "source_git_sha": (
+            reported_identity.get("commit")
+            if isinstance(reported_identity, dict)
+            else None
+        ),
+        "source_dirty": (
+            reported_identity.get("dirty")
+            if isinstance(reported_identity, dict)
+            else None
+        ),
+        "build_identity": identity,
+        "build_identity_error": identity_error,
     }
 
 

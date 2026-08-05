@@ -1735,11 +1735,15 @@ def build_report(
                 }
             )
             continue
-        if harness.get("repository_git_sha") != report_source_sha:
+        if (
+            harness.get("repository_git_sha") != report_source_sha
+            or harness.get("repository_dirty") is not False
+            or harness.get("harness_file_dirty") is not False
+        ):
             invalid.append(
                 {
                     "path": str(path),
-                    "error": "provider harness repository_git_sha does not match the report source revision",
+                    "error": "provider harness provenance is not a clean report-source checkout",
                 }
             )
             continue

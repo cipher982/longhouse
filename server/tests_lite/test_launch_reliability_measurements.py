@@ -426,6 +426,34 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
     assert report["provider_scenarios"]["evidence_level_counts"] == {"hermetic": 1, "live_token_required": 1}
 
 
+def test_dirty_provider_harness_is_invalid(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    harness = tmp_path / "harness.json"
+    harness.write_text(
+        json.dumps(
+            {
+                "harness": {**_harness_provenance(), "repository_dirty": True},
+                "artifact_kind": "universal_agent_harness_run",
+                "schema_version": 1,
+                "providers": ["fixture"],
+                "scenarios": ["fixture"],
+                "results": [{"provider": "fixture", "scenario": "fixture", "status": "pass"}],
+            }
+        )
+    )
+
+    report = MODULE.build_report([matrix], [harness])
+
+    assert report["report_status"] == "invalid"
+    assert report["inputs"]["invalid_artifacts"] == [
+        {
+            "path": str(harness),
+            "error": "provider harness provenance is not a clean report-source checkout",
+        }
+    ]
+
+
 def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
     matrix = tmp_path / "matrix.json"
     _matrix(path=matrix, auth_gap=False)

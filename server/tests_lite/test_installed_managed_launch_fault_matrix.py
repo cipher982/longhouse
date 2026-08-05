@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -137,6 +138,36 @@ def test_harness_provenance_verification_fails_closed_on_git_error(
 
     with pytest.raises(_MODULE.ProcessScanFailure, match="repository_git_sha"):
         _MODULE.verified_harness_provenance()
+
+
+def test_source_provenance_uses_identity_compiled_into_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    binary = tmp_path / "longhouse"
+    binary.write_bytes(b"stale binary")
+    reported_sha = "a" * 40
+    monkeypatch.setattr(
+        _MODULE.subprocess,
+        "run",
+        lambda *args, **kwargs: _result(
+            0,
+            stdout=json.dumps(
+                {
+                    "facade": {
+                        "commit": reported_sha,
+                        "dirty": False,
+                    },
+                    "engine_path": str(tmp_path / "longhouse-engine"),
+                }
+            ),
+        ),
+    )
+
+    provenance = _MODULE.source_provenance(binary)
+
+    assert provenance["source_git_sha"] == reported_sha
+    assert provenance["source_dirty"] is False
+    assert provenance["build_identity"]["facade"]["commit"] == reported_sha
 
 
 def test_run_matrix_records_completion_after_teardown(

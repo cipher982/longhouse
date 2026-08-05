@@ -129,7 +129,7 @@ jobs:
           git -C "$measured_root" -c "http.extraheader=AUTHORIZATION: basic $auth_header" \
             fetch --no-tags origin main:refs/remotes/origin/main
           unset GITHUB_TOKEN auth_header
-          git -C "$measured_root" rev-list --first-parent refs/remotes/origin/main | grep -Fxq "$SOURCE_SHA" || {
+          git -C "$measured_root" rev-list --first-parent refs/remotes/origin/main | grep -Fx -- "$SOURCE_SHA" >/dev/null || {
             echo "The measured source SHA is not a protected main first-parent commit." >&2
             exit 1
           }
