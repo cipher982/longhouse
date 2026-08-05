@@ -144,7 +144,7 @@ jobs:
   deploy_demo:
     name: "Deploy public demo runtime"
     runs-on: cube-deploy
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main'
     timeout-minutes: 60
     needs: [changes, gate]
     env:
@@ -210,7 +210,7 @@ jobs:
   reprovision_canary:
     name: "Reprovision hosted canary"
     runs-on: cube-deploy
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main'
     timeout-minutes: 60
     needs: [changes, gate]
     outputs:
@@ -265,7 +265,7 @@ jobs:
   fast_smoke:
     name: "Fast smoke + hosted QA dispatch"
     runs-on: cube-deploy
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main'
     timeout-minutes: 20
     needs: [gate, deploy_demo, reprovision_canary]
     env:

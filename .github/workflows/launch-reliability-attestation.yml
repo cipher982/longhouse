@@ -21,6 +21,7 @@ jobs:
     # This runner may access the retained evidence and the measured source,
     # but it never receives the release signing secret.
     runs-on: longhouse-release-qualification
+    if: ${{ github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main' }}
     timeout-minutes: 15
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
@@ -33,6 +34,22 @@ jobs:
             Linux:X64|Linux:ARM64|macOS:X64|macOS:ARM64) ;;
             *) echo "Unsupported qualification runner: $RUNNER_OS/$RUNNER_ARCH." >&2; exit 1 ;;
           esac
+
+      - name: Require protected attestation dispatch
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = "cipher982/longhouse" || {
+            echo "Launch reliability attestation must run in cipher982/longhouse." >&2
+            exit 1
+          }
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Launch reliability attestation must be dispatched from protected main." >&2
+            exit 1
+          }
+          printf '%s\n' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "source_sha must be a lowercase full 40-character commit SHA." >&2
+            exit 1
+          }
 
       - name: Checkout the measured source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -269,6 +286,7 @@ jobs:
     # Keep the key-bearing job off the shared self-hosted cube node. The
     # measured checkout and its dependencies are never present in this job.
     runs-on: ubuntu-24.04
+    if: ${{ github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main' }}
     environment: longhouse-release-attestation
     timeout-minutes: 10
     env:
@@ -399,7 +417,7 @@ jobs:
             --receipt "$receipt_path" \
             --subject "$trusted_subject_path"
 
-      - name: Remove the signing key from the self-hosted runner
+      - name: Remove the signing key from the hosted signer runner
         if: ${{ always() }}
         shell: bash
         env:

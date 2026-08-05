@@ -38,7 +38,7 @@ jobs:
     name: "${{ matrix.name }}"
     runs-on: cube-deploy
     timeout-minutes: 30
-    if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SESSION_PROPAGATION_SLA_ENABLED == 'true') }}
+    if: ${{ github.repository == 'cipher982/longhouse' && github.ref == 'refs/heads/main' && (github.event_name != 'schedule' || vars.SESSION_PROPAGATION_SLA_ENABLED == 'true') }}
     strategy:
       fail-fast: false
       matrix:
