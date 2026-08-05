@@ -57,7 +57,7 @@ uv run --project server python scripts/qa/launch_reliability_dogfood.py \
   --challenge /tmp/longhouse-dogfood-challenge-a.json \
   --output /tmp/longhouse-dogfood-episode-a.json \
   --episode-id provider-recovery-a \
-  --longhouse-bin /Users/davidrose/.local/bin/longhouse \
+  --longhouse-bin longhouse \
   --expected-health-state broken \
   --expected-producer-freshness stale \
   --expected-red-eligible \
