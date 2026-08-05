@@ -278,6 +278,43 @@ def test_finish_live_command_waits_before_forcing_provider_cleanup(
     assert "kill" not in events
 
 
+def test_finish_live_command_accepts_owned_stop_proof_after_provider_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NaturalProcess:
+        pid = 123
+        returncode = 0
+        stdout = None
+
+        def poll(self) -> int:
+            return 0
+
+    monkeypatch.setattr(_MODULE, "scoped_process_table", lambda scope: {})
+    monkeypatch.setattr(_MODULE.os, "write", lambda *args: None)
+    monkeypatch.setattr(_MODULE.os, "close", lambda *args: None)
+
+    result = _MODULE.finish_live_command(
+        _MODULE.LiveCommand(
+            process=NaturalProcess(),
+            output_fd=-1,
+            output=bytearray(),
+            is_tty=True,
+            provider_ready_observed=True,
+        ),
+        provider_pid=456,
+        provider_process_start_time="no-longer-running",
+        cleanup_scope={"provider_pgid": 456, "provider_process_observed": True},
+        provider_cleanup_verified=True,
+    )
+
+    assert result["status"] == "pass"
+    assert result["provider_process_group_cleanup"] == "natural_owned_stop"
+
+
+def test_redact_does_not_replace_every_character_for_missing_token() -> None:
+    assert _MODULE.redact("provider stop failed", "") == "provider stop failed"
+
+
 def test_finish_live_command_rejects_unverified_natural_provider_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

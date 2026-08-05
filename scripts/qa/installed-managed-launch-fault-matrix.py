@@ -779,7 +779,11 @@ def read_retry_count(root: Path) -> int:
 
 
 def redact(text: str, token: str) -> str:
-    return text.replace(token, "<device-token-redacted>")
+    return (
+        text.replace(token, "<device-token-redacted>")
+        if token
+        else text
+    )
 
 
 def session_process_groups(session_id: str) -> dict[int, dict[int, str]]:
@@ -878,7 +882,7 @@ def cleanup_detached_provider(
             "forced_cleanup"
             if forced_cleanup
             else "pass"
-            if not final_group_ids
+            if stop.returncode == 0 and not final_group_ids
             else "fail"
         ),
         "stop_returncode": stop.returncode,
@@ -947,6 +951,10 @@ def finish_owned_live_provider(
         provider_pid=result.get("provider_pid"),
         provider_process_start_time=result.get("provider_process_start_time"),
         cleanup_scope=result.get("cleanup_scope"),
+        provider_cleanup_verified=(
+            owned_stop.get("status") == "pass"
+            and owned_stop.get("natural_cleanup_observed") is True
+        ),
     )
     cleanup["owned_stop"] = owned_stop
     if owned_stop["status"] not in {"pass", "not_applicable"}:
@@ -1404,6 +1412,7 @@ def finish_live_command(
     provider_pid: int | None = None,
     provider_process_start_time: str | None = None,
     cleanup_scope: dict[str, Any] | None = None,
+    provider_cleanup_verified: bool = False,
 ) -> dict[str, Any]:
     """Stop one exact launcher/provider process group and assert it is reaped.
 
@@ -1416,8 +1425,14 @@ def finish_live_command(
 
     provider_kill_status = "not_observed"
     provider_cleanup_pid: int | None = None
-    provider_natural_cleanup_verified = False
+    provider_natural_cleanup_verified = provider_cleanup_verified
+    if provider_cleanup_verified:
+        provider_kill_status = "natural_owned_stop"
     if (
+        provider_cleanup_verified
+    ):
+        provider_cleanup_pid = None
+    elif (
         provider_pid is not None
         and provider_process_start_time is not None
         and process_start_identity(provider_pid) == provider_process_start_time
@@ -1565,8 +1580,10 @@ def finish_live_command(
         if (
             launcher_absent_after_cleanup
             and not remaining
-            and provider_pid is not None
-            and provider_natural_cleanup_verified
+            and (
+                provider_cleanup_verified
+                or (provider_pid is not None and provider_natural_cleanup_verified)
+            )
         )
         else "not_started"
         if (
