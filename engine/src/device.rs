@@ -5840,4 +5840,67 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             "323c324778672b567522d29687b14f1e273951dbba28ff1dc10f3bd8c5d2c09f"
         );
     }
+
+    /// The degraded-launch receipt writer and this health reader are in
+    /// different binaries and only agree by convention. If either side changes
+    /// the directory or the `recovery_exhausted` key, a degraded launch stops
+    /// being visible in the menu bar and `longhouse doctor` while still being
+    /// degraded, which is the exact failure this contract exists to prevent.
+    #[test]
+    fn degraded_launch_receipts_drive_native_recovery_health() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_dir = root.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let status_path = agent_dir.join("engine-status.json");
+
+        let quiet = collect_managed_launch_recovery(&status_path);
+        assert_eq!(quiet.active_count, 0);
+        assert_eq!(quiet.exhausted_count, 0);
+        assert!(!quiet.scan_error);
+
+        crate::managed_launch_lifecycle::record_registration_retry(
+            &agent_dir, "session-a", "Codex", false,
+        )
+        .unwrap();
+        let retrying = collect_managed_launch_recovery(&status_path);
+        assert_eq!(retrying.active_count, 1, "a retrying launch must read as active recovery");
+        assert_eq!(retrying.exhausted_count, 0);
+
+        crate::managed_launch_lifecycle::record_registration_retry(
+            &agent_dir, "session-a", "Codex", true,
+        )
+        .unwrap();
+        let exhausted = collect_managed_launch_recovery(&status_path);
+        assert_eq!(exhausted.active_count, 0, "an abandoned retry must stop reading as active");
+        assert_eq!(exhausted.exhausted_count, 1);
+
+        crate::managed_launch_lifecycle::clear_registration_retry(&agent_dir, "session-a");
+        let recovered = collect_managed_launch_recovery(&status_path);
+        assert_eq!(recovered.active_count, 0);
+        assert_eq!(recovered.exhausted_count, 0);
+    }
+
+    #[test]
+    fn degraded_launch_receipt_names_its_provider_and_missing_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_dir = root.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        crate::managed_launch_lifecycle::record_registration_retry(
+            &agent_dir, "session-b", "OpenCode", false,
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(
+            agent_dir
+                .join("managed-local")
+                .join("registration-retries")
+                .join("session-b.json"),
+        )
+        .unwrap();
+        let payload: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(payload["provider"], "OpenCode");
+        assert_eq!(payload["recovery_exhausted"], false);
+        // A degraded launch never held coordination authority; the receipt must
+        // not imply the running provider picks one up later.
+        assert_eq!(payload["coordination_state"], "unavailable");
+    }
 }

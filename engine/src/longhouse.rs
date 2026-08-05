@@ -925,44 +925,102 @@ impl DeferredNotices {
     }
 }
 
-struct ClaudeRegistrationRetry {
+struct ManagedRegistrationRetry {
     provider_alive: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
+    agent_dir: PathBuf,
+    session_id: String,
+    provider: String,
 }
 
-impl Drop for ClaudeRegistrationRetry {
+impl ManagedRegistrationRetry {
+    /// Give up on recovery from the launcher side. A detached launch returns
+    /// immediately and takes the retry thread with it, so the receipt must be
+    /// settled here rather than left reporting a recovery that is not running.
+    fn abandon(&self) {
+        self.cancel.store(true, Ordering::Release);
+        let _ = crate::managed_launch_lifecycle::record_registration_retry(
+            &self.agent_dir,
+            &self.session_id,
+            &self.provider,
+            true,
+        );
+    }
+}
+
+impl Drop for ManagedRegistrationRetry {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
     }
 }
 
-fn spawn_claude_registration_retry(
+/// Recover a managed launch whose first bounded registration attempt failed.
+///
+/// The provider is already running locally and owns the terminal, so this must
+/// never block the caller and never print directly: notices are buffered until
+/// the provider exits. `provider` is the user-facing label used in those
+/// notices, so every managed provider reports its own name.
+fn spawn_managed_registration_retry(
     url: &str,
     token: &str,
+    provider: &str,
     payload: serde_json::Value,
     session_id: &str,
     notices: DeferredNotices,
-) -> ClaudeRegistrationRetry {
+) -> ManagedRegistrationRetry {
     let url = url.to_string();
     let token = token.to_string();
+    let provider = provider.to_string();
     let session_id = session_id.to_string();
     let provider_alive = Arc::new(AtomicBool::new(false));
     let cancel = Arc::new(AtomicBool::new(false));
     let provider_alive_for_thread = Arc::clone(&provider_alive);
     let cancel_for_thread = Arc::clone(&cancel);
+    let agent_dir = longhouse_home()
+        .map(|home| home.join("agent"))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let retry_agent_dir = agent_dir.clone();
+    let retry_session_id = session_id.clone();
+    let retry_provider = provider.clone();
+    // Publish the degraded state before the provider takes over the terminal.
+    // Local health runs in a different process, so it can only see this launch
+    // as degraded through a durable receipt; process liveness is not proof that
+    // control exists.
+    if let Err(error) =
+        crate::managed_launch_lifecycle::record_registration_retry(
+            &agent_dir,
+            &session_id,
+            &provider,
+            false,
+        )
+    {
+        notices.push(format!(
+            "Longhouse warning: could not record {provider} launch recovery state: {error:#}"
+        ));
+    }
     std::thread::spawn(move || {
+        // Every terminal path below must settle the receipt: cleared when
+        // control is genuinely established, exhausted otherwise. Leaving it
+        // active would report recovery that is no longer running.
+        let settle_exhausted = |session_id: &str, provider: &str| {
+            let _ = crate::managed_launch_lifecycle::record_registration_retry(
+                &agent_dir, session_id, provider, true,
+            );
+        };
         for attempt in 0..5 {
             if cancel_for_thread.load(Ordering::Acquire) {
+                settle_exhausted(&session_id, &provider);
                 return;
             }
             let Ok(runtime) = tokio::runtime::Runtime::new() else {
+                settle_exhausted(&session_id, &provider);
                 return;
             };
             match register_managed_launch_with_timeout(
                 &runtime,
                 &url,
                 &token,
-                "Claude degraded",
+                &format!("{provider} degraded"),
                 &payload,
                 Some(&session_id),
                 Duration::from_secs(2),
@@ -971,10 +1029,9 @@ fn spawn_claude_registration_retry(
                     if response.provider_session_id.as_deref()
                         != payload.get("provider_session_id").and_then(|value| value.as_str())
                     {
-                        notices.push(
-                            "Longhouse warning: degraded Claude registration returned a different provider identity"
-                                .to_string(),
-                        );
+                        notices.push(format!(
+                            "Longhouse warning: degraded {provider} registration returned a different provider identity"
+                        ));
                         let _transaction = ManagedLaunchTransaction::new(
                             &runtime,
                             &url,
@@ -982,6 +1039,7 @@ fn spawn_claude_registration_retry(
                             &response.session_id,
                             &response.run_id,
                         );
+                        settle_exhausted(&session_id, &provider);
                     } else {
                         let mut transaction = ManagedLaunchTransaction::new(
                             &runtime,
@@ -992,22 +1050,28 @@ fn spawn_claude_registration_retry(
                         );
                         for _ in 0..100 {
                             if cancel_for_thread.load(Ordering::Acquire) {
+                                settle_exhausted(&session_id, &provider);
                                 return;
                             }
                             if provider_alive_for_thread.load(Ordering::Acquire) {
-                                if let Err(error) = transaction.confirm() {
-                                    notices.push(format!(
-                                        "Longhouse warning: recovered Claude registration could not be confirmed: {error:#}"
-                                    ));
+                                match transaction.confirm() {
+                                    Ok(_) => crate::managed_launch_lifecycle::
+                                        clear_registration_retry(&agent_dir, &session_id),
+                                    Err(error) => {
+                                        notices.push(format!(
+                                            "Longhouse warning: recovered {provider} registration could not be confirmed: {error:#}"
+                                        ));
+                                        settle_exhausted(&session_id, &provider);
+                                    }
                                 }
                                 return;
                             }
                             std::thread::sleep(Duration::from_millis(100));
                         }
-                        notices.push(
-                            "Longhouse warning: Claude exited before recovered registration became ready"
-                                .to_string(),
-                        );
+                        notices.push(format!(
+                            "Longhouse warning: {provider} exited before recovered registration became ready"
+                        ));
+                        settle_exhausted(&session_id, &provider);
                     }
                     return;
                 }
@@ -1016,10 +1080,9 @@ fn spawn_claude_registration_retry(
                     // reads in order. The final attempt's error is the most
                     // recent and is reported by the failure arm below.
                     if attempt == 0 {
-                        notices.push(
-                            "Longhouse warning: Runtime Host is still unavailable; Claude is running locally and registration will retry"
-                                .to_string(),
-                        );
+                        notices.push(format!(
+                            "Longhouse warning: Runtime Host is still unavailable; {provider} is running locally and registration will retry"
+                        ));
                     }
                     let _ = error;
                     for _ in 0..2_u64.pow(attempt) {
@@ -1031,15 +1094,19 @@ fn spawn_claude_registration_retry(
                 }
                 Err(error) => {
                     notices.push(format!(
-                        "Longhouse warning: could not recover Claude Helm registration: {error:#}"
+                        "Longhouse warning: could not recover {provider} Helm registration: {error:#}"
                     ));
+                    settle_exhausted(&session_id, &provider);
                 }
             }
         }
     });
-    ClaudeRegistrationRetry {
+    ManagedRegistrationRetry {
         provider_alive,
         cancel,
+        agent_dir: retry_agent_dir,
+        session_id: retry_session_id,
+        provider: retry_provider,
     }
 }
 
@@ -1165,7 +1232,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         payload["session_id"] = json!(Uuid::new_v4().to_string());
         payload["provider_session_id"] = json!(Uuid::new_v4().to_string());
     }
-    let mut degraded_registration: Option<ClaudeRegistrationRetry> = None;
+    let mut degraded_registration: Option<ManagedRegistrationRetry> = None;
     // Deferred degradation/recovery notices: the retry thread must not write
     // directly to the caller's terminal while the provider TUI owns the
     // alternate screen, so route them through a buffer drained only after the
@@ -1226,9 +1293,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
             .context("Claude degraded launch lost its client-minted session identity")?;
-        degraded_registration = Some(spawn_claude_registration_retry(
+        degraded_registration = Some(spawn_managed_registration_retry(
             &url,
             &token,
+            "Claude",
             payload.clone(),
             session_id,
             deferred_notices.clone(),
@@ -1431,8 +1499,25 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(surface) = launch_surface {
         payload["launch_surface"] = json!(surface);
     }
+    // A new launch mints its own session identity so it can start without the
+    // Runtime Host. Resume keeps the Runtime Host's identity and stays fail
+    // closed: local state cannot prove single-owner fencing for an existing
+    // session.
+    if resume_target.is_none() {
+        payload["session_id"] = json!(Uuid::new_v4().to_string());
+    }
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(
+    let deferred_notices = DeferredNotices::default();
+    let expected_session_id = resume_target
+        .as_ref()
+        .map(|target| target.session_id.clone())
+        .or_else(|| {
+            payload
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+    let registration = register_managed_launch_with_timeout(
         &runtime,
         &url,
         &token,
@@ -1442,18 +1527,54 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             "OpenCode"
         },
         &payload,
-        resume_target
-            .as_ref()
-            .map(|target| target.session_id.as_str()),
-    )?;
-    let mut launch_transaction = ManagedLaunchTransaction::new(
-        &runtime,
-        &url,
-        &token,
-        &response.session_id,
-        &response.run_id,
+        expected_session_id.as_deref(),
+        Duration::from_millis(2000),
     );
-    let coordination_token = response.require_authority("OpenCode", "opencode_server_bridge")?;
+    let response = match registration {
+        Ok(response) => Some(response),
+        // Resume must not proceed without proven identity and fencing.
+        Err(error) if resume_target.is_some() => return Err(error),
+        Err(error) => {
+            eprintln!(
+                "Longhouse warning: starting OpenCode without Longhouse control because registration failed ({error:#})"
+            );
+            None
+        }
+    };
+    let session_id = response
+        .as_ref()
+        .map(|response| response.session_id.clone())
+        .or(expected_session_id)
+        .context("degraded OpenCode launch has no session identity")?;
+    let run_id = response
+        .as_ref()
+        .map(|response| response.run_id.clone())
+        .unwrap_or_else(|| {
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+            )
+            .to_string()
+        });
+    let coordination_token = response
+        .as_ref()
+        .map(|response| response.require_authority("OpenCode", "opencode_server_bridge"))
+        .transpose()?
+        .map(str::to_owned);
+    let degraded_registration = match response {
+        Some(_) => None,
+        None => Some(spawn_managed_registration_retry(
+            &url,
+            &token,
+            "OpenCode",
+            payload.clone(),
+            &session_id,
+            deferred_notices.clone(),
+        )),
+    };
+    let mut launch_transaction = degraded_registration
+        .is_none()
+        .then(|| ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &run_id));
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -1461,9 +1582,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             "opencode-bridge",
             "start",
             "--session-id",
-            &response.session_id,
+            &session_id,
             "--run-id",
-            &response.run_id,
+            &run_id,
             "--cwd",
         ])
         .arg(&cwd)
@@ -1481,7 +1602,11 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
                 "detached"
             },
         ])
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        ;
+    match coordination_token.as_deref() {
+        Some(value) => start.env("LONGHOUSE_COORDINATION_TOKEN", value),
+        None => start.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
+    };
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
     }
@@ -1495,7 +1620,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     let output = start.output().context("start native OpenCode bridge")?;
     if !output.status.success() {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
         anyhow::bail!(
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -1506,7 +1631,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     {
         Ok(response) => response,
         Err(error) => {
-            let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+            let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
             return Err(error);
         }
     };
@@ -1514,21 +1639,23 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
     {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
-        return Err(error);
+    if let Some(transaction) = launch_transaction.as_mut() {
+        if let Err(error) = transaction.confirm() {
+            let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+            return Err(error);
+        }
+    }
+    // The bridge owns the provider process from here.
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(true, Ordering::Release);
     }
     println!(
         "Managed OpenCode ready\n→ {}/s/{}",
         url.trim_end_matches('/'),
-        response
-            .session_id
-            .split('-')
-            .next()
-            .unwrap_or(&response.session_id)
+        session_id.split('-').next().unwrap_or(&session_id)
     );
     let attached = args.attach
         && !args.no_attach
@@ -1537,8 +1664,17 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if !attached {
         println!(
             "Attach: longhouse opencode attach --session-id {}",
-            response.session_id
+            session_id
         );
+        if let Some(registration) = &degraded_registration {
+            registration.abandon();
+            eprintln!(
+                "Longhouse warning: OpenCode started without Longhouse control and this launcher is exiting, so registration will not retry. Relaunch once the Runtime Host is reachable to restore control."
+            );
+        }
+        for message in deferred_notices.drain() {
+            eprintln!("{message}");
+        }
         return Ok(());
     }
     let mut attach = Command::new(&bridge);
@@ -1546,12 +1682,20 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "opencode-bridge",
         "attach",
         "--session-id",
-        &response.session_id,
+        &session_id,
         "--opencode-bin",
         &opencode_bin,
     ]);
     let run_result = run_foreground_command(&mut attach);
-    let stop_result = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(false, Ordering::Release);
+    }
+    let stop_result = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+    drop(degraded_registration);
+    // Printed only after the provider released the terminal.
+    for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
     let exit = run_result?;
     stop_result?;
     if exit != 0 {
@@ -1976,19 +2120,76 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         extra: vec![],
     }
     .to_json();
+    // Mint the session identity locally so a degraded launch owns a stable
+    // session the background retry can register later under the same id.
+    let mut payload = payload;
+    payload["session_id"] = json!(Uuid::new_v4().to_string());
     let runtime = tokio::runtime::Runtime::new()?;
-    let response = register_managed_launch(&runtime, &url, &token, "Codex", &payload, None)?;
-    let mut launch_transaction = ManagedLaunchTransaction::new(
+    let deferred_notices = DeferredNotices::default();
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let response = match register_managed_launch_with_timeout(
         &runtime,
         &url,
         &token,
-        &response.session_id,
-        &response.run_id,
-    );
-    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
-    if response.run_id.trim().is_empty() {
+        "Codex",
+        &payload,
+        expected_session_id.as_deref(),
+        // A healthy host answers well inside this window. A slow or missing one
+        // must not hold the provider TUI.
+        Duration::from_millis(2000),
+    ) {
+        Ok(response) => Some(response),
+        Err(error) => {
+            eprintln!(
+                "Longhouse warning: starting Codex without Longhouse control because registration failed ({error:#})"
+            );
+            None
+        }
+    };
+    let session_id = response
+        .as_ref()
+        .map(|response| response.session_id.clone())
+        .or(expected_session_id)
+        .context("degraded Codex launch has no session identity")?;
+    let run_id = response
+        .as_ref()
+        .map(|response| response.run_id.clone())
+        .unwrap_or_else(|| {
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+            )
+            .to_string()
+        });
+    // Coordination authority is minted by the Runtime Host at registration. A
+    // degraded launch has none; the bridge omits the MCP token when the
+    // variable is absent, so coordination tools fail closed for this session
+    // until it is relaunched.
+    let coordination_token = response
+        .as_ref()
+        .map(|response| response.require_authority("Codex", "codex_app_server"))
+        .transpose()?
+        .map(str::to_owned);
+    if response.is_some() && run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
+    let degraded_registration = match response {
+        Some(_) => None,
+        None => Some(spawn_managed_registration_retry(
+            &url,
+            &token,
+            "Codex",
+            payload.clone(),
+            &session_id,
+            deferred_notices.clone(),
+        )),
+    };
+    let mut launch_transaction = degraded_registration.is_none().then(|| {
+        ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &run_id)
+    });
     let attach = args.attach && !args.no_attach && interactive_stdio();
     let launch_mode = if attach { "tui" } else { "detached_ui" };
     let engine = paired_engine_path()?;
@@ -1998,9 +2199,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "codex-bridge",
             "start",
             "--session-id",
-            &response.session_id,
+            &session_id,
             "--run-id",
-            &response.run_id,
+            &run_id,
             "--cwd",
         ])
         .arg(&cwd)
@@ -2014,7 +2215,13 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "--json",
         ])
         .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token)
-        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token);
+    // Never let an inherited token stand in for authority this launch does not
+    // hold: the bridge treats an absent variable as "no coordination".
+    match coordination_token.as_deref() {
+        Some(value) => bridge.env("LONGHOUSE_COORDINATION_TOKEN", value),
+        None => bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
+    };
     if !attach {
         bridge.arg("--create-initial-thread");
     }
@@ -2040,28 +2247,31 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             .is_none_or(|thread| thread.trim().is_empty())
     {
         let _ = stop_codex_bridge(
-            &response.session_id,
-            Some(response.run_id.as_str()),
+            &session_id,
+            Some(run_id.as_str()),
             "bridge_start_failed",
         );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        let _ = stop_codex_bridge(
-            &response.session_id,
-            Some(response.run_id.as_str()),
-            "launch_confirmation_failed",
-        );
-        return Err(error);
+    if let Some(transaction) = launch_transaction.as_mut() {
+        if let Err(error) = transaction.confirm() {
+            let _ = stop_codex_bridge(
+                &session_id,
+                Some(run_id.as_str()),
+                "launch_confirmation_failed",
+            );
+            return Err(error);
+        }
+    }
+    // The bridge owns the provider process from here, so a background
+    // registration retry is allowed to confirm the launch once it succeeds.
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(true, Ordering::Release);
     }
     println!(
         "Managed Codex ready\n→ {}/s/{}",
         url.trim_end_matches('/'),
-        response
-            .session_id
-            .split('-')
-            .next()
-            .unwrap_or(&response.session_id)
+        session_id.split('-').next().unwrap_or(&session_id)
     );
     if !attach {
         if args.attach && !args.no_attach {
@@ -2069,12 +2279,21 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         }
         println!(
             "Attach: longhouse codex attach --session-id {}",
-            response.session_id
+            session_id
         );
+        if let Some(registration) = &degraded_registration {
+            registration.abandon();
+            eprintln!(
+                "Longhouse warning: Codex started without Longhouse control and this launcher is exiting, so registration will not retry. Relaunch once the Runtime Host is reachable to restore control."
+            );
+        }
+        for message in deferred_notices.drain() {
+            eprintln!("{message}");
+        }
         return Ok(());
     }
     if let Err(error) = record_codex_contract(
-        &response.session_id,
+        &session_id,
         &cwd,
         &codex_bin,
         launch_mode,
@@ -2088,18 +2307,27 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         &codex_bin,
         &bridge.ws_url,
         &cwd,
-        &response.session_id,
+        &session_id,
         None,
         args.model.as_deref(),
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    finish_codex_tui_session(
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(false, Ordering::Release);
+    }
+    let outcome = finish_codex_tui_session(
         tui_result,
-        &response.session_id,
-        Some(response.run_id.as_str()),
+        &session_id,
+        Some(run_id.as_str()),
         Some(&machine_name),
-    )
+    );
+    drop(degraded_registration);
+    // Printed only now: the provider owned the alternate screen until here.
+    for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
+    outcome
 }
 
 fn launch_managed_codex_resume(
@@ -3638,7 +3866,7 @@ mod tests {
     // Regression guard for the degraded-mode PTY corruption: the thread-spawn
     // notice sink must drain its buffered messages exactly once, in order.
     // Raw eprintln! inside thread bodies is prevented structurally by routing
-    // thread notices through DeferredNotices (see spawn_claude_registration_retry).
+    // thread notices through DeferredNotices (see spawn_managed_registration_retry).
     #[test]
     fn deferred_notices_drain_is_fifo_and_consuming() {
         let notices = DeferredNotices::default();

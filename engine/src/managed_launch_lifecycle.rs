@@ -11,6 +11,56 @@ use serde_json::{json, Value};
 
 const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Directory scanned by native local health (`device::collect_managed_launch_recovery`)
+/// to decide whether a managed launch is still recovering its registration.
+/// A degraded launch writes a receipt here so the menu bar and `longhouse
+/// doctor` can see the degradation from another process; process liveness
+/// alone must never be read as proof that control exists.
+/// `agent_dir` is the caller's `<longhouse home>/agent`. It is passed in rather
+/// than resolved here because the engine and the facade binary each own their
+/// own home resolution and this module is shared by both.
+fn registration_retry_path(
+    agent_dir: &std::path::Path,
+    session_id: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let directory = agent_dir.join("managed-local").join("registration-retries");
+    std::fs::create_dir_all(&directory).context("create managed launch recovery directory")?;
+    Ok(directory.join(format!("{session_id}.json")))
+}
+
+/// Record that a launch started without Runtime Host registration and is
+/// retrying. `exhausted` flips the receipt to a terminal state so health can
+/// distinguish "recovering" from "gave up".
+pub fn record_registration_retry(
+    agent_dir: &std::path::Path,
+    session_id: &str,
+    provider: &str,
+    exhausted: bool,
+) -> anyhow::Result<()> {
+    let path = registration_retry_path(agent_dir, session_id)?;
+    let payload = json!({
+        "schema_version": 1,
+        "session_id": session_id,
+        "provider": provider,
+        "recovery_exhausted": exhausted,
+        // Coordination authority is minted by the Runtime Host at registration.
+        // A degraded launch never had one, and this receipt does not imply the
+        // running provider acquires it later.
+        "coordination_state": "unavailable",
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&payload)?)
+        .with_context(|| format!("write managed launch recovery receipt {}", path.display()))
+}
+
+/// Drop the receipt once registration succeeds, so health stops reporting
+/// active recovery.
+pub fn clear_registration_retry(agent_dir: &std::path::Path, session_id: &str) {
+    if let Ok(path) = registration_retry_path(agent_dir, session_id) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // Fields are split across the facade and engine binary consumers.
 pub struct ManagedLaunchResponse {

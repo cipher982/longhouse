@@ -68,10 +68,12 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     ) {
         bail!("unsupported OpenCode launch mode");
     }
+    // A degraded launch starts without Runtime Host authority. Carry the
+    // absence explicitly rather than refusing: the MCP server already fails
+    // closed on coordination calls when the variable is missing, so the
+    // provider stays usable while coordination does not silently appear to work.
     let coordination_token = config.coordination_token.trim();
-    if coordination_token.is_empty() {
-        bail!("Longhouse did not issue coordination authority for this session");
-    }
+    let coordination_token = (!coordination_token.is_empty()).then_some(coordination_token);
     let state_dir = state_dir(config.claude_dir.as_deref())?;
     let _start_lock = acquire_start_lock(&state_dir.join(format!("{session_id}.start.lock")))?;
     let state_path = state_dir.join(format!("{session_id}.json"));
@@ -209,18 +211,24 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
 fn opencode_mcp_config(
     engine: &Path,
     session_id: &str,
-    coordination_token: &str,
+    coordination_token: Option<&str>,
     model: Option<&str>,
 ) -> serde_json::Value {
+    // Omit the variable entirely when this launch holds no authority. An empty
+    // string would look like a credential to the channel server; an absent one
+    // makes it fail closed.
+    let mut environment = json!({
+        "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+    });
+    if let Some(token) = coordination_token {
+        environment["LONGHOUSE_COORDINATION_TOKEN"] = json!(token);
+    }
     let mut config = json!({
         "mcp": {
             "longhouse": {
                 "type": "local",
                 "command": [engine, "claude-channel", "serve"],
-                "environment": {
-                    "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
-                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-                },
+                "environment": environment,
                 "enabled": true,
             }
         }
@@ -949,7 +957,7 @@ mod tests {
         let config = opencode_mcp_config(
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
-            "session-secret",
+            Some("session-secret"),
             None,
         );
         let server = &config["mcp"]["longhouse"];
@@ -968,7 +976,7 @@ mod tests {
         let configured = opencode_mcp_config(
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
-            "session-secret",
+            Some("session-secret"),
             Some("openrouter/deepseek/deepseek-v4-flash"),
         );
         assert_eq!(
