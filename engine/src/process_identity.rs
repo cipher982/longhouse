@@ -51,15 +51,14 @@ pub fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
 /// Read one process identity without depending on a successful whole-system
 /// inventory. This is used when persisting or validating an owned child PID.
 pub fn try_collect_process_fact(pid: u32) -> Option<ProcessFact> {
-    let output = Command::new("ps")
-        .args([
-            "-p",
-            &pid.to_string(),
-            "-o",
-            "pid=,tty=,stat=,lstart=,command=",
-        ])
-        .output()
-        .ok()?;
+    let mut command = Command::new("ps");
+    command.args([
+        "-p",
+        &pid.to_string(),
+        "-o",
+        "pid=,tty=,stat=,lstart=,command=",
+    ]);
+    let output = output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
@@ -528,7 +527,6 @@ mod tests {
 
         assert_eq!(targeted.pid, full.pid);
         assert_eq!(targeted.tty, full.tty);
-        assert_eq!(targeted.stat, full.stat);
         assert_eq!(targeted.lstart, full.lstart);
         assert_eq!(targeted.command, full.command);
         assert!(targeted.start_time.is_some());

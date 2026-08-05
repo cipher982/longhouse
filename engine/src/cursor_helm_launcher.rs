@@ -75,14 +75,10 @@ fn write_json(path: &Path, value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 fn process_start_time(pid: libc::pid_t) -> Option<String> {
-    std::process::Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
-        .output()
+    u32::try_from(pid)
         .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+        .and_then(crate::process_identity::try_collect_process_fact)
+        .map(|fact| fact.lstart)
 }
 fn phase(dir: &Path, session_id: &str, conversation: &str, launch_id: &str) -> Option<Value> {
     let value: Value =
