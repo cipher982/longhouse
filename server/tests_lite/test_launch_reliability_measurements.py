@@ -184,10 +184,20 @@ def _matrix(
         startup_failures.append({"provider": "claude", "qualification": "provider_owned_start_failure"})
     payload = {
         "artifact_kind": "installed_managed_launch_fault_matrix",
+        "schema_version": 1,
         "generated_at": "2026-08-04T16:00:00Z",
         "verdict": verdict,
         "providers": providers,
         "provider_auth": auth,
+        "provider_binaries": {
+            provider: {
+                "path": f"/usr/local/bin/{provider}",
+                "sha256": "c" * 64,
+                "returncode": 0,
+                "version_line": f"{provider} test-version",
+            }
+            for provider in ("claude", "codex", "opencode", "cursor")
+        },
         "provider_startup_failures": startup_failures,
         "retry_intents_before_recovery": 8,
         "retry_intents_after_recovery": retry_after,
@@ -472,11 +482,12 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
             "error": "provider harness contains a blocked, failed, or unknown result status",
         }
     ]
-    assert report["provider_scenarios"]["result_status_counts"]["blocked"] == 1
-    assert report["provider_scenarios"]["result_status_counts"]["pass"] == len(payload["results"]) - 1
-    assert report["provider_scenarios"]["operation_status_counts"] == {"blocked": 1, "pass": 1}
-    assert report["provider_scenarios"]["blocked_operations"][0]["operation"] == "live_answer_delivery"
-    assert report["provider_scenarios"]["evidence_level_counts"] == {"hermetic": 1, "live_token_required": 1}
+    assert report["provider_scenarios"] == {
+        "result_status_counts": {},
+        "operation_status_counts": {},
+        "blocked_operations": [],
+        "evidence_level_counts": {},
+    }
 
 
 def test_dirty_provider_harness_is_invalid(tmp_path: Path):
@@ -567,6 +578,41 @@ def test_changed_implementation_hash_is_not_measured(tmp_path: Path):
 
     assert report["matrix"]["measured_clean_run_count"] == 0
     assert report["matrix"]["excluded_full_runs"][0]["reason"] == ("unbound_or_dirty_implementation_binary")
+
+
+def test_missing_provider_binary_evidence_is_not_measured(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["provider_binaries"].pop("cursor")
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [
+        {
+            "path": str(matrix),
+            "reason": "missing_or_unverified_provider_binary_evidence",
+        }
+    ]
+
+
+def test_stale_matrix_is_not_measured(tmp_path: Path):
+    matrix = tmp_path / "matrix.json"
+    _matrix(path=matrix, auth_gap=False)
+    payload = json.loads(matrix.read_text())
+    payload["generated_at"] = "2020-01-01T00:00:00Z"
+    matrix.write_text(json.dumps(payload))
+
+    report = MODULE.build_report([matrix])
+
+    assert report["matrix"]["measured_clean_run_count"] == 0
+    assert report["matrix"]["excluded_full_runs"] == [{"path": str(matrix), "reason": "stale_matrix_artifact"}]
+
+
+def test_matrix_provider_set_is_derived_from_managed_contract():
+    assert MODULE.EXPECTED_PROVIDERS == frozenset(MODULE.factory_provider_names())
 
 
 def test_dirty_health_harness_is_invalid(tmp_path: Path):
@@ -1234,7 +1280,9 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
             "harness_file_dirty": False,
             "sha256": "b" * 64,
         },
+        "matrix": {"successful_recovery_count": 1},
         "matrix_source_shas": ["a" * 40],
+        "matrix_generated_at": ["2026-08-05T03:00:00Z"],
         "matrix_implementations": [
             {
                 "source_git_sha": "a" * 40,
@@ -1243,6 +1291,15 @@ def _minimal_attestation_subject(attestation) -> dict[str, object]:
                 "engine_sha256": "2" * 64,
                 "binary_dirty": False,
                 "engine_dirty": False,
+                "provider_binaries": {
+                    provider: {
+                        "path": f"/usr/local/bin/{provider}",
+                        "sha256": "3" * 64,
+                        "returncode": 0,
+                        "version_line": f"{provider} test-version",
+                    }
+                    for provider in ("claude", "codex", "opencode", "cursor")
+                },
             }
         ],
         "inputs": {
@@ -1438,6 +1495,62 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
     assert qualified["qualification"]["dogfood_attestation"] == "external_receipt"
     assert qualified["inputs"]["dogfood_attestation_receipts"][0]["sha256"]
     assert attestation.TRUSTED_KEYS_PATH == keyring
+
+
+def test_attestation_rejects_report_without_successful_recovery(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    series = tmp_path / "dogfood.json"
+    _dogfood_series(series)
+    episode_paths, challenge_paths = _split_dogfood_series(series)
+    matrix_path = tmp_path / "matrix.json"
+    _matrix(path=matrix_path, auth_gap=False, retry_after=8)
+    harness_path = tmp_path / "provider-harness.json"
+    harness_path.write_text(json.dumps(_provider_harness_artifact()))
+    health_path = tmp_path / "health.json"
+    health_path.write_text(json.dumps(_health_artifact([])))
+
+    report = MODULE.build_report(
+        [matrix_path],
+        [harness_path],
+        [health_path],
+        dogfood_paths=episode_paths,
+        dogfood_challenge_paths=challenge_paths,
+    )
+
+    with pytest.raises(ValueError, match="no successful recovery evidence"):
+        attestation.build_subject(report)
+
+
+def test_attestation_manifest_binds_all_report_inputs(tmp_path: Path):
+    attestation = MODULE._attestation_module()
+    report = {
+        "inputs": {
+            name: [{"sha256": value * 64}]
+            for name, value in (
+                ("matrix_artifacts", "a"),
+                ("provider_harness_artifacts", "b"),
+                ("health_artifacts", "c"),
+                ("dogfood_series_artifacts", "d"),
+            )
+        }
+    }
+    manifest = tmp_path / "manifest"
+    manifest.write_text(
+        "".join(
+            f"{value * 64}  {name}.json\n"
+            for name, value in (
+                ("matrix", "a"),
+                ("harness", "b"),
+                ("health", "c"),
+                ("dogfood", "d"),
+            )
+        )
+    )
+
+    attestation._validate_evidence_manifest(report, manifest)
+    manifest.write_text(manifest.read_text().replace("c" * 64, "e" * 64))
+    with pytest.raises(ValueError, match="not present in the retained evidence manifest"):
+        attestation._validate_evidence_manifest(report, manifest)
 
 
 def test_malformed_dogfood_series_fails_closed(tmp_path: Path):

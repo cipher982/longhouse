@@ -35,7 +35,9 @@ from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
 from zerg.services.managed_provider_contracts import factory_provider_names
 
 MATRIX_FILENAME = "installed-managed-launch-fault-matrix.json"
-EXPECTED_PROVIDERS = frozenset({"claude", "codex", "cursor", "opencode"})
+EXPECTED_PROVIDERS = frozenset(factory_provider_names())
+MATRIX_SCHEMA_VERSION = 1
+MAX_MATRIX_ARTIFACT_AGE_SECONDS = 86400.0
 DOGFOOD_ARTIFACT_KIND = "launch_reliability_dogfood_series"
 DOGFOOD_SCHEMA_VERSION = 1
 DOGFOOD_GENERATOR_RELATIVE = Path("scripts/qa/launch_reliability_dogfood.py")
@@ -387,6 +389,7 @@ def _is_full_run(artifact: dict[str, Any]) -> bool:
         len(artifact.get("providers") or []) == 8
         and provider_counts == {provider: 2 for provider in EXPECTED_PROVIDERS}
         and artifact.get("artifact_kind") == "installed_managed_launch_fault_matrix"
+        and artifact.get("schema_version") == MATRIX_SCHEMA_VERSION
     )
 
 
@@ -489,8 +492,53 @@ def _implementation_exclusion_reason(
     return None
 
 
+def _provider_binary_exclusion_reason(artifact: dict[str, Any]) -> str | None:
+    evidence = artifact.get("provider_binaries")
+    if not isinstance(evidence, dict) or set(evidence) != EXPECTED_PROVIDERS:
+        return "missing_or_unverified_provider_binary_evidence"
+    for provider in sorted(EXPECTED_PROVIDERS):
+        value = evidence.get(provider)
+        if not isinstance(value, dict):
+            return "missing_or_unverified_provider_binary_evidence"
+        path = value.get("path")
+        sha256 = value.get("sha256")
+        version_line = value.get("version_line")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or value.get("returncode") != 0
+            or not isinstance(version_line, str)
+            or not version_line.strip()
+        ):
+            return "missing_or_unverified_provider_binary_evidence"
+    return None
+
+
+def _matrix_freshness_exclusion_reason(
+    artifact: dict[str, Any], *, as_of: datetime | None
+) -> str | None:
+    if as_of is None:
+        return None
+    try:
+        generated_at = _timestamp(
+            artifact.get("generated_at"), label="matrix.generated_at"
+        )
+    except ValueError:
+        return "missing_or_invalid_matrix_generated_at"
+    if generated_at > as_of:
+        return "matrix_generated_after_report"
+    if (as_of - generated_at).total_seconds() > MAX_MATRIX_ARTIFACT_AGE_SECONDS:
+        return "stale_matrix_artifact"
+    return None
+
+
 def _measured_run(
-    artifact: dict[str, Any], *, report_source_sha: str | None = None
+    artifact: dict[str, Any],
+    *,
+    report_source_sha: str | None = None,
+    as_of: datetime | None = None,
 ) -> bool:
     measurements = artifact.get("measurements") or {}
     return bool(
@@ -500,18 +548,26 @@ def _measured_run(
         and measurements.get("run_duration_seconds") is not None
         and artifact.get("harness", {}).get("repository_dirty") is False
         and artifact.get("harness", {}).get("harness_file_dirty") is False
+        and _matrix_freshness_exclusion_reason(artifact, as_of=as_of) is None
         and _implementation_exclusion_reason(
             artifact, report_source_sha=report_source_sha
         )
         is None
+        and _provider_binary_exclusion_reason(artifact) is None
     )
 
 
 def _excluded_run_reason(
-    artifact: dict[str, Any], *, report_source_sha: str | None = None
+    artifact: dict[str, Any],
+    *,
+    report_source_sha: str | None = None,
+    as_of: datetime | None = None,
 ) -> str | None:
     if not _is_full_run(artifact):
         return "not_exact_four_provider_eight_launch_run"
+    freshness_reason = _matrix_freshness_exclusion_reason(artifact, as_of=as_of)
+    if freshness_reason is not None:
+        return freshness_reason
     measurements = artifact.get("measurements") or {}
     harness = artifact.get("harness") or {}
     if (
@@ -534,6 +590,9 @@ def _excluded_run_reason(
     )
     if implementation_reason is not None:
         return implementation_reason
+    provider_binary_reason = _provider_binary_exclusion_reason(artifact)
+    if provider_binary_reason is not None:
+        return provider_binary_reason
     return None
 
 
@@ -541,12 +600,21 @@ def _input_reference(path: Path) -> dict[str, str]:
     return {"path": str(path), "sha256": _sha256(path)}
 
 
-def _successful_recovery(artifact: dict[str, Any]) -> bool:
+def _successful_recovery(
+    artifact: dict[str, Any],
+    *,
+    report_source_sha: str | None = None,
+    as_of: datetime | None = None,
+) -> bool:
     before = artifact.get("retry_intents_before_recovery")
     after = artifact.get("retry_intents_after_recovery")
     cleanup = _cleanup_statuses(artifact)
     return bool(
-        _measured_run(artifact)
+        _measured_run(
+            artifact,
+            report_source_sha=report_source_sha,
+            as_of=as_of,
+        )
         and isinstance(before, int)
         and isinstance(after, int)
         and before > 0
@@ -1754,14 +1822,20 @@ def build_report(
     measured = [
         (path, artifact)
         for path, artifact in full
-        if _measured_run(artifact, report_source_sha=report_source_sha)
+        if _measured_run(
+            artifact,
+            report_source_sha=report_source_sha,
+            as_of=report_generated_at,
+        )
     ]
     excluded = [
         {"path": str(path), "reason": reason}
         for path, artifact in full
         if (
             reason := _excluded_run_reason(
-                artifact, report_source_sha=report_source_sha
+                artifact,
+                report_source_sha=report_source_sha,
+                as_of=report_generated_at,
             )
         )
         is not None
@@ -1769,7 +1843,11 @@ def build_report(
     successful = [
         (path, artifact)
         for path, artifact in measured
-        if _successful_recovery(artifact)
+        if _successful_recovery(
+            artifact,
+            report_source_sha=report_source_sha,
+            as_of=report_generated_at,
+        )
     ]
     cleanup_statuses = [
         status for _, artifact in measured for status in _cleanup_statuses(artifact)
@@ -1844,6 +1922,7 @@ def build_report(
                 "implementation_engine_dirty": (
                     (artifact.get("implementation") or {}).get("longhouse_engine") or {}
                 ).get("source_dirty"),
+                "provider_binaries": artifact.get("provider_binaries"),
             }
         )
 
@@ -1919,6 +1998,7 @@ def build_report(
             _validate_provider_harness_qualification(artifact)
         except ValueError as exc:
             invalid.append({"path": str(path), "error": str(exc)})
+            continue
         harness_inputs.append(str(path))
         for result in artifact.get("results") or []:
             if not isinstance(result, dict):

@@ -7,7 +7,9 @@ from pathlib import Path
 from types import ModuleType
 
 _CLI_PATH = Path(__file__).with_name("launch-reliability-attestation.py")
-_SPEC = importlib.util.spec_from_file_location("launch_reliability_attestation_cli", _CLI_PATH)
+_SPEC = importlib.util.spec_from_file_location(
+    "launch_reliability_attestation_cli", _CLI_PATH
+)
 if _SPEC is None or _SPEC.loader is None:
     raise ImportError(f"cannot load {_CLI_PATH}")
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -24,6 +26,7 @@ build_subject = _MODULE.build_subject
 create_receipt = _MODULE.create_receipt
 create_receipt_from_report = _MODULE.create_receipt_from_report
 sha256_json = _MODULE.sha256_json
+_validate_evidence_manifest = _MODULE._validate_evidence_manifest
 
 
 def verify_receipt(*args, **kwargs):

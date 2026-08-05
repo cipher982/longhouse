@@ -288,6 +288,7 @@ jobs:
             ${{ runner.temp }}/launch-reliability-measurements.json
             ${{ runner.temp }}/launch-reliability-attestation-subject.json
             ${{ runner.temp }}/report.sha256
+            ${{ runner.temp }}/launch-reliability-evidence.after-report.manifest
 
   sign:
     name: Sign the measured report
@@ -385,6 +386,7 @@ jobs:
           input_root="$RUNNER_TEMP/launch-reliability-measurement"
           report_path="$input_root/launch-reliability-measurements.json"
           measured_subject_path="$input_root/launch-reliability-attestation-subject.json"
+          evidence_manifest_path="$input_root/launch-reliability-evidence.after-report.manifest"
           receipt_path="$RUNNER_TEMP/launch-reliability-attestation.json"
           trusted_subject_path="$RUNNER_TEMP/trusted-launch-reliability-attestation-subject.json"
           test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_SHA" || {
@@ -415,6 +417,7 @@ jobs:
             --subject-output "$trusted_subject_path" \
             --output "$receipt_path" \
             --key-id "$ATTESTATION_KEY_ID" \
+            --evidence-manifest "$evidence_manifest_path" \
             --expected-source-sha "$SOURCE_SHA"
           cmp "$trusted_subject_path" "$measured_subject_path" || {
             echo "Trusted subject derivation differs from measured subject." >&2

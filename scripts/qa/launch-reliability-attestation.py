@@ -14,6 +14,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import secrets
 from datetime import UTC
 from datetime import datetime
@@ -25,6 +26,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from zerg.services.managed_provider_contracts import factory_provider_names
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 REPOSITORY_IDENTITY = "cipher982/longhouse"
@@ -35,6 +37,8 @@ SCHEMA_VERSION = 1
 ISSUER = "longhouse-release-ci"
 ALGORITHM = "ed25519"
 MAX_RECEIPT_LIFETIME = timedelta(days=90)
+MAX_REPORT_AGE = timedelta(days=1)
+EXPECTED_PROVIDER_NAMES = frozenset(factory_provider_names())
 MEASURE_NAMES = (
     "automatic_recovery_time",
     "false_red_rate",
@@ -108,6 +112,13 @@ def _validate_subject(subject: dict[str, Any]) -> None:
         raise ValueError(
             "attestation subject matrix source SHA does not match the report"
         )
+    matrix_generated_at = subject.get("matrix_generated_at")
+    if not isinstance(matrix_generated_at, list) or len(matrix_generated_at) != len(
+        matrix_source_shas
+    ):
+        raise ValueError("attestation subject has incomplete matrix collection times")
+    for value in matrix_generated_at:
+        _timestamp(value, label="subject.matrix_generated_at")
     matrix_implementations = subject.get("matrix_implementations")
     if not isinstance(matrix_implementations, list) or len(
         matrix_implementations
@@ -135,6 +146,38 @@ def _validate_subject(subject: dict[str, Any]) -> None:
                 or any(character not in LOWER_HEX for character in value)
             ):
                 raise ValueError("attestation subject matrix binary hash is invalid")
+        provider_binaries = implementation.get("provider_binaries")
+        if set(provider_binaries) != EXPECTED_PROVIDER_NAMES:
+            raise ValueError("attestation subject has no provider binary provenance")
+        for provider, evidence in provider_binaries.items():
+            if provider not in EXPECTED_PROVIDER_NAMES or not isinstance(
+                evidence, dict
+            ):
+                raise ValueError(
+                    "attestation subject provider binary provenance is malformed"
+                )
+            if (
+                not isinstance(evidence.get("path"), str)
+                or not evidence["path"]
+                or evidence.get("returncode") != 0
+                or not isinstance(evidence.get("version_line"), str)
+                or not evidence["version_line"].strip()
+            ):
+                raise ValueError("attestation subject provider binary probe is invalid")
+            value = evidence.get("sha256")
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in LOWER_HEX for character in value)
+            ):
+                raise ValueError("attestation subject provider binary hash is invalid")
+    matrix_summary = subject.get("matrix")
+    if (
+        not isinstance(matrix_summary, dict)
+        or not isinstance(matrix_summary.get("successful_recovery_count"), int)
+        or matrix_summary["successful_recovery_count"] < 1
+    ):
+        raise ValueError("attestation subject has no successful recovery evidence")
     dogfood = subject.get("dogfood_series")
     if not isinstance(dogfood, dict) or dogfood.get("input_status") != "valid":
         raise ValueError("attestation subject dogfood input is not valid")
@@ -211,7 +254,22 @@ def build_subject(
     matrix_history = matrix.get("history") if isinstance(matrix, dict) else None
     if not isinstance(matrix_history, list) or not matrix_history:
         raise ValueError("report has no measured matrix source provenance")
+    if (
+        not isinstance(matrix, dict)
+        or not isinstance(matrix.get("successful_recovery_count"), int)
+        or matrix["successful_recovery_count"] < 1
+    ):
+        raise ValueError("report has no successful recovery evidence")
+    report_generated_at = _timestamp(
+        report.get("generated_at"), label="report.generated_at"
+    )
+    now = datetime.now(UTC)
+    if report_generated_at > now:
+        raise ValueError("report.generated_at is after subject generation time")
+    if now - report_generated_at > MAX_REPORT_AGE:
+        raise ValueError("report.generated_at is too old for qualification")
     matrix_source_shas = []
+    matrix_generated_at = []
     matrix_implementations = []
     for history in matrix_history:
         if not isinstance(history, dict):
@@ -219,6 +277,13 @@ def build_subject(
         source_sha = history.get("implementation_source_git_sha")
         if source_sha != required_provenance["git_sha"]:
             raise ValueError("matrix artifact source SHA does not match the report")
+        matrix_time = _timestamp(
+            history.get("generated_at"), label="matrix.generated_at"
+        )
+        if matrix_time > report_generated_at:
+            raise ValueError("matrix.generated_at is after report generation time")
+        if report_generated_at - matrix_time > MAX_REPORT_AGE:
+            raise ValueError("matrix.generated_at is too old for qualification")
         engine_source_sha = history.get("implementation_engine_source_git_sha")
         if engine_source_sha != required_provenance["git_sha"]:
             raise ValueError("matrix engine source SHA does not match the report")
@@ -239,6 +304,13 @@ def build_subject(
         ):
             raise ValueError("matrix implementation binary hashes are invalid")
         matrix_source_shas.append(source_sha)
+        matrix_generated_at.append(history["generated_at"])
+        provider_binaries = history.get("provider_binaries")
+        if (
+            not isinstance(provider_binaries, dict)
+            or set(provider_binaries) != EXPECTED_PROVIDER_NAMES
+        ):
+            raise ValueError("matrix provider binary provenance is missing")
         matrix_implementations.append(
             {
                 "source_git_sha": source_sha,
@@ -247,6 +319,7 @@ def build_subject(
                 "engine_sha256": engine_sha,
                 "binary_dirty": history.get("implementation_binary_dirty"),
                 "engine_dirty": history.get("implementation_engine_dirty"),
+                "provider_binaries": provider_binaries,
             }
         )
     subjects = dogfood.get("attestation_subjects")
@@ -294,6 +367,10 @@ def build_subject(
         "artifact_kind": "launch_reliability_measurements",
         "report_schema_version": report.get("schema_version"),
         "report_provenance": required_provenance,
+        "matrix": {
+            "successful_recovery_count": matrix["successful_recovery_count"],
+        },
+        "matrix_generated_at": matrix_generated_at,
         "matrix_source_shas": matrix_source_shas,
         "matrix_implementations": matrix_implementations,
         "inputs": input_hashes,
@@ -329,6 +406,39 @@ def _read_object(path: Path, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
     return value
+
+
+def _validate_evidence_manifest(report: dict[str, Any], manifest_path: Path) -> None:
+    """Bind every report input hash to the retained evidence snapshot."""
+
+    try:
+        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError("could not read retained evidence manifest") from exc
+    manifest_hashes: set[str] = set()
+    for line in lines:
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if match is None:
+            raise ValueError("retained evidence manifest contains an invalid line")
+        manifest_hashes.add(match.group(1))
+    inputs = report.get("inputs")
+    if not isinstance(inputs, dict):
+        raise ValueError("report has no evidence inputs for manifest verification")
+    for name in (
+        "matrix_artifacts",
+        "provider_harness_artifacts",
+        "health_artifacts",
+        "dogfood_series_artifacts",
+    ):
+        references = inputs.get(name)
+        if not isinstance(references, list) or any(
+            not isinstance(reference, dict)
+            or reference.get("sha256") not in manifest_hashes
+            for reference in references
+        ):
+            raise ValueError(
+                f"report input hashes are not present in the retained evidence manifest: {name}"
+            )
 
 
 def _trusted_public_key(
@@ -372,9 +482,17 @@ def create_receipt(
     key_id: str,
     now: datetime | None = None,
     keys_path: Path | None = None,
+    expected_source_sha: str | None = None,
 ) -> dict[str, Any]:
     subject = _read_object(subject_path, label="attestation subject")
     _validate_subject(subject)
+    if (
+        expected_source_sha is not None
+        and subject["report_provenance"].get("git_sha") != expected_source_sha
+    ):
+        raise ValueError(
+            "attestation subject source SHA does not match the expected source SHA"
+        )
     try:
         key = serialization.load_pem_private_key(
             private_key_path.read_bytes(), password=None
@@ -430,10 +548,13 @@ def create_receipt_from_report(
     keys_path: Path | None = None,
     now: datetime | None = None,
     expected_source_sha: str | None = None,
+    evidence_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     """Derive and sign a report subject in one release-owned operation."""
 
     report = _read_object(report_path, label="launch reliability report")
+    if evidence_manifest_path is not None:
+        _validate_evidence_manifest(report, evidence_manifest_path)
     subject = build_subject(report, expected_source_sha=expected_source_sha)
     subject_output_path.parent.mkdir(parents=True, exist_ok=True)
     subject_output_path.write_text(
@@ -446,6 +567,7 @@ def create_receipt_from_report(
         key_id=key_id,
         keys_path=keys_path,
         now=now,
+        expected_source_sha=expected_source_sha,
     )
 
 
@@ -521,6 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--output", type=Path, required=True)
     create.add_argument("--key-id", required=True)
     create.add_argument("--keys", type=Path, default=TRUSTED_KEYS_PATH)
+    create.add_argument("--expected-source-sha", required=True)
     create_from_report = subparsers.add_parser(
         "create-from-report",
         help="derive a qualifying subject from a report and sign it",
@@ -532,6 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_from_report.add_argument("--key-id", required=True)
     create_from_report.add_argument("--keys", type=Path, default=TRUSTED_KEYS_PATH)
     create_from_report.add_argument("--expected-source-sha")
+    create_from_report.add_argument("--evidence-manifest", type=Path)
     verify = subparsers.add_parser("verify")
     verify.add_argument("--receipt", type=Path, required=True)
     verify.add_argument("--subject", type=Path, required=True)
@@ -549,6 +673,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.output,
                 key_id=args.key_id,
                 keys_path=args.keys,
+                expected_source_sha=args.expected_source_sha,
+                evidence_manifest_path=args.evidence_manifest,
             )
             print(args.output)
         elif args.command == "create-from-report":
