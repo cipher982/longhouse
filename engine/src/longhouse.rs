@@ -1128,7 +1128,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         "Claude",
         "--claude-bin",
     )?;
-    ensure_claude_channel_prerequisite(&binary)?;
+    ensure_claude_channel_prerequisite(&binary, args.claude_dir.as_deref())?;
     let (launch_actor, launch_surface) =
         managed_launch_payload::interactive_human_shell_provenance();
     let runtime = tokio::runtime::Runtime::new()?;
@@ -1356,6 +1356,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 "0"
             },
         );
+    if let Some(claude_dir) = args.claude_dir.as_ref() {
+        command.env("CLAUDE_CONFIG_DIR", claude_dir);
+    }
     let contract_path = claude_contract_path(&session_id)?;
     let retained_contract_existed = contract_path.is_file();
     if let Err(error) = record_claude_contract(
@@ -2070,9 +2073,15 @@ fn resolve_provider_binary(
     )
 }
 
-fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
+fn ensure_claude_channel_prerequisite(
+    binary: &str,
+    claude_dir: Option<&Path>,
+) -> anyhow::Result<()> {
     let mut command = Command::new(binary);
     command.args(["auth", "status", "--json"]);
+    if let Some(claude_dir) = claude_dir {
+        command.env("CLAUDE_CONFIG_DIR", claude_dir);
+    }
     let output =
         crate::process_identity::output_with_timeout(command, MANAGED_PROVIDER_COMMAND_TIMEOUT)
             .with_context(|| format!("run {binary} auth status timed out"))?;
@@ -4615,6 +4624,34 @@ mod tests {
             .to_string()
             .contains("claude-lifecycle-hook"));
         assert!(!temp.path().join(".claude.json").exists());
+    }
+
+    #[test]
+    fn claude_auth_probe_uses_explicit_config_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let binary = temp.path().join("claude-probe");
+        let observed = temp.path().join("observed-config-dir");
+        let claude_dir = temp.path().join("isolated-claude");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$CLAUDE_CONFIG_DIR\" > '{}'\nprintf '{{\\\"loggedIn\\\":true}}\\n'\n",
+                observed.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        ensure_claude_channel_prerequisite(binary.to_str().unwrap(), Some(&claude_dir)).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(observed).unwrap(),
+            claude_dir.display().to_string()
+        );
     }
 
     #[test]
