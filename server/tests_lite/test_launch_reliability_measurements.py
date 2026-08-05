@@ -32,6 +32,23 @@ REPO_ROOT = SCRIPT.parents[2]
 DOGFOOD_GENERATOR = REPO_ROOT / "scripts" / "qa" / "launch_reliability_dogfood.py"
 
 
+def _current_repo_sha() -> str:
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _harness_provenance() -> dict[str, object]:
+    return {
+        "repository_git_sha": _current_repo_sha(),
+        "repository_dirty": False,
+        "harness_file_dirty": False,
+    }
+
+
 def _dogfood_provenance() -> dict[str, object]:
     git_sha = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
@@ -292,7 +309,11 @@ def _health_artifact(results: list[dict[str, object]]) -> dict[str, object]:
         "schema_version": 1,
         "generated_at": "2026-08-04T13:00:30Z",
         "verdict": "green",
-        "implementation": {"sha256": ("abcdef" * 10) + "abcd", "returncode": 0},
+        "implementation": {
+            "sha256": ("abcdef" * 10) + "abcd",
+            "returncode": 0,
+            "source_git_sha": _current_repo_sha(),
+        },
         "scenarios": list(HEALTH_CASES),
         "results": normalized_results,
     }
@@ -359,6 +380,7 @@ def test_report_marks_live_provider_delivery_separately(tmp_path: Path):
     harness.write_text(
         json.dumps(
             {
+                "harness": _harness_provenance(),
                 "results": [
                     {
                         "status": "blocked",
@@ -393,6 +415,7 @@ def test_repeated_provider_harness_artifact_is_counted_once(tmp_path: Path):
     harness.write_text(
         json.dumps(
             {
+                "harness": _harness_provenance(),
                 "results": [
                     {
                         "status": "pass",
@@ -1181,7 +1204,7 @@ def test_external_release_receipt_promotes_qualified_report(tmp_path: Path, monk
     matrix_path = tmp_path / "matrix.json"
     _matrix(path=matrix_path, auth_gap=False)
     harness_path = tmp_path / "provider-harness.json"
-    harness_path.write_text(json.dumps({"results": []}))
+    harness_path.write_text(json.dumps({"harness": _harness_provenance(), "results": []}))
     health_path = tmp_path / "health.json"
     health_path.write_text(json.dumps(_health_artifact([])))
 

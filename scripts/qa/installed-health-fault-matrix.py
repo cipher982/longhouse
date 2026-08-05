@@ -77,17 +77,26 @@ def resolve_binary(raw: str | None) -> Path:
 
 def version_probe(binary: Path) -> dict[str, Any]:
     result = subprocess.run(
-        [str(binary), "build-identity"],
+        [str(binary), "build-identity", "--json"],
         capture_output=True,
         text=True,
         timeout=15,
         check=False,
     )
+    identity: dict[str, Any] = {}
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        identity = parsed
     return {
         "path": str(binary),
         "sha256": sha256_file(binary),
         "returncode": result.returncode,
         "output": (result.stdout or result.stderr or "").strip(),
+        "source_git_sha": identity.get("commit"),
+        "build_dirty": identity.get("dirty"),
     }
 
 

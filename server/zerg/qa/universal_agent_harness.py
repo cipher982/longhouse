@@ -7043,6 +7043,7 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": ARTIFACT_KIND,
         "generated_at": utc_now(),
+        "harness": harness_provenance(),
         "providers": list(options.providers),
         "scenarios": list(options.scenarios),
         "evidence_root": str(options.evidence_root),
@@ -7130,6 +7131,46 @@ def build_parser() -> argparse.ArgumentParser:
 def default_evidence_root() -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return default_repo_root() / ".build/canaries/universal-agent-harness" / timestamp
+
+
+def harness_provenance() -> dict[str, Any]:
+    """Bind the harness artifact to the exact source checkout that ran it."""
+
+    path = Path(__file__).resolve()
+    repository = default_repo_root().resolve()
+
+    def run_git(*args: str) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(repository), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    revision = run_git("rev-parse", "HEAD")
+    status = run_git("status", "--porcelain", "--untracked-files=all")
+    file_status = run_git(
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        str(path.relative_to(repository)),
+    )
+    repository_git_sha = revision.stdout.strip() if revision and revision.returncode == 0 else None
+    repository_dirty = bool(status.stdout.strip()) if status and status.returncode == 0 else None
+    return {
+        "path": str(path),
+        "repository": str(repository),
+        "git_sha": repository_git_sha,
+        "repository_git_sha": repository_git_sha,
+        "repository_dirty": repository_dirty,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "dirty": repository_dirty,
+        "harness_file_dirty": bool(file_status.stdout.strip()) if file_status and file_status.returncode == 0 else None,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

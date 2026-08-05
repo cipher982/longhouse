@@ -21,7 +21,7 @@ jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
     runs-on: ubuntu-latest
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && (github.event_name == 'schedule' || github.ref == 'refs/heads/main')
     timeout-minutes: 25
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
@@ -34,11 +34,34 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       CARGO_HOME: /home/runner/.cargo
       RUSTUP_HOME: /home/runner/.rustup
+      SOURCE_SHA_INPUT: ${{ github.event.inputs.source_sha || github.sha }}
 
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate and select source commit
+        id: source_sha
+        run: |
+          source_sha="$SOURCE_SHA_INPUT"
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          git cat-file -e "$source_sha^{commit}"
+          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+            echo "source_sha is not an ancestor of origin/main" >&2
+            exit 1
+          fi
+          if ! git rev-list --first-parent origin/main | grep -Fx -- "$source_sha" >/dev/null; then
+            echo "source_sha is not on the first-parent history of origin/main" >&2
+            exit 1
+          fi
+          git checkout --detach "$source_sha"
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
 
       - name: Restore Bun download cache
         uses: actions/cache@v4
@@ -154,7 +177,7 @@ jobs:
             echo "- Instance: \`$QA_INSTANCE_SUBDOMAIN\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Source SHA: \`${{ github.event.inputs.source_sha || github.sha }}\`"
+            echo "- Source SHA: \`${{ steps.source_sha.outputs.sha }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"

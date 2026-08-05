@@ -1223,6 +1223,7 @@ def _health_measurements(
     invalid: list[dict[str, str]],
     *,
     as_of: datetime,
+    report_source_sha: str,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     references: list[dict[str, str]] = []
     seen_paths: set[Path] = set()
@@ -1271,6 +1272,10 @@ def _health_measurements(
             implementation = artifact.get("implementation")
             if not isinstance(implementation, dict):
                 raise ValueError("health implementation provenance must be an object")
+            if implementation.get("source_git_sha") != report_source_sha:
+                raise ValueError(
+                    "health implementation.source_git_sha does not match the report source revision"
+                )
             implementation_sha = implementation.get("sha256")
             if (
                 not isinstance(implementation_sha, str)
@@ -1523,6 +1528,9 @@ def build_report(
     dogfood_attestation_paths = list(dogfood_attestation_paths)
     matrix_artifacts: list[tuple[Path, dict[str, Any]]] = []
     invalid: list[dict[str, str]] = []
+    report_generated_at = datetime.now(UTC)
+    report_provenance_value = report_provenance()
+    report_source_sha = report_provenance_value["git_sha"]
     seen_matrix_paths: set[Path] = set()
     seen_matrix_hashes: set[str] = set()
     for path in matrix_paths:
@@ -1645,6 +1653,23 @@ def build_report(
                 }
             )
             continue
+        harness = artifact.get("harness")
+        if not isinstance(harness, dict):
+            invalid.append(
+                {
+                    "path": str(path),
+                    "error": "provider harness artifact has no harness provenance object",
+                }
+            )
+            continue
+        if harness.get("repository_git_sha") != report_source_sha:
+            invalid.append(
+                {
+                    "path": str(path),
+                    "error": "provider harness repository_git_sha does not match the report source revision",
+                }
+            )
+            continue
         harness_inputs.append(str(path))
         for result in artifact.get("results") or []:
             if not isinstance(result, dict):
@@ -1672,13 +1697,12 @@ def build_report(
                     level = str(evidence.get("level") or "unknown")
                     harness_levels[level] += 1
 
-    report_generated_at = datetime.now(UTC)
-    report_provenance_value = report_provenance()
     invalid_before_health = len(invalid)
     health_inputs, health_summary = _health_measurements(
         health_paths,
         invalid,
         as_of=report_generated_at,
+        report_source_sha=report_source_sha,
     )
     if len(invalid) > invalid_before_health:
         _invalidate_health_summary(health_summary)

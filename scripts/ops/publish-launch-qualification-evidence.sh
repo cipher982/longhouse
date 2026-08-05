@@ -61,21 +61,25 @@ done < <(find -P "$INPUT_ROOT/matrix" "$INPUT_ROOT/native-health" \
 target="$REMOTE_ROOT/$SOURCE_SHA"
 lock="$REMOTE_ROOT/.publish.$SOURCE_SHA.lock"
 staging=""
+lock_owned=false
 
 cleanup() {
     if [[ -n "$staging" ]]; then
         ssh "$REMOTE_HOST" "sudo rm -rf -- '$staging'" || true
     fi
-    ssh "$REMOTE_HOST" "sudo rmdir -- '$lock'" || true
+    if [[ "$lock_owned" == true ]]; then
+        ssh "$REMOTE_HOST" "sudo rmdir -- '$lock'" || true
+    fi
 }
 trap cleanup EXIT
 
-staging="$(ssh "$REMOTE_HOST" "
+ssh "$REMOTE_HOST" "
     set -eu
     sudo install -d -o root -g root -m 0755 '$REMOTE_ROOT'
     sudo mkdir '$lock'
-    sudo mktemp -d '$REMOTE_ROOT/.incoming.$SOURCE_SHA.XXXXXX'
-")"
+"
+lock_owned=true
+staging="$(ssh "$REMOTE_HOST" "sudo mktemp -d '$REMOTE_ROOT/.incoming.$SOURCE_SHA.XXXXXX'")"
 
 if ! tar -C "$INPUT_ROOT" -cf - matrix native-health provider-harness \
     dogfood/episodes dogfood/challenges \
@@ -97,6 +101,7 @@ ssh "$REMOTE_HOST" "
     sudo mv -- '$staging' '$target'
 "
 ssh "$REMOTE_HOST" "sudo rmdir -- '$lock'"
+lock_owned=false
 staging=""
 trap - EXIT
 
