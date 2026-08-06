@@ -881,7 +881,36 @@ async fn shutdown_process_group(pgid: i32) {
     let _ = pgid;
 }
 
+/// How long shutdown may wait for console workers to settle.
+///
+/// Shutdown has to terminate. A worker whose unregister never runs — an
+/// aborted task, a process reaped out from under the pool — would otherwise
+/// hold the daemon open forever, and the daemon awaits this before returning
+/// from its SIGTERM path.
+const CONSOLE_SHUTDOWN_BUDGET: Duration = Duration::from_secs(5);
+
+/// Wait for a pool notification that was armed while the pool lock was held.
+///
+/// `notify_waiters` stores no permit, and a `Notified` future does not register
+/// interest until it is first polled. Building the future under the lock and
+/// awaiting it after the lock is released therefore loses every wakeup that
+/// lands in between — which is exactly when the notifiers fire, because both
+/// update the pool, release the lock, and only then notify. The caller arms the
+/// future under the lock so this can only wait for a notification still to come.
+async fn await_pool_settle(
+    wait: std::pin::Pin<Box<tokio::sync::futures::OwnedNotified>>,
+    deadline: tokio::time::Instant,
+    stage: &str,
+) -> bool {
+    if tokio::time::timeout_at(deadline, wait).await.is_err() {
+        eprintln!("[codex-exec] shutdown proceeding while {stage} is still outstanding");
+        return false;
+    }
+    true
+}
+
 pub async fn shutdown_codex_console_worker_pool() {
+    let deadline = tokio::time::Instant::now() + CONSOLE_SHUTDOWN_BUDGET;
     loop {
         let wait = {
             let mut pool = console_worker_pool().lock().await;
@@ -889,11 +918,15 @@ pub async fn shutdown_codex_console_worker_pool() {
             if pool.spawning == 0 {
                 None
             } else {
-                Some(pool.spawn_finished.clone().notified_owned())
+                let mut wait = Box::pin(pool.spawn_finished.clone().notified_owned());
+                wait.as_mut().enable();
+                Some(wait)
             }
         };
         let Some(wait) = wait else { break };
-        wait.await;
+        if !await_pool_settle(wait, deadline, "a warm-worker spawn").await {
+            break;
+        }
     }
     let (workers, active_process_groups) = {
         let mut pool = console_worker_pool().lock().await;
@@ -922,11 +955,15 @@ pub async fn shutdown_codex_console_worker_pool() {
             if pool.active_process_groups.is_empty() {
                 None
             } else {
-                Some(pool.active_finished.clone().notified_owned())
+                let mut wait = Box::pin(pool.active_finished.clone().notified_owned());
+                wait.as_mut().enable();
+                Some(wait)
             }
         };
         let Some(wait) = wait else { break };
-        wait.await;
+        if !await_pool_settle(wait, deadline, "an active console worker").await {
+            break;
+        }
     }
 }
 
@@ -1746,6 +1783,30 @@ mod tests {
             machine_name: "cinder".to_string(),
             local_db_path: None,
         }
+    }
+
+    /// The daemon awaits this on its SIGTERM path, so it must return even when
+    /// the pool never reports the outstanding work settled. Before the budget,
+    /// a spawn that never notified left the engine running forever after
+    /// SIGTERM: it broke its main loop, then blocked here and never exited.
+    ///
+    /// Paused time means the budget elapses instantly, so a regression shows up
+    /// as a hung test rather than a slow one.
+    /// Only `spawning` is seeded. An active process group would make shutdown
+    /// signal that group for real, and this pool is a process-wide global.
+    #[tokio::test(start_paused = true)]
+    async fn console_shutdown_returns_when_outstanding_work_never_reports() {
+        {
+            let mut pool = console_worker_pool().lock().await;
+            pool.spawning = 1;
+        }
+
+        shutdown_codex_console_worker_pool().await;
+
+        let mut pool = console_worker_pool().lock().await;
+        assert!(pool.shutting_down, "shutdown must latch the pool closed");
+        pool.spawning = 0;
+        pool.shutting_down = false;
     }
 
     #[test]

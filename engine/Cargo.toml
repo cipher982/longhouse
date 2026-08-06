@@ -92,6 +92,9 @@ fd-lock = "4"
 tempfile = "3"
 pretty_assertions = "1"
 temp-env = "0.3.6"
+# Paused time, so a test that asserts a bounded wait terminates does not have to
+# spend that wait in real seconds.
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 opt-level = 3
