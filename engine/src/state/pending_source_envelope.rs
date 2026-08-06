@@ -45,14 +45,78 @@ pub struct StorageV2OutboxSnapshot {
     pub error: Option<String>,
 }
 
+/// Why a source is blocked.
+///
+/// The column stays TEXT because one of these values does not originate here:
+/// `storage_v2_shipper` blocks with the Runtime Host's own `conflict.code`, so
+/// a host newer than this engine can introduce a kind this binary has never
+/// seen. A closed enum would be a lie about who owns the vocabulary.
+///
+/// [`Unrecognized`] makes that explicit rather than hiding it in a string
+/// comparison, and — because every dispatch is an exhaustive `match` — forces
+/// each call site to state what it does about a code it does not understand.
+/// Adding a variant becomes a compile error at every decision point, which is
+/// the question `no_absorbing_states` asks at test time, asked earlier and
+/// unavoidably.
+///
+/// [`Unrecognized`]: BlockKind::Unrecognized
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockKind {
+    /// A range disagreement `resync_behind_host` can settle against host truth.
+    SourceEpochConflict,
+    /// The Runtime Host has no epoch for this source at all. No local action
+    /// can fix it; re-registering needs remote authority.
+    SourceEpochConflictUnresolved,
+    /// The envelope names a tenant or machine that is not the current one.
+    StorageTargetChanged,
+    /// A code from a Runtime Host this engine does not know about.
+    Unrecognized(String),
+}
+
+impl BlockKind {
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "source_epoch_conflict" => Self::SourceEpochConflict,
+            "source_epoch_conflict_unresolved" => Self::SourceEpochConflictUnresolved,
+            "storage_target_changed" => Self::StorageTargetChanged,
+            other => Self::Unrecognized(other.to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::SourceEpochConflict => "source_epoch_conflict",
+            Self::SourceEpochConflictUnresolved => "source_epoch_conflict_unresolved",
+            Self::StorageTargetChanged => "storage_target_changed",
+            Self::Unrecognized(value) => value,
+        }
+    }
+}
+
 /// Whether a recorded block has a local recovery path that will be retried.
 ///
-/// `source_epoch_conflict` covers the range disagreements `resync_behind_host`
-/// resolves against host truth. `source_epoch_conflict_unresolved` means the
-/// Runtime Host has no epoch at all, which no local action can fix — it needs
-/// remote authority to re-register, so it is honestly "needs you".
+/// Exhaustive on purpose: a new variant must not compile until someone decides
+/// whether local recovery exists for it.
 pub fn block_kind_is_reconciling(block_kind: Option<&str>) -> bool {
-    matches!(block_kind, Some("source_epoch_conflict"))
+    let Some(kind) = block_kind.map(BlockKind::parse) else {
+        // No kind recorded at all. Nothing to dispatch on, so nobody is
+        // working on it.
+        return false;
+    };
+    match kind {
+        // `resync_behind_host` settles these against the host manifest.
+        BlockKind::SourceEpochConflict => true,
+        // Needs the Runtime Host to re-register an epoch; honestly "needs you".
+        BlockKind::SourceEpochConflictUnresolved => false,
+        // The machine or tenant changed underneath this envelope. Recovering
+        // would mean re-deriving identity, which nothing does today.
+        BlockKind::StorageTargetChanged => false,
+        // Fail closed. A code this engine does not recognise may well be
+        // recoverable by a newer engine, but reporting "healing" for something
+        // no code here can act on is exactly the false green the health
+        // contract forbids.
+        BlockKind::Unrecognized(_) => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1107,6 +1171,35 @@ mod tests {
         assert!(!block_kind_is_reconciling(Some("something_new")));
         assert!(!block_kind_is_reconciling(None));
         assert!(block_kind_is_reconciling(Some("source_epoch_conflict")));
+        assert!(!block_kind_is_reconciling(Some(
+            "source_epoch_conflict_unresolved"
+        )));
+    }
+
+    #[test]
+    fn a_host_code_this_engine_does_not_know_round_trips_intact() {
+        // The kind can come from the Runtime Host (storage_v2_shipper blocks
+        // with conflict.code), so a newer host can send something this binary
+        // has never seen. It must survive parse/serialize unchanged, or the
+        // diagnostic that would explain the block is destroyed by the engine
+        // that failed to understand it.
+        let kind = super::BlockKind::parse("some_future_host_code");
+        assert_eq!(
+            kind,
+            super::BlockKind::Unrecognized("some_future_host_code".to_string())
+        );
+        assert_eq!(kind.as_str(), "some_future_host_code");
+    }
+
+    #[test]
+    fn known_block_kinds_round_trip() {
+        for value in [
+            "source_epoch_conflict",
+            "source_epoch_conflict_unresolved",
+            "storage_target_changed",
+        ] {
+            assert_eq!(super::BlockKind::parse(value).as_str(), value);
+        }
     }
 
     #[test]
