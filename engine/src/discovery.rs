@@ -566,7 +566,7 @@ mod tests {
                 .join("agent")
                 .join("cursor-acp-source")
         );
-        assert_eq!(providers[7].root, home.join(".gemini").join("tmp"));
+        assert_eq!(providers[8].root, home.join(".gemini").join("tmp"));
         assert!(providers
             .iter()
             .all(|provider| canonical_provider_name(provider.name) == Some(provider.name)));

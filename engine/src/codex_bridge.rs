@@ -9909,7 +9909,10 @@ mod tests {
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::Subscribed.as_str())
         );
-        assert_eq!(context.state.thread_subscription_attempts, 2);
+        assert_eq!(
+            context.state.thread_subscription_attempts, 0,
+            "adopting the parent starts a fresh subscription-attempt window"
+        );
         assert_eq!(context.state.thread_subscription_last_error, None);
         assert!(context.rejected_thread_ids.contains("thr-child"));
 

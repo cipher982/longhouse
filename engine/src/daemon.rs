@@ -6700,9 +6700,7 @@ mod tests {
             .unwrap();
 
         let limiter = AdaptiveLimiter::new();
-        for _ in 0..4 {
-            limiter.observe(1_000.0);
-        }
+        limiter.observe_backpressure(Some(Duration::from_secs(5)));
         assert!(!limiter.huge_range_eligible());
 
         let mut scheduler = PathScheduler::new(4);
@@ -7066,10 +7064,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_spawn_caffeinate_uses_correct_args() {
+    #[tokio::test]
+    async fn test_spawn_caffeinate_uses_correct_args() {
         let pid = std::process::id();
-        let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
+        let mut child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let id = child.id().expect("child should have a PID");
 
         // caffeinate should be running as our child
@@ -7098,10 +7096,11 @@ mod tests {
             pid,
             cmdline
         );
+        child.kill().await.expect("stop fixture caffeinate");
     }
 
-    #[test]
-    fn test_caffeinate_child_exits_when_dropped() {
+    #[tokio::test]
+    async fn test_caffeinate_child_exits_when_dropped() {
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let caffeinate_pid = child.id().expect("child should have a PID");
@@ -7125,5 +7124,8 @@ mod tests {
             caffeinate_pid,
             pid
         );
+        let _ = std::process::Command::new("kill")
+            .arg(caffeinate_pid.to_string())
+            .status();
     }
 }

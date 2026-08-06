@@ -1045,6 +1045,30 @@ mod tests {
         (format!("http://{}", addr), handle)
     }
 
+    fn spawn_http_response_sequence_server(
+        responses: &[(&str, &str)],
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = responses
+            .iter()
+            .map(|(status, body)| (status.to_string(), body.to_string()))
+            .collect::<Vec<_>>();
+        let handle = std::thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0_u8; 8192];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
     #[test]
     fn test_cmd_ship_file_dry_run_does_not_mutate_state() {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1223,7 +1247,10 @@ mod tests {
             )
             .unwrap();
 
-        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let (url, handle) = spawn_http_response_sequence_server(&[
+            ("404 Not Found", "{}"),
+            ("200 OK", "{}"),
+        ]);
         rt.block_on(cmd_ship_file(
             &file,
             Some("claude"),
@@ -1314,7 +1341,10 @@ mod tests {
         );
         let db_path = dir.path().join("engine.db");
         let file_len = std::fs::metadata(&file).unwrap().len();
-        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let (url, handle) = spawn_http_response_sequence_server(&[
+            ("404 Not Found", "{}"),
+            ("200 OK", "{}"),
+        ]);
 
         rt.block_on(cmd_ship_file(
             &file,

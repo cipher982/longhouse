@@ -344,16 +344,20 @@ mod tests {
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
-        for (epoch, created_at) in [
-            (first, "2026-07-21T00:00:00Z"),
-            (second, "2026-07-21T00:01:00Z"),
+        for (epoch, created_at, ended_at) in [
+            (
+                first,
+                "2026-07-21T00:00:00Z",
+                Some("2026-07-21T00:00:30Z"),
+            ),
+            (second, "2026-07-21T00:01:00Z", None),
         ] {
             conn.execute(
                 "INSERT INTO source_epoch_registry (
                     source_epoch, provider, opaque_source_id, file_incarnation,
-                    start_reason, max_observed_len, created_at, updated_at
-                 ) VALUES (?1, 'cursor', 'shared-source', 'fixture', 'initial', 1, ?2, ?3)",
-                params![epoch.to_string(), created_at, now],
+                    start_reason, max_observed_len, created_at, updated_at, ended_at
+                 ) VALUES (?1, 'cursor', 'shared-source', 'fixture', 'initial', 1, ?2, ?3, ?4)",
+                params![epoch.to_string(), created_at, now, ended_at],
             )
             .unwrap();
             conn.execute(

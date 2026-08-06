@@ -1006,7 +1006,8 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let f = write_hook_style(dir.path(), "SLOW123", "sess-slow", "thinking");
-        let posts = collect_outbox_with_local_state_result(dir.path(), None).posts;
+        let db_path = dir.path().join("state.db");
+        let posts = collect_outbox_with_local_state_result(dir.path(), Some(&db_path)).posts;
 
         let (sent, kept) =
             post_pending_presence_files_with_timeout(&client, posts, Duration::from_millis(50))

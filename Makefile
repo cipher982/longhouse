@@ -261,9 +261,13 @@ test-engine: ## Rust engine tests (~20s)
 	@# the only coordination-token scoping assertion -- had never run in CI. The
 	@# identical iOS scheme drift is documented above; the Rust lane had the same
 	@# hole.
+	@# The main binary's tests mutate process-wide HOME/PATH/config variables in
+	@# several modules. Module-local locks cannot make those mutations safe
+	@# against one another, so run this binary serially instead of accepting a
+	@# timing-dependent CI gate.
 	@engine_test_log="$$(mktemp -t longhouse-engine-tests.XXXXXX)"; \
 	status=0; \
-	(cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine) >"$$engine_test_log" 2>&1 || status=$$?; \
+	(cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- --test-threads=1) >"$$engine_test_log" 2>&1 || status=$$?; \
 	cat "$$engine_test_log"; \
 	if [ "$$status" -ne 0 ]; then rm -f "$$engine_test_log"; exit "$$status"; fi; \
 	if ! grep -q '^test result: ok\.' "$$engine_test_log"; then \
