@@ -141,6 +141,16 @@ _SAFE_RETRY_METHODS = {
 DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS = 1.0
 DEFAULT_CATALOG_RPC_MAX_CONCURRENCY = 8
 
+# Launch lifecycle RPCs do not belong under the hot-read budget. They are
+# human-initiated and low-frequency, and the two costs are wildly asymmetric: a
+# false "unavailable" aborts a launch the user asked for, while waiting longer
+# is invisible inside a launch that already takes seconds. The 1 s bound also
+# cannot cover the first call after a Runtime Host start, which pays cold
+# schema and first-write-transaction costs -- that alone made the first managed
+# launch after every restart fail, and made a committed launch outcome surface
+# to the engine as a 503.
+MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS = 10.0
+
 
 class CatalogUnavailable(RuntimeError):
     pass

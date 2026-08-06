@@ -2591,7 +2591,13 @@ async def record_managed_local_launch_outcome(
         "observed_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        result = await catalogd.call("session.launch.local.finish.v2", {"outcome": outcome})
+        from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
+
+        result = await catalogd.call(
+            "session.launch.local.finish.v2",
+            {"outcome": outcome},
+            timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
+        )
     except CatalogRemoteError as exc:
         if exc.code == "not_found":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Launch was not found") from exc

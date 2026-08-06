@@ -218,6 +218,7 @@ async def _write_hot_managed_local_launch_readiness(
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
     if database_module.live_catalog_enabled():
+        from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
         from zerg.catalogd.client import CatalogRemoteError
         from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -269,9 +270,14 @@ async def _write_hot_managed_local_launch_readiness(
                             "expires_at": expires_at.isoformat(),
                         }
                     },
+                    timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
                 )
             else:
-                result = await catalogd.call("session.launch.local.create.v2", {"launch": launch})
+                result = await catalogd.call(
+                    "session.launch.local.create.v2",
+                    {"launch": launch},
+                    timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
+                )
             run_id = str(result.get("run_id") or "").strip()
             if not run_id:
                 raise RuntimeError("catalogd local launch response is missing run_id")
