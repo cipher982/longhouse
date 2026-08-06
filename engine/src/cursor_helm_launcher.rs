@@ -1236,6 +1236,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             .to_string()
         });
     let deferred_notices = crate::managed_launch_lifecycle::DeferredNotices::default();
+    let confirm_agent_dir = home(config.config_dir.as_deref())?.join("agent");
     let degraded_registration = match registered {
         Some(_) => None,
         None => Some(
@@ -1246,7 +1247,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 registration_payload,
                 &session_id,
                 deferred_notices.clone(),
-                home(config.config_dir.as_deref())?.join("agent"),
+                confirm_agent_dir.clone(),
             ),
         ),
     };
@@ -1506,21 +1507,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(true, Ordering::Release);
     }
-    if let Err(error) = launch_transaction
-        .as_mut()
-        .map(|transaction| transaction.confirm())
-        .unwrap_or(Ok(()))
-    {
-        drop(terminal);
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-            if slave_hold >= 0 {
-                libc::close(slave_hold);
-            }
-            libc::close(master);
-            libc::waitpid(pid, std::ptr::null_mut(), 0);
-        }
-        return Err(error);
+    if let Some(transaction) = launch_transaction.as_mut() {
+        // cursor-agent is already running and attached to this PTY. SIGKILLing
+        // it because the Runtime Host could not record the launch outcome would
+        // destroy a working session over bookkeeping, so degrade instead and
+        // let the background retry converge.
+        transaction.confirm_or_degrade("Cursor", &confirm_agent_dir, &deferred_notices);
     }
     sync_winsize(master);
     let socket_stop = stop.clone();

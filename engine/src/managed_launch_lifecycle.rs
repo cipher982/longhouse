@@ -27,13 +27,21 @@ const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// `agent_dir` is the caller's `<longhouse home>/agent`. It is passed in rather
 /// than resolved here because the engine and the facade binary each own their
 /// own home resolution and this module is shared by both.
+fn retry_receipt_path(
+    agent_dir: &std::path::Path,
+    kind: &str,
+    session_id: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let directory = agent_dir.join("managed-local").join(kind);
+    std::fs::create_dir_all(&directory).context("create managed launch recovery directory")?;
+    Ok(directory.join(format!("{session_id}.json")))
+}
+
 fn registration_retry_path(
     agent_dir: &std::path::Path,
     session_id: &str,
 ) -> anyhow::Result<std::path::PathBuf> {
-    let directory = agent_dir.join("managed-local").join("registration-retries");
-    std::fs::create_dir_all(&directory).context("create managed launch recovery directory")?;
-    Ok(directory.join(format!("{session_id}.json")))
+    retry_receipt_path(agent_dir, "registration-retries", session_id)
 }
 
 /// Record that a launch started without Runtime Host registration and is
@@ -65,6 +73,40 @@ pub fn record_registration_retry(
 /// active recovery.
 pub fn clear_registration_retry(agent_dir: &std::path::Path, session_id: &str) {
     if let Ok(path) = registration_retry_path(agent_dir, session_id) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Record that a provider is running with an unsettled durable launch outcome.
+///
+/// Registration already succeeded here, so coordination authority exists and
+/// the session is genuinely controllable; only the confirmation is unrecorded.
+/// That is a weaker degradation than a failed registration and health reads it
+/// from its own directory, where a fresh receipt is ordinary convergence and an
+/// aged or exhausted one is real degradation.
+pub fn record_outcome_retry(
+    agent_dir: &std::path::Path,
+    session_id: &str,
+    provider: &str,
+    exhausted: bool,
+) -> anyhow::Result<()> {
+    let path = retry_receipt_path(agent_dir, "outcome-retries", session_id)?;
+    let payload = json!({
+        "schema_version": 1,
+        "session_id": session_id,
+        "provider": provider,
+        "recovery_exhausted": exhausted,
+        "stage": "confirmation",
+        "coordination_state": "available",
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&payload)?)
+        .with_context(|| format!("write managed launch outcome receipt {}", path.display()))
+}
+
+/// Drop the receipt once the outcome is durably recorded.
+pub fn clear_outcome_retry(agent_dir: &std::path::Path, session_id: &str) {
+    if let Ok(path) = retry_receipt_path(agent_dir, "outcome-retries", session_id) {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -159,6 +201,99 @@ impl<'a> ManagedLaunchTransaction<'a> {
         self.confirmed = true;
         Ok(())
     }
+
+    /// Settle a launch whose provider process already exists.
+    ///
+    /// Confirmation is bookkeeping about a process that is already spawned, so
+    /// a Runtime Host outage must never unspawn it. Every caller previously
+    /// treated a failed confirm as a fatal launch error and killed the
+    /// provider, which turned one lost HTTP response into "Longhouse will not
+    /// let you open your agent" — including the common case where the outcome
+    /// committed durably and only the response was lost.
+    ///
+    /// Degrading marks the transaction settled, because its `Drop` would
+    /// otherwise report a launch abort for a provider that really did start,
+    /// and hands the same idempotent outcome to a bounded background retry.
+    pub fn confirm_or_degrade(
+        &mut self,
+        provider: &str,
+        agent_dir: &std::path::Path,
+        notices: &DeferredNotices,
+    ) {
+        let error = match self.confirm() {
+            Ok(()) => return,
+            Err(error) => error,
+        };
+        self.confirmed = true;
+        notices.push(format!(
+            "Longhouse warning: {provider} started but Longhouse could not record the launch outcome; retrying in the background: {error:#}"
+        ));
+        if let Err(error) = record_outcome_retry(agent_dir, self.session_id, provider, false) {
+            notices.push(format!(
+                "Longhouse warning: could not record {provider} launch outcome recovery state: {error:#}"
+            ));
+        }
+        spawn_launch_outcome_retry(
+            self.url,
+            self.device_token,
+            self.session_id,
+            self.run_id,
+            provider,
+            agent_dir.to_path_buf(),
+            notices.clone(),
+        );
+    }
+}
+
+/// Replay one unrecorded launch confirmation until the Runtime Host accepts it.
+///
+/// The outcome is idempotent on (session, run): the Runtime Host accepts an
+/// exact replay of an already-committed confirmation instead of treating it as
+/// a conflict, so retrying a lost response cannot corrupt durable state.
+fn spawn_launch_outcome_retry(
+    url: &str,
+    device_token: &str,
+    session_id: &str,
+    run_id: &str,
+    provider: &str,
+    agent_dir: PathBuf,
+    notices: DeferredNotices,
+) {
+    let url = url.to_string();
+    let device_token = device_token.to_string();
+    let session_id = session_id.to_string();
+    let run_id = run_id.to_string();
+    let provider = provider.to_string();
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            let _ = record_outcome_retry(&agent_dir, &session_id, &provider, true);
+            return;
+        };
+        let mut last_error = None;
+        for attempt in 0..5_u32 {
+            std::thread::sleep(Duration::from_secs(2_u64.pow(attempt)));
+            match runtime.block_on(report_launch_outcome(
+                &url,
+                &device_token,
+                &session_id,
+                &run_id,
+                LaunchOutcome::Confirmed,
+                None,
+            )) {
+                Ok(()) => {
+                    clear_outcome_retry(&agent_dir, &session_id);
+                    return;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if let Some(error) = last_error {
+            notices.push(format!(
+                "Longhouse warning: {provider} is running but its launch outcome was never recorded: {error:#}"
+            ));
+        }
+        let _ = record_outcome_retry(&agent_dir, &session_id, &provider, true);
+    });
 }
 
 /// Register one managed launch with the Runtime Host.
@@ -370,6 +505,100 @@ mod tests {
             validate_launch_identity(response("expected", "run"), "Cursor", Some("expected"))
                 .is_ok()
         );
+    }
+
+    /// Serve every launch-outcome POST with `status`, reporting each request body.
+    fn spawn_outcome_server(status: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut buffer = [0_u8; 8192];
+                let Ok(size) = stream.read(&mut buffer) else {
+                    continue;
+                };
+                if sender
+                    .send(String::from_utf8_lossy(&buffer[..size]).to_string())
+                    .is_err()
+                {
+                    return;
+                }
+                let body = r#"{"recorded":true,"detail":"Launch outcomes require catalogd"}"#;
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (format!("http://{address}"), receiver)
+    }
+
+    fn outcome_receipt(agent_dir: &std::path::Path, session_id: &str) -> std::path::PathBuf {
+        agent_dir
+            .join("managed-local")
+            .join("outcome-retries")
+            .join(format!("{session_id}.json"))
+    }
+
+    #[test]
+    fn failed_confirmation_degrades_instead_of_unspawning_a_running_provider() {
+        let (url, requests) = spawn_outcome_server("503 Service Unavailable");
+        let agent_dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let notices = DeferredNotices::default();
+        {
+            let mut transaction =
+                ManagedLaunchTransaction::new(&runtime, &url, "device-token", "session-1", "run-1");
+            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices);
+        }
+
+        let confirm = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(confirm.contains(r#""outcome":"confirmed""#));
+        // The provider really started, so dropping an unconfirmed transaction
+        // must not report a launch abort. The background retry does not send
+        // its first replay until well after this window.
+        assert!(requests.recv_timeout(Duration::from_millis(250)).is_err());
+
+        let payload: Value = serde_json::from_slice(
+            &std::fs::read(outcome_receipt(agent_dir.path(), "session-1")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["recovery_exhausted"], json!(false));
+        assert_eq!(payload["stage"], json!("confirmation"));
+        assert_eq!(payload["coordination_state"], json!("available"));
+        assert!(notices
+            .drain()
+            .iter()
+            .any(|message| message.contains("could not record the launch outcome")));
+    }
+
+    #[test]
+    fn recorded_confirmation_leaves_no_degradation_receipt() {
+        let (url, requests) = spawn_outcome_server("200 OK");
+        let agent_dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let notices = DeferredNotices::default();
+        {
+            let mut transaction =
+                ManagedLaunchTransaction::new(&runtime, &url, "device-token", "session-2", "run-2");
+            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices);
+        }
+
+        assert!(requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .contains(r#""outcome":"confirmed""#));
+        assert!(requests.recv_timeout(Duration::from_millis(250)).is_err());
+        assert!(!outcome_receipt(agent_dir.path(), "session-2").exists());
+        assert!(notices.drain().is_empty());
     }
 
     #[test]

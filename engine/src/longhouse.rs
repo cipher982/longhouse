@@ -459,6 +459,15 @@ fn longhouse_home() -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".longhouse"))
 }
 
+/// Where managed-launch recovery receipts are written for local health to read.
+/// Falling back to the working directory keeps a receipt-write failure from
+/// gating a launch; the receipt is evidence about a launch, not a precondition.
+fn managed_launch_agent_dir() -> PathBuf {
+    longhouse_home()
+        .map(|home| home.join("agent"))
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
 fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let claude_dir = claude_dir.unwrap_or_else(|| {
         std::env::var_os("CLAUDE_CONFIG_DIR")
@@ -1193,14 +1202,20 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let degraded_provider_alive_for_spawn = degraded_registration
         .as_ref()
         .map(|registration| Arc::clone(&registration.provider_alive));
+    let confirm_agent_dir = managed_launch_agent_dir();
+    let confirm_notices = deferred_notices.clone();
     let run_result = run_foreground_command_after_spawn(&mut command, || {
         if let Some(provider_alive) = degraded_provider_alive_for_spawn {
             provider_alive.store(true, Ordering::Release);
         }
-        match launch_transaction.as_mut() {
-            Some(transaction) => transaction.confirm(),
-            None => Ok(()),
+        // The child is spawned but still blocked on the terminal-release
+        // barrier, so an error returned here reaps it before `claude` is ever
+        // exec'd. Confirmation must therefore degrade in place: the provider
+        // starts, and the unrecorded outcome converges in the background.
+        if let Some(transaction) = launch_transaction.as_mut() {
+            transaction.confirm_or_degrade("Claude", &confirm_agent_dir, &confirm_notices);
         }
+        Ok(())
     });
     let exit = match run_result {
         Ok(exit) => exit,
@@ -1442,10 +1457,10 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
     if let Some(transaction) = launch_transaction.as_mut() {
-        if let Err(error) = transaction.confirm() {
-            let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
-            return Err(error);
-        }
+        // The bridge already owns a live provider. Stopping it because the
+        // Runtime Host could not record the outcome would destroy a working
+        // session over bookkeeping, so degrade and converge in the background.
+        transaction.confirm_or_degrade("OpenCode", &managed_launch_agent_dir(), &deferred_notices);
     }
     // The bridge owns the provider process from here.
     if let Some(registration) = &degraded_registration {
@@ -2064,14 +2079,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
     if let Some(transaction) = launch_transaction.as_mut() {
-        if let Err(error) = transaction.confirm() {
-            let _ = stop_codex_bridge(
-                &session_id,
-                Some(run_id.as_str()),
-                "launch_confirmation_failed",
-            );
-            return Err(error);
-        }
+        // Same contract as every other provider: the bridge is already running
+        // Codex, so an unrecorded outcome degrades rather than stopping it.
+        transaction.confirm_or_degrade("Codex", &managed_launch_agent_dir(), &deferred_notices);
     }
     // The bridge owns the provider process from here, so a background
     // registration retry is allowed to confirm the launch once it succeeds.
@@ -2244,9 +2254,17 @@ fn launch_managed_codex_resume(
         stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
         anyhow::bail!("Codex resumed a different provider thread; the new run was stopped");
     }
-    if let Err(error) = launch_transaction.confirm() {
-        stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
-        return Err(error);
+    // A resumed thread that is already running must not be torn down and
+    // restored because its outcome could not be recorded; the restore path
+    // exists for a bridge that genuinely failed, not for Runtime Host silence.
+    let resume_notices = DeferredNotices::default();
+    launch_transaction.confirm_or_degrade(
+        "Codex resume",
+        &managed_launch_agent_dir(),
+        &resume_notices,
+    );
+    for message in resume_notices.drain() {
+        eprintln!("{message}");
     }
     if let Err(error) = record_codex_contract(
         &response.session_id,
