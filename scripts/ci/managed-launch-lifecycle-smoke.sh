@@ -46,12 +46,17 @@ FAULT_URL=""
 # exit trap. The watchdog bounds that without hiding a slow shutdown, because
 # a child that needed the SIGKILL still took the full grace period.
 stop_child() {
-  local pid="$1" watchdog
+  local pid="$1" label="${2:-child}" watchdog
   [[ -n "$pid" ]] || return 0
   kill "$pid" 2>/dev/null || true
   (
     sleep 10
-    kill -9 "$pid" 2>/dev/null || true
+    # Say so. A stalled shutdown that is silently killed looks exactly like a
+    # clean one, which is how a daemon that never exits on SIGTERM stayed
+    # invisible behind a passing suite.
+    if kill -9 "$pid" 2>/dev/null; then
+      echo "warning: $label ignored SIGTERM for 10s and was killed" >&2
+    fi
   ) &
   watchdog=$!
   wait "$pid" 2>/dev/null || true
@@ -60,11 +65,11 @@ stop_child() {
 }
 
 cleanup() {
-  stop_child "$FAULT_PROXY_PID"
-  stop_child "$CURSOR_CONTROL_PID"
-  stop_child "$CLAUDE_CONTROL_PID"
-  stop_child "$ENGINE_PID"
-  stop_child "$SERVER_PID"
+  stop_child "$FAULT_PROXY_PID" "fault proxy"
+  stop_child "$CURSOR_CONTROL_PID" "cursor control"
+  stop_child "$CLAUDE_CONTROL_PID" "claude control"
+  stop_child "$ENGINE_PID" "machine agent"
+  stop_child "$SERVER_PID" "runtime host"
   if [[ "${LONGHOUSE_KEEP_LIFECYCLE_SMOKE_ROOT:-0}" == "1" ]]; then
     echo "preserved lifecycle smoke root: $TEST_ROOT" >&2
   else
@@ -125,9 +130,14 @@ start_runtime_host() {
     ) &
     SERVER_PID=$!
 
+    # Wait on readiness, not liveness. `/api/health` answers as soon as uvicorn
+    # is serving, while this suite runs with the live catalog on and reaches
+    # catalogd on its very first request. `/api/readyz` is the probe that
+    # already gates on a catalogd ping, so it is the honest gate for what the
+    # first section actually depends on.
     local _
-    for _ in $(seq 1 120); do
-      if curl -fsS -o /dev/null "$BASE_URL/api/health" 2>/dev/null; then return 0; fi
+    for _ in $(seq 1 240); do
+      if curl -fsS -o /dev/null "$BASE_URL/api/readyz" 2>/dev/null; then return 0; fi
       if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
       sleep 0.5
     done
@@ -995,7 +1005,7 @@ start_fault_proxy() {
 }
 
 stop_fault_proxy() {
-  stop_child "$FAULT_PROXY_PID"
+  stop_child "$FAULT_PROXY_PID" "fault proxy"
   FAULT_PROXY_PID=""
 }
 
