@@ -1359,6 +1359,123 @@ mod tests {
         }
     }
 
+    // ---- Crash boundaries -------------------------------------------------
+    //
+    // Applying an update spans three resources SQLite cannot make atomic: the
+    // staged release directory, the `current` symlink, and the status file,
+    // followed by process exit. A crash at any boundary must leave the machine
+    // convergent — running *some* complete pair, with the debt either settled
+    // or still recorded.
+    //
+    // These reconstruct each partial state directly rather than killing a
+    // process, which keeps them deterministic and per-commit. That is the whole
+    // argument for doing this before a release canary: the failure lives at a
+    // boundary, and a boundary can be simulated.
+
+    #[test]
+    fn crash_after_staging_leaves_the_previous_release_running() {
+        // Boundary 1: release downloaded and verified, `current` untouched.
+        let install = FakeInstall::new();
+        let old = install.release("0.1.33", true, true);
+        activate_release(&old).unwrap();
+        install.release("0.1.34", true, true); // staged, never activated
+
+        assert_eq!(
+            std::fs::read_link(install.current()).unwrap(),
+            std::path::Path::new("releases/0.1.33"),
+            "staging alone must not change what runs"
+        );
+    }
+
+    #[test]
+    fn a_staged_release_can_still_be_activated_after_a_crash() {
+        // The staged directory is not debris; the next pass must be able to use
+        // it rather than being forced to re-download.
+        let install = FakeInstall::new();
+        activate_release(&install.release("0.1.33", true, true)).unwrap();
+        let staged = install.release("0.1.34", true, true);
+
+        activate_release(&staged).unwrap();
+        assert_eq!(
+            std::fs::read_link(install.current()).unwrap(),
+            std::path::Path::new("releases/0.1.34")
+        );
+    }
+
+    #[test]
+    fn an_interrupted_stage_does_not_poison_the_next_attempt() {
+        // Boundary 0: a `.staging` directory left by a killed download must not
+        // contribute files to, or block, the retry.
+        let install = FakeInstall::new();
+        let poisoned = install
+            .root
+            .join(".local/share/longhouse/releases")
+            .join("0.1.34.staging");
+        std::fs::create_dir_all(&poisoned).unwrap();
+        std::fs::write(poisoned.join("longhouse"), b"truncated").unwrap();
+
+        let good = install.release("0.1.34", true, true);
+        activate_release(&good).unwrap();
+        assert_eq!(
+            std::fs::read_link(install.current()).unwrap(),
+            std::path::Path::new("releases/0.1.34")
+        );
+    }
+
+    #[test]
+    fn activation_is_idempotent() {
+        // A crash between the `current` swap and the status write means the
+        // next pass activates the same release again. That must be a no-op, not
+        // an error, or the retry itself becomes the stuck state.
+        let install = FakeInstall::new();
+        let release = install.release("0.1.34", true, true);
+        activate_release(&release).unwrap();
+        activate_release(&release).unwrap();
+        assert_eq!(
+            std::fs::read_link(install.current()).unwrap(),
+            std::path::Path::new("releases/0.1.34")
+        );
+        assert_eq!(
+            std::fs::read_link(install.root.join(".local/bin/longhouse")).unwrap(),
+            std::path::Path::new("../share/longhouse/current/longhouse")
+        );
+    }
+
+    #[test]
+    fn a_crash_before_the_status_write_still_leaves_a_complete_pair() {
+        // Boundary 2: binaries swapped, status never written. The machine runs
+        // a complete new pair; only the record of the owed restart is missing,
+        // and the next check re-derives that from the installed version.
+        let install = FakeInstall::new();
+        activate_release(&install.release("0.1.34", true, true)).unwrap();
+
+        let bin = install.root.join(".local/bin");
+        for name in ["longhouse", "longhouse-engine"] {
+            let resolved = std::fs::read_link(bin.join(name)).unwrap();
+            assert_eq!(
+                resolved,
+                std::path::Path::new("../share/longhouse/current").join(name),
+                "{name} must resolve through current, so both move together"
+            );
+        }
+        assert!(read_status().is_none(), "no status was written");
+    }
+
+    #[test]
+    fn a_failed_activation_leaves_the_bin_links_pointing_somewhere_complete() {
+        // The worst outcome is a facade from one release beside an engine from
+        // another. Because both links resolve through `current`, a failed
+        // activation cannot split them.
+        let install = FakeInstall::new();
+        activate_release(&install.release("0.1.33", true, true)).unwrap();
+        assert!(activate_release(&install.release("0.1.34", false, true)).is_err());
+
+        let target = std::fs::read_link(install.current()).unwrap();
+        assert_eq!(target, std::path::Path::new("releases/0.1.33"));
+        let dir = install.root.join(".local/share/longhouse").join(&target);
+        assert!(dir.join("longhouse").is_file() && dir.join("longhouse-engine").is_file());
+    }
+
     #[test]
     fn activation_repoints_current_atomically() {
         let install = FakeInstall::new();
