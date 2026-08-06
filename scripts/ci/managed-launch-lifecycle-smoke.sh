@@ -34,23 +34,37 @@ CLAUDE_CONTROL_PID=""
 CURSOR_CONTROL_PID=""
 PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
+FAULT_PROXY_PID=""
+FAULT_URL=""
+
+# Terminate one child and reap it, but never wait on it forever.
+#
+# `kill` followed by a bare `wait` assumes the child's graceful shutdown always
+# finishes. The Machine Agent's does not always: under this suite's session
+# churn it can stall on its first SIGTERM and only exit on a second, which
+# turns a passing run into a job that spends its whole CI timeout inside the
+# exit trap. The watchdog bounds that without hiding a slow shutdown, because
+# a child that needed the SIGKILL still took the full grace period.
+stop_child() {
+  local pid="$1" watchdog
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  (
+    sleep 10
+    kill -9 "$pid" 2>/dev/null || true
+  ) &
+  watchdog=$!
+  wait "$pid" 2>/dev/null || true
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+}
+
 cleanup() {
-  if [[ -n "$CURSOR_CONTROL_PID" ]]; then
-    kill "$CURSOR_CONTROL_PID" 2>/dev/null || true
-    wait "$CURSOR_CONTROL_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$CLAUDE_CONTROL_PID" ]]; then
-    kill "$CLAUDE_CONTROL_PID" 2>/dev/null || true
-    wait "$CLAUDE_CONTROL_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$ENGINE_PID" ]]; then
-    kill "$ENGINE_PID" 2>/dev/null || true
-    wait "$ENGINE_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$SERVER_PID" ]]; then
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
-  fi
+  stop_child "$FAULT_PROXY_PID"
+  stop_child "$CURSOR_CONTROL_PID"
+  stop_child "$CLAUDE_CONTROL_PID"
+  stop_child "$ENGINE_PID"
+  stop_child "$SERVER_PID"
   if [[ "${LONGHOUSE_KEEP_LIFECYCLE_SMOKE_ROOT:-0}" == "1" ]]; then
     echo "preserved lifecycle smoke root: $TEST_ROOT" >&2
   else
@@ -942,5 +956,151 @@ cursor_exit=$?
 set -e
 [[ "$cursor_exit" == "7" ]] || fail "provider exit code was $cursor_exit, expected 7"
 echo "ok: provider exit code propagates"
+
+# ---------------------------------------------------------------------------
+# 5. The Runtime Host misbehaves and the agent still opens.
+#
+#    Sections 1-4 assert stage outcomes against a Runtime Host that only ever
+#    succeeds, which is the same blind spot this file was written to close one
+#    layer down: a counterpart that cannot fail cannot prove failure is
+#    survivable. Launch confirmation stayed fatal in all five launchers behind
+#    green CI, so a single lost response on a bookkeeping POST meant Longhouse
+#    refused to open the user's agent at all.
+#
+#    Every case below asserts one invariant instead of a stage result: the user
+#    typed `longhouse <provider>` and got a running agent. Nothing Longhouse
+#    does after the provider is spawned may take that away.
+# ---------------------------------------------------------------------------
+start_fault_proxy() {
+  local path="$1" mode="$2" count="$3" fault_port attempt
+  fault_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+  python3 "$ROOT_DIR/scripts/ci/runtime-host-fault-proxy.py" \
+    --listen "127.0.0.1:$fault_port" \
+    --target "127.0.0.1:$PORT" \
+    --fault-path "$path" \
+    --fault-mode "$mode" \
+    --fault-count "$count" \
+    >"$TEST_ROOT/fault-proxy.log" 2>&1 &
+  FAULT_PROXY_PID=$!
+  FAULT_URL="http://127.0.0.1:$fault_port"
+  # /api/health does not match any fault path, so a healthy answer here proves
+  # the proxy relays cleanly before the launch depends on it.
+  for attempt in $(seq 1 60); do
+    if curl -fsS -o /dev/null "$FAULT_URL/api/health" 2>/dev/null; then return 0; fi
+    if ! kill -0 "$FAULT_PROXY_PID" 2>/dev/null; then break; fi
+    sleep 0.2
+  done
+  cat "$TEST_ROOT/fault-proxy.log" >&2 || true
+  fail "fault proxy never relayed to the Runtime Host"
+}
+
+stop_fault_proxy() {
+  stop_child "$FAULT_PROXY_PID"
+  FAULT_PROXY_PID=""
+}
+
+provider_ready_marker() {
+  case "$1" in
+    cursor) printf 'CURSOR_LIFECYCLE_PTY_OK' ;;
+    claude) printf 'CLAUDE_LIFECYCLE_PTY_OK' ;;
+    codex) printf 'Managed Codex ready' ;;
+    opencode) printf 'Managed OpenCode ready' ;;
+    *) fail "no readiness marker for $1" ;;
+  esac
+}
+
+launch_through_fault() {
+  local provider="$1" out_file="$2"
+  case "$provider" in
+    cursor)
+      run_launch_bounded "$out_file" 90 "$BIN_DIR/longhouse" cursor \
+        --cwd "$HOME_DIR" --cursor-bin "$BIN_DIR/cursor-agent" --url "$FAULT_URL"
+      ;;
+    claude)
+      run_launch_bounded "$out_file" 90 "$BIN_DIR/longhouse" claude \
+        --cwd "$HOME_DIR" --claude-bin "$BIN_DIR/claude" --url "$FAULT_URL"
+      ;;
+    codex)
+      "$BIN_DIR/longhouse" codex --no-attach \
+        --cwd "$HOME_DIR" --codex-bin "$BIN_DIR/codex" --url "$FAULT_URL" \
+        >"$out_file" 2>&1
+      ;;
+    opencode)
+      "$BIN_DIR/longhouse" opencode --no-attach \
+        --cwd "$HOME_DIR" --opencode-bin "$BIN_DIR/opencode" --url "$FAULT_URL" \
+        >"$out_file" 2>&1
+      ;;
+    *) fail "no fault launch recipe for $provider" ;;
+  esac
+}
+
+# The detached providers leave a bridge and a provider process behind. Their
+# session identity comes from the launcher's own attach hint rather than the
+# database, because a degraded launch never reaches the database at all.
+teardown_faulted_launch() {
+  local provider="$1" out_file="$2" session_id
+  case "$provider" in
+    codex | opencode)
+      session_id="$(sed -n "s/^Attach: longhouse $provider attach --session-id \([0-9a-f-]*\).*/\1/p" \
+        "$out_file" | tail -1 | tr -d '\r')"
+      [[ -n "$session_id" ]] || fail "$provider launch under fault printed no session identity to tear down"
+      "$BIN_DIR/longhouse" "$provider" stop --session-id "$session_id" >/dev/null 2>&1 \
+        || fail "$provider launch under fault could not be torn down"
+      ;;
+  esac
+}
+
+# provider, faulted path, fault mode, fault budget, optional expected durable state
+assert_opens_under_fault() {
+  local provider="$1" path="$2" mode="$3" count="$4" expected_state="${5:-}"
+  local slug out_file status state
+  slug="$(printf '%s-%s-%s' "$provider" "${path##*/}" "$mode" | tr -c 'a-zA-Z0-9._-' '_')"
+  out_file="$TEST_ROOT/fault-$slug.out"
+
+  start_fault_proxy "$path" "$mode" "$count"
+  set +e
+  launch_through_fault "$provider" "$out_file"
+  status=$?
+  set -e
+  stop_fault_proxy
+
+  if [[ "$status" != "0" ]]; then
+    echo "--- $provider launch with $mode on $path ---" >&2
+    cat "$out_file" >&2
+    fail "$provider exited $status when the Runtime Host answered $mode on $path"
+  fi
+  grep -q "$(provider_ready_marker "$provider")" "$out_file" \
+    || fail "$provider never started when the Runtime Host answered $mode on $path"
+
+  if [[ -n "$expected_state" ]]; then
+    state="$(launch_attempt_state "$(latest_launch_session_id)")"
+    [[ "$state" == "$expected_state" ]] \
+      || fail "$provider: durable launch state was $state, expected $expected_state under $mode"
+  fi
+
+  teardown_faulted_launch "$provider" "$out_file"
+}
+
+for provider in cursor claude codex opencode; do
+  # The Runtime Host is unreachable for the call, so nothing is committed.
+  assert_opens_under_fault "$provider" launch-outcome status:503 0
+  # The write commits and only the response is lost. This is the exact incident
+  # this lane exists for: the durable launch is adopted while the launcher was
+  # told the call failed, and killing the provider there loses a live session
+  # that the Runtime Host already believes in.
+  assert_opens_under_fault "$provider" launch-outcome forward-status:503 0 adopted
+  # A transport failure after the request was processed, rather than a status.
+  assert_opens_under_fault "$provider" launch-outcome forward-reset 0
+  # No answer at all, so the launcher's own timeout decides.
+  assert_opens_under_fault "$provider" launch-outcome hang 0
+  echo "ok: $provider opens through every launch-outcome fault"
+done
+
+for provider in cursor claude codex opencode; do
+  # Registration degradation has its own recovery path; assert it against the
+  # same invariant so both stages are one guarantee rather than two.
+  assert_opens_under_fault "$provider" managed-local/this-device status:503 1
+  echo "ok: $provider opens when registration is refused"
+done
 
 echo "managed launch lifecycle smoke passed"
