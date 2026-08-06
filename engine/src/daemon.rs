@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use anyhow::Context as _;
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
@@ -1006,6 +1007,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     tokio::spawn(crate::codex_exec::prewarm_codex_console_workers());
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
+    // These must outlive the loop. tokio delivers a signal only to receivers
+    // that already exist, so building them inside the select rebuilt them on
+    // every iteration and dropped the previous ones. A SIGTERM landing while
+    // this loop body was busy -- and it does synchronous filesystem and SQLite
+    // work -- therefore reached nobody, and the stream built on the next
+    // iteration had no idea it had happened. The Machine Agent ignored its
+    // first SIGTERM and exited only on a second, because the second arrived
+    // while a stream was being polled. A long-lived stream latches the signal
+    // instead, so the next poll sees it no matter when it arrived.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .context("install SIGTERM handler")?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .context("install SIGINT handler")?;
     loop {
         if !startup_archive_replay_pending {
             match queue_failed_shipment_retries_if_idle(
@@ -1043,7 +1057,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             biased;
 
             // Shutdown signals
-            _ = shutdown_signal() => {
+            _ = sigterm.recv() => {
+                tracing::info!("Shutdown signal received, exiting gracefully...");
+                break;
+            }
+            _ = sigint.recv() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
                 break;
             }
@@ -4831,19 +4849,6 @@ fn retire_legacy_spool_after_storage_v2(
 fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskResult {
     result.processing_elapsed = started.elapsed();
     result
-}
-
-/// Wait for SIGINT (Ctrl-C) or SIGTERM.
-async fn shutdown_signal() {
-    use tokio::signal::unix::{signal, SignalKind};
-
-    let ctrl_c = tokio::signal::ctrl_c();
-    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = sigterm.recv() => {},
-    }
 }
 
 #[cfg(test)]
