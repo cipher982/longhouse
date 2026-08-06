@@ -1060,6 +1060,34 @@ impl<'a> Spool<'a> {
         Ok(result)
     }
 
+    /// True only when the filesystem *positively reports* this path is absent.
+    ///
+    /// `Path::exists()` returns false for every error, including a permission
+    /// denial, an unmounted volume, or a transient I/O failure. Treating those
+    /// as deletion would erase the only record that bytes were never shipped —
+    /// the debt would vanish because a disk was briefly unavailable. Only
+    /// `NotFound` is evidence of absence; anything else means "could not look",
+    /// and the pointer is kept.
+    fn source_is_provably_gone(path: &std::path::Path) -> bool {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => false,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+
+    /// True when this path is a regular file the process can actually open.
+    ///
+    /// Existence is not readability. A directory, a dangling symlink, or a file
+    /// whose permissions changed all "exist" while being useless to a shipper
+    /// that must read bytes out of them, and reviving those just churns them
+    /// back to dead on the next attempt.
+    fn source_is_readable_file(path: &std::path::Path) -> bool {
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => std::fs::File::open(path).is_ok(),
+            _ => false,
+        }
+    }
+
     /// Return dead-lettered ranges to the pending queue so they can ship again.
     ///
     /// `dead` had no transition back. Every query that selects work asks for
@@ -1077,18 +1105,25 @@ impl<'a> Spool<'a> {
     /// Returns how many rows were revived.
     pub fn revive_dead_with_readable_sources(&self, limit: usize) -> Result<usize> {
         let candidates: Vec<i64> = {
+            // Scan past unreadable rows rather than letting them consume the
+            // budget. Taking the oldest `limit` rows and *then* filtering means
+            // a block of permanently unreadable old entries starves every
+            // readable row behind it on every tick, forever. The scan is capped
+            // so a very large graveyard still costs a bounded amount per tick.
             let mut statement = self.conn.prepare(
                 "SELECT id, file_path FROM spool_queue
                  WHERE status = 'dead'
                  ORDER BY created_at
                  LIMIT ?1",
             )?;
-            let rows = statement.query_map([limit as i64], |row| {
+            let scan_budget = (limit as i64).saturating_mul(20).max(limit as i64);
+            let rows = statement.query_map([scan_budget], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?;
             rows.filter_map(|row| row.ok())
-                .filter(|(_, path)| std::path::Path::new(path).exists())
+                .filter(|(_, path)| Self::source_is_readable_file(std::path::Path::new(path)))
                 .map(|(id, _)| id)
+                .take(limit)
                 .collect()
         };
         let now = Utc::now().to_rfc3339();
@@ -1201,7 +1236,7 @@ impl<'a> Spool<'a> {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?;
             rows.filter_map(|row| row.ok())
-                .filter(|(_, path)| !std::path::Path::new(path).exists())
+                .filter(|(_, path)| Self::source_is_provably_gone(std::path::Path::new(path)))
                 .map(|(id, _)| id)
                 .collect()
         };

@@ -502,8 +502,14 @@ fn load_lane_position(
 /// Safe because the range being re-shipped is content-addressed: re-sending
 /// bytes the host already holds is idempotent, and the gap it opens is exactly
 /// the bytes the host says it never received.
+/// Takes `&Connection` rather than `&mut Connection` so callers can pass a
+/// `&Transaction`. The rewind and the removal of the now-obsolete pending
+/// envelope must commit together: a crash between them leaves a rewound cursor
+/// beside a blocked envelope, and the next attempt then fails this function's
+/// own "not behind" precondition and sticks the source permanently — the exact
+/// absorbing state this path exists to remove.
 pub fn resync_to_host_watermark(
-    conn: &mut Connection,
+    conn: &Connection,
     source_epoch: Uuid,
     lane: SourceLane,
     host_accepted_through: u64,

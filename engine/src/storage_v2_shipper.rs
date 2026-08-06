@@ -944,25 +944,65 @@ fn resync_behind_host(
     if accepted_through >= prepared.range_start {
         return Ok(None);
     }
-    // The bytes must still exist to be re-sent. A truncated or rotated file
-    // cannot serve them, and rewinding onto one would swap a stuck source for a
-    // permanently failing one.
-    let source_len = std::fs::metadata(source_path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    if source_len < prepared.range_start {
+    // The bytes must still exist to be re-sent, and they must be the *same*
+    // bytes. Length alone is not enough: a file replaced at the same path can
+    // be long enough while holding entirely different content, and re-shipping
+    // that under the old epoch would attribute one session's bytes to another.
+    // Compare the file's current incarnation against the one this epoch was
+    // registered with, which is the same identity test epoch rotation uses.
+    let Ok(metadata) = std::fs::metadata(source_path) else {
+        tracing::warn!(
+            source_epoch = %prepared.source_epoch,
+            "host is behind but the source is unreadable; not resyncing"
+        );
+        return Ok(None);
+    };
+    if metadata.len() < prepared.range_start {
         tracing::warn!(
             source_epoch = %prepared.source_epoch,
             accepted_through,
             range_start = prepared.range_start,
-            source_len,
-            "host is behind but the source can no longer serve the gap"
+            source_len = metadata.len(),
+            "host is behind but the source is too short to serve the gap"
+        );
+        return Ok(None);
+    }
+    let current_incarnation = crate::state::file_identity::identity_from_metadata(&metadata);
+    let registered_incarnation = crate::state::source_epoch::active_source_incarnation(
+        conn,
+        &envelope.provider,
+        &envelope.opaque_source_id,
+    )?;
+    if !crate::state::file_identity::file_identities_match(
+        registered_incarnation.as_deref(),
+        current_incarnation.as_deref(),
+    ) {
+        // A different file now occupies this path. The epoch that owns these
+        // ranges no longer describes what is on disk, so rewinding its cursor
+        // would ship the new file's bytes as if they were the old one's.
+        // Epoch rotation is the correct handler for this, not resync.
+        tracing::warn!(
+            source_epoch = %prepared.source_epoch,
+            registered = ?registered_incarnation,
+            current = ?current_incarnation,
+            "host is behind but the source file was replaced; leaving it to epoch rotation"
         );
         return Ok(None);
     }
 
+    // Both mutations commit together or neither does.
+    //
+    // Splitting them leaves a window where a crash produces a rewound cursor
+    // beside the still-blocked envelope. The next attempt then trips
+    // `resync_to_host_watermark`'s own "not behind" precondition — the cursor
+    // already equals the host watermark — the error propagates, and the source
+    // is stuck for good. That is a fresh absorbing state inside the code that
+    // exists to remove absorbing states, so it gets a transaction.
+    let transaction = conn
+        .transaction()
+        .context("open transaction for durable cursor resync")?;
     let previous = crate::state::source_epoch::resync_to_host_watermark(
-        conn,
+        &transaction,
         prepared.source_epoch,
         SourceLane::Durable,
         accepted_through,
@@ -971,11 +1011,22 @@ fn resync_behind_host(
     // no longer the work to do, and deleting it also clears the block: a source
     // is blocked by the presence of that row, so removing it is what lets the
     // next prepare rebuild from the corrected cursor and ship contiguously.
-    pending_source_envelope::discard_after_cursor_resync(
-        conn,
+    let discarded = pending_source_envelope::discard_after_cursor_resync(
+        &transaction,
         prepared.source_epoch,
         &prepared.envelope.expected_envelope_id,
     )?;
+    if !discarded {
+        // The envelope identity moved under us, so the cursor rewind no longer
+        // describes reality. Roll back rather than commit half a repair.
+        anyhow::bail!(
+            "pending envelope for {} changed during resync; rolled back",
+            prepared.source_epoch
+        );
+    }
+    transaction
+        .commit()
+        .context("commit durable cursor resync")?;
     tracing::warn!(
         source_epoch = %prepared.source_epoch,
         provider = %envelope.provider,

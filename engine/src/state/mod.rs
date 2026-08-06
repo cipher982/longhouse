@@ -5,6 +5,7 @@ pub mod db_pool;
 pub mod file_identity;
 pub mod file_state;
 pub mod live_file_state;
+pub mod no_absorbing_states;
 pub mod pending_source_envelope;
 pub mod session_binding;
 pub mod session_phase;

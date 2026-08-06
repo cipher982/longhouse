@@ -429,6 +429,21 @@ pub fn read_status() -> Option<UpdateStatus> {
 /// Called from the daemon's update tick. Errors are logged rather than
 /// propagated: an update check must never be able to fail a heartbeat.
 pub async fn run_check_tick(client: &reqwest::Client) {
+    // Held for the whole read/check/apply/write sequence, not just the swap.
+    //
+    // Two concurrent checks — the daemon tick and a hand-run `update check` —
+    // could otherwise both read status, one install and record a pending
+    // restart, and the loser then overwrite that record with its own older
+    // view. The debt would vanish and the same release would install again on
+    // the next tick, forever. Bailing rather than waiting is right for periodic
+    // work: the other actor is already doing this.
+    let _lock = match UpdateLock::acquire() {
+        Ok(lock) => lock,
+        Err(error) => {
+            tracing::debug!(error = %format!("{error:#}"), "skipping update tick; lock held");
+            return;
+        }
+    };
     let control = read_update_control();
     let policy = control.effective_policy(UpdatePolicy::default());
     let previous = read_status();
@@ -501,15 +516,13 @@ pub async fn run_check_tick(client: &reqwest::Client) {
 /// to do about it. That is the difference between a pending update and the
 /// half-applied limbo this work exists to remove.
 async fn apply_staged(client: &reqwest::Client, version: &str, status: &mut UpdateStatus) {
-    // Held across staging and activation so a concurrent `update check` cannot
-    // publish or activate the same directory underneath this one.
-    let _lock = match UpdateLock::acquire() {
-        Ok(lock) => lock,
-        Err(error) => {
-            tracing::debug!(error = %format!("{error:#}"), "skipping apply; update lock held");
-            return;
-        }
-    };
+    // No lock acquired here: `run_check_tick` holds it across the whole
+    // read/check/apply/write sequence, which is what keeps a concurrent actor
+    // from overwriting the restart debt this function records.
+    debug_assert!(
+        UpdateLock::acquire().is_err(),
+        "apply_staged must run under the caller's update lock"
+    );
     let release_dir = match stage_release(client, version).await {
         Ok(dir) => dir,
         Err(error) => {

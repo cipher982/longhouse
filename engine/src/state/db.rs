@@ -14,10 +14,43 @@ use crate::config;
 const DB_FILENAME: &str = "longhouse-shipper.db";
 
 /// Resolve the configured DB path (or default) without touching the file.
+///
+/// # Tests may not resolve the default
+///
+/// Under `cfg(test)` passing `None` panics instead of returning the real
+/// database path. Six tests in `state/source_epoch.rs` called `open_db(None)`
+/// and spent months quietly writing into a developer's live 9.7GB shipper
+/// database — a fake `codex` epoch was found sitting in it, first written in
+/// July. That also made one of them fail, because state survived between runs,
+/// and Linux CI never saw any of it since the default path does not exist
+/// there.
+///
+/// A test that wants a database wants a temporary one. Making the wrong call
+/// loud is cheaper than auditing for it again: the panic names the fix, and it
+/// cannot reach a real machine because it compiles only into test binaries.
+///
+/// The stronger fix is to delete the hazard from the signature — `open_db(&Path)`
+/// plus a separate `open_default_db()` — so the mistake is unrepresentable
+/// rather than caught at runtime. That was considered and rejected here: it is
+/// 136 call sites across 27 files, and the usual argument for it does not apply
+/// to this crate. That argument is that `cfg(test)` misses integration tests,
+/// which compile the library without it. This crate has no `[lib]` target —
+/// only two `[[bin]]`s — and `engine/tests/*.rs` drive the built binaries
+/// through `Command` rather than importing anything here, so no integration
+/// test can reach this function at all. If a `[lib]` target is ever added, that
+/// reasoning expires and the signature should change.
 pub fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf> {
     match db_path {
         Some(p) => Ok(p.to_path_buf()),
-        None => default_db_path(),
+        None => {
+            #[cfg(test)]
+            panic!(
+                "tests must not open the default shipper database — it is the real \
+                 ~/.longhouse/agent/{DB_FILENAME}. Pass Some(temp_dir.join(\"state.db\")) instead."
+            );
+            #[cfg(not(test))]
+            default_db_path()
+        }
     }
 }
 
