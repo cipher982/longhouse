@@ -630,10 +630,71 @@ fn should_apply(status: &UpdateStatus) -> bool {
 /// Returns `None` when the definition cannot be read, which is treated as "do
 /// not exit". Absence of evidence is not evidence that a restart will happen.
 pub fn supervisor_restarts_clean_exit() -> Option<bool> {
-    let home = native_home().ok()?;
-    let path = crate::device::installed_service_definition_path(&home)?;
-    let body = std::fs::read_to_string(&path).ok()?;
-    Some(definition_restarts_clean_exit(&body))
+    // Ask the supervisor what it will actually do, not what a file says.
+    //
+    // The file and the daemon can disagree. systemd runs the unit it has
+    // *loaded*: a unit edited without `daemon-reload` — including one this
+    // engine just rewrote — reads `Restart=always` on disk while the daemon
+    // still enforces `on-failure`. Trusting the file there produces exactly the
+    // outcome this guard exists to prevent: a clean exit that permanently stops
+    // the Machine Agent on a machine nobody can reach.
+    if cfg!(target_os = "linux") {
+        let output = std::process::Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                "longhouse-shipper.service",
+                "--property=Restart",
+                "--value",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Some(matches!(value.as_str(), "always" | "on-success"));
+    }
+    if cfg!(target_os = "macos") {
+        let uid = unsafe { libc::getuid() };
+        let output = std::process::Command::new("launchctl")
+            .arg("print")
+            .arg(format!("gui/{uid}/com.longhouse.shipper"))
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        return Some(launchctl_print_keeps_alive(&String::from_utf8_lossy(
+            &output.stdout,
+        )));
+    }
+    None
+}
+
+/// Read effective KeepAlive out of `launchctl print`.
+///
+/// The loaded job prints `keepalive = <n>` (or a `keepalive { … }` block for the
+/// conditional form). Only the unconditional form restarts a clean exit; the
+/// conditional form is what the Desktop app uses so Quit means quit. Anything
+/// unrecognised returns false, because guessing here strands a user.
+fn launchctl_print_keeps_alive(body: &str) -> bool {
+    for line in body.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("keepalive") else {
+            continue;
+        };
+        let rest = rest.trim();
+        // A conditional block — `keepalive = {` or `keepalive {` — is not
+        // unconditional, whatever it contains.
+        if rest.starts_with('{') || rest.starts_with("= {") {
+            return false;
+        }
+        if let Some(value) = rest.strip_prefix('=') {
+            return value.trim() == "1" || value.trim().eq_ignore_ascii_case("true");
+        }
+    }
+    false
 }
 
 /// Does this service definition bring the process back after `exit(0)`?

@@ -1113,6 +1113,7 @@ impl<'a> Spool<'a> {
             let mut statement = self.conn.prepare(
                 "SELECT id, file_path FROM spool_queue
                  WHERE status = 'dead'
+                   AND COALESCE(last_error, '') NOT LIKE '%[revived]%'
                  ORDER BY created_at
                  LIMIT ?1",
             )?;
@@ -1129,11 +1130,31 @@ impl<'a> Spool<'a> {
         let now = Utc::now().to_rfc3339();
         let mut revived = 0usize;
         for id in &candidates {
+            // Each dead range is revived at most once, ever.
+            //
+            // The first version reset `retry_count` to zero, which made revival
+            // unbounded: a payload the host will never accept came back every
+            // day forever, spending quota and log volume and never reaching
+            // done. "Retried forever" has no path to completion any more than
+            // "never retried" does — the same defect wearing the opposite sign.
+            //
+            // A single retry is the whole point. Dead-lettering is only wrong
+            // when the world has changed since — a host outage ended, a payload
+            // shape got fixed, a bug shipped in one release and repaired in the
+            // next — and one attempt is enough to discover that. A range that
+            // fails again returns to dead and stays there: still counted, still
+            // visible in `recent_dead`, no longer costing anything.
+            //
+            // The `[revived]` marker is the bound. It is durable, already
+            // written, and needs no new column.
             revived += self.conn.execute(
                 "UPDATE spool_queue
-                 SET status = 'pending', retry_count = 0, next_retry_at = ?2,
+                 SET status = 'pending',
+                     retry_count = 0,
+                     next_retry_at = ?2,
                      last_error = COALESCE(last_error, '') || ' [revived]'
-                 WHERE id = ?1 AND status = 'dead'",
+                 WHERE id = ?1 AND status = 'dead'
+                   AND COALESCE(last_error, '') NOT LIKE '%[revived]%'",
                 rusqlite::params![id, now],
             )?;
         }

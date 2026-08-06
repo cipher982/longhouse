@@ -21,12 +21,38 @@ pub struct StorageV2OutboxSnapshot {
     pub pending_bytes: u64,
     pub oldest_pending_at: Option<String>,
     pub blocked_source_count: u64,
+    /// Blocked sources a re-examination can plausibly clear on its own.
+    ///
+    /// These two fields have been read by three consumers — Rust `device.rs`,
+    /// Python `local_health/`, and Python `agent_heartbeat_health.py` — and
+    /// emitted by nobody, so every block presented identically as permanent red
+    /// and `device.rs` took its "requires repair" fallback for all of them.
+    /// A count that only a consumer knows about is not a signal.
+    ///
+    /// The split is by `block_kind`, which is the only evidence available here
+    /// about whether local recovery has anything to try. It deliberately does
+    /// not promise success: `reconciling` means a recovery path exists and is
+    /// scheduled, not that it will work.
+    pub reconciling_blocked_source_count: u64,
+    /// Blocked sources with no local recovery path, which is what should
+    /// actually reach a user as "needs you".
+    pub unresolved_blocked_source_count: u64,
     pub blocked_bytes: u64,
     pub oldest_blocked_at: Option<String>,
     pub latest_block_kind: Option<String>,
     pub latest_block_detail: Option<String>,
     pub byte_limit: u64,
     pub error: Option<String>,
+}
+
+/// Whether a recorded block has a local recovery path that will be retried.
+///
+/// `source_epoch_conflict` covers the range disagreements `resync_behind_host`
+/// resolves against host truth. `source_epoch_conflict_unresolved` means the
+/// Runtime Host has no epoch at all, which no local action can fix — it needs
+/// remote authority to re-register, so it is honestly "needs you".
+pub fn block_kind_is_reconciling(block_kind: Option<&str>) -> bool {
+    matches!(block_kind, Some("source_epoch_conflict"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,6 +384,25 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
             ))
         },
     )?;
+    // Split the blocked total by whether local recovery has anything to try.
+    // Counted in Rust rather than SQL so the classification lives in exactly one
+    // place — `block_kind_is_reconciling` — instead of being duplicated as a
+    // CASE expression that can drift from it.
+    let mut reconciling_blocked_source_count: u64 = 0;
+    let mut unresolved_blocked_source_count: u64 = 0;
+    {
+        let mut statement = conn.prepare(
+            "SELECT block_kind FROM pending_source_envelope WHERE blocked_at IS NOT NULL",
+        )?;
+        let kinds = statement.query_map([], |row| row.get::<_, Option<String>>(0))?;
+        for kind in kinds {
+            if block_kind_is_reconciling(kind?.as_deref()) {
+                reconciling_blocked_source_count += 1;
+            } else {
+                unresolved_blocked_source_count += 1;
+            }
+        }
+    }
     let latest_block = conn
         .query_row(
             "SELECT block_kind, block_detail
@@ -380,6 +425,8 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
         oldest_pending_at,
         blocked_source_count: u64::try_from(blocked_source_count)
             .context("blocked source count is negative")?,
+        reconciling_blocked_source_count,
+        unresolved_blocked_source_count,
         blocked_bytes: u64::try_from(blocked_bytes).context("blocked source bytes are negative")?,
         oldest_blocked_at,
         latest_block_kind: latest_block.as_ref().and_then(|value| value.0.clone()),
@@ -869,7 +916,7 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        pending_outbox_has_capacity, persist_or_load, quarantine,
+        block_kind_is_reconciling, pending_outbox_has_capacity, persist_or_load, quarantine,
         replace_request_body_after_lineage_repair, retire_after_host_replacement, retry_paths,
         snapshot, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
@@ -882,6 +929,51 @@ mod tests {
         assert!(pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES - 1, 1));
         assert!(!pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES, 1));
         assert!(!pending_outbox_has_capacity(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn the_blocked_split_is_emitted_and_sums_to_the_total() {
+        // These two counters were read by three consumers and produced by
+        // nobody, so device.rs took its "requires repair" fallback for every
+        // block and a healing source looked identical to a stuck one.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let healing = Uuid::new_v4();
+        register_epoch(&conn, healing, "claude");
+        persist_or_load(&mut conn, &candidate(healing, "/tmp/healing.jsonl")).unwrap();
+        quarantine(&mut conn, healing, "source_epoch_conflict", "range gap").unwrap();
+
+        let stuck = Uuid::new_v4();
+        register_epoch(&conn, stuck, "claude");
+        persist_or_load(&mut conn, &candidate(stuck, "/tmp/stuck.jsonl")).unwrap();
+        quarantine(
+            &mut conn,
+            stuck,
+            "source_epoch_conflict_unresolved",
+            "host has no epoch",
+        )
+        .unwrap();
+
+        let state = snapshot(&conn).unwrap();
+        assert_eq!(state.blocked_source_count, 2);
+        assert_eq!(state.reconciling_blocked_source_count, 1);
+        assert_eq!(state.unresolved_blocked_source_count, 1);
+        assert_eq!(
+            state.reconciling_blocked_source_count + state.unresolved_blocked_source_count,
+            state.blocked_source_count,
+            "the split must account for every blocked source or consumers will \
+             silently under-report one side"
+        );
+    }
+
+    #[test]
+    fn an_unknown_block_kind_counts_as_needing_a_human() {
+        // Failing closed matters here: a new block kind nobody has written
+        // recovery for must not be reported as quietly healing.
+        assert!(!block_kind_is_reconciling(Some("something_new")));
+        assert!(!block_kind_is_reconciling(None));
+        assert!(block_kind_is_reconciling(Some("source_epoch_conflict")));
     }
 
     #[test]

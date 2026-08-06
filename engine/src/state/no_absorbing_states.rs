@@ -124,6 +124,39 @@ mod tests {
         );
     }
 
+    /// A recovery function nothing calls is the bug, not the fix.
+    ///
+    /// The other tests here prove the recovery *functions* behave. None of them
+    /// can observe whether the daemon still invokes them: delete the tick
+    /// wiring and they all stay green. That is precisely the producer/consumer
+    /// failure this module exists to catch — `--owner-pid` was defined, parsed
+    /// and forwarded while no caller passed it, and the orphan-bridge reaper
+    /// exists only in comments.
+    ///
+    /// Asserting on source text is crude, and it is the cheapest thing that
+    /// actually fails when the call site disappears. A stronger version would
+    /// drive the daemon loop directly; until that exists, this is the guard.
+    #[test]
+    fn every_recovery_producer_is_wired_into_the_daemon() {
+        let daemon = include_str!("../daemon.rs");
+        for (function, why) in [
+            (
+                "revive_dead_with_readable_sources",
+                "dead spool ranges would never return to pending",
+            ),
+            (
+                "run_check_tick",
+                "the machine would never learn it is running a stale binary",
+            ),
+        ] {
+            assert!(
+                daemon.contains(function),
+                "{function} is not called from daemon.rs, so {why}. A recovery path that \
+                 nothing schedules is indistinguishable from one that does not exist."
+            );
+        }
+    }
+
     #[test]
     fn a_dead_range_whose_source_survives_is_never_deleted() {
         // The bug: cleanup() hard-deleted dead rows after 30 days. A spool row
