@@ -21,6 +21,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
+.PHONY: test-engine-single
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
 .PHONY: profile-ios-live-console
@@ -272,6 +273,11 @@ test-engine: ## Rust engine tests (~20s)
 	fi; \
 	rm -f "$$engine_test_log"
 	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+
+test-engine-single: ## One exact Rust engine unit test (TEST=module::tests::name)
+	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
+	@python3 scripts/build/generate_build_identity.py
+	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine $(TEST) -- --exact --nocapture
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py

@@ -4473,15 +4473,26 @@ mod tests {
             [first.source_epoch.to_string()],
         )
         .unwrap();
-
         let rebuilt = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
             .unwrap()
             .unwrap();
-        assert_ne!(rebuilt.source_epoch, first.source_epoch);
+        assert_eq!(
+            rebuilt.source_epoch, first.source_epoch,
+            "the old undrained raw epoch must ship before its parser-replay successor"
+        );
         assert_eq!(
             rebuilt.envelope.render.as_ref().unwrap().parser_revision,
             CURSOR_PARSER_REVISION
         );
+        let active_epoch: String = conn
+            .query_row(
+                "SELECT source_epoch FROM source_epoch_registry
+                 WHERE provider = 'cursor' AND opaque_source_id = ?1 AND ended_at IS NULL",
+                [&first.envelope.opaque_source_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(active_epoch, first.source_epoch.to_string());
     }
 
     #[tokio::test]
@@ -5004,7 +5015,7 @@ mod tests {
             .path()
             .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
         let user = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
-        let assistant = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"hi\"}}\n";
+        let assistant = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n";
         fs::write(&path, user).unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
 
@@ -5912,9 +5923,12 @@ mod tests {
         let path = dir
             .path()
             .join("019c638d-0000-0000-0000-000000000012.jsonl");
-        let bytes = br#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}}
-"#;
-        fs::write(&path, bytes).unwrap();
+        let image_data = BASE64_STANDARD.encode([0_u8; 600]);
+        let bytes = format!(
+            "{{\"type\":\"response_item\",\"timestamp\":\"2026-03-01T10:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,{image_data}\"}}]}}}}\n"
+        )
+        .into_bytes();
+        fs::write(&path, &bytes).unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
             .unwrap()
@@ -5922,10 +5936,10 @@ mod tests {
 
         assert_eq!(
             prepared.envelope.records[0].data_b64,
-            BASE64_STANDARD.encode(bytes)
+            BASE64_STANDARD.encode(&bytes)
         );
         assert_eq!(prepared.media_objects.len(), 1);
-        assert_eq!(prepared.media_objects[0].bytes, vec![0, 0, 0]);
+        assert_eq!(prepared.media_objects[0].bytes, vec![0; 600]);
         assert_eq!(prepared.envelope.media.len(), 1);
         assert_eq!(
             prepared.envelope.media[0].sha256,
@@ -6017,9 +6031,9 @@ mod tests {
         let path = dir
             .path()
             .join("019c638d-0000-0000-0000-000000000013.jsonl");
-        let line = concat!(
-            r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}}"#,
-            "\n"
+        let image_data = BASE64_STANDARD.encode([0_u8; 600]);
+        let line = format!(
+            "{{\"type\":\"response_item\",\"timestamp\":\"2026-03-01T10:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,{image_data}\"}}]}}}}\n"
         );
         fs::write(&path, line).unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
