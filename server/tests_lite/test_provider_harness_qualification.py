@@ -709,7 +709,7 @@ def test_cursor_full_column_gate_accepts_live_gate0_limits() -> None:
     assert gate["status"] == "pass"
 
 
-def test_cursor_observed_install_executor_demotes_blocked_live_provider_status(
+def test_cursor_observed_install_executor_keeps_profile_verdict_separate_from_full_column(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -817,7 +817,7 @@ def test_claude_profile_runs_one_full_column_and_reuses_live_print_result(
     assert bundle["execution_metadata"]["semantic_status"] == "pass"
 
 
-def test_claude_full_column_regression_fails_both_profile_assertions_closed(
+def test_claude_full_column_regression_remains_coverage_evidence(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -841,9 +841,13 @@ def test_claude_full_column_regression_fails_both_profile_assertions_closed(
 
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
     outcomes = bundle["coverage_manifest"]["outcomes"]
-    assert outcomes["claude_cli_channel_contract_preserved"] == "infrastructure_error"
-    assert outcomes["real_print_marker_returned"] == "infrastructure_error"
-    assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
+    assert outcomes["claude_cli_channel_contract_preserved"] == "pass"
+    assert outcomes["real_print_marker_returned"] == "pass"
+    assert bundle["execution_metadata"]["semantic_status"] == "pass"
+    observation = json.loads(
+        (tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8")
+    )
+    assert observation["full_column_gate"]["status"] == "fail"
 
 
 def test_opencode_profile_runs_one_full_column_with_server_tool_and_live_proof(
@@ -889,7 +893,7 @@ def test_opencode_profile_runs_one_full_column_with_server_tool_and_live_proof(
 
 
 @pytest.mark.parametrize("regressed_scenario", ["timeline_projection", "tool_call_result", LIVE_TOKEN_HARNESS_SCENARIO])
-def test_opencode_release_gate_regression_fails_profile_assertions_closed(
+def test_opencode_release_gate_regression_remains_coverage_evidence(
     tmp_path: Path,
     monkeypatch,
     regressed_scenario: str,
@@ -918,9 +922,14 @@ def test_opencode_release_gate_regression_fails_profile_assertions_closed(
 
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
     outcomes = bundle["coverage_manifest"]["outcomes"]
-    assert outcomes["serve_session_contract_preserved"] == "infrastructure_error"
-    assert outcomes["process_restart_reattach_preserved"] == "infrastructure_error"
-    assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
+    assert outcomes["serve_session_contract_preserved"] == "pass"
+    assert outcomes["process_restart_reattach_preserved"] == "pass"
+    assert bundle["execution_metadata"]["semantic_status"] == "pass"
+    observation = json.loads(
+        (tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8")
+    )
+    expected_failure_key = "full_column" if regressed_scenario == "timeline_projection" else regressed_scenario
+    assert observation["full_column_failures"][expected_failure_key] == "fail"
 
 
 def test_antigravity_profile_runs_full_column_and_preserves_blocked_live_boundary(
@@ -961,7 +970,7 @@ def test_antigravity_profile_runs_full_column_and_preserves_blocked_live_boundar
     assert bundle["execution_metadata"]["semantic_status"] == "blocked"
 
 
-def test_antigravity_full_column_regression_fails_profile_assertions_closed(
+def test_antigravity_full_column_regression_remains_coverage_evidence(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -989,9 +998,9 @@ def test_antigravity_full_column_regression_fails_profile_assertions_closed(
 
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
     outcomes = bundle["coverage_manifest"]["outcomes"]
-    assert outcomes["hook_inbox_contract_preserved"] == "infrastructure_error"
-    assert outcomes["real_print_injection_observed"] == "infrastructure_error"
-    assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
+    assert outcomes["hook_inbox_contract_preserved"] == "pass"
+    assert outcomes["real_print_injection_observed"] == "blocked"
+    assert bundle["execution_metadata"]["semantic_status"] == "blocked"
 
 
 @pytest.mark.timeout(30)

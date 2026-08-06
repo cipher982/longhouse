@@ -563,12 +563,14 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     }
     ran_strict_check = strict_result.get("status") in {"pass", "fail"}
     evidence_class = EvidenceClass.LIVE_TOKEN if ran_strict_check else EvidenceClass.LIVE_NO_TOKEN
-    if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values() or full_column_gate["status"] != "pass":
+    # The profile owns the four outcomes above.  The universal full-column
+    # gate is retained as separate coverage evidence; it must not turn a
+    # successful codex_tool_call_result proof into an infrastructure failure
+    # because an unrelated requirement was unavailable.
+    if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values():
         execution_status = "infrastructure_error"
-    elif full_column_gate.get("provider_status") == "blocked":
+    elif all(outcome == AssertionOutcome.BLOCKED for outcome in outcomes.values()):
         execution_status = "blocked"
-    elif full_column_gate.get("provider_status") == "fail":
-        execution_status = "infrastructure_error"
     else:
         execution_status = "completed"
 
@@ -748,18 +750,11 @@ def _claude_full_column_executor(
         live_enabled=True,
         live_status=str(live_result.get("status")),
     )
-    if full_column_gate["status"] != "pass" or full_column_gate.get("provider_status") == "fail":
-        assertions = tuple(
-            semantic.SemanticAssertion(
-                assertion.assertion_id,
-                AssertionOutcome.INFRASTRUCTURE_ERROR,
-                assertion.evidence_class,
-            )
-            for assertion in assertions
-        )
+    # ``claude_real_print_v1`` is judged by its no-token and real-print
+    # assertions.  Full-column coverage is useful diagnostic evidence, not a
+    # third assertion for this profile.
+    if AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
         status = "infrastructure_error"
-    elif full_column_gate.get("provider_status") == "blocked":
-        status = "blocked"
     elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
         status = "fail"
     elif AssertionOutcome.BLOCKED in {assertion.outcome for assertion in assertions}:
@@ -866,7 +861,7 @@ def _opencode_full_column_executor(
     canaries = _opencode_server_canaries(managed_result, evidence_root=evidence_root)
     assertions = opencode_server_qualification.opencode_server_contract_oracle(canaries)
 
-    release_gate_failures = {
+    full_column_failures = {
         name: result.get("status")
         for name, result in {
             "full_column": full_column_gate,
@@ -875,21 +870,10 @@ def _opencode_full_column_executor(
         }.items()
         if result.get("status") != "pass"
     }
-    provider_gate_failed = full_column_gate.get("provider_status") == "fail"
-    provider_gate_blocked = full_column_gate.get("provider_status") == "blocked"
-    if release_gate_failures or provider_gate_failed:
-        assertions = tuple(
-            semantic.SemanticAssertion(
-                assertion.assertion_id,
-                AssertionOutcome.INFRASTRUCTURE_ERROR,
-                assertion.evidence_class,
-            )
-            for assertion in assertions
-        )
-        status = "infrastructure_error"
-    elif provider_gate_blocked:
-        status = "blocked"
-    elif AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
+    # The OpenCode contract oracle is the profile decision.  Keep the live
+    # token and universal-column results visible for coverage/drill-down, but
+    # do not let an unrelated column gap overwrite the two profile outcomes.
+    if AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
         status = "infrastructure_error"
     elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
         status = "fail"
@@ -907,7 +891,7 @@ def _opencode_full_column_executor(
         "managed_session_e2e": managed_result,
         "tool_call_result": tool_result,
         LIVE_TOKEN_HARNESS_SCENARIO: live_result,
-        "release_gate_failures": release_gate_failures,
+        "full_column_failures": full_column_failures,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
     _copy_live_model_evidence(observation, live_result)
@@ -988,17 +972,10 @@ def _antigravity_full_column_executor(
     canaries = _antigravity_hook_canaries(launch_result, evidence_root=evidence_root)
     assertions = antigravity_hook_qualification.antigravity_hook_inbox_oracle(canaries)
 
-    if full_column_gate["status"] != "pass":
-        assertions = tuple(
-            semantic.SemanticAssertion(
-                assertion.assertion_id,
-                AssertionOutcome.INFRASTRUCTURE_ERROR,
-                assertion.evidence_class,
-            )
-            for assertion in assertions
-        )
-        status = "infrastructure_error"
-    elif AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
+    # Antigravity's maintenance-tier profile is the hook/inbox oracle.  The
+    # universal column is retained for coverage reporting and cannot rewrite
+    # the profile result.
+    if AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
         status = "infrastructure_error"
     elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
         status = "fail"
@@ -1014,6 +991,7 @@ def _antigravity_full_column_executor(
         "full_column_gate": full_column_gate,
         "launch_managed_session": launch_result,
         "managed_session_e2e": managed_result,
+        "full_column_failures": {"full_column": full_column_gate["status"]} if full_column_gate.get("status") != "pass" else {},
         "producer_boundary": "unwatched_worker_required",
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
@@ -1102,13 +1080,15 @@ def _cursor_observed_install_executor(
         provider="cursor",
         scenario="interaction_semantics",
     )
-    gate_status = full_column_gate.get("status")
-    provider_status = full_column_gate.get("provider_status")
     gate0_passed = gate0 is not None and gate0.get("status") == "passed"
-    if not gate0_passed or gate_status != "pass" or provider_status in {"fail", "blocked"} or live_result.get("status") != "pass":
+    # Gate 0 and the bounded live canary are this profile's requirements.
+    # The universal full-column result remains observable evidence but does
+    # not change this profile's verdict.
+    interaction_status = interaction_result.get("status")
+    if not gate0_passed or live_result.get("status") != "pass" or interaction_status != "pass":
         assertion_outcome = (
             AssertionOutcome.BLOCKED
-            if provider_status == "blocked" or live_result.get("status") == "blocked"
+            if live_result.get("status") == "blocked" or interaction_status == "blocked"
             else AssertionOutcome.INFRASTRUCTURE_ERROR
         )
         status = "blocked" if assertion_outcome == AssertionOutcome.BLOCKED else "infrastructure_error"
