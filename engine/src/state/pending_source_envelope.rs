@@ -192,22 +192,28 @@ pub fn load_for_epoch(
 /// scheduler. Multiple epochs for one path collapse into one scheduler job.
 pub fn retry_paths(conn: &Connection) -> Result<Vec<PendingSourceRetryPath>> {
     let mut statement = conn.prepare(
-        // Blocked rows are included. They used to be filtered out here, which
-        // meant a quarantined source was skipped by restart recovery as well as
-        // by the live path, so nothing in the process ever looked at it again —
-        // the block was terminal by scheduling, not just by policy. A blocked
-        // source now gets woken like any other and is re-examined against host
-        // truth once it arrives; if that re-examination finds nothing to do, it
-        // stays blocked and costs one manifest fetch.
+        // Selection is by time due, and by nothing else.
+        //
+        // Blocked rows used to be filtered out here, so a quarantined source
+        // was skipped by restart recovery as well as by the live path and
+        // nothing in the process ever looked at it again. Removing that filter
+        // fixed the absorbing state; selecting on `wake_at` is what keeps the
+        // fix from becoming an unbounded re-examination loop.
+        //
+        // The shape is the point: classification lives in `blocked_at` and
+        // `block_kind`, which this query does not mention. A predicate can
+        // postpone a row by moving `wake_at`; it cannot remove one from
+        // consideration, because there is nothing here to filter on.
         "SELECT epoch.provider, pending.source_path,
                 SUM(pending.raw_bytes), MIN(pending.created_at)
          FROM pending_source_envelope AS pending
          JOIN source_epoch_registry AS epoch
            ON epoch.source_epoch = pending.source_epoch
+         WHERE pending.wake_at <= ?1
          GROUP BY epoch.provider, pending.source_path
          ORDER BY MIN(pending.created_at), epoch.provider, pending.source_path",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map([Utc::now().to_rfc3339()], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -315,22 +321,78 @@ pub fn mark_attempt(conn: &Connection, source_epoch: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// How long to wait before re-examining a blocked source, by attempt count.
+///
+/// Blocking no longer removes a row from consideration, which is what fixed the
+/// absorbing state — and immediately created the opposite risk, since every
+/// blocked row would otherwise be re-examined on every watcher tick and every
+/// restart, each costing a Runtime Host manifest fetch.
+///
+/// The curve is deliberately coarse. Nothing here is time-critical: a source
+/// that has been blocked for a day loses nothing by being looked at hourly
+/// rather than continuously, and the cheapest re-examination is the one that
+/// does not happen.
+fn reexamine_backoff(attempt_count: u64) -> chrono::Duration {
+    match attempt_count {
+        0..=1 => chrono::Duration::minutes(1),
+        2..=3 => chrono::Duration::minutes(15),
+        4..=6 => chrono::Duration::hours(1),
+        _ => chrono::Duration::hours(6),
+    }
+}
+
 pub fn quarantine(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &str) -> Result<bool> {
+    let now = Utc::now();
+    // Read the attempt count so repeated blocks back off rather than spinning.
+    let attempts: u64 = conn
+        .query_row(
+            "SELECT attempt_count FROM pending_source_envelope WHERE source_epoch = ?1",
+            [source_epoch.to_string()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(|value| u64::try_from(value).unwrap_or(0))
+        .unwrap_or(0);
+    let wake_at = now + reexamine_backoff(attempts);
     let changed = conn.execute(
         "UPDATE pending_source_envelope
-         SET blocked_at = ?1, block_kind = ?2, block_detail = ?3
+         SET blocked_at = ?1, block_kind = ?2, block_detail = ?3, wake_at = ?5
          WHERE source_epoch = ?4 AND blocked_at IS NULL",
         params![
-            Utc::now().to_rfc3339(),
+            now.to_rfc3339(),
             kind,
             detail,
-            source_epoch.to_string()
+            source_epoch.to_string(),
+            wake_at.to_rfc3339()
         ],
     )?;
     if changed > 1 {
         bail!("quarantining one source changed multiple pending envelopes");
     }
     Ok(changed == 1)
+}
+
+/// Push a blocked source's next examination out after one that found nothing.
+///
+/// A re-examination that changes nothing still costs a manifest fetch, so the
+/// row must move further out rather than coming straight back. Without this the
+/// backoff set at quarantine time only ever applies once.
+pub fn defer_reexamination(conn: &Connection, source_epoch: Uuid) -> Result<()> {
+    let attempts: u64 = conn
+        .query_row(
+            "SELECT attempt_count FROM pending_source_envelope WHERE source_epoch = ?1",
+            [source_epoch.to_string()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(|value| u64::try_from(value).unwrap_or(0))
+        .unwrap_or(0);
+    let wake_at = Utc::now() + reexamine_backoff(attempts.saturating_add(1));
+    conn.execute(
+        "UPDATE pending_source_envelope SET wake_at = ?2 WHERE source_epoch = ?1",
+        params![source_epoch.to_string(), wake_at.to_rfc3339()],
+    )?;
+    Ok(())
 }
 
 pub fn source_is_blocked(
@@ -918,7 +980,7 @@ mod tests {
     use super::{
         block_kind_is_reconciling, pending_outbox_has_capacity, persist_or_load, quarantine,
         replace_request_body_after_lineage_repair, retire_after_host_replacement, retry_paths,
-        snapshot, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
+        defer_reexamination, snapshot, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
     use rusqlite::params;
@@ -929,6 +991,77 @@ mod tests {
         assert!(pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES - 1, 1));
         assert!(!pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES, 1));
         assert!(!pending_outbox_has_capacity(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn a_blocked_source_is_postponed_rather_than_removed() {
+        // The whole shape of the fix: quarantine sets a future wake_at instead
+        // of excluding the row, so it is invisible *now* and due *later*. If a
+        // future change filters on blocked_at again, the second assertion here
+        // keeps passing while the third starts failing.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        persist_or_load(&mut conn, &candidate(epoch, "/tmp/blocked.jsonl")).unwrap();
+
+        assert_eq!(retry_paths(&conn).unwrap().len(), 1, "due immediately");
+
+        quarantine(&mut conn, epoch, "source_epoch_conflict", "range gap").unwrap();
+        assert!(
+            retry_paths(&conn).unwrap().is_empty(),
+            "a freshly blocked source is postponed, not due right now"
+        );
+
+        // Time passing is the only thing that should bring it back.
+        conn.execute(
+            "UPDATE pending_source_envelope SET wake_at = '1970-01-01T00:00:00+00:00'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            retry_paths(&conn).unwrap().len(),
+            1,
+            "once due, a blocked source is scheduled like any other row; it is \
+             re-examined against host truth and stays blocked only if there is \
+             genuinely nothing to do"
+        );
+    }
+
+    #[test]
+    fn repeated_blocks_back_off_instead_of_spinning() {
+        // Without a growing interval, removing the absorbing state just trades
+        // it for a manifest fetch on every watcher tick.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        persist_or_load(&mut conn, &candidate(epoch, "/tmp/blocked.jsonl")).unwrap();
+        quarantine(&mut conn, epoch, "source_epoch_conflict", "gap").unwrap();
+
+        let first: String = conn
+            .query_row("SELECT wake_at FROM pending_source_envelope", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        // Simulate attempts accumulating, then a fruitless re-examination.
+        conn.execute(
+            "UPDATE pending_source_envelope SET attempt_count = 8",
+            [],
+        )
+        .unwrap();
+        defer_reexamination(&conn, epoch).unwrap();
+        let later: String = conn
+            .query_row("SELECT wake_at FROM pending_source_envelope", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert!(
+            later > first,
+            "a re-examination that found nothing must push the next one further \
+             out, not schedule it again immediately ({later} vs {first})"
+        );
     }
 
     #[test]
@@ -1004,7 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_paths_are_provider_scoped_deduplicated_and_include_quarantine() {
+    fn retry_paths_are_provider_scoped_deduplicated_and_time_gated() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let active = Uuid::new_v4();
@@ -1040,28 +1173,21 @@ mod tests {
         persist_or_load(&mut conn, &blocked_envelope).unwrap();
         quarantine(&mut conn, blocked, "fixture", "blocked").unwrap();
 
-        // A blocked source is scheduled like any other. Excluding it here is
-        // what made quarantine terminal by scheduling as well as by policy:
-        // nothing in the process ever looked at the row again, so no repair
-        // could run even once one existed. It is woken and re-examined against
-        // host truth; if there is nothing to do it stays blocked.
-        // Ordering is by MIN(created_at) then provider then path; the fixtures
-        // share a timestamp, so the blocked claude row sorts first on provider.
+        // Selection is by time due. A freshly blocked source is postponed, not
+        // excluded — it carries a future `wake_at` and returns on its own once
+        // that passes. `a_blocked_source_is_postponed_rather_than_removed`
+        // covers the full cycle including the return; this case exists for the
+        // provider scoping and same-path deduplication.
         let paths = retry_paths(&conn).unwrap();
         assert_eq!(
             paths,
-            vec![
-                super::PendingSourceRetryPath {
-                    provider: "claude".to_string(),
-                    source_path: "/tmp/blocked.jsonl".to_string(),
-                    raw_bytes: 1,
-                },
-                super::PendingSourceRetryPath {
-                    provider: "codex".to_string(),
-                    source_path: "/tmp/shared.jsonl".to_string(),
-                    raw_bytes: 8,
-                },
-            ]
+            vec![super::PendingSourceRetryPath {
+                provider: "codex".to_string(),
+                source_path: "/tmp/shared.jsonl".to_string(),
+                raw_bytes: 8,
+            }],
+            "two epochs on one path collapse into a single job, and the blocked \
+             claude source is due later rather than now"
         );
     }
 

@@ -116,11 +116,30 @@ mod tests {
         pending_source_envelope::persist_or_load(&mut conn, &candidate).unwrap();
         pending_source_envelope::quarantine(&mut conn, epoch, "fixture", "blocked").unwrap();
 
+        // The invariant is *reachable*, not *immediately due*. Quarantine now
+        // postpones by setting a future `wake_at`, so asserting the row appears
+        // right away tested a stricter property than the invariant — and one
+        // that backoff correctly violates. Advancing the clock is the honest
+        // form: the row must come back on its own, without anything else
+        // intervening.
+        assert!(
+            !pending_source_envelope::retry_paths(&conn)
+                .unwrap()
+                .iter()
+                .any(|p| p.source_path == "/tmp/blocked.jsonl"),
+            "a freshly blocked source is postponed rather than spun on"
+        );
+        conn.execute(
+            "UPDATE pending_source_envelope SET wake_at = '1970-01-01T00:00:00+00:00'",
+            [],
+        )
+        .unwrap();
         let paths = pending_source_envelope::retry_paths(&conn).unwrap();
         assert!(
             paths.iter().any(|p| p.source_path == "/tmp/blocked.jsonl"),
-            "a quarantined source must still be scheduled; it is re-examined against host \
-             truth when it runs, and stays blocked only if there is genuinely nothing to do"
+            "once due, a quarantined source must be scheduled like any other row; it is \
+             re-examined against host truth when it runs, and stays blocked only if there \
+             is genuinely nothing to do"
         );
     }
 

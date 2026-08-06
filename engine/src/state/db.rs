@@ -240,6 +240,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             blocked_at TEXT,
             block_kind TEXT,
             block_detail TEXT,
+            -- When this row should next be looked at. NOT NULL on purpose:
+            -- classification may postpone work, never remove it from
+            -- consideration. See the migration in this file for why.
+            wake_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
@@ -379,6 +383,25 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             "ALTER TABLE pending_source_envelope ADD COLUMN blocked_at TEXT;
              ALTER TABLE pending_source_envelope ADD COLUMN block_kind TEXT;
              ALTER TABLE pending_source_envelope ADD COLUMN block_detail TEXT;",
+        )?;
+    }
+    if !pending_envelope_columns.contains("wake_at") {
+        // When this row should next be looked at.
+        //
+        // Blocking a source used to remove it from consideration outright.
+        // Removing that filter fixed the absorbing state and replaced it with
+        // the opposite problem: every blocked row is now woken on every restart
+        // and re-examined on every watcher tick, each costing a Runtime Host
+        // manifest fetch. Unbounded re-examination is how "always schedulable"
+        // becomes a load incident.
+        //
+        // `wake_at` is what lets classification *postpone* a row without ever
+        // removing it. Existing rows default to the epoch so nothing is
+        // stranded by the migration: an old row is due immediately, gets one
+        // examination, and is then scheduled properly.
+        conn.execute_batch(
+            "ALTER TABLE pending_source_envelope
+             ADD COLUMN wake_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00';",
         )?;
     }
 

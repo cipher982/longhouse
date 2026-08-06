@@ -890,12 +890,17 @@ async fn reexamine_blocked_source(
             return Ok(true);
         }
     }
-    if prepared.envelope.provider == "cursor" {
-        return Ok(
-            reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
-                || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?,
-        );
+    if prepared.envelope.provider == "cursor"
+        && (reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
+            || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
+    {
+        return Ok(true);
     }
+    // Nothing to do this time. Push the next look further out rather than
+    // letting the row come straight back: a re-examination that changes nothing
+    // still costs a manifest fetch, and "always schedulable" without a growing
+    // interval is how the fix for an absorbing state turns into a load problem.
+    pending_source_envelope::defer_reexamination(conn, prepared.source_epoch)?;
     Ok(false)
 }
 
