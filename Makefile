@@ -260,7 +260,18 @@ test-engine: ## Rust engine tests (~20s)
 	@# the only coordination-token scoping assertion -- had never run in CI. The
 	@# identical iOS scheme drift is documented above; the Rust lane had the same
 	@# hole.
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+	@engine_test_log="$$(mktemp -t longhouse-engine-tests.XXXXXX)"; \
+	status=0; \
+	(cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine) >"$$engine_test_log" 2>&1 || status=$$?; \
+	cat "$$engine_test_log"; \
+	if [ "$$status" -ne 0 ]; then rm -f "$$engine_test_log"; exit "$$status"; fi; \
+	if ! grep -q '^test result: ok\.' "$$engine_test_log"; then \
+		echo "ERROR: longhouse-engine test harness exited without a completion summary" >&2; \
+		rm -f "$$engine_test_log"; \
+		exit 1; \
+	fi; \
+	rm -f "$$engine_test_log"
+	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py

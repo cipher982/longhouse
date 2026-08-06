@@ -2534,7 +2534,9 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
     Ok(())
 }
 
-pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
+fn build_codex_bridge_attach_command(
+    config: &BridgeAttachConfig,
+) -> Result<(std::process::Command, String)> {
     let state = load_ready_state(&config.session_id, config.state_root.as_deref())?;
     let _thread_id = state
         .thread_id
@@ -2559,6 +2561,12 @@ pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
         .arg(&ws_url)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .current_dir(PathBuf::from(state.cwd));
+
+    Ok((command, codex_bin))
+}
+
+pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
+    let (mut command, codex_bin) = build_codex_bridge_attach_command(&config)?;
 
     #[cfg(unix)]
     {
@@ -6559,27 +6567,39 @@ mod tests {
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
-        let exit_code = cmd_codex_bridge_attach(BridgeAttachConfig {
+        let (command, _) = build_codex_bridge_attach_command(&BridgeAttachConfig {
             session_id: session_id.to_string(),
             state_root: Some(temp.path().to_path_buf()),
             codex_bin: None,
         })
         .unwrap();
 
-        assert_eq!(exit_code, 0);
-        let args = fs::read_to_string(args_file).unwrap();
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
         assert_eq!(
-            args.lines().collect::<Vec<_>>(),
+            args,
             vec![
-                "-c",
-                CODEX_DISABLE_UPDATE_CHECK_CONFIG,
-                "--enable",
-                "tui_app_server",
-                "--remote",
-                "ws://127.0.0.1:4800",
+                "-c".to_string(),
+                CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string(),
+                "--enable".to_string(),
+                "tui_app_server".to_string(),
+                "--remote".to_string(),
+                "ws://127.0.0.1:4800".to_string(),
             ]
         );
-        assert_eq!(fs::read_to_string(session_file).unwrap().trim(), session_id);
+        assert_eq!(
+            command.get_current_dir(),
+            Some(temp.path()),
+            "attach must preserve the managed session cwd"
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "LONGHOUSE_MANAGED_SESSION_ID"
+                && value == Some(std::ffi::OsStr::new(session_id))
+        }));
+        assert!(!args_file.exists());
+        assert!(!session_file.exists());
     }
 
     #[cfg(unix)]
