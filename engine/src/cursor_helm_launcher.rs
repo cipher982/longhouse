@@ -1472,7 +1472,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let stop = Arc::new(AtomicBool::new(false));
     let requested_session_end = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
-    let setup = (|| -> anyhow::Result<Terminal> {
+    // Recording the control state is bookkeeping about a provider that is
+    // already exec'd, so it must not be able to take that provider away. A `ps`
+    // that cannot fork under process-table pressure, or a full disk, used to
+    // reach the SIGKILL below and kill a working cursor-agent that had already
+    // painted its banner. Without this file the session runs with no control
+    // path -- the same degradation a failed registration already produces --
+    // which is the outcome the user can still work with.
+    let control_state = (|| -> anyhow::Result<()> {
         let launcher_pid = std::process::id();
         let launcher_start = process_start_time(launcher_pid as libc::pid_t)
             .context("could not capture Cursor Helm launcher process identity")?;
@@ -1483,6 +1490,16 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             &dir.join(format!("{session_id}.json")),
             &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":run_id,"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if degraded_registration.is_some() { "degraded" } else { "registered" },"started_at":now,"updated_at":now}),
         )?;
+        Ok(())
+    })();
+    if let Err(error) = control_state {
+        deferred_notices.push(format!(
+            "Longhouse warning: Cursor started without a control path because its control state could not be recorded: {error:#}"
+        ));
+    }
+    // Terminal setup stays fatal. Without raw mode and signal handling there is
+    // no relay to run, so the child could not be used even if it were spared.
+    let setup = (|| -> anyhow::Result<Terminal> {
         let terminal = Terminal(0, raw(0)?);
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
         signal_hook::flag::register(libc::SIGTERM, stop.clone())?;
