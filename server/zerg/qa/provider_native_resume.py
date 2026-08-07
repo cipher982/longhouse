@@ -352,6 +352,7 @@ def registration_for(provider: str) -> ProducerRegistration:
             "initial_transcript",
             "initial_transcript_ship_receipt",
             "native_resume_terminal_recording",
+            *(("resume_bootstrap_response_correlation", "resume_bootstrap_transcript") if provider == "cursor" else ()),
             "resumed_bridge_state",
             "resumed_transcript",
             "post_resume_response_correlation",
@@ -1703,7 +1704,7 @@ def _control_send(
     }
 
 
-def _cursor_bootstrap_prompt() -> str:
+def _cursor_bootstrap_prompt(marker: str = "READY") -> str:
     """Return a side-effect-free first-turn prompt for Cursor's hook probe.
 
     Cursor's native lifecycle hooks are not observed until the first foreground
@@ -1712,7 +1713,7 @@ def _cursor_bootstrap_prompt() -> str:
     the managed Helm socket after the hook reports idle.
     """
 
-    return "Reply with exactly READY and nothing else. Do not use tools or inspect files."
+    return f"Reply with exactly {marker} and nothing else. Do not use tools or inspect files."
 
 
 def _resume_marker(provider: str, phase: str) -> str:
@@ -2200,12 +2201,19 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             # restoration a bounded settling window; submit exactly one
             # bootstrap through the provider PTY, then require the fresh hook
             # event before using the authoritative managed socket.
+            bootstrap_marker = _resume_marker(provider, "BOOTSTRAP")
+            bootstrap_prior_tail = _wait_session_tail(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+            )
+            bootstrap_prior_assistant_event_digests = _assistant_event_digests(bootstrap_prior_tail)
             bootstrap_send = _control_send(
                 spec,
                 args,
                 resumed_state,
                 resumed,
-                _cursor_bootstrap_prompt(),
+                _cursor_bootstrap_prompt(bootstrap_marker),
                 initial=True,
             )
             _write_json(
@@ -2218,6 +2226,23 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 minimum_hook_event_bytes=resume_hook_event_bytes,
             )
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
+            bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+                bootstrap_marker,
+                prior_assistant_event_digests=bootstrap_prior_assistant_event_digests,
+                require_assistant_marker=True,
+                timeout=args.live_send_timeout_secs,
+            )
+            _write_json(root / "resume-bootstrap-response-correlation.json", bootstrap_response_correlation)
+            if not (
+                bootstrap_response_correlation["marker_observed_in_transcript"]
+                and bootstrap_response_correlation["marker_observed_in_assistant"]
+                and bootstrap_response_correlation["new_assistant_events"] > 0
+            ):
+                raise RuntimeError(f"provider transcript did not correlate resumed Cursor bootstrap marker {bootstrap_marker}")
+            _write_json(root / "resume-bootstrap-transcript.jsonl", bootstrap_tail)
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)

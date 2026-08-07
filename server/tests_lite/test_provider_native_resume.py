@@ -24,6 +24,7 @@ from zerg.qa.provider_native_resume import _claude_input_prompt_visible
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
+from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
@@ -31,9 +32,9 @@ from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
+from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
-from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
@@ -75,6 +76,21 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
             "post_resume_transcript_ship_receipt",
             "post_stop_transcript_ship_receipt",
         } <= set(registration.required_artifacts)
+        cursor_only = {
+            "resume_bootstrap_response_correlation",
+            "resume_bootstrap_transcript",
+        }
+        if provider == "cursor":
+            assert cursor_only <= set(registration.required_artifacts)
+        else:
+            assert cursor_only.isdisjoint(registration.required_artifacts)
+
+
+def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
+    assert _cursor_bootstrap_prompt() == "Reply with exactly READY and nothing else. Do not use tools or inspect files."
+    assert _cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == (
+        "Reply with exactly LH_CURSOR_BOOTSTRAP_abc123 and nothing else. Do not use tools or inspect files."
+    )
 
 
 def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
