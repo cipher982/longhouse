@@ -73,6 +73,7 @@ class CapabilityAssertion:
     oracle_source: str
     acceptable_evidence: tuple[str, ...]
     max_age_seconds: int
+    disposition: str = "implemented"
 
 
 def _load_schema() -> dict:
@@ -117,6 +118,7 @@ def _load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
                         oracle_source=assertion["oracle_source"],
                         acceptable_evidence=tuple(assertion.get("acceptable_evidence") or ()),
                         max_age_seconds=int(assertion["max_age_seconds"]),
+                        disposition=str(capability_entry.get("disposition") or "implemented"),
                     )
                 )
     return tuple(out)

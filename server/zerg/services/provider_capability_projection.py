@@ -15,6 +15,7 @@ from zerg.services.provider_capability_schema import CapabilityAssertion
 NEVER_PROVEN = "never_proven"
 STALE = "stale"
 UNACCEPTABLE_EVIDENCE = "unacceptable_evidence"
+PROJECTION_VERSION = "assurance-projection-v1"
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class CapabilityProjection:
     worker_id: str | None = None
     open_case_id: str | None = None
     baseline_outcome: str | None = None
+    disposition: str = "implemented"
 
 
 def _parse_timestamp(value: str) -> datetime | None:
@@ -156,6 +158,7 @@ def project_capabilities(
                 scenario_id=assertion.scenario_id,
                 declared=True,
                 proof_status=status,
+                disposition=assertion.disposition,
                 generated_at=support.generated_at if support else None,
                 evidence_class=support.evidence_class.value if support else None,
                 proof_artifact_id=qualifying.artifact_id if qualifying else None,
@@ -180,5 +183,6 @@ __all__ = [
     "NEVER_PROVEN",
     "STALE",
     "UNACCEPTABLE_EVIDENCE",
+    "PROJECTION_VERSION",
     "project_capabilities",
 ]

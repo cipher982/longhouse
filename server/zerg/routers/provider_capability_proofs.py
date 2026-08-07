@@ -20,6 +20,7 @@ from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.provider_capability_projection import PROJECTION_VERSION
 from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -318,6 +319,7 @@ def build_capability_projection_payload() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "artifact_kind": "provider_capability_projection",
+        "projection_version": PROJECTION_VERSION,
         "capabilities": [
             {
                 "provider": p.provider,
@@ -326,6 +328,7 @@ def build_capability_projection_payload() -> dict[str, Any]:
                 "variant": p.variant,
                 "scenario_id": p.scenario_id,
                 "declared": p.declared,
+                "disposition": p.disposition,
                 "proof_status": p.proof_status,
                 "generated_at": p.generated_at,
                 "evidence_class": p.evidence_class,

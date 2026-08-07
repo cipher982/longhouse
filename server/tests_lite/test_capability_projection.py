@@ -87,6 +87,7 @@ def test_fresh_passing_proof_is_attached():
     assert projections[0].proof_status == "pass"
     assert projections[0].generated_at == "2026-07-29T00:30:00+00:00"
     assert projections[0].evidence_class == "live_token"
+    assert projections[0].disposition == "implemented"
 
 
 def test_legacy_proof_is_historical_for_non_variant_assertion():

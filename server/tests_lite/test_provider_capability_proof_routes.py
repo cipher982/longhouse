@@ -418,6 +418,7 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     assert response.status_code == 200
     payload = response.json()
     assert payload["artifact_kind"] == "provider_capability_projection"
+    assert payload["projection_version"] == "assurance-projection-v1"
     # assertion_id is not globally unique across providers -- e.g. both codex
     # and cursor declare "coordination_instructions_model_visible" for their
     # own coordination.awareness.create capability -- so the join and this
@@ -426,6 +427,7 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     by_key = {(row["provider"], row["assertion_id"]): row for row in payload["capabilities"]}
     proven = by_key[("codex", "coordination_instructions_model_visible")]
     assert proven["capability"] == "coordination.awareness.create"
+    assert proven["disposition"] == "implemented"
     assert proven["proof_status"] == "pass"
     assert proven["generated_at"] == generated_at
     other_codex_proven = by_key.get(("cursor", "coordination_instructions_model_visible"))
