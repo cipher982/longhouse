@@ -439,9 +439,11 @@ fn reexamine_floor(block_kind: Option<&str>) -> chrono::Duration {
 pub fn quarantine(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &str) -> Result<bool> {
     let now = Utc::now();
     // A row being blocked right now has age zero, so it earns the shortest
-    // interval. Widening is `defer_reexamination`'s job, once the block has
-    // actually persisted.
-    let wake_at = now + reexamine_backoff(chrono::Duration::zero());
+    // interval — unless its kind has no local recovery path at all, in which
+    // case the first re-examination is already pointless and the floor applies
+    // immediately rather than one cycle later.
+    let wake_at =
+        now + reexamine_backoff(chrono::Duration::zero()).max(reexamine_floor(Some(kind)));
     let changed = conn.execute(
         "UPDATE pending_source_envelope
          SET blocked_at = ?1, block_kind = ?2, block_detail = ?3, wake_at = ?5

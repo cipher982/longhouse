@@ -89,6 +89,56 @@ pub fn oldest_undrained_epoch(
         .transpose()
 }
 
+/// Delete copied Cursor bytes for epochs the Runtime Host has fully receipted.
+///
+/// Claude and Codex are re-read from their `.jsonl` files by byte offset, so
+/// the engine keeps only a cursor for them. Cursor keeps chats in its own blob
+/// database, so its records must be copied out and linearized here before they
+/// can be shipped. That copy is necessary while an epoch is in flight and dead
+/// weight afterwards — and nothing ever deleted it. On the machine that
+/// motivated this, `cursor_store_raw_record` was 8.5GB of 9.7GB, with 501,511
+/// rows (5.97GB) belonging to epochs that had been fully receipted and ended.
+///
+/// The predicate is keyed on **positions, not row counts**. `last_position` is
+/// exclusive: envelopes cover `[range_start, range_end)` and a receipt advances
+/// the cursor to `range_end` (`pending_source_envelope.rs:894-903`), so an epoch
+/// is fully durable exactly when it retains no record at or above it. The
+/// count-based comparison in [`oldest_undrained_epoch`] is only equivalent
+/// while rows are dense and undeleted, which stops being true the first time
+/// this runs.
+///
+/// Safe against the lineage walk: `wire_predecessor_proof_for_epoch` returns on
+/// `durable_position > 0` before it ever consults the raw-record count
+/// (`source_epoch.rs:443-451`), and every epoch drained here has shipped, so it
+/// can never be mistaken for an empty ancestor.
+///
+/// Historical supersession rows deliberately do not block a drain: they are an
+/// audit trail with no production reader, not an in-flight operation.
+pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
+    let deleted = conn.execute(
+        "DELETE FROM cursor_store_raw_record
+         WHERE source_epoch IN (
+             SELECT epoch.source_epoch
+             FROM source_epoch_registry AS epoch
+             JOIN source_epoch_lane_state AS durable
+               ON durable.source_epoch = epoch.source_epoch
+              AND durable.lane = 'durable'
+             WHERE epoch.ended_at IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM pending_source_envelope AS pending
+                   WHERE pending.source_epoch = epoch.source_epoch
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM cursor_store_raw_record AS retained
+                   WHERE retained.source_epoch = epoch.source_epoch
+                     AND retained.source_position >= durable.last_position
+               )
+         )",
+        [],
+    )?;
+    u64::try_from(deleted).context("drained Cursor record count is negative")
+}
+
 pub fn cursor_record_hash(bytes: &[u8]) -> String {
     hex_hash(bytes)
 }
@@ -245,6 +295,100 @@ mod tests {
             params![epoch.to_string(), format!("fixture:{epoch}"), now],
         )
         .unwrap();
+    }
+
+    /// Set the durable cursor for an epoch. Exclusive: the next position that
+    /// is *not* yet durable.
+    fn set_durable_cursor(conn: &Connection, epoch: Uuid, last_position: u64) {
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+             VALUES (?1, 'durable', ?2, ?3)
+             ON CONFLICT(source_epoch, lane) DO UPDATE SET last_position = ?2",
+            params![
+                epoch.to_string(),
+                last_position as i64,
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+    }
+
+    fn end_epoch(conn: &Connection, epoch: Uuid) {
+        conn.execute(
+            "UPDATE source_epoch_registry SET ended_at = ?2 WHERE source_epoch = ?1",
+            params![epoch.to_string(), Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_drain_removes_only_fully_receipted_ended_epochs() {
+        // The whole risk of this feature is deleting evidence that was never
+        // shipped, so every retention reason gets its own epoch here.
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+
+        // (a) ended and fully receipted — the only one that should go.
+        let drained = Uuid::new_v4();
+        seed_epoch(&conn, drained);
+        append_unseen_cursor_records(&mut conn, drained, &[b"a0".to_vec(), b"a1".to_vec()]).unwrap();
+        set_durable_cursor(&conn, drained, 2);
+        end_epoch(&conn, drained);
+
+        // (b) ended, but one record sits at the cursor — never shipped.
+        let partial = Uuid::new_v4();
+        seed_epoch(&conn, partial);
+        append_unseen_cursor_records(&mut conn, partial, &[b"b0".to_vec(), b"b1".to_vec()]).unwrap();
+        set_durable_cursor(&conn, partial, 1);
+        end_epoch(&conn, partial);
+
+        // (c) ended and receipted, but an envelope is still pending.
+        let pending = Uuid::new_v4();
+        seed_epoch(&conn, pending);
+        append_unseen_cursor_records(&mut conn, pending, &[b"c0".to_vec()]).unwrap();
+        set_durable_cursor(&conn, pending, 1);
+        end_epoch(&conn, pending);
+        conn.execute(
+            "INSERT INTO pending_source_envelope (
+                 source_epoch, source_path, range_start, range_end, envelope_id,
+                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
+                 has_reply_evidence, has_more, created_at
+             ) VALUES (?1, '/tmp/c', 0, 1, 'env-c', x'00', x'00', 1, 1, 0, 0, ?2)",
+            params![pending.to_string(), Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        // (d) fully receipted but still open — the session may yet write more.
+        let open = Uuid::new_v4();
+        seed_epoch(&conn, open);
+        append_unseen_cursor_records(&mut conn, open, &[b"d0".to_vec()]).unwrap();
+        set_durable_cursor(&conn, open, 1);
+
+        let deleted = drain_receipted_cursor_records(&conn).unwrap();
+
+        assert_eq!(deleted, 2, "expected only the fully receipted ended epoch");
+        assert_eq!(cursor_record_count(&conn, drained).unwrap(), 0);
+        assert_eq!(cursor_record_count(&conn, partial).unwrap(), 2, "unshipped");
+        assert_eq!(cursor_record_count(&conn, pending).unwrap(), 1, "pending");
+        assert_eq!(cursor_record_count(&conn, open).unwrap(), 1, "still open");
+
+        // Retained evidence must still be shippable byte-for-byte, not merely
+        // present: a drain that corrupted the read path would pass a row count.
+        assert_eq!(
+            oldest_undrained_epoch(&conn, "cursor", &format!("fixture:{partial}")).unwrap(),
+            Some(partial)
+        );
+        assert_eq!(
+            cursor_records_from(&conn, partial, 1, 10, 1024).unwrap(),
+            vec![CursorRawRecord {
+                source_position: 1,
+                bytes: b"b1".to_vec()
+            }]
+        );
+
+        // Idempotent: the predicate is position-based, so a second pass over an
+        // already-drained epoch finds nothing rather than mis-reading counts.
+        assert_eq!(drain_receipted_cursor_records(&conn).unwrap(), 0);
     }
 
     #[test]

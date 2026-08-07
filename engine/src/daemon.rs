@@ -1692,19 +1692,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 "Managed observation scan completed"
                             );
                         }
-                        // Reap here rather than in the scan: stopping a group
-                        // means waiting on it, and the scan runs under
-                        // spawn_blocking. The scan already gated this list on
-                        // a valid process inventory and a full reconciliation.
+                        // Report only. `process_inventory_valid` proves `ps`
+                        // ran; it does not prove the five provider scanners
+                        // did, and a scanner that fails is indistinguishable
+                        // from a provider with no sessions. Killing on that
+                        // basis would destroy live work.
                         if !result.orphan_processes.is_empty() {
-                            let reaped = crate::managed_process_janitor::reap_orphan_processes(
+                            crate::managed_process_janitor::report_orphan_processes(
                                 &result.orphan_processes,
-                            )
-                            .await;
-                            tracing::info!(
-                                found = result.orphan_processes.len(),
-                                reaped,
-                                "swept orphaned managed provider processes"
                             );
                         }
                         if !result.process_inventory_valid {
@@ -2142,6 +2137,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         Err(error) => tracing::warn!(
                             error = %error,
                             "Immutable storage-v2 retry error"
+                        ),
+                    }
+                    // Copied Cursor bytes are only needed until the host
+                    // receipts them; nothing deleted them before, so they grew
+                    // to 8.5GB of a 9.7GB local database. Runs after the retry
+                    // queueing above so anything still owed a retry is visibly
+                    // pending and therefore excluded by the predicate.
+                    match crate::state::cursor_store_records::drain_receipted_cursor_records(&conn) {
+                        Ok(0) => {}
+                        Ok(deleted) => tracing::info!(
+                            deleted,
+                            "drained receipted Cursor records from the local store"
+                        ),
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "Cursor record drain error"
                         ),
                     }
                 }
@@ -3561,6 +3572,16 @@ fn maybe_start_managed_observation_scan(
                 );
                 retained_sessions.extend(retained_codex.iter().cloned());
                 retained_sessions.extend(retained_claude.iter().cloned());
+                // Resume contracts cover four providers, not just Claude
+                // (`managed_resume_scan.rs:29-54`). Folding in only Claude's
+                // made a live Codex, Cursor or OpenCode session known solely
+                // through its contract look orphaned.
+                retained_sessions.extend(
+                    crate::managed_resume_scan::scan_resume_contracts(&home, chrono::Utc::now())
+                        .into_iter()
+                        .filter(|observation| observation.contract_state == "valid")
+                        .map(|observation| observation.session_id),
+                );
 
                 // Only *identify* here. This closure runs under
                 // `spawn_blocking`, and stopping a process group means waiting

@@ -232,7 +232,7 @@ fn parse_lsof(text: &str) -> Vec<PathBuf> {
     paths
 }
 
-fn is_provider_process(command: &str) -> Option<&'static str> {
+pub(crate) fn is_provider_process(command: &str) -> Option<&'static str> {
     // Grab argv[0] — the first whitespace-separated token.
     let mut argv = command.split_whitespace();
     let argv0 = argv.next().unwrap_or("");
