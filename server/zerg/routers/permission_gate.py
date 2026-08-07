@@ -367,6 +367,9 @@ async def expire_permission_request(
     response_payload = {"permissionDecision": "deny", "permissionDecisionReason": reason}
     now = datetime.now(timezone.utc)
     if database_module.live_catalog_enabled():
+        from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client
 
         catalogd = get_catalogd_client()
@@ -383,10 +386,20 @@ async def expire_permission_request(
                     "response_text": reason,
                     "resolved_at": now.isoformat(),
                 },
-                timeout_seconds=1.0,
+                # Expiring an interaction is a mutation, not a hot read.
+                timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
             )
-        except Exception as exc:
+        except CatalogUnavailable as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction expiry failed") from exc
+        except CatalogRemoteError as exc:
+            # A bare `except Exception` here reported catalog conflicts, missing
+            # rows, and outright bugs as one infrastructure failure.
+            status_code = {
+                "not_found": status.HTTP_404_NOT_FOUND,
+                "forbidden": status.HTTP_403_FORBIDDEN,
+                "conflict": status.HTTP_409_CONFLICT,
+            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
         if result.get("found") is not True:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="permission request not found")
     else:

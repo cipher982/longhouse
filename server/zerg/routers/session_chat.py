@@ -736,6 +736,9 @@ async def _resolve_catalog_interaction(
     response_payload: dict[str, Any],
     response_text: str | None,
 ) -> dict[str, Any]:
+    from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
     from zerg.services.catalogd_supervisor import get_catalogd_client
 
     catalogd = get_catalogd_client()
@@ -753,10 +756,35 @@ async def _resolve_catalog_interaction(
                 "response_text": response_text,
                 "resolved_at": resolved_at.isoformat(),
             },
-            timeout_seconds=1.0,
+            # Answering a provider question is a user-initiated mutation, not a
+            # hot read. Under the read budget, ordinary write latency reported
+            # an answer that had actually been recorded as a failure.
+            timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
         )
-    except Exception as exc:
+    except CatalogUnavailable as exc:
+        if exc.outcome_unknown:
+            # The answer may already be recorded. Saying it failed sends the
+            # user back to retry, and the retry meets the 409 below telling
+            # them it has already resolved -- two contradictory messages for a
+            # decision that worked.
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=(
+                    "Your answer may already have been recorded; the catalog did not answer in time. "
+                    "Re-read this request before answering again."
+                ),
+            ) from exc
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction resolution failed") from exc
+    except CatalogRemoteError as exc:
+        # Preserve what the catalog actually said. A bare `except Exception`
+        # collapsed conflict and not_found into a generic 503 and hid genuine
+        # programming errors behind an infrastructure-shaped message.
+        status_code = {
+            "not_found": status.HTTP_404_NOT_FOUND,
+            "forbidden": status.HTTP_403_FORBIDDEN,
+            "conflict": status.HTTP_409_CONFLICT,
+        }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     reason = result.get("reason")
     if result.get("found") is not True:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="pause request not found for this session")
