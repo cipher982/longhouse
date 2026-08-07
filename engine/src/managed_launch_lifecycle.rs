@@ -271,7 +271,13 @@ fn spawn_launch_outcome_retry(
         };
         let mut last_error = None;
         for attempt in 0..5_u32 {
-            std::thread::sleep(Duration::from_secs(2_u64.pow(attempt)));
+            // Back off between attempts, never before the first one. A detached
+            // launch (`--no-attach`) returns within milliseconds and takes this
+            // thread with it, so a sleep-first loop never reached the Runtime
+            // Host at all and left the launch permanently unrecorded.
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_secs(2_u64.pow(attempt - 1)));
+            }
             match runtime.block_on(report_launch_outcome(
                 &url,
                 &device_token,
@@ -563,9 +569,16 @@ mod tests {
         let confirm = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(confirm.contains(r#""outcome":"confirmed""#));
         // The provider really started, so dropping an unconfirmed transaction
-        // must not report a launch abort. The background retry does not send
-        // its first replay until well after this window.
-        assert!(requests.recv_timeout(Duration::from_millis(250)).is_err());
+        // must never report a launch abort. The background retry replays the
+        // same confirmation immediately -- a detached launch exits too fast for
+        // a delayed first attempt to reach anything -- so assert on what those
+        // replays SAY rather than on their absence.
+        while let Ok(replay) = requests.recv_timeout(Duration::from_millis(300)) {
+            assert!(
+                replay.contains(r#""outcome":"confirmed""#),
+                "degraded launch replayed something other than its confirmation: {replay}"
+            );
+        }
 
         let payload: Value = serde_json::from_slice(
             &std::fs::read(outcome_receipt(agent_dir.path(), "session-1")).unwrap(),
