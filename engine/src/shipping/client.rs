@@ -627,7 +627,14 @@ fn parse_storage_v2_backpressure(
 ) -> Option<StorageV2Backpressure> {
     let typed_busy = parse_header_string(headers, STORAGE_BACKPRESSURE_HEADER)
         .is_some_and(|kind| kind == "storage_lane_busy");
-    if status_code != 503 || (!typed_busy && !body.contains("storage_lane_busy")) {
+    // A catalogd deadline expiry reaches the shipper as `catalog_unavailable`.
+    // That is the same transient condition as a full lane and deserves the same
+    // retry: storage-v2 manifests are keyed by envelope and content hash, so an
+    // exact replay returns the durable receipt instead of writing twice. It was
+    // not recognised here, so a moment of catalog contention under load failed
+    // the whole ship rather than backing off and trying again.
+    let catalog_unavailable = body.contains("catalog_unavailable");
+    if status_code != 503 || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_unavailable) {
         return None;
     }
     Some(StorageV2Backpressure {
@@ -890,6 +897,26 @@ mod tests {
         assert_eq!(detail.lane, "repair");
         assert_eq!(detail.retry_after, Duration::from_secs(7));
         assert!(parse_storage_v2_backpressure(500, &headers, "{}", "repair").is_none());
+    }
+
+    /// A catalogd deadline expiry is transient, and storage-v2 writes are keyed
+    /// by envelope and content hash so replaying one returns the durable
+    /// receipt. Treating it as a hard failure meant a moment of catalog
+    /// contention under load failed an entire ship instead of retrying it.
+    #[test]
+    fn storage_v2_catalog_unavailable_is_retryable_backpressure() {
+        let headers = HeaderMap::new();
+        let body = r#"{"detail":{"code":"catalog_unavailable","message":"Storage-v2 catalog is temporarily unavailable."}}"#;
+
+        let detail = parse_storage_v2_backpressure(503, &headers, body, "live")
+            .expect("a transient catalog stall should be retryable, not fatal");
+        assert_eq!(detail.lane, "live");
+        assert_eq!(detail.retry_after, Duration::from_secs(5));
+
+        // Still scoped: a non-503, and a 503 that is neither condition, are not
+        // silently retried.
+        assert!(parse_storage_v2_backpressure(500, &headers, body, "live").is_none());
+        assert!(parse_storage_v2_backpressure(503, &headers, r#"{"detail":"nope"}"#, "live").is_none());
     }
 
     #[test]
