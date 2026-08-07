@@ -1114,7 +1114,9 @@ def test_launch_outcome_uses_device_bound_catalog_transaction(monkeypatch, tmp_p
     calls = []
 
     class Catalog:
-        async def call(self, method, params):
+        # Matches the real client, which takes a per-call deadline. Launch RPCs
+        # pass one explicitly so a cold catalogd cannot fail them spuriously.
+        async def call(self, method, params, **_kwargs):
             calls.append((method, params))
             return {
                 "launch": {
