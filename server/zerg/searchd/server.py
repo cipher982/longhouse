@@ -401,6 +401,7 @@ class SearchDaemon:
                     request,
                     await self._run_with_dense_refresh(
                         self._store.delete_session,
+                        refresh=lambda result: bool(result.get("changed")),
                         session_id=_uuid(request.params["session_id"], "session_id"),
                     ),
                 )
@@ -454,6 +455,8 @@ class SearchDaemon:
 
         assert self._executor is not None
         result = await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
+        conditional_refresh = callable(refresh)
+        should_refresh = refresh(result) if conditional_refresh else refresh
         if self._closing or self._dense_index is None or self._connection is None:
             return result
         store = self._store
@@ -461,8 +464,12 @@ class SearchDaemon:
         if store is None or executor is None:
             return result
         dense_index = self._dense_index
+        if conditional_refresh and not should_refresh:
+            # A mutation can be a durable no-op. Do not even mark the resident
+            # snapshot stale when the indexed corpus did not change.
+            return result
         dense_index.invalidate(allow_stale_reads=not self._dense_known_unservable)
-        if not refresh:
+        if not should_refresh:
             # Partial embedding batches are durable but not yet a publishable
             # session snapshot. Keep serving the last truthful resident view
             # and rebuild once, after the final complete batch.

@@ -1013,6 +1013,35 @@ async def test_dense_refresh_skips_partial_embedding_batches(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dense_refresh_skips_noop_mutations(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    loads = 0
+    original_load = daemon._dense_index.load
+
+    def counted_load(connection):
+        nonlocal loads
+        loads += 1
+        original_load(connection)
+
+    daemon._dense_index.load = counted_load
+    try:
+        result = await daemon._run_with_dense_refresh(
+            lambda: {"deleted": True, "changed": False},
+            refresh=lambda value: bool(value["changed"]),
+        )
+        assert result == {"deleted": True, "changed": False}
+        assert loads == 0
+        assert daemon._dense_index.coverage.stale is False
+    finally:
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
 async def test_dense_refresh_defers_full_rebuild_while_a_corrupt_session_blocks_it(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)

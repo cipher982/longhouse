@@ -1846,20 +1846,25 @@ class SearchStore:
         return _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
 
     def delete_session(self, *, session_id: str) -> dict[str, object]:
+        changed = False
         self.connection.execute("BEGIN IMMEDIATE")
         try:
-            self.connection.execute("DELETE FROM session_index WHERE session_id = ?", (session_id,))
-            self.connection.execute("DELETE FROM searchable_events WHERE session_id = ?", (session_id,))
-            self.connection.execute("DELETE FROM projection_membership WHERE session_id = ?", (session_id,))
-            self.connection.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
-            self.connection.execute("DELETE FROM indexed_objects WHERE session_id = ?", (session_id,))
-            self.connection.execute("DELETE FROM episode_embeddings WHERE session_id = ?", (session_id,))
-            self.connection.execute("DELETE FROM embedding_publications WHERE session_id = ?", (session_id,))
+            for table in (
+                "session_index",
+                "searchable_events",
+                "projection_membership",
+                "events",
+                "indexed_objects",
+                "episode_embeddings",
+                "embedding_publications",
+            ):
+                cursor = self.connection.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
+                changed = changed or cursor.rowcount > 0
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")
             raise
-        return {"deleted": True}
+        return {"deleted": True, "changed": changed}
 
 
 def canonical_json(value: object) -> str:
