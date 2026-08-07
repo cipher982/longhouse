@@ -22,6 +22,9 @@ use uuid::Uuid;
 
 const USERNAME: &str = "opencode";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the event stream may take to produce response headers. The stream
+/// itself is unbounded by design; only this opening handshake is not.
+const OPENCODE_EVENT_HEADER_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct StartConfig {
     pub session_id: String,
@@ -406,7 +409,7 @@ async fn monitor_opencode_events_once(
     longhouse_session_id: &str,
     stop: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let mut response = reqwest::Client::builder()
+    let request = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         // OpenCode's long-lived SSE endpoint can close a compressed response
         // without a complete compression trailer. Ask for identity bytes so
@@ -416,8 +419,30 @@ async fn monitor_opencode_events_once(
         .get(format!("{server_url}/global/event"))
         .header("Accept-Encoding", "identity")
         .basic_auth(username, Some(password))
-        .send()
-        .await?;
+        .send();
+    // `connect_timeout` bounds only the handshake, and this stream is
+    // long-lived so it cannot carry a total request timeout. A server that
+    // accepts and then never answers -- wedged, half-open after a sleep, or a
+    // recycled port owned by something else -- parked this future forever.
+    // Nothing else polled the stop watch while it did, so on TUI exit the
+    // attach wrapper's monitor.join() never returned and the user's terminal
+    // was held until the process was killed. Bound the wait for headers and
+    // let a requested stop win it.
+    let mut response = tokio::select! {
+        result = request => result?,
+        changed = stop.changed() => {
+            if changed.is_err() || *stop.borrow() {
+                return Ok(());
+            }
+            bail!("OpenCode event stream stop signal changed before response headers");
+        }
+        _ = tokio::time::sleep(OPENCODE_EVENT_HEADER_TIMEOUT) => {
+            bail!(
+                "OpenCode event stream sent no response headers within {:?}",
+                OPENCODE_EVENT_HEADER_TIMEOUT
+            );
+        }
+    };
     if !response.status().is_success() {
         bail!("OpenCode event stream failed ({})", response.status());
     }
