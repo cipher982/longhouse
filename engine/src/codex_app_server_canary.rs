@@ -913,6 +913,10 @@ fn app_server_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Lead a group: the app-server starts helpers of its own, and both
+    // `kill_on_drop` and `start_kill` reach only the leader.
+    #[cfg(unix)]
+    command.process_group(0);
     if config.app_server_transport == AppServerTransport::Stdio {
         command.stdin(Stdio::piped());
     } else {
@@ -1318,10 +1322,22 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     if let RpcOutbound::Stdio(stdin) = &mut client.outbound {
         let _ = stdin.shutdown().await;
     }
-    if client.child.try_wait()?.is_none() {
-        let _ = client.child.start_kill();
+    let pgid = client
+        .child
+        .id()
+        .and_then(crate::process_group::leader_group_for);
+    let outcome = crate::process_group::shutdown_owned_child(
+        &mut client.child,
+        pgid,
+        crate::process_group::DEFAULT_GRACE,
+    )
+    .await;
+    if !outcome.is_gone() {
+        eprintln!(
+            "[codex-canary] app-server process group {} survived SIGKILL",
+            pgid.unwrap_or_default()
+        );
     }
-    let _ = client.child.wait().await;
     Ok(())
 }
 
@@ -1377,6 +1393,12 @@ async fn spawn_remote_tui(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // `script` execs a zsh that execs the Codex TUI, so killing the leader
+    // leaves two live processes. Safe to group here: this is not attached to
+    // the user's terminal (stdin and stdout are null), so no job control is
+    // being taken away from anyone.
+    #[cfg(unix)]
+    command.process_group(0);
     if let Some(home) = home_override {
         command.env("HOME", home);
         command.env("CODEX_HOME", home.join(".codex"));
@@ -1424,10 +1446,16 @@ impl RemoteTuiHandle {
     }
 
     async fn shutdown(&mut self) -> Result<()> {
-        if self.child.try_wait()?.is_none() {
-            let _ = self.child.start_kill();
-        }
-        let _ = self.child.wait().await;
+        let pgid = self
+            .child
+            .id()
+            .and_then(crate::process_group::leader_group_for);
+        crate::process_group::shutdown_owned_child(
+            &mut self.child,
+            pgid,
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
         Ok(())
     }
 }

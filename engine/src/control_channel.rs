@@ -1954,6 +1954,11 @@ async fn run_longhouse_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // `kill_on_drop` reaches the leader only. These invocations start providers
+    // that spawn their own children, so a timeout would drop the handle, kill
+    // `longhouse`, and leave the tree it started running with no owner.
+    #[cfg(unix)]
+    command.process_group(0);
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -1962,16 +1967,27 @@ async fn run_longhouse_command(
         code: "provider_launch_failed".to_string(),
         message: format!("failed to start longhouse command: {err}"),
     })?;
-    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
-        .await
-        .map_err(|_| CommandError {
-            code: "provider_launch_failed".to_string(),
-            message: format!("longhouse command timed out after {timeout_secs} seconds"),
-        })?
-        .map_err(|err| CommandError {
-            code: "provider_launch_failed".to_string(),
-            message: format!("longhouse command failed: {err}"),
-        })?;
+    // Read the group before `wait_with_output` consumes the child.
+    let pgid = child.id().and_then(crate::process_group::leader_group_for);
+    let output =
+        match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
+            .await
+        {
+            Ok(result) => result.map_err(|err| CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: format!("longhouse command failed: {err}"),
+            })?,
+            Err(_) => {
+                if let Some(pgid) = pgid {
+                    crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE)
+                        .await;
+                }
+                return Err(CommandError {
+                    code: "provider_launch_failed".to_string(),
+                    message: format!("longhouse command timed out after {timeout_secs} seconds"),
+                });
+            }
+        };
 
     Ok(CliCommandOutput {
         exit_code: output.status.code().unwrap_or(1),
