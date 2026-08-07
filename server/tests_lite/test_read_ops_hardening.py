@@ -280,9 +280,17 @@ def test_health_db_uses_catalogd_when_live_catalog_is_enabled(monkeypatch):
     from zerg.routers import health as health_mod
 
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+    from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+
     monkeypatch.setattr(
         "zerg.catalogd.client.call_catalogd_sync",
-        lambda *_args, **_kwargs: {"ready": True, "commit_seq": "42"},
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "commit_seq": "42",
+            "schema_version": CATALOG_SCHEMA_VERSION,
+            "schema_generation": CATALOG_SCHEMA_GENERATION,
+        },
     )
     monkeypatch.setattr(
         "zerg.services.catalogd_supervisor.catalogd_paths",
@@ -293,6 +301,30 @@ def test_health_db_uses_catalogd_when_live_catalog_is_enabled(monkeypatch):
     response = health_mod.health_db(object())
 
     assert response["catalog"]["commit_seq"] == "42"
+
+
+def test_health_db_rejects_a_catalogd_running_an_incompatible_schema(monkeypatch):
+    """`ready` is true on every successful ping, so it proves only that the
+    socket answered. A peer owning the socket with a schema this process cannot
+    use must not be reported as ready."""
+
+    import zerg.database as database_module
+    from zerg.routers import health as health_mod
+
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        "zerg.catalogd.client.call_catalogd_sync",
+        lambda *_args, **_kwargs: {"ready": True, "commit_seq": "42", "schema_version": -1, "schema_generation": -1},
+    )
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.catalogd_paths",
+        lambda: (None, "/tmp/catalogd-test.sock"),
+    )
+    monkeypatch.setattr(health_mod, "_request_is_trusted", lambda request: True)
+
+    response = health_mod.health_db(object())
+
+    assert response.status_code == 503
 
 
 # ---------------------------------------------------------------------------
