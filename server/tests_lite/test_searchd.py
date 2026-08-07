@@ -1271,6 +1271,16 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
     daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
+    assert daemon._dense_index is not None
+    dense_loads = 0
+    original_dense_load = daemon._dense_index.load
+
+    def counted_dense_load(connection):
+        nonlocal dense_loads
+        dense_loads += 1
+        original_dense_load(connection)
+
+    daemon._dense_index.load = counted_dense_load
     session_id = str(uuid4())
     generation_id = str(uuid4())
     source_epoch = str(uuid4())
@@ -1328,6 +1338,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert (await client.call("search.query.v2", _search_params("speed")))["results"] == []
         published = await client.call("search.index.publish.v2", {**base_publish, "object_count": 1})
         assert published["published"] is True
+        assert dense_loads == 0
         search = await client.call("search.query.v2", _search_params("speed"))
         assert search["results"][0]["session_id"] == session_id
         assert search["results"][0]["source_object_id"] == object_id

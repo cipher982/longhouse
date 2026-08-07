@@ -289,7 +289,12 @@ class SearchDaemon:
                 return self._result(request, await self._run(self._store.reuse_indexed_objects, **params))
             if request.method == "search.index.publish.v2":
                 params = _publish_params(request.params)
-                published = await self._run_with_dense_refresh(self._store.publish_generation, **params)
+                # Lexical publication makes the resident dense snapshot stale,
+                # but the embedding projector is the mutation that can make a
+                # new generation resident. Keep serving the prior truthful
+                # snapshot while that durable embedding pass catches up; a
+                # full corpus reload here would run again for the same turn.
+                published = await self._run_with_dense_refresh(self._store.publish_generation, refresh=False, **params)
                 return self._result(request, published)
             if request.method == "search.embedding.write.v2":
                 params = _embedding_write_params(request.params)
