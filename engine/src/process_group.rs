@@ -184,7 +184,11 @@ pub async fn shutdown_group(_pgid: i32, _grace: Duration) -> GroupShutdown {
 /// Not `cfg(unix)`-gated: `group_is_alive` is always false off unix, so this
 /// returns immediately there and both callers stay platform-neutral.
 async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + budget;
+    wait_for_group_exit_until(pgid, tokio::time::Instant::now() + budget).await
+}
+
+/// Poll until the group is gone or `deadline` passes. True when it is gone.
+async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) -> bool {
     loop {
         if !group_is_alive(pgid) {
             return true;
@@ -213,43 +217,68 @@ pub async fn shutdown_owned_child(
     pgid: Option<i32>,
     grace: Duration,
 ) -> GroupShutdown {
+    // One deadline for the whole polite phase. Timing the child wait and the
+    // group wait separately spent up to two graces before reporting
+    // `Terminated`, which contradicts what that outcome claims.
+    let deadline = tokio::time::Instant::now() + grace;
     let pgid = pgid.filter(|pgid| *pgid > 0 && group_is_alive(*pgid));
 
+    // `Absent` must mean nothing was running, not "we had no pgid". Without
+    // this check the no-group path could kill a live child and still report
+    // that there was nothing to stop.
+    if pgid.is_none() && !matches!(child.try_wait(), Ok(None)) {
+        let _ = child.wait().await;
+        return GroupShutdown::Absent;
+    }
+
+    // Ask nicely: the whole group when we lead one, the child alone otherwise.
     #[cfg(unix)]
-    if let Some(pgid) = pgid {
-        unsafe {
+    match pgid {
+        Some(pgid) => unsafe {
             libc::killpg(pgid, libc::SIGTERM);
+        },
+        None => {
+            if let Some(pid) = child.id() {
+                if let Ok(pid) = i32::try_from(pid) {
+                    unsafe {
+                        libc::kill(pid, libc::SIGTERM);
+                    }
+                }
+            }
         }
     }
 
-    // Reap the leader within the grace period so its zombie stops holding the
-    // group open. Everything after this point sees only the other members.
-    let exited_on_term = tokio::time::timeout(grace, child.wait()).await.is_ok();
+    // Reap the leader first so its zombie stops holding the group open.
+    // `Ok(Err(_))` is a `wait` failure, not an exit: treating it as success
+    // would skip escalation for a child we have lost track of.
+    let exited_on_term = matches!(
+        tokio::time::timeout_at(deadline, child.wait()).await,
+        Ok(Ok(_))
+    );
 
-    let Some(pgid) = pgid else {
-        if !exited_on_term {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-        }
-        return GroupShutdown::Absent;
+    let settled = match pgid {
+        Some(pgid) => exited_on_term && wait_for_group_exit_until(pgid, deadline).await,
+        None => exited_on_term,
     };
-
-    if exited_on_term && wait_for_group_exit(pgid, grace).await {
+    if settled {
         return GroupShutdown::Terminated;
     }
 
     #[cfg(unix)]
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
+    if let Some(pgid) = pgid {
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
     }
     if !exited_on_term {
         let _ = child.start_kill();
         let _ = child.wait().await;
     }
-    if wait_for_group_exit(pgid, KILL_CONFIRM_BUDGET).await {
-        GroupShutdown::Killed
-    } else {
-        GroupShutdown::Survived
+    match pgid {
+        Some(pgid) if !wait_for_group_exit(pgid, KILL_CONFIRM_BUDGET).await => {
+            GroupShutdown::Survived
+        }
+        _ => GroupShutdown::Killed,
     }
 }
 
@@ -337,6 +366,52 @@ mod tests {
 
         assert_eq!(outcome, GroupShutdown::Killed);
         assert!(!group_is_alive(pgid), "group survived SIGKILL");
+    }
+
+    #[tokio::test]
+    async fn a_live_child_with_no_group_is_stopped_and_reported_honestly() {
+        // Without a pgid there is no group to signal, but there is still a live
+        // child. Reporting `Absent` here claimed nothing needed stopping while
+        // having just killed it.
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap '' TERM; while :; do sleep 5; done")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().expect("spawn ungrouped child");
+        let pid = child.id().expect("test child pid");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let outcome = shutdown_owned_child(&mut child, None, Duration::from_millis(100)).await;
+
+        assert_eq!(
+            outcome,
+            GroupShutdown::Killed,
+            "a live child that ignored SIGTERM was stopped; saying otherwise hides the kill"
+        );
+        assert!(
+            unsafe { libc::kill(pid as i32, 0) } != 0,
+            "child outlived shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_already_dead_child_reports_absent() {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn short-lived child");
+        // Let it exit and be reaped by the runtime before we look.
+        let _ = child.wait().await;
+
+        assert_eq!(
+            shutdown_owned_child(&mut child, None, DEFAULT_GRACE).await,
+            GroupShutdown::Absent
+        );
     }
 
     #[tokio::test]

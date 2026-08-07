@@ -559,20 +559,56 @@ def _terminate_group(proc: subprocess.Popen, grace: float = 5.0) -> None:
     Requires the process to have been started with `start_new_session=True`, so
     it leads its own group and the signal cannot escape to unrelated work.
     """
-    if proc.poll() is None:
+    # The group id is the leader's pid, because these are all started with
+    # start_new_session=True. Use that rather than getpgid(), which fails once
+    # the leader is reaped and would leave the rest of the tree unsignalled.
+    pgid = proc.pid
+
+    def group_alive() -> bool:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def signal_group(sig) -> None:
+        try:
+            os.killpg(pgid, sig)
         except (ProcessLookupError, PermissionError):
-            proc.terminate()
+            pass
+
+    # Signal unconditionally. Gating on `proc.poll() is None` meant that a
+    # leader which had already exited left its children running untouched.
+    signal_group(signal.SIGTERM)
+
+    # Reap the leader so it stops being a zombie, then wait on the *group*.
+    # Waiting only for the leader was the bug: `uv` exiting says nothing about
+    # the uvicorn tree it started, so escalation never fired for the processes
+    # that actually leaked.
     try:
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-        # Always reap: a killed-but-unwaited child stays a defunct entry.
+        pass
+
+    deadline = time.monotonic() + grace
+    while group_alive() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    if group_alive():
+        signal_group(signal.SIGKILL)
+        deadline = time.monotonic() + grace
+        while group_alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    # Always reap: a killed-but-unwaited child stays a defunct entry.
+    if proc.poll() is None:
+        proc.kill()
+    try:
         proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _terminate_process(proc: subprocess.Popen[str]) -> str:

@@ -1071,7 +1071,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "24e6fd2541ec9eaa2728f65e83638c2a70ea66343bec827e4d8eb6f7659faca7"
+      "adapter_digest": "6aa4fcd8a12961260fd3cb79ef1a4b3483f4a7de3878b4502a9570b1e4969d09"
     },
     {
       "provider": "opencode",
@@ -2211,7 +2211,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "a2bcfdfca7c641239ce1000e602794e80649423dfa978e778b6f7301d32aff5d"
+      "adapter_digest": "daa359625727de994268d7dd5e4715fa24f11db06aed4b437a4d93499d0a2169"
     }
   ]
 }

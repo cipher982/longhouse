@@ -359,6 +359,11 @@ async fn monitor_claude_print(
                 }
             }
             Err(error) => {
+                // The run is over, so the group must go with it. Returning
+                // here without this abandoned a live provider group that
+                // nothing else owned — the same leak that accumulated 430
+                // orphans on the author's machine.
+                cleanup_process_group(sink.process_group_id).await;
                 sink.post_terminal("run_failed", None, Some(error.to_string()))
                     .await;
                 return;
@@ -424,6 +429,11 @@ async fn monitor_claude_print(
             }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
+                // The run is over, so the group must go with it. Returning
+                // here without this abandoned a live provider group that
+                // nothing else owned — the same leak that accumulated 430
+                // orphans on the author's machine.
+                cleanup_process_group(sink.process_group_id).await;
                 sink.post_terminal("run_failed", None, Some(error.to_string()))
                     .await;
                 return;
@@ -557,13 +567,10 @@ async fn cleanup_process_group(process_group_id: Option<i32>) {
     let Some(pgid) = process_group_id else {
         return;
     };
-    if unsafe { libc::killpg(pgid, 0) } != 0 {
-        return;
-    }
-    unsafe { libc::killpg(pgid, libc::SIGTERM) };
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    if unsafe { libc::killpg(pgid, 0) } == 0 {
-        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    let outcome =
+        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
+    if !outcome.is_gone() {
+        eprintln!("[claude-print] process group {pgid} survived SIGKILL and was left running");
     }
 }
 
