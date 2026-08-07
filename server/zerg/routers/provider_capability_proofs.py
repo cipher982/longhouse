@@ -276,7 +276,11 @@ def list_provider_capability_proofs(
     }
 
 
-def build_capability_projection_payload() -> dict[str, Any]:
+def build_capability_projection_payload(
+    *,
+    expected_longhouse_sha: str | None = None,
+    expected_epoch_digest: str | None = None,
+) -> dict[str, Any]:
     """Capability projection from the contract, proof status attached
     separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
     declared capability assertion for every managed provider gets exactly
@@ -315,11 +319,22 @@ def build_capability_projection_payload() -> dict[str, Any]:
         # narrow boundary rather than changing the shared loader's
         # CLI-facing contract for every other caller.
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-    projections = project_capabilities(assertions, all_records, integrity_reasons=integrity_reasons)
+    projections = project_capabilities(
+        assertions,
+        all_records,
+        integrity_reasons=integrity_reasons,
+        expected_longhouse_sha=expected_longhouse_sha,
+        expected_epoch_digest=expected_epoch_digest,
+    )
     return {
         "schema_version": 1,
         "artifact_kind": "provider_capability_projection",
         "projection_version": PROJECTION_VERSION,
+        "subject_fence": {
+            "configured": expected_longhouse_sha is not None or expected_epoch_digest is not None,
+            "longhouse_source_sha": expected_longhouse_sha,
+            "accepted_epoch_digest": expected_epoch_digest,
+        },
         "capabilities": [
             {
                 "provider": p.provider,
