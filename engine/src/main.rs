@@ -38,6 +38,7 @@ mod managed_contract_janitor;
 mod managed_cursor_helm_scan;
 mod managed_launch_lifecycle;
 mod managed_launch_payload;
+mod managed_process_janitor;
 mod managed_opencode_scan;
 mod managed_resume_scan;
 mod managed_terminal;

@@ -374,6 +374,9 @@ struct ManagedObservationScanResult {
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
+    /// Managed provider processes whose session is gone. Identified in the
+    /// blocking scan, reaped by the async consumer.
+    orphan_processes: Vec<crate::managed_process_janitor::OrphanProcess>,
     process_inventory_ms: u64,
     codex_elapsed_ms: u64,
     antigravity_elapsed_ms: u64,
@@ -1687,6 +1690,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"
+                            );
+                        }
+                        // Reap here rather than in the scan: stopping a group
+                        // means waiting on it, and the scan runs under
+                        // spawn_blocking. The scan already gated this list on
+                        // a valid process inventory and a full reconciliation.
+                        if !result.orphan_processes.is_empty() {
+                            let reaped = crate::managed_process_janitor::reap_orphan_processes(
+                                &result.orphan_processes,
+                            )
+                            .await;
+                            tracing::info!(
+                                found = result.orphan_processes.len(),
+                                reaped,
+                                "swept orphaned managed provider processes"
                             );
                         }
                         if !result.process_inventory_valid {
@@ -3479,6 +3497,7 @@ fn maybe_start_managed_observation_scan(
         // Gated on a valid process inventory. Without one every observation
         // reads as dead, and the sweep would delete the launch provenance of
         // every running session older than the grace period.
+        let mut orphan_processes = Vec::new();
         if full_reconciliation && process_inventory_valid {
             if let Ok(home) = crate::config::get_longhouse_home() {
                 // Codex launch provenance remains useful after a run ends: a
@@ -3517,6 +3536,42 @@ fn maybe_start_managed_observation_scan(
                 if swept > 0 {
                     tracing::info!(swept, "removed orphaned managed-session contracts");
                 }
+
+                // Sweep the processes themselves. A managed provider whose
+                // owner died keeps running forever otherwise: 126 Codex
+                // app-servers and 81 OpenCode servers, up to three days old,
+                // exhausted swap on the author's laptop before anything
+                // noticed.
+                //
+                // Retained is every session any provider still observes at
+                // all, not just the live ones. An orphan is a process whose
+                // session Longhouse has lost track of completely — which is
+                // what these were, since they pointed at temp and worktree
+                // homes this daemon never reads.
+                let mut retained_sessions = std::collections::HashSet::new();
+                retained_sessions.extend(codex_observations.iter().map(|o| o.session_id.clone()));
+                retained_sessions.extend(claude_observations.iter().map(|o| o.session_id.clone()));
+                retained_sessions
+                    .extend(opencode_observations.iter().map(|o| o.session_id.clone()));
+                retained_sessions.extend(cursor_observations.iter().map(|o| o.session_id.clone()));
+                retained_sessions.extend(
+                    antigravity_observations
+                        .iter()
+                        .map(|o| o.session_id.clone()),
+                );
+                retained_sessions.extend(retained_codex.iter().cloned());
+                retained_sessions.extend(retained_claude.iter().cloned());
+
+                // Only *identify* here. This closure runs under
+                // `spawn_blocking`, and stopping a process group means waiting
+                // on it; the async consumer of this result does the reaping so
+                // the inventory scan stays quick.
+                orphan_processes = crate::managed_process_janitor::find_orphan_processes(
+                    &process_facts,
+                    &retained_sessions,
+                    chrono::Utc::now(),
+                    crate::managed_process_janitor::ORPHAN_GRACE,
+                );
             }
         }
 
@@ -3528,6 +3583,7 @@ fn maybe_start_managed_observation_scan(
             codex_observations,
             antigravity_observations,
             claude_observations,
+            orphan_processes,
             opencode_observations,
             cursor_observations,
             process_inventory_ms,
