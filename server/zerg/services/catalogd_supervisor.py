@@ -17,6 +17,7 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
 from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+from zerg.catalogd.schema import catalogd_ping_is_compatible
 from zerg.config import get_settings_unchecked
 from zerg.config import sqlite_file_path
 from zerg.runtime_boot import RUNTIME_BOOT_ID
@@ -213,11 +214,7 @@ class CatalogdSupervisor:
 
     @staticmethod
     def _is_compatible(ping: dict[str, Any]) -> bool:
-        return (
-            ping.get("ready") is True
-            and ping.get("schema_version") == CATALOG_SCHEMA_VERSION
-            and ping.get("schema_generation") == CATALOG_SCHEMA_GENERATION
-        )
+        return catalogd_ping_is_compatible(ping)
 
     def _write_status(self, status: str, *, log_transition: bool = True, **details: Any) -> None:
         if log_transition:

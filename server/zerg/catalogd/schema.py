@@ -136,6 +136,25 @@ def _schema_generation() -> str:
 CATALOG_SCHEMA_GENERATION = _schema_generation()
 
 
+def catalogd_ping_is_compatible(ping: dict) -> bool:
+    """Whether a catalogd ping describes a daemon this process can actually use.
+
+    Every readiness probe and the supervisor must decide this the same way. A
+    ping that merely returns proves only that the socket answered, and ``ready``
+    alone proves almost as little, because catalogd sets it true on every
+    successful ping — so a peer owning the socket with an incompatible schema
+    answers exactly like a healthy one. When the probes disagreed, the ones
+    reporting healthy were the wrong ones, and those are the ones deployment and
+    QA gate on.
+    """
+
+    return (
+        ping.get("ready") is True
+        and ping.get("schema_version") == CATALOG_SCHEMA_VERSION
+        and ping.get("schema_generation") == CATALOG_SCHEMA_GENERATION
+    )
+
+
 # Every version bump must register the transaction that moves the preceding
 # durable version forward. An empty registry is intentional for initial v1.
 def _hide_empty_human_launch_shells(connection: Connection) -> None:

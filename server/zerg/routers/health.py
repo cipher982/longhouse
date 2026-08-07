@@ -217,11 +217,14 @@ def health_db(request: Request):
     if catalog_mode:
         try:
             from zerg.catalogd.client import call_catalogd_sync
+            from zerg.catalogd.schema import catalogd_ping_is_compatible
             from zerg.services.catalogd_supervisor import catalogd_paths
 
             _database_path, catalog_socket = catalogd_paths()
             ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS)
-            if ping.get("ready") is not True:
+            # `ready` alone is not readiness: catalogd sets it true on every
+            # successful ping, so an incompatible peer answers like a healthy one.
+            if not catalogd_ping_is_compatible(ping):
                 raise RuntimeError("catalog not ready")
             return {"status": "ready", "catalog": ping} if trusted else {"status": "ready"}
         except Exception:
@@ -301,17 +304,12 @@ def readyz_check():
     if catalog_mode and not _settings.testing:
         try:
             from zerg.catalogd.client import call_catalogd_sync
-            from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
-            from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+            from zerg.catalogd.schema import catalogd_ping_is_compatible
             from zerg.services.catalogd_supervisor import catalogd_paths
 
             _database_path, catalog_socket = catalogd_paths()
             ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS)
-            catalogd_ready = (
-                ping.get("ready") is True
-                and ping.get("schema_version") == CATALOG_SCHEMA_VERSION
-                and ping.get("schema_generation") == CATALOG_SCHEMA_GENERATION
-            )
+            catalogd_ready = catalogd_ping_is_compatible(ping)
         except Exception:
             catalogd_ready = False
         if not catalogd_ready:
@@ -502,6 +500,7 @@ def health_check(request: Request):
     if catalog_mode and not _settings.testing:
         try:
             from zerg.catalogd.client import call_catalogd_sync
+            from zerg.catalogd.schema import catalogd_ping_is_compatible
             from zerg.services.catalogd_supervisor import catalogd_paths
 
             _database_path, catalog_socket = catalogd_paths()
@@ -510,12 +509,20 @@ def health_check(request: Request):
                 "ping.v2",
                 timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS,
             )
+            # Schema version and generation were reported here but never
+            # graded, so an incompatible catalogd passed and only readyz
+            # noticed. Deploy gates and QA scripts read this endpoint.
+            compatible = catalogd_ping_is_compatible(catalog_ping)
             checks["catalogd"] = {
-                "status": "pass",
+                "status": "pass" if compatible else "fail",
                 "ready": catalog_ping.get("ready") is True,
                 "schema_version": catalog_ping.get("schema_version"),
+                "schema_generation": catalog_ping.get("schema_generation"),
                 "commit_seq": catalog_ping.get("commit_seq"),
             }
+            if not compatible:
+                health_status["status"] = "unhealthy"
+                health_status["message"] = "Catalog service is incompatible"
         except Exception as exc:
             checks["catalogd"] = {"status": "fail", "error": type(exc).__name__}
             health_status["status"] = "unhealthy"
