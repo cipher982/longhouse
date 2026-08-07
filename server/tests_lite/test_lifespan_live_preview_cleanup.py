@@ -1,32 +1,18 @@
-import pytest
+"""Catalog mode must not reaper live control ops through the live WriteSerializer."""
 
-from zerg.lifespan import _reap_stale_live_machine_control_operations_once
+from __future__ import annotations
+
+import inspect
+
+import zerg.lifespan as lifespan_module
 
 
-@pytest.mark.asyncio
-async def test_live_machine_control_reaper_uses_write_serializer(monkeypatch):
-    calls = []
-
-    def fake_reap(db):
-        calls.append(("reap", db))
-        return 3
-
-    class FakeSerializer:
-        async def execute(self, fn, *, auto_commit, label):
-            calls.append(("execute", label, auto_commit))
-            return fn("serializer-db")
-
-    monkeypatch.setattr(
-        "zerg.services.machine_control_operations.reap_stale_live_machine_control_operations",
-        fake_reap,
-    )
-    monkeypatch.setattr(
-        "zerg.services.write_serializer.get_live_write_serializer",
-        lambda: FakeSerializer(),
-    )
-
-    assert await _reap_stale_live_machine_control_operations_once() == 3
-    assert calls == [
-        ("execute", "live-machine-control-reaper", False),
-        ("reap", "serializer-db"),
-    ]
+def test_live_catalog_api_does_not_own_machine_control_reaper():
+    # Regression lock for the every-60s hosted error:
+    # "WriteSerializer session factory not configured" from an API-side
+    # live-machine-control reaper that only started under catalog_mode, where
+    # configure_live_write_serializer() is intentionally a no-op.
+    source = inspect.getsource(lifespan_module.lifespan)
+    assert "live-machine-control-reaper" not in source
+    assert "_live_machine_control_operation_reaper_loop" not in dir(lifespan_module)
+    assert not hasattr(lifespan_module, "_reap_stale_live_machine_control_operations_once")

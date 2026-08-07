@@ -3103,6 +3103,10 @@ class CatalogDaemon:
                 # of interactive reads. This yields one canonical terminal
                 # fact without turning each timeline poll into a global write.
                 await self._run_store(self._store.expire_due_interactions, now=datetime.now(UTC))
+                # Same ownership rule as interactions: live control rows live in
+                # catalogd, so lease expiry must run here — not via the API's
+                # unconfigured live WriteSerializer.
+                await self._run_store(self._store.reap_stale_control_operations, now=datetime.now(UTC))
             except asyncio.CancelledError:
                 raise
             except Exception:

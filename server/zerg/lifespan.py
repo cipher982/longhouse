@@ -24,28 +24,6 @@ _settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-async def _reap_stale_live_machine_control_operations_once() -> int:
-    from zerg.services.machine_control_operations import reap_stale_live_machine_control_operations
-    from zerg.services.write_serializer import get_live_write_serializer
-
-    return await get_live_write_serializer().execute(
-        reap_stale_live_machine_control_operations,
-        auto_commit=False,
-        label="live-machine-control-reaper",
-    )
-
-
-async def _live_machine_control_operation_reaper_loop() -> None:
-    while True:
-        try:
-            await asyncio.sleep(60)
-            await _reap_stale_live_machine_control_operations_once()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Live machine control operation reaper tick failed")
-
-
 async def _initialize_local_embedding_projector(app: FastAPI) -> None:
     """Provision dense recall without delaying the Runtime Host launch loop."""
 
@@ -372,14 +350,10 @@ async def lifespan(app: FastAPI):
                 logger.info("Storage-v2 AI title reconciler started")
             except Exception:
                 logger.exception("Failed to start storage-v2 AI title reconciler")
-
-            # Machine-control operation reaper: expire commands whose result
-            # did not return before their operation lease.
-            try:
-                asyncio.create_task(_live_machine_control_operation_reaper_loop())
-                logger.info("Live machine control operation reaper started")
-            except Exception:
-                logger.exception("Failed to start live machine control operation reaper")
+            # Machine-control lease expiry is catalogd's job in live mode
+            # (checkpoint loop). The old API-side reaper called
+            # get_live_write_serializer(), which is intentionally never
+            # configured when live_catalog_enabled().
 
         # Periodic runtime maintenance (runner-health reconcile, etc.). The
         # loop's own body branches on live_catalog_enabled() internally, so it

@@ -2573,6 +2573,51 @@ class CatalogStore:
             commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
             return {"found": True, "changed": changed, "commit_seq": str(commit_seq)}
 
+    def reap_stale_control_operations(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Expire leased machine-control operations that never received a result.
+
+        Catalog mode owns live writes; the API process must not open the live
+        WriteSerializer for this. Opportunistic reaping on prepare/read still
+        happens, and this periodic path covers abandoned operations nobody
+        touches again.
+        """
+
+        from zerg.services.machine_control_operations import NONTERMINAL_OPERATION_STATUSES
+
+        observed_at = now or datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                stale = (
+                    orm.query(LiveMachineControlOperation)
+                    .filter(
+                        LiveMachineControlOperation.status.in_(NONTERMINAL_OPERATION_STATUSES),
+                        LiveMachineControlOperation.expires_at.is_not(None),
+                        LiveMachineControlOperation.expires_at <= observed_at,
+                    )
+                    .all()
+                )
+                for row in stale:
+                    row.status = "timed_out"
+                    row.error_json = json.dumps(
+                        {
+                            "code": "machine_control_operation_timeout",
+                            "message": "Machine Agent did not report back before the operation lease expired",
+                        },
+                        sort_keys=True,
+                    )
+                    row.finished_at = _as_aware_utc(row.expires_at) or observed_at
+                    row.updated_at = observed_at
+                    row.expires_at = None
+                orm.commit() if stale else orm.rollback()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at) if stale else _current_commit_seq(connection)
+            return {"reaped_count": len(stale), "commit_seq": str(commit_seq)}
+
     def prepare_machine_operation(
         self,
         *,
