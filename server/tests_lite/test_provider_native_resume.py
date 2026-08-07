@@ -39,6 +39,7 @@ from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
+from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_session_tail
@@ -383,6 +384,9 @@ def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> N
         def send(self, value: str) -> None:
             self.sent.append(value)
 
+        def settle(self, **_kwargs: object) -> bytes:
+            return b""
+
     process = FakeProcess()
     _wait_cursor_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
 
@@ -394,6 +398,13 @@ def test_cursor_readiness_rejects_the_trust_transition_and_accepts_the_prompt() 
     assert _cursor_tui_input_ready("Cursor Agent — Plan, search, build anything") is True
     assert _cursor_tui_input_ready("Cursor Agent — Trusting workspace...") is False
     assert _cursor_tui_input_ready("Cursor Agent — Loading conversation") is False
+
+
+def test_cursor_readiness_uses_the_latest_prompt_after_resume_loading() -> None:
+    restored = "Cursor Agent — Plan, search, build anything Loading conversation Add a follow-up"
+    assert _cursor_tui_input_ready(restored) is True
+    assert _cursor_tui_input_ready(f"{restored} Working") is False
+    assert _cursor_tui_input_ready(f"{restored} Loading conversation") is False
 
 
 def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> None:
@@ -512,6 +523,51 @@ def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> 
     )
 
     assert _wait_cursor_idle(state, {"LONGHOUSE_HOME": str(longhouse_home)})["phase"] == "idle"
+
+
+def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    events.write_text(json.dumps({"event": "sessionStart", "session_id": "session-1", "conversation_id": "cursor-thread-1"}) + "\n")
+    baseline = events.stat().st_size
+    events.write_text(
+        events.read_text()
+        + "\n".join(
+            [
+                json.dumps({"event": "beforeSubmitPrompt", "session_id": "session-1", "conversation_id": "cursor-thread-1"}),
+                json.dumps({"event": "afterAgentResponse", "session_id": "session-1", "conversation_id": "cursor-thread-1"}),
+            ]
+        )
+        + "\n",
+    )
+
+    sequence = _wait_cursor_bootstrap_hook_sequence(
+        state,
+        {"LONGHOUSE_HOME": str(longhouse_home)},
+        minimum_hook_event_bytes=baseline,
+        timeout=1,
+    )
+
+    assert sequence["events"] == ["beforeSubmitPrompt", "afterAgentResponse"]
+    assert sequence["timed_out"] is False
+
+
+def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    events.write_text(json.dumps({"event": "sessionStart", "session_id": "session-1", "conversation_id": "cursor-thread-1"}) + "\n")
+
+    with pytest.raises(RuntimeError, match="beforeSubmitPrompt/afterAgentResponse"):
+        _wait_cursor_bootstrap_hook_sequence(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            minimum_hook_event_bytes=0,
+            timeout=0.01,
+        )
 
 
 def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:

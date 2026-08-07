@@ -913,18 +913,32 @@ def _wait_cursor_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
 
     del recording  # The process owns the append-only PTY recording.
     deadline = time.monotonic() + timeout
+    ready_since: float | None = None
     while time.monotonic() < deadline:
         process.drain()
         if process.process.poll() is not None:
             raise RuntimeError("cursor Helm process exited before its TUI became ready")
         _accept_cursor_workspace_trust(process)
         if _cursor_tui_input_ready(_terminal_text(process.recording)):
-            return
+            now = time.monotonic()
+            if ready_since is None:
+                ready_since = now
+            elif now - ready_since >= 1.0:
+                # A resumed Cursor TUI can briefly paint the previous prompt
+                # before it finishes restoring the conversation. Require the
+                # latest visible prompt to remain valid for a bounded quiet
+                # interval before injecting anything into the PTY.
+                process.settle(minimum=0.1, quiet=0.15, timeout=1.0)
+                if _cursor_tui_input_ready(_terminal_text(process.recording)):
+                    return
+                ready_since = None
+        else:
+            ready_since = None
         time.sleep(0.1)
 
-    # Some provider builds do not render a trust gate for an already-known
-    # workspace. The bounded wait still gave late gates a chance to appear;
-    # the subsequent native marker is the readiness assertion.
+    raise RuntimeError(
+        "Cursor TUI did not publish a stable post-restore input prompt " f"(tail={_terminal_text(process.recording)[-1200:]!r})"
+    )
 
 
 def _cursor_tui_input_ready(terminal: str) -> bool:
@@ -938,15 +952,27 @@ def _cursor_tui_input_ready(terminal: str) -> bool:
 
     normalized = re.sub(r"\s+", " ", _ANSI_CONTROL_RE.sub(" ", terminal)).lower()
     compact = re.sub(r"[^a-z0-9?]+", "", normalized)
-    if "workspacetrustrequired" in compact or "trustingworkspace" in compact:
+    ready_positions = [compact.rfind(marker) for marker in ("plansearchbuildanything", "addafollowup", "promptbar")]
+    ready_position = max(ready_positions)
+    if ready_position < 0:
         return False
-    # A Resume launch can expose the prompt bar while Cursor is still
-    # restoring the conversation. Treat that redraw as a loading boundary;
-    # injecting a bootstrap prompt here leaves the provider permanently in
-    # Working and produces no response hook.
-    if "loadingconversation" in compact or "restoringconversation" in compact:
+    # The recording is append-only and includes the restored conversation.
+    # Compare the latest visible state markers instead of rejecting any old
+    # loading text or accepting the first prompt from the restored transcript.
+    blocked_positions = [
+        compact.rfind(marker)
+        for marker in (
+            "workspacetrustrequired",
+            "trustingworkspace",
+            "loadingconversation",
+            "restoringconversation",
+            "startingconversation",
+            "working",
+        )
+    ]
+    if max(blocked_positions) > ready_position:
         return False
-    return "cursoragent" in compact and ("plansearchbuildanything" in compact or "promptbar" in compact)
+    return True
 
 
 def _wait_claude_tui_ready(process: PtyProcess, recording: Path, *, timeout: float = 30.0) -> None:
@@ -1642,6 +1668,75 @@ def _wait_cursor_idle(
     )
 
 
+def _wait_cursor_bootstrap_hook_sequence(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    *,
+    minimum_hook_event_bytes: int,
+    timeout: float = 45.0,
+) -> dict[str, Any]:
+    """Require the submitted bootstrap to produce ordered native hook events.
+
+    ``sessionStart`` is an idle phase, but it does not prove that the prompt
+    written to the PTY was accepted.  The only provider-owned sequence that
+    establishes a real foreground turn is ``beforeSubmitPrompt`` followed by
+    ``afterAgentResponse`` for this session and retained conversation.
+    """
+
+    longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
+    if not longhouse_home:
+        raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
+    path = Path(longhouse_home) / "managed-local" / "cursor-helm" / "hook-events" / f"{state['session_id']}.ndjson"
+    deadline = time.monotonic() + timeout
+    observed_events: list[str] = []
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        try:
+            with path.open("rb") as stream:
+                stream.seek(minimum_hook_event_bytes)
+                raw = stream.read()
+        except OSError:
+            raw = b""
+        for line in raw.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("session_id") != state.get("session_id"):
+                continue
+            if event.get("conversation_id") != state.get("provider_session_id"):
+                continue
+            name = str(event.get("event") or "")
+            if name:
+                observed_events.append(name)
+            if before is None and name == "beforeSubmitPrompt":
+                before = event
+            elif before is not None and name == "afterAgentResponse":
+                after = event
+                break
+        if before is not None and after is not None:
+            try:
+                end_bytes = path.stat().st_size
+            except OSError:
+                end_bytes = minimum_hook_event_bytes
+            return {
+                "start_bytes": minimum_hook_event_bytes,
+                "end_bytes": end_bytes,
+                "events": observed_events,
+                "before_submit_prompt": before,
+                "after_agent_response": after,
+                "timed_out": False,
+            }
+        time.sleep(0.25)
+    raise RuntimeError(
+        "Cursor bootstrap did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence "
+        f"(start_bytes={minimum_hook_event_bytes}, events={observed_events[-20:]!r})"
+    )
+
+
 def _control_send(
     spec: ProviderSpec,
     args: argparse.Namespace,
@@ -2163,13 +2258,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             use_credential_files=True,
             cwd=provider_cwd,
         )
-        resume_hook_event_bytes: int | None = None
-        if spec.provider == "cursor":
-            # Preserve the pre-resume hook boundary before launching the
-            # native selector. Resume must first finish restoring the
-            # conversation; its first foreground turn is sent only after the
-            # TUI and provider-owned idle phase are ready.
-            resume_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
         _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         resumed = PtyProcess(
             resumed_command,
@@ -2208,6 +2296,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 resumed_state["session_id"],
             )
             bootstrap_prior_assistant_event_digests = _assistant_event_digests(bootstrap_prior_tail)
+            bootstrap_hook_event_bytes = _cursor_hook_event_bytes(resumed_state, environment)
             bootstrap_send = _control_send(
                 spec,
                 args,
@@ -2220,10 +2309,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 root / "resume-bootstrap-send.json",
                 bootstrap_send,
             )
+            bootstrap_hook_sequence = _wait_cursor_bootstrap_hook_sequence(
+                resumed_state,
+                environment,
+                minimum_hook_event_bytes=bootstrap_hook_event_bytes,
+            )
             _wait_cursor_idle(
                 resumed_state,
                 environment,
-                minimum_hook_event_bytes=resume_hook_event_bytes,
+                minimum_hook_event_bytes=bootstrap_hook_event_bytes,
             )
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
             bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
@@ -2235,6 +2329,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 require_assistant_marker=True,
                 timeout=args.live_send_timeout_secs,
             )
+            bootstrap_response_correlation["hook_sequence"] = bootstrap_hook_sequence
             _write_json(root / "resume-bootstrap-response-correlation.json", bootstrap_response_correlation)
             if not (
                 bootstrap_response_correlation["marker_observed_in_transcript"]
