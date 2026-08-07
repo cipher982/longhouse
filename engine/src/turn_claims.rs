@@ -37,6 +37,10 @@ pub struct TurnClaim {
     pub pid: Option<u32>,
     #[serde(default)]
     pub process_group_id: Option<i32>,
+    /// Boot this claim's pid and process group were recorded under. Absent on
+    /// claims written before this field existed, which is treated as unknown.
+    #[serde(default)]
+    pub boot_id: Option<String>,
     pub process_start_time: Option<String>,
     #[serde(default)]
     pub adapter: Option<String>,
@@ -54,6 +58,31 @@ pub struct TurnClaim {
     pub projected_seq: u64,
     pub result: Option<Value>,
     pub error: Option<String>,
+}
+
+impl TurnClaim {
+    /// Whether this claim's recorded process group id can still be trusted to
+    /// name the group this claim spawned.
+    ///
+    /// A pid is never reallocated while it is still in use as a process group
+    /// id, so within one boot the recorded id either names our own group or
+    /// names nothing, and signalling it is safe. A reboot removes that
+    /// guarantee: claims outlive reboots because nothing prunes them, every pid
+    /// is free again, and the same number can name a completely unrelated
+    /// group. Recovery reaches the signalling path exactly when the recorded
+    /// process is gone, so it has no other way to tell those apart.
+    ///
+    /// Claims written before this field existed report false, which costs at
+    /// most some orphaned children and never costs someone else's processes.
+    pub fn process_group_is_from_this_boot(&self) -> bool {
+        match (
+            self.boot_id.as_deref(),
+            crate::heartbeat::machine_boot_id().as_deref(),
+        ) {
+            (Some(recorded), Some(current)) => recorded == current,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -99,6 +128,9 @@ impl TurnClaimRegistry {
             source_path: None,
             provider: provider.to_string(),
             state: "claimed".to_string(),
+            // Recorded at spawn, alongside the pid and process group it
+            // describes; a claim with no process yet has no boot to record.
+            boot_id: None,
             claimed_at: now.clone(),
             updated_at: now,
             pid: None,
@@ -165,6 +197,7 @@ impl TurnClaimRegistry {
         claim.state = "spawned".to_string();
         claim.pid = Some(pid);
         claim.process_group_id = Some(process_group_id);
+        claim.boot_id = crate::heartbeat::machine_boot_id();
         claim.process_start_time = process_start_time;
         claim.adapter = Some(adapter.to_string());
         claim.launch_id = Some(launch_id.to_string());
@@ -361,6 +394,49 @@ mod tests {
 
     fn id(value: u128) -> String {
         Uuid::from_u128(value).to_string()
+    }
+
+    /// Recovery signals a recorded process group only when it can still prove
+    /// the group is the one this claim spawned. A claim carried across a reboot
+    /// cannot prove that — every pid is free again and the same number can name
+    /// an unrelated group — and a claim written before the field existed cannot
+    /// prove it either.
+    #[test]
+    fn recorded_process_group_is_trusted_only_within_its_own_boot() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        let run_id = id(1);
+        registry
+            .claim(&run_id, &id(2), &id(3), None, None, "opencode")
+            .unwrap();
+        let spawned = registry
+            .mark_spawned_invocation(
+                &run_id,
+                std::process::id(),
+                i32::try_from(std::process::id()).unwrap(),
+                None,
+                "opencode_run",
+                &id(4),
+                None,
+                "/tmp/out.log",
+                "/tmp/err.log",
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert!(
+            spawned.boot_id.is_some(),
+            "a spawned claim must record the boot its pid belongs to"
+        );
+        assert!(spawned.process_group_is_from_this_boot());
+
+        let mut rebooted = spawned.clone();
+        rebooted.boot_id = Some("macos:1:0".to_string());
+        assert!(!rebooted.process_group_is_from_this_boot());
+
+        let mut legacy = spawned;
+        legacy.boot_id = None;
+        assert!(!legacy.process_group_is_from_this_boot());
     }
 
     #[test]

@@ -276,7 +276,8 @@
       "path": "engine/src/turn_claims.rs",
       "providers": [
         "codex",
-        "cursor"
+        "cursor",
+        "opencode"
       ]
     },
     {
