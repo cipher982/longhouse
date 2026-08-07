@@ -2692,12 +2692,22 @@ def _directed_input_owner_id(auth: object) -> int:
     return int(owner_id)
 
 
+_DIRECTED_INPUT_MUTATIONS = frozenset({"directed_input.create.v2", "directed_input.link_receipt.v2"})
+
+
 async def _directed_input_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
+
     catalogd = get_catalogd_client()
     if catalogd is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input is unavailable")
+    # Reads keep the hot budget. Delivering a message between agents is a
+    # user-initiated mutation, and the one-second read bound turned ordinary
+    # write latency into a delivery the sender was told had failed. Derived
+    # from the method rather than passed in, so a new call site cannot forget.
+    timeout_seconds = MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS if method in _DIRECTED_INPUT_MUTATIONS else 1.0
     try:
-        return await catalogd.call(method, params, timeout_seconds=1.0)
+        return await catalogd.call(method, params, timeout_seconds=timeout_seconds)
     except CatalogRemoteError as exc:
         status_code = {
             "not_found": status.HTTP_404_NOT_FOUND,
@@ -2706,6 +2716,18 @@ async def _directed_input_call(method: str, params: dict[str, Any]) -> dict[str,
         }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except CatalogUnavailable as exc:
+        if exc.outcome_unknown:
+            # The write may have committed with only its answer lost. Reporting
+            # "unavailable" invites a resend, and a resend arrives under a new
+            # client_request_id, so the catalog's own dedupe cannot match it and
+            # the peer receives the message twice. Say what is actually known.
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=(
+                    "Directed input may already have been delivered; the catalog did not answer in time. "
+                    "Check the target session's inbox before sending again."
+                ),
+            ) from exc
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input is unavailable") from exc
 
 

@@ -153,7 +153,22 @@ MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS = 10.0
 
 
 class CatalogUnavailable(RuntimeError):
-    pass
+    """catalogd did not answer this call.
+
+    ``outcome_unknown`` separates the two cases callers must not conflate. A
+    socket or protocol error means the daemon never processed the request, so
+    the effect definitely did not happen and a caller may safely say so or
+    retry. A deadline expiry means only that the answer did not arrive in time:
+    the write may well have committed, and telling the caller it failed is a
+    lie that has already cost a killed launch and a duplicated peer message.
+
+    The machine control channel already draws this distinction as
+    ``delivery_certainty`` of ``not_sent`` versus ``ambiguous``.
+    """
+
+    def __init__(self, message: str, *, outcome_unknown: bool = False) -> None:
+        super().__init__(message)
+        self.outcome_unknown = outcome_unknown
 
 
 class CatalogRemoteError(RuntimeError):
@@ -214,7 +229,11 @@ class CatalogClient:
                             if attempt + 1 == attempts:
                                 raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc
         except asyncio.TimeoutError as exc:
-            raise CatalogUnavailable(f"catalogd deadline exceeded for {method}") from exc
+            # The request may have been processed and only its answer lost.
+            raise CatalogUnavailable(
+                f"catalogd deadline exceeded for {method}",
+                outcome_unknown=True,
+            ) from exc
         raise AssertionError("unreachable")
 
     async def _call_once(self, method: str, params: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
