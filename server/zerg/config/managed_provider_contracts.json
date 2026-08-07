@@ -1071,7 +1071,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "a767801eeec8e2da2824fade298a32d98807dbe13cdc941ed089c4fdf7455918"
+      "adapter_digest": "24e6fd2541ec9eaa2728f65e83638c2a70ea66343bec827e4d8eb6f7659faca7"
     },
     {
       "provider": "opencode",
@@ -1499,7 +1499,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "392fa5de3efaec2a49e38a7fb2fa8e532ed812bb50b50be80e86bbb515695476"
+      "adapter_digest": "60fe03363d9861ba15d602fa314012e1c13a354e47ed3450cd603f517ecbb673"
     },
     {
       "provider": "antigravity",
@@ -2211,7 +2211,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "c3c7c8542dab5eb6299c1d1949a6b42db8c436a9e1c6c92cd05dcddc1041f6df"
+      "adapter_digest": "008501bfdc54f51b9609d892d3d62233788fa3577d444024633633084324e93d"
     }
   ]
 }

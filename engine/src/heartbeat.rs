@@ -534,7 +534,7 @@ fn apply_boot_identity(sessions: &mut [ResolvedLocalSession], boot_id: Option<&s
     }
 }
 
-fn machine_boot_id() -> Option<String> {
+pub(crate) fn machine_boot_id() -> Option<String> {
     MACHINE_BOOT_ID.get_or_init(detect_machine_boot_id).clone()
 }
 

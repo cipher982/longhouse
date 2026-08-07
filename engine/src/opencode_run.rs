@@ -494,7 +494,13 @@ async fn settle_recovered_dead_claim(
     } else {
         "run_failed"
     };
-    cleanup_process_group(sink.process_group_id).await;
+    // Recovery only reaches here because the claim's process is gone, so the
+    // recorded process group id can no longer be verified against it. Signal
+    // it only when this boot is the one that recorded it; otherwise the number
+    // may name an unrelated group and killing it would hit a stranger.
+    if claim.process_group_is_from_this_boot() {
+        cleanup_process_group(sink.process_group_id).await;
+    }
     sink.post_terminal(
         terminal,
         None,
