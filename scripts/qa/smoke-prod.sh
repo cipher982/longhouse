@@ -258,7 +258,14 @@ test_health_contract() {
     ready_status=$(jq -r '.status // "unknown"' "$ready_file" 2>/dev/null || echo "ERROR")
     rm -f "$ready_file"
 
+    # Readiness has to be graded, not just printed. This fetched readyz and then
+    # returned pass on the health status alone, so a runtime whose catalogd was
+    # answering but unusable went green here while readyz was already 503ing.
     if [[ "$health_status" == "healthy" || "$health_status" == "ok" ]]; then
+        if [[ "$ready_code" != "200" ]]; then
+            fail "$name (health=$health_status but readyz=$ready_code $ready_status)"
+            return 1
+        fi
         pass "$name (health=$health_status readyz=$ready_status)"
         return 0
     fi
