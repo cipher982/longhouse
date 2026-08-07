@@ -93,9 +93,40 @@ enum Commands {
         #[command(flatten)]
         launch: CursorLaunchArgs,
     },
+    /// Inspect or discard retained evidence for blocked durable uploads.
+    ///
+    /// Local health has printed `longhouse shipping inspect` as the next step
+    /// since before this existed, so the command users were told to run failed
+    /// with "unrecognized subcommand".
+    Shipping {
+        #[command(subcommand)]
+        command: ShippingCommand,
+    },
     /// Internal exec barrier used to hand a terminal to a provider safely.
     #[command(name = "__managed-provider-trampoline", hide = true)]
     ManagedProviderTrampoline(ManagedProviderTrampolineArgs),
+}
+
+#[derive(Subcommand)]
+enum ShippingCommand {
+    /// Show retained source evidence for blocked or queued uploads.
+    Inspect {
+        /// Limit to one source epoch instead of every retained source.
+        #[arg(long)]
+        source_epoch: Option<String>,
+        /// Emit the inspection as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Discard a blocked source's retained envelope after inspecting it.
+    Discard {
+        /// The source epoch to discard, as reported by `shipping inspect`.
+        #[arg(long)]
+        source_epoch: String,
+        /// Required. Without it this only reports what would be discarded.
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[derive(Args)]
@@ -558,6 +589,41 @@ fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
         command.arg("--state-root").arg(state_root);
     }
     let status = command.status().context("run paired native local-health")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+fn native_shipping(command: ShippingCommand) -> anyhow::Result<()> {
+    // Same shape as local-health: the facade owns the user-facing name, the
+    // paired engine owns the database.
+    let mut process = Command::new(paired_engine_path()?);
+    process.arg("device");
+    match command {
+        ShippingCommand::Inspect { source_epoch, json } => {
+            process.arg("shipping-inspect");
+            if let Some(source_epoch) = source_epoch {
+                process.arg("--source-epoch").arg(source_epoch);
+            }
+            if json {
+                process.arg("--json");
+            }
+        }
+        ShippingCommand::Discard {
+            source_epoch,
+            confirm,
+        } => {
+            process
+                .arg("shipping-discard")
+                .arg("--source-epoch")
+                .arg(source_epoch);
+            if confirm {
+                process.arg("--confirm");
+            }
+        }
+    }
+    let status = process.status().context("run paired native shipping")?;
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -3657,6 +3723,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Auth(args) => native_auth(args)?,
         Commands::LocalHealth(args) => native_local_health(args)?,
+        Commands::Shipping { command } => native_shipping(command)?,
         Commands::Machine { command } => match command {
             MachineCommand::Repair(args) => native_machine_repair(args)?,
         },

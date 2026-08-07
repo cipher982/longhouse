@@ -427,6 +427,184 @@ pub fn cmd_device_status(json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Show the retained evidence behind blocked storage-v2 sources.
+///
+/// Health output has pointed users at `longhouse shipping inspect` from eight
+/// places in this file since before the command existed. The only affordance
+/// was a button in the macOS panel, so resolving the 2026-08-04 block meant
+/// hand-editing SQLite — which is not a thing a product should require.
+pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::Result<()> {
+    let db_path = config::get_agent_db_path()?;
+    if !db_path.exists() {
+        anyhow::bail!("no local shipper database at {}", db_path.display());
+    }
+    let conn = crate::state::db::open_db(Some(&db_path))?;
+
+    let mut statement = conn.prepare(
+        "SELECT pending.source_epoch, pending.source_path, pending.range_start,
+                pending.range_end, pending.event_count, pending.raw_bytes,
+                pending.attempt_count, pending.created_at, pending.blocked_at,
+                pending.block_kind, pending.block_detail, pending.wake_at,
+                epoch.provider, epoch.bound_session_id
+         FROM pending_source_envelope AS pending
+         JOIN source_epoch_registry AS epoch
+           ON epoch.source_epoch = pending.source_epoch
+         WHERE (?1 IS NULL OR pending.source_epoch = ?1)
+         ORDER BY pending.blocked_at IS NULL, pending.blocked_at, pending.created_at",
+    )?;
+    let rows = statement.query_map([source_epoch], |row| {
+        let block_kind: Option<String> = row.get(9)?;
+        Ok(serde_json::json!({
+            "source_epoch": row.get::<_, String>(0)?,
+            "source_path": row.get::<_, String>(1)?,
+            "range_start": row.get::<_, i64>(2)?,
+            "range_end": row.get::<_, i64>(3)?,
+            "event_count": row.get::<_, i64>(4)?,
+            "raw_bytes": row.get::<_, i64>(5)?,
+            "attempt_count": row.get::<_, i64>(6)?,
+            "created_at": row.get::<_, String>(7)?,
+            "blocked_at": row.get::<_, Option<String>>(8)?,
+            "block_kind": block_kind,
+            "block_detail": row.get::<_, Option<String>>(10)?,
+            "next_examination_at": row.get::<_, String>(11)?,
+            "provider": row.get::<_, String>(12)?,
+            "bound_session_id": row.get::<_, Option<String>>(13)?,
+        }))
+    })?;
+    let mut sources = Vec::new();
+    for row in rows {
+        let mut value = row?;
+        // Whether anything local is still trying is the one thing a user cannot
+        // read off the raw row, and it decides what they should do next.
+        let kind = value["block_kind"].as_str().map(str::to_string);
+        let reconciling =
+            crate::state::pending_source_envelope::block_kind_is_reconciling(kind.as_deref());
+        value["local_recovery_in_progress"] = serde_json::Value::from(reconciling);
+        // The local file is the actual evidence; the envelope is one queued
+        // attempt to upload it. Say so, because "discard" reads as data loss.
+        let path = value["source_path"].as_str().unwrap_or_default();
+        value["source_file_present"] = serde_json::Value::from(Path::new(path).exists());
+        sources.push(value);
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "database": db_path.display().to_string(),
+                "sources": sources,
+            }))?
+        );
+        return Ok(());
+    }
+
+    if sources.is_empty() {
+        match source_epoch {
+            Some(epoch) => println!("No retained source evidence for {epoch}."),
+            None => println!("No retained source evidence. Nothing is blocked or queued."),
+        }
+        return Ok(());
+    }
+    for source in &sources {
+        let epoch = source["source_epoch"].as_str().unwrap_or("?");
+        println!("Source epoch {epoch}");
+        println!("  provider     {}", source["provider"].as_str().unwrap_or("?"));
+        println!("  file         {}", source["source_path"].as_str().unwrap_or("?"));
+        println!(
+            "  retained     {} events, {} bytes, range {}..{}",
+            source["event_count"], source["raw_bytes"], source["range_start"], source["range_end"]
+        );
+        println!(
+            "  file present {}",
+            if source["source_file_present"].as_bool() == Some(true) {
+                "yes — the transcript itself is on disk"
+            } else {
+                "NO — this envelope is the only copy"
+            }
+        );
+        match source["blocked_at"].as_str() {
+            Some(blocked_at) => {
+                println!(
+                    "  blocked      {} ({})",
+                    blocked_at,
+                    source["block_kind"].as_str().unwrap_or("unknown kind")
+                );
+                println!(
+                    "  recovery     {}",
+                    if source["local_recovery_in_progress"].as_bool() == Some(true) {
+                        "a local path is retrying this; no action needed yet"
+                    } else {
+                        "nothing local can clear this; it needs the Runtime Host"
+                    }
+                );
+                println!(
+                    "  next look    {}",
+                    source["next_examination_at"].as_str().unwrap_or("?")
+                );
+                if let Some(detail) = source["block_detail"].as_str() {
+                    println!("  detail       {detail}");
+                }
+                println!(
+                    "  discard with longhouse shipping discard --source-epoch {epoch} --confirm"
+                );
+            }
+            None => println!("  status       queued, not blocked"),
+        }
+        println!();
+    }
+    Ok(())
+}
+
+/// Drop a blocked source's retained envelope.
+///
+/// No `retry` counterpart on purpose: re-posting an identical envelope the host
+/// structurally refused cannot change the admission fact, so offering it would
+/// be an action that only looks like one.
+pub fn cmd_shipping_discard(source_epoch: &str, confirm: bool) -> anyhow::Result<()> {
+    let db_path = config::get_agent_db_path()?;
+    let conn = crate::state::db::open_db(Some(&db_path))?;
+    let existing: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT source_path, blocked_at FROM pending_source_envelope WHERE source_epoch = ?1",
+            [source_epoch],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok();
+    let Some((source_path, blocked_at)) = existing else {
+        anyhow::bail!("no retained envelope for source epoch {source_epoch}");
+    };
+    if blocked_at.is_none() {
+        anyhow::bail!(
+            "source epoch {source_epoch} is queued, not blocked; discarding live work is not \
+             what this command is for"
+        );
+    }
+    if !confirm {
+        let present = Path::new(&source_path).exists();
+        println!("Would discard the retained envelope for {source_epoch}.");
+        println!("  source file: {source_path}");
+        println!(
+            "  {}",
+            if present {
+                "The transcript is still on disk, so this drops the upload attempt, not the data."
+            } else {
+                "WARNING: the source file is gone. This envelope is the only copy."
+            }
+        );
+        println!("Re-run with --confirm to proceed.");
+        return Ok(());
+    }
+    let removed = conn.execute(
+        "DELETE FROM pending_source_envelope WHERE source_epoch = ?1 AND blocked_at IS NOT NULL",
+        [source_epoch],
+    )?;
+    if removed == 0 {
+        anyhow::bail!("source epoch {source_epoch} was not discarded; it may have unblocked");
+    }
+    println!("Discarded the retained envelope for {source_epoch}.");
+    Ok(())
+}
+
 pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow::Result<()> {
     let status_path = engine_status_path(state_root)?;
     let health = collect_native_fast_local_health(&status_path);

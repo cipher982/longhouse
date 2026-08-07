@@ -716,6 +716,37 @@ enum DeviceCommands {
         state_root: Option<PathBuf>,
     },
 
+    /// Inspect retained source evidence for blocked storage-v2 sources.
+    ///
+    /// Health output has told users to run this since before it existed; the
+    /// only affordance was a button in the macOS panel, and resolving the
+    /// 2026-08-04 block required hand-editing SQLite.
+    ShippingInspect {
+        /// Limit to one source epoch instead of every blocked source.
+        #[arg(long)]
+        source_epoch: Option<String>,
+
+        /// Emit the inspection as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Discard a blocked source's retained envelope after inspecting it.
+    ///
+    /// Deliberately no `retry`: re-posting an identical envelope that was
+    /// structurally refused cannot change the admission fact, so it would only
+    /// look like an action. The local transcript file is untouched — this drops
+    /// the queued upload attempt, not the evidence.
+    ShippingDiscard {
+        /// The source epoch to discard, as reported by shipping-inspect.
+        #[arg(long)]
+        source_epoch: String,
+
+        /// Required. Discarding is not reversible from here.
+        #[arg(long)]
+        confirm: bool,
+    },
+
     /// Print a read-only native repair recommendation from local state
     RepairPlan {
         /// Emit the native repair recommendation as JSON
@@ -1234,6 +1265,8 @@ fn command_name(command: &Commands) -> &'static str {
             DeviceCommands::Plan { .. } => "device-plan",
             DeviceCommands::Status { .. } => "device-status",
             DeviceCommands::LocalHealth { .. } => "device-local-health",
+            DeviceCommands::ShippingInspect { .. } => "device-shipping-inspect",
+            DeviceCommands::ShippingDiscard { .. } => "device-shipping-discard",
             DeviceCommands::RepairPlan { .. } => "device-repair-plan",
             DeviceCommands::Repair { .. } => "device-repair",
         },
@@ -1704,6 +1737,15 @@ fn main() -> anyhow::Result<()> {
             }
             DeviceCommands::Status { json } => {
                 device::cmd_device_status(json)?;
+            }
+            DeviceCommands::ShippingInspect { source_epoch, json } => {
+                device::cmd_shipping_inspect(source_epoch.as_deref(), json)?;
+            }
+            DeviceCommands::ShippingDiscard {
+                source_epoch,
+                confirm,
+            } => {
+                device::cmd_shipping_discard(&source_epoch, confirm)?;
             }
             DeviceCommands::LocalHealth { json, state_root } => {
                 device::cmd_device_local_health(json, state_root.as_deref())?;
