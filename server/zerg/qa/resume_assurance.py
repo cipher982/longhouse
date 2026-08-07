@@ -94,6 +94,7 @@ def capability_contract_shape(assertions: Sequence[object], *, provider: str, ca
             {
                 "provider": provider,
                 "capability": capability,
+                "disposition": getattr(assertion, "disposition", "implemented"),
                 "assertion_id": getattr(assertion, "assertion_id"),
                 "variant": getattr(assertion, "variant"),
                 "scenario_id": getattr(assertion, "scenario_id"),
@@ -416,6 +417,8 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "required_cleanup": list(registration["required_cleanup"]),
                 "credential_binding_ids": list(registration["credential_binding_ids"]),
                 "provider": selected["provider"],
+                "capability": cell.get("capability"),
+                "disposition": cell.get("disposition", "implemented"),
                 "subject_id": provider_subject.get("subject_id"),
                 "provider_artifact": dict(provider_subject.get("provider_artifact") or {}),
                 "provider_contract_digest": sha256_json(cell),

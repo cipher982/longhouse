@@ -90,6 +90,25 @@ def test_fresh_passing_proof_is_attached():
     assert projections[0].disposition == "implemented"
 
 
+def test_subject_fence_rejects_proof_from_an_older_longhouse_or_epoch():
+    record = replace(
+        _record(),
+        longhouse_git_sha="older-longhouse",
+        accepted_epoch_digest="older-epoch",
+    )
+
+    projection = project_capabilities(
+        (_assertion(),),
+        [record],
+        expected_longhouse_sha="current-longhouse",
+        expected_epoch_digest="current-epoch",
+    )[0]
+
+    assert projection.proof_status == UNACCEPTABLE_EVIDENCE
+    assert "proof_longhouse_source_mismatch" in projection.admissibility_reasons
+    assert "proof_accepted_epoch_mismatch" in projection.admissibility_reasons
+
+
 def test_legacy_proof_is_historical_for_non_variant_assertion():
     now = datetime(2026, 7, 29, 1, 0, 0, tzinfo=UTC)
     legacy = replace(

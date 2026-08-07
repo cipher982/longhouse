@@ -62,6 +62,8 @@ def _rejection_reasons(
     *,
     moment: datetime,
     integrity_reasons: Mapping[str, tuple[str, ...]],
+    expected_longhouse_sha: str | None = None,
+    expected_epoch_digest: str | None = None,
 ) -> tuple[str, ...]:
     reasons: list[str] = list(integrity_reasons.get(record.artifact_id, ()))
     if record.assertion_variant != assertion.variant:
@@ -71,6 +73,10 @@ def _rejection_reasons(
         reasons.append("proof_scenario_mismatch")
     if record.scenario_revision < assertion.minimum_scenario_revision:
         reasons.append("proof_scenario_revision_mismatch")
+    if expected_longhouse_sha is not None and record.longhouse_git_sha != expected_longhouse_sha:
+        reasons.append("proof_longhouse_source_mismatch")
+    if expected_epoch_digest is not None and record.accepted_epoch_digest != expected_epoch_digest:
+        reasons.append("proof_accepted_epoch_mismatch")
     if record.evidence_class.value not in assertion.acceptable_evidence:
         reasons.append("evidence_class_insufficient")
     generated = _parse_timestamp(record.generated_at)
@@ -107,6 +113,8 @@ def project_capabilities(
     integrity_reasons: Mapping[str, tuple[str, ...]] | None = None,
     open_cases: Mapping[tuple[str, str, str, str | None], str] | None = None,
     baselines: Mapping[tuple[str, str, str, str | None], str] | None = None,
+    expected_longhouse_sha: str | None = None,
+    expected_epoch_digest: str | None = None,
 ) -> tuple[CapabilityProjection, ...]:
     """Join every exact assertion variant to its currently admissible proof.
 
@@ -133,7 +141,18 @@ def project_capabilities(
         )
         exact = [record for record in nearby if record.assertion_variant == assertion.variant]
         evaluated = [
-            (record, _rejection_reasons(assertion, record, moment=moment, integrity_reasons=integrity_reasons)) for record in exact
+            (
+                record,
+                _rejection_reasons(
+                    assertion,
+                    record,
+                    moment=moment,
+                    integrity_reasons=integrity_reasons,
+                    expected_longhouse_sha=expected_longhouse_sha,
+                    expected_epoch_digest=expected_epoch_digest,
+                ),
+            )
+            for record in exact
         ]
         qualifying = next((record for record, reasons in evaluated if not reasons), None)
         latest = exact[0] if exact else nearby[0] if nearby else None
@@ -143,7 +162,14 @@ def project_capabilities(
             reasons: tuple[str, ...] = ()
         elif latest is not None:
             support = latest
-            reasons = _rejection_reasons(assertion, latest, moment=moment, integrity_reasons=integrity_reasons)
+            reasons = _rejection_reasons(
+                assertion,
+                latest,
+                moment=moment,
+                integrity_reasons=integrity_reasons,
+                expected_longhouse_sha=expected_longhouse_sha,
+                expected_epoch_digest=expected_epoch_digest,
+            )
             status = _status_for_rejection(latest, reasons)
         else:
             support = None
