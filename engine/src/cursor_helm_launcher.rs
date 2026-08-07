@@ -1623,20 +1623,29 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let exit_code = unsafe {
         let mut status = reaped_status.unwrap_or(0);
         if reaped_status.is_none() {
-            if launcher_requested_stop {
-                let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-                for _ in 0..25 {
-                    if observed != 0 {
-                        break;
-                    }
-                    thread::sleep(std::time::Duration::from_millis(10));
-                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            // Reap with a deadline whether or not the stop was requested. The
+            // relay loop can also exit with cursor-agent still alive -- a poll
+            // error, or a write to stdout failing when an SSH connection drops
+            // -- and this path used to block in waitpid forever. Nothing drains
+            // the PTY master after the loop ends, so cursor-agent blocks writing
+            // into a full buffer while the launcher blocks waiting for it to
+            // exit. Neither can progress and the user's shell never returns.
+            //
+            // A normal exit is unaffected: the relay ends on PTY EOF, which
+            // means the child is already gone and the first probe reaps it. The
+            // grace only elapses when the child genuinely outlived the relay,
+            // and is longer here because this exit was not asked for.
+            let grace_ticks = if launcher_requested_stop { 25 } else { 200 };
+            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            for _ in 0..grace_ticks {
+                if observed != 0 {
+                    break;
                 }
-                if observed == 0 {
-                    libc::kill(pid, libc::SIGKILL);
-                    libc::waitpid(pid, &mut status, 0);
-                }
-            } else {
+                thread::sleep(std::time::Duration::from_millis(10));
+                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            }
+            if observed == 0 {
+                libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, &mut status, 0);
             }
         }
