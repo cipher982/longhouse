@@ -119,6 +119,23 @@ const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
+/// How long the local status projection may take before it is worth reporting.
+///
+/// Derived from its own cadence rather than picked: the projection runs every
+/// `LOCAL_STATUS_INTERVAL_SECS`, so spending a quarter of that on one pass is
+/// the point where it stops being background work.
+///
+/// The previous value was a hardcoded 50ms against an observed p50 of 195ms, so
+/// the warning fired on nearly every tick — 11,866 of one 20,000-line window,
+/// and a 112MB log in a day. A warning that is always on carries no
+/// information, and the volume buried the ones that did.
+const LOCAL_STATUS_BUDGET_MS: u64 = LOCAL_STATUS_INTERVAL_SECS * 1000 / 4;
+/// Minimum gap between budget-overrun reports.
+///
+/// A slow projection is a persistent condition, not an event. Reporting it once
+/// a minute with a count of how many ticks were over preserves the signal and
+/// removes the spam; reporting every tick did the opposite of both.
+const LOCAL_STATUS_BUDGET_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
 const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
@@ -979,6 +996,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut pending_periodic_observation = false;
     let mut projection_build_pending = false;
     let mut projection_generation = 0_u64;
+    // Budget-overrun reporting state: how many ticks were over since the last
+    // report, the worst one seen, and when we last said anything.
+    let mut projection_over_budget_ticks = 0_u64;
+    let mut projection_worst_elapsed_ms = 0_u64;
+    let mut projection_budget_reported_at: Option<Instant> = None;
     let mut last_full_reconciled_at: Option<String> = None;
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_projected_managed_scan_partial = false;
@@ -1854,11 +1876,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let is_current = result.generation == projection_generation;
                         match result.result {
                         Ok((projection, next_snapshot_state)) => {
-                            if result.elapsed_ms > 50 {
-                                tracing::warn!(
-                                    projection_elapsed_ms = result.elapsed_ms,
-                                    "Local status projection exceeded background budget"
-                                );
+                            if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
+                                projection_over_budget_ticks =
+                                    projection_over_budget_ticks.saturating_add(1);
+                                projection_worst_elapsed_ms =
+                                    projection_worst_elapsed_ms.max(result.elapsed_ms);
+                                let due = projection_budget_reported_at.is_none_or(|at| {
+                                    at.elapsed() >= LOCAL_STATUS_BUDGET_REPORT_INTERVAL
+                                });
+                                if due {
+                                    tracing::warn!(
+                                        over_budget_ticks = projection_over_budget_ticks,
+                                        worst_elapsed_ms = projection_worst_elapsed_ms,
+                                        budget_ms = LOCAL_STATUS_BUDGET_MS,
+                                        "Local status projection exceeded background budget"
+                                    );
+                                    projection_over_budget_ticks = 0;
+                                    projection_worst_elapsed_ms = 0;
+                                    projection_budget_reported_at = Some(Instant::now());
+                                }
                             }
                             if !is_current {
                                 tracing::debug!(

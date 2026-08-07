@@ -91,6 +91,22 @@ impl GroupShutdown {
     }
 }
 
+/// Two limits worth stating, because both are inherent to pid-based signalling
+/// rather than oversights:
+///
+/// - [`leader_group_for`] proves a pid *leads* a group, not that the group is
+///   ours. Ownership comes from provenance — we spawned it, or a previous
+///   engine recorded it — and a stale pid that now leads unrelated work would
+///   pass. Every caller pairs it with an identity check for that reason.
+/// - There is a TOCTOU window between that check and `killpg`. A group can exit
+///   and its numeric pgid be reused in between. Nothing closes this; it is why
+///   the callers that matter re-verify identity immediately before signalling.
+///
+/// [`GroupShutdown::Survived`] also means "could not confirm gone" rather than
+/// "definitely still running": a member that exited but lingers unreaped by its
+/// own parent still answers `killpg(_, 0)`. `is_gone()` treats it as not-gone,
+/// which is the safe direction.
+///
 /// Whether any process remains in `pgid`.
 ///
 /// Uses `killpg(_, 0)`, which counts a zombie as present because a not-yet
