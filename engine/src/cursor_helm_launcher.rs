@@ -344,21 +344,16 @@ fn cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String> {
         text
     });
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let received = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break Err(anyhow::anyhow!("cursor-agent create-chat timed out"));
+    // One receive with one budget: every arm of the old `loop` broke out of it,
+    // so the deadline arithmetic only ever computed the same 30s once.
+    let received = match stdout_rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(line)) => Ok(line),
+        Ok(Err(error)) => Err(error.into()),
+        Err(RecvTimeoutError::Timeout) => {
+            Err(anyhow::anyhow!("cursor-agent create-chat timed out"))
         }
-        match stdout_rx.recv_timeout(remaining) {
-            Ok(Ok(line)) => break Ok(line),
-            Ok(Err(error)) => break Err(error.into()),
-            Err(RecvTimeoutError::Timeout) => {
-                break Err(anyhow::anyhow!("cursor-agent create-chat timed out"));
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                break Err(anyhow::anyhow!("cursor-agent create-chat returned no id"));
-            }
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(anyhow::anyhow!("cursor-agent create-chat returned no id"))
         }
     };
 
