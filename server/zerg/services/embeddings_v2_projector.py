@@ -30,6 +30,11 @@ SOURCE_PAGE_SIZE = 1_000
 # the full hosted corpus projection; higher concurrency remains an explicit
 # bounded-repair override.
 PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "1")))
+# Claim a small batch so independent sessions can prepare and overlap their
+# source reads, model calls, and publication refreshes. The model remains
+# process-wide serialized; the overlap is what lets searchd coalesce the
+# resident-index refresh instead of rebuilding once per session.
+PROJECTOR_CLAIM_BATCH = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_CLAIM_BATCH", "4")))
 PROJECTOR_IDLE_POLL_SECONDS = 5.0
 PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_LEASE_SECONDS", "900")))
 # Projects whose sessions are machine-generated load-test fixtures rather than
@@ -404,7 +409,7 @@ _task: asyncio.Task[None] | None = None
 async def _run_worker(projector: EmbeddingsV2Projector) -> None:
     while True:
         try:
-            await asyncio.sleep(0 if await projector.run_once(limit=1) else PROJECTOR_IDLE_POLL_SECONDS)
+            await asyncio.sleep(0 if await projector.run_once(limit=PROJECTOR_CLAIM_BATCH) else PROJECTOR_IDLE_POLL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from zerg.services.embeddings_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
+from zerg.services.embeddings_v2_projector import PROJECTOR_CLAIM_BATCH
 from zerg.services.embeddings_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
 from zerg.services.embeddings_v2_projector import _run_forever
@@ -104,7 +105,7 @@ async def test_embedding_projector_workers_refill_independently():
     class Projector:
         async def run_once(self, *, limit):
             nonlocal active
-            assert limit == 1
+            assert limit == PROJECTOR_CLAIM_BATCH
             active += 1
             if active == 2:
                 both_started.set()
@@ -120,7 +121,7 @@ async def test_embedding_projector_workers_refill_independently():
 async def test_embedding_projector_backs_off_when_the_claim_ledger_is_empty(monkeypatch):
     class Projector:
         async def run_once(self, *, limit):
-            assert limit == 1
+            assert limit == PROJECTOR_CLAIM_BATCH
             return 0
 
     async def stop_after_observation(delay):
