@@ -1163,6 +1163,7 @@ async fn execute_command(
                 .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "opencode" {
                 let summary = crate::opencode_control::stop_server_bridge(&session_id)
+                    .await
                     .map_err(CommandError::command_failed)?;
                 return Ok(json!({
                     "exit_code": 0,

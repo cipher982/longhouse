@@ -6027,26 +6027,24 @@ fn update_bridge_error(context: &mut BridgeContext, error: &str) -> Result<()> {
 }
 
 async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
-    #[cfg(unix)]
-    if let Some(process_group_id) = client.child_pgid {
-        if process_group_id > 0 {
-            unsafe {
-                let _ = libc::killpg(process_group_id, libc::SIGTERM);
-            }
-            tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
-            let process_group_still_alive = unsafe { libc::killpg(process_group_id, 0) == 0 };
-            if process_group_still_alive {
-                unsafe {
-                    let _ = libc::killpg(process_group_id, libc::SIGKILL);
-                }
-            }
+    let pgid = client.child_pgid.filter(|value| *value > 0);
+    let outcome = match client.child {
+        Some(ref mut child) => {
+            crate::process_group::shutdown_owned_child(child, pgid, CHILD_SHUTDOWN_GRACE_PERIOD)
+                .await
         }
-    }
-    if let Some(ref mut child) = client.child {
-        if child.try_wait()?.is_none() {
-            let _ = child.start_kill();
-        }
-        let _ = child.wait().await;
+        None => match pgid {
+            Some(pgid) => {
+                crate::process_group::shutdown_group(pgid, CHILD_SHUTDOWN_GRACE_PERIOD).await
+            }
+            None => crate::process_group::GroupShutdown::Absent,
+        },
+    };
+    if !outcome.is_gone() {
+        eprintln!(
+            "[codex-bridge] app-server process group {} survived SIGKILL",
+            pgid.unwrap_or_default()
+        );
     }
     Ok(())
 }

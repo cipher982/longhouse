@@ -854,31 +854,17 @@ async fn run_app_server_turn(
 }
 
 async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
-    if let Some(pgid) = pgid {
-        shutdown_process_group(pgid).await;
+    let outcome =
+        crate::process_group::shutdown_owned_child(child, pgid, crate::process_group::DEFAULT_GRACE)
+            .await;
+    if !outcome.is_gone() {
+        tracing::warn!(
+            pgid = pgid.unwrap_or_default(),
+            outcome = outcome.as_str(),
+            "Codex worker process group survived SIGKILL"
+        );
     }
-    if child.try_wait()?.is_none() {
-        child.start_kill()?;
-    }
-    let _ = child.wait().await;
     Ok(())
-}
-
-async fn shutdown_process_group(pgid: i32) {
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::killpg(pgid, libc::SIGTERM);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if unsafe { libc::killpg(pgid, 0) } == 0 {
-            unsafe {
-                libc::killpg(pgid, libc::SIGKILL);
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = pgid;
 }
 
 /// How long shutdown may wait for console workers to settle.
@@ -939,7 +925,17 @@ pub async fn shutdown_codex_console_worker_pool() {
         )
     };
     for pgid in active_process_groups {
-        shutdown_process_group(pgid).await;
+        // These groups have no `Child` handle here — the pool tracks them by
+        // pgid alone — so they are stopped and verified, not reaped.
+        let outcome =
+            crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
+        if !outcome.is_gone() {
+            tracing::warn!(
+                pgid,
+                outcome = outcome.as_str(),
+                "Codex console process group survived SIGKILL during shutdown"
+            );
+        }
     }
     for mut worker in workers {
         if let Err(err) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await {

@@ -126,17 +126,17 @@ pub async fn permission_reply(
     })
 }
 
-pub fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
-    stop_server_bridge_at(session_id, None)
+pub async fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
+    stop_server_bridge_at(session_id, None).await
 }
 
-pub fn stop_server_bridge_at(
+pub async fn stop_server_bridge_at(
     session_id: &str,
     state_dir: Option<&Path>,
 ) -> Result<OpenCodeStopResult> {
     let state = read_bridge_state(session_id, state_dir)?;
     let pid = state.pid;
-    let stopped = terminate_recorded_opencode_server(&state)?;
+    let stopped = terminate_recorded_opencode_server(&state).await?;
     if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
         let outbox = crate::config::get_longhouse_home()?.join("agent/runtime-events-outbox");
         enqueue_terminal_event(&state, &outbox)?;
@@ -346,7 +346,13 @@ fn pid_matches_strict_opencode_identity(state: &OpenCodeControlState) -> bool {
     recorded_start == live_start && recorded_cmd == live_cmd
 }
 
-fn terminate_recorded_opencode_server(state: &OpenCodeControlState) -> Result<bool> {
+/// Stop the recorded OpenCode server and report whether it is actually gone.
+///
+/// The return value means *exited*, not *signalled*. `stop_server_bridge_at`
+/// removes the bridge state file on the strength of it, and a state file
+/// removed while the process still runs makes that process unfindable — which
+/// is how an `opencode serve` group becomes a permanent orphan.
+async fn terminate_recorded_opencode_server(state: &OpenCodeControlState) -> Result<bool> {
     let Some(pid) = state.pid else {
         return Ok(false);
     };
@@ -356,41 +362,14 @@ fn terminate_recorded_opencode_server(state: &OpenCodeControlState) -> Result<bo
     if !pid_matches_strict_opencode_identity(state) {
         return Ok(false);
     }
-    terminate_recorded_process_group(pid)
-}
-
-#[cfg(unix)]
-fn terminate_recorded_process_group(pid: u32) -> Result<bool> {
-    let pid_i = pid as i32;
-    unsafe {
-        let pgid = libc::getpgid(pid_i);
-        if pgid == -1 {
-            let err = std::io::Error::last_os_error();
-            if matches!(err.raw_os_error(), Some(code) if code == libc::ESRCH) {
-                return Ok(false);
-            }
-            return Err(err).with_context(|| {
-                format!("Could not inspect OpenCode server process group pid={pid}")
-            });
-        }
-        if pgid != pid_i {
-            return Ok(false);
-        }
-        let rc = libc::killpg(pid_i, libc::SIGTERM);
-        if rc == 0 {
-            return Ok(true);
-        }
-        let err = std::io::Error::last_os_error();
-        if matches!(err.raw_os_error(), Some(code) if code == libc::ESRCH) {
-            return Ok(false);
-        }
-        Err(err).with_context(|| format!("Could not terminate OpenCode server pid={pid}"))
-    }
-}
-
-#[cfg(not(unix))]
-fn terminate_recorded_process_group(_pid: u32) -> Result<bool> {
-    Ok(false)
+    // Only ever signal a group this pid leads. A pid that merely belongs to
+    // someone else's group would put SIGTERM into unrelated work.
+    let Some(pgid) = crate::process_group::leader_group_for(pid) else {
+        return Ok(false);
+    };
+    let outcome =
+        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
+    Ok(outcome.is_gone())
 }
 
 #[cfg(test)]
@@ -760,12 +739,23 @@ mod tests {
         let (start, command) = wait_process_identity(pid);
         write_stop_state(temp.path(), pid, &start, &command);
 
-        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        // Unlike production, this target is a child of the *test* process: real
+        // `opencode serve` pids come from a state file written by a separate
+        // `longhouse opencode` invocation that has since exited, which is why
+        // they orphan onto launchd rather than lingering as our zombies. Reap
+        // in the background so the stop path sees the same "not my child"
+        // shape it sees on a real machine, instead of a zombie that
+        // `killpg(pgid, 0)` reports as still alive.
+        let reaper = std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
 
         assert_eq!(result.pid, Some(pid));
         assert!(result.stopped);
         wait_until_pid_stops(pid).await;
-        let _ = child.wait();
+        reaper.join().unwrap();
     }
 
     #[cfg(unix)]
@@ -777,7 +767,7 @@ mod tests {
             SESSION_ID,
             base_state_payload("http://127.0.0.1:12345", Some("/tmp/project")),
         );
-        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
         assert_eq!(result.pid, None);
         assert!(!result.stopped);
 
@@ -788,7 +778,7 @@ mod tests {
         legacy["pid"] = json!(pid);
         write_state_payload(temp.path(), SESSION_ID, legacy);
 
-        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
 
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
@@ -807,7 +797,7 @@ mod tests {
         let (start, command) = wait_process_identity(pid);
 
         write_stop_state(temp.path(), pid, "Sun Jan  1 00:00:00 2000", &command);
-        let wrong_start = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        let wrong_start = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
         assert!(!wrong_start.stopped);
         assert!(pid_is_running(pid));
 
@@ -817,7 +807,7 @@ mod tests {
             &start,
             "opencode serve --hostname 127.0.0.1 --different",
         );
-        let wrong_command = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        let wrong_command = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
         assert!(!wrong_command.stopped);
         assert!(pid_is_running(pid));
 
@@ -835,7 +825,7 @@ mod tests {
         let (start, command) = wait_process_identity(pid);
         write_stop_state(temp.path(), pid, &start, &command);
 
-        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
 
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
@@ -847,7 +837,7 @@ mod tests {
         let pid = child.id();
         let (start, _command) = wait_process_identity(pid);
         write_stop_state(temp.path(), pid, &start, "sleep 60");
-        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).await.unwrap();
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
         assert!(pid_is_running(pid));
@@ -935,12 +925,12 @@ mod tests {
         })
     }
 
-    fn stop_from_state_dir(state_dir: &Path, session_id: &str) -> Result<OpenCodeStopResult> {
+    async fn stop_from_state_dir(state_dir: &Path, session_id: &str) -> Result<OpenCodeStopResult> {
         let state = read_bridge_state(session_id, Some(state_dir))?;
         let pid = state.pid;
         Ok(OpenCodeStopResult {
             pid,
-            stopped: terminate_recorded_opencode_server(&state)?,
+            stopped: terminate_recorded_opencode_server(&state).await?,
         })
     }
 

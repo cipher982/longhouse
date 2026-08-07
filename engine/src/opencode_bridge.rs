@@ -284,12 +284,12 @@ fn acquire_start_lock(lock_path: &Path) -> Result<fd_lock::RwLockWriteGuard<'sta
     })
 }
 
-pub fn stop(
+pub async fn stop(
     session_id: &str,
     claude_dir: Option<PathBuf>,
 ) -> Result<crate::opencode_control::OpenCodeStopResult> {
     let state_dir = claude_dir.map(|path| path.join("managed-local/opencode-server"));
-    crate::opencode_control::stop_server_bridge_at(session_id, state_dir.as_deref())
+    crate::opencode_control::stop_server_bridge_at(session_id, state_dir.as_deref()).await
 }
 
 pub fn attach(

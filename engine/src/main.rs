@@ -50,6 +50,7 @@ mod opencode_db;
 mod opencode_run;
 mod outbox;
 mod pipeline;
+mod process_group;
 mod process_identity;
 mod raw_records;
 mod scheduler;
@@ -1747,7 +1748,8 @@ fn main() -> anyhow::Result<()> {
                 session_id,
                 claude_dir,
             } => {
-                let result = opencode_bridge::stop(&session_id, claude_dir)?;
+                let rt = tokio::runtime::Runtime::new()?;
+                let result = rt.block_on(opencode_bridge::stop(&session_id, claude_dir))?;
                 println!(
                     "{}",
                     serde_json::to_string(&json!({"pid": result.pid, "stopped": result.stopped}))?
