@@ -991,13 +991,14 @@ class SearchStore:
         return {"written": written, "skipped": skipped}
 
     def read_episode_embedding_hashes(self, *, session_id: str, model: str, dims: int | None = None) -> dict[str, object]:
+        # The vector bytes are reusable across render generations and revisions
+        # when the episode content hash is unchanged. The write path already
+        # updates generation/revision provenance on such a reuse; restricting
+        # this lookup to the current fence made every active session re-embed
+        # its entire history on every shipped turn.
         sql = """
             SELECT e.episode_ordinal, e.content_hash
             FROM episode_embeddings e
-            JOIN session_index s
-              ON s.session_id = e.session_id
-             AND s.generation_id = e.generation_id
-             AND s.desired_revision = e.revision
             WHERE e.session_id = ? AND e.model = ?
         """
         params: tuple[object, ...] = (session_id, model)

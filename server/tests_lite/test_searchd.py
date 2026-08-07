@@ -304,7 +304,7 @@ def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
         connection.close()
 
 def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
-    """A same-generation revision bump must move reused vectors to the new fence."""
+    """A revision bump exposes reusable hashes and moves the vector to the new fence."""
 
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
@@ -353,7 +353,7 @@ def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
                 model="test-model",
                 dims=2,
             )["hashes"]
-            == {}
+            == {"0": "a" * 64}
         )
         assert store.write_episode_embeddings(
             session_id=session_id,
