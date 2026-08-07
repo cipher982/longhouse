@@ -295,7 +295,11 @@ class SearchDaemon:
                 params = _embedding_write_params(request.params)
                 return self._result(
                     request,
-                    await self._run_with_dense_refresh(self._store.write_episode_embeddings, **params),
+                    await self._run_with_dense_refresh(
+                        self._store.write_episode_embeddings,
+                        refresh=bool(params["complete"]),
+                        **params,
+                    ),
                 )
             if request.method == "search.embedding.hashes.v2":
                 params = _embedding_hashes_params(request.params)
@@ -436,7 +440,7 @@ class SearchDaemon:
         assert self._executor is not None
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
 
-    async def _run_with_dense_refresh(self, function, **kwargs):
+    async def _run_with_dense_refresh(self, function, *, refresh: bool = True, **kwargs):
         """Commit a mutation and preserve a truthful resident coverage gate.
 
         Rebuilding and revalidating the full matrix after every projector RPC
@@ -458,6 +462,11 @@ class SearchDaemon:
             return result
         dense_index = self._dense_index
         dense_index.invalidate(allow_stale_reads=not self._dense_known_unservable)
+        if not refresh:
+            # Partial embedding batches are durable but not yet a publishable
+            # session snapshot. Keep serving the last truthful resident view
+            # and rebuild once, after the final complete batch.
+            return result
         refresh_active = self._dense_refresh_task is not None and not self._dense_refresh_task.done()
         if self._dense_known_unservable and not refresh_active:
             # The last full load found non-finite, unnormalized, unlocatable, or
