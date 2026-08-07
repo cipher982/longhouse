@@ -1,8 +1,9 @@
 # Provider Release Proof Runbook
 
 Use this runbook to generate, compare, accept, and inspect provider proof
-artifacts. The design contract is `docs/specs/provider-release-proof.md`; the
-the provider build and execution model is `docs/specs/provider-factory-coherence.md`.
+artifacts. The private control-plane specification owns the release-proof
+contract and provider-factory execution model; this public runbook documents
+the commands and artifact rules exposed by the Longhouse repository.
 
 ## Rules
 
@@ -222,9 +223,10 @@ Common setup failures:
 
 When proof strength changes:
 
-1. update `docs/specs/provider-release-proof-coverage.json`;
-2. update the two generated snapshot tables in
-   `docs/specs/provider-release-proof.md`;
+1. update the provider release-proof coverage artifact in the owning
+   control-plane specification;
+2. update the corresponding generated coverage tables in the public and
+   private artifacts;
 3. keep accepted scenario identities explicit; and
 4. run the provider validation target.
 

@@ -1,8 +1,9 @@
 # Longhouse docs
 
-Design specs and runbooks. Most files here are internal engineering RFCs
-written during development — useful for understanding *why* something works the
-way it does, but not required reading to use or contribute to Longhouse.
+Public documentation and operational runbooks for Longhouse. Detailed private
+architecture and control-plane specifications are maintained outside this
+repository; this directory must not link to paths that are absent from the
+public checkout.
 
 **Start with the top-level docs instead:**
 
@@ -10,24 +11,16 @@ way it does, but not required reading to use or contribute to Longhouse.
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — system map + glossary
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — dev setup, test tiers, codegen
 
-## Canonical, current specs
+## Public contracts and design context
 
-These define contracts the rest of the system depends on — read these first if
-you're touching the relevant area:
+- [`contracts/truth-plane.md`](contracts/truth-plane.md) — public truth-plane
+  contract
+- [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — system map and terminology
+- [`../VISION.md`](../VISION.md) — product thesis and invariants
 
-- [`specs/agents-machine-surface.md`](specs/agents-machine-surface.md) — the canonical `/api/agents/*` machine contract
-- [`specs/machine-control-truth.md`](specs/machine-control-truth.md) — how control-path truth is resolved
-- [`specs/runtime-display-contract.md`](specs/runtime-display-contract.md) — the server-authoritative runtime/liveness projection
-- [`specs/model-capability-contract.md`](specs/model-capability-contract.md) — provider/model capability surface
-- [`specs/macos-launch-product-shape.md`](specs/macos-launch-product-shape.md) — the macOS launch-product decision
-
-## Historical design notes
-
-The remaining files in `specs/` are point-in-time design records (session
-identity, transcript planes, data-plane migration, propagation profiling,
-provider state-compat, etc.). They reflect decisions as of their writing and
-may not match current code line-for-line. Treat them as background, not as the
-source of truth — the code and the canonical specs above are.
+Private implementation specifications are intentionally not mirrored here.
+When working in the shared workspace, use the private control-plane spec index
+as the routing map for those documents.
 
 ## Runbooks
 

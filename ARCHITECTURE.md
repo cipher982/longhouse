@@ -83,7 +83,7 @@ manifest/engine field names below refer to the same three modes:
 | --- | --- |
 | Shadow | discovered/unmanaged import; no `launch_*` capability involved |
 | Helm | `launch_local`, plus adapter-proven live controls such as `steer_active_turn` and `send_input` |
-| Console | `turn_start` (current); `run_once` (legacy, being retired — see `docs/specs/turn-scoped-console-execution.md`) |
+| Console | `turn_start` (current); `run_once` (legacy, being retired) |
 
 `launch_remote` / provider-facing `session.launch` was removed. Persistent
 no-terminal processes are not a fourth mode or a valid Helm launch surface.
@@ -107,5 +107,6 @@ The project uses some shorthand nouns. The important ones:
 
 - [`VISION.md`](VISION.md) — product thesis and invariants (start here)
 - [`docs/README.md`](docs/README.md) — index of design specs
-- `docs/specs/agents-machine-surface.md` — the canonical machine contract
+- `docs/contracts/truth-plane.md` — the public truth-plane contract
+- `docs/README.md` — public documentation and runbooks
 - `server/README.md` / `runner/README.md` — component detail

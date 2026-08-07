@@ -1,5 +1,5 @@
 {
-  "description": "plan_run(provider, build_provenance, trigger) over every cell. 'never_run' is a first-class result, not an omission \u2014 see docs/specs/provider-factory-coherence.md.",
+  "description": "plan_run(provider, build_provenance, trigger) over every cell. 'never_run' is a first-class result, not an omission; the private control-plane specification owns the full execution model.",
   "providers": [
     "codex",
     "claude",

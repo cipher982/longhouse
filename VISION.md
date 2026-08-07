@@ -15,8 +15,9 @@ This is the north-star document. It is intentionally short. If a proposal confli
 ## Read Next
 
 - `README.md` for the install and demo loop
-- `docs/specs/agents-machine-surface.md` for the canonical machine-facing contract
-- `docs/specs/macos-launch-product-shape.md` for the macOS launch-product decision
+- `ARCHITECTURE.md` for the system map and canonical vocabulary
+- `docs/contracts/truth-plane.md` for the public truth-plane contract
+- `docs/README.md` for public documentation and runbooks
 
 ## Naming
 

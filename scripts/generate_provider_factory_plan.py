@@ -53,8 +53,8 @@ def build_matrix() -> dict:
     return {
         "description": (
             "plan_run(provider, build_provenance, trigger) over every cell. "
-            "'never_run' is a first-class result, not an omission — see "
-            "docs/specs/provider-factory-coherence.md."
+            "'never_run' is a first-class result, not an omission; the private "
+            "control-plane specification owns the full execution model."
         ),
         "providers": list(ALL_PROVIDERS),
         "build_provenances": [p.value for p in BuildProvenance],
