@@ -1,11 +1,16 @@
 //! One teardown primitive for Longhouse-spawned process groups.
 //!
-//! Four ad-hoc implementations existed before this module, each subtly
-//! different: `codex_exec` slept 100ms, `codex_bridge` slept 500ms,
-//! `opencode_run` slept 200ms, and `opencode_control` sent `SIGTERM` and
-//! returned success on *signal delivery* without ever escalating. None of them
-//! waited for the group to actually go away, so every one could report success
-//! while leaving a live process group behind.
+//! Six ad-hoc implementations existed before this module, each subtly
+//! different: `codex_exec` slept 100ms, `codex_bridge` slept 500ms, and
+//! `opencode_run`, `claude_print` and `cursor_print` each carried their own
+//! 200ms copy, while `opencode_control` sent `SIGTERM` and returned success on
+//! *signal delivery* without ever escalating. None of them waited for the group
+//! to actually go away, so every one could report success while leaving a live
+//! process group behind.
+//!
+//! The count is the point: the same helper was reinvented per provider, so a
+//! fix to one never reached the others, and three of the six also had exit
+//! paths that skipped cleanup entirely.
 //!
 //! That is not theoretical. On 2026-08-07 the author's laptop held 430 orphaned
 //! Longhouse processes accumulated over roughly seven days — 81 `opencode
