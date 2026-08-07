@@ -32,6 +32,7 @@ import base64
 import json
 import os
 import shutil
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -532,6 +533,8 @@ def _start_connect_daemon(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        # Lead a process group so teardown reaches spawned children too.
+        start_new_session=True,
     )
     return {
         "session_id": session_id,
@@ -543,13 +546,37 @@ def _start_connect_daemon(
     }
 
 
-def _terminate_process(proc: subprocess.Popen[str]) -> str:
-    proc.terminate()
+def _terminate_group(proc: subprocess.Popen, grace: float = 5.0) -> None:
+    """Stop a spawned process and everything it started, then reap the leader.
+
+    Signalling only the leader is what leaked: `uv run uvicorn` execs a python
+    that goes on to spawn catalogd, searchd and a pool of multiprocessing
+    workers. `proc.terminate()` reaches `uv` and nothing else, so the tree
+    survives, reparents to launchd and never exits. 42 runtime hosts, 36
+    catalogd/searchd and 126 multiprocessing forks accumulated this way over
+    about seven days.
+
+    Requires the process to have been started with `start_new_session=True`, so
+    it leads its own group and the signal cannot escape to unrelated work.
+    """
+    if proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            proc.terminate()
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        # Always reap: a killed-but-unwaited child stays a defunct entry.
+        proc.wait(timeout=grace)
+
+
+def _terminate_process(proc: subprocess.Popen[str]) -> str:
+    _terminate_group(proc)
     output = ""
     for pipe in (proc.stdout, proc.stderr):
         if pipe is None:
@@ -602,17 +629,16 @@ def server(tmp_path_factory):
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        # Lead a process group: `uv run uvicorn` spawns catalogd, searchd and
+        # multiprocessing workers that a leader-only signal never reaches.
+        start_new_session=True,
     )
 
     try:
         _wait_ready(base_url, proc)
         yield {"url": base_url, "token": _mint_device_token(base_url), "db_path": str(db_path)}
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _terminate_group(proc)
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +690,8 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        # Lead a process group so teardown reaches spawned children too.
+        start_new_session=True,
     )
 
     try:
