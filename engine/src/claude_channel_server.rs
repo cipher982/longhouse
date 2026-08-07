@@ -830,6 +830,15 @@ impl HttpServerHandle {
             while !thread_shutdown.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Accepted sockets inherit nonblocking mode from the
+                        // listener on macOS, and `set_read_timeout` sets
+                        // SO_RCVTIMEO without clearing O_NONBLOCK. Without this
+                        // line a read whose data has not arrived yet returns
+                        // EAGAIN immediately instead of waiting, and
+                        // `read_http_request` turns that into HTTP 400 -- so a
+                        // well-formed steer whose first byte lands a few
+                        // milliseconds after the handshake is rejected.
+                        let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(DEFAULT_HTTP_TIMEOUT));
                         let _ = stream.set_write_timeout(Some(DEFAULT_HTTP_TIMEOUT));
                         handle_http_stream(&mut stream, &state, &outbound);
