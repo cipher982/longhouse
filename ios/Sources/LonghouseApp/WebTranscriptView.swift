@@ -590,7 +590,7 @@ struct WebTranscriptView: UIViewRepresentable {
     ) -> [WebTranscriptMediaRef]? {
         var seen = Set<String>()
         let media = refs.compactMap { ref -> WebTranscriptMediaRef? in
-            let dedupeURL = ref.thumbUrl ?? ref.blobUrl ?? ""
+            let dedupeURL = ref.thumbUrl ?? ref.blobUrl
             let dedupeKey = "\(ref.sha256):\(dedupeURL)"
             guard !seen.contains(dedupeKey) else {
                 return nil

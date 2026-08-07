@@ -658,7 +658,7 @@ final class AppState: ObservableObject {
             // cleared session if the task fired before cancellation landed.
             // restoreSession calls refreshRuntimeTokenProactively directly and
             // does not go through this task path.
-            guard await self?.isAuthenticated == true else { return }
+            guard self?.isAuthenticated == true else { return }
             _ = await self?.refreshRuntimeTokenProactively()
         }
     }
