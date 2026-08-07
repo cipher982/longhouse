@@ -857,6 +857,7 @@ class SearchStore:
         revision: int = 0,
         complete: bool = False,
         desired_episode_ordinals: list[int] | None = None,
+        reused_episodes: list[dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         written = 0
         skipped = 0
@@ -949,6 +950,44 @@ class SearchStore:
                         episode["content_hash"],
                         episode["embedding"],
                         now,
+                    ),
+                )
+                written += 1
+            for episode in reused_episodes or []:
+                existing = self.connection.execute(
+                    "SELECT content_hash, dims, revision, generation_id, owner_id, start_order_time_us"
+                    " FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                    (session_id, episode["episode_ordinal"], model),
+                ).fetchone()
+                if existing is None or str(existing["content_hash"]) != episode["content_hash"] or int(existing["dims"]) != dims:
+                    raise ValueError("reused embedding does not match stored content")
+                if int(existing["revision"]) > revision:
+                    skipped += 1
+                    continue
+                provenance_matches = (
+                    str(existing["generation_id"]) == generation_id
+                    and int(existing["revision"]) == revision
+                    and str(existing["owner_id"]) == owner_id
+                    and existing["start_order_time_us"] == episode.get("start_order_time_us")
+                )
+                if provenance_matches:
+                    skipped += 1
+                    continue
+                self.connection.execute(
+                    "UPDATE episode_embeddings SET generation_id = ?, revision = ?, owner_id = ?,"
+                    " event_index_start = ?, event_index_end = ?, start_order_time_us = ?, updated_at = ?"
+                    " WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                    (
+                        generation_id,
+                        revision,
+                        owner_id,
+                        episode["event_index_start"],
+                        episode["event_index_end"],
+                        episode.get("start_order_time_us"),
+                        now,
+                        session_id,
+                        episode["episode_ordinal"],
+                        model,
                     ),
                 )
                 written += 1

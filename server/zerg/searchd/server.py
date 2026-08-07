@@ -878,18 +878,22 @@ def _embedding_write_params(value: dict) -> dict:
             "complete",
             "desired_episode_ordinals",
             "episodes",
+            "reused_episodes",
         },
     )
     dims = value["dims"]
     model = _text(value["model"], "model", 255)
     episodes = value["episodes"]
     desired_episode_ordinals = value["desired_episode_ordinals"]
+    reused_episodes = value["reused_episodes"]
     complete = value["complete"]
     if (
         type(dims) is not int
         or not 1 <= dims <= 16_384
         or not isinstance(episodes, list)
         or len(episodes) > 512
+        or not isinstance(reused_episodes, list)
+        or len(reused_episodes) > 1_000_000
         or type(complete) is not bool
     ):
         raise ValueError("embedding write dimensions or episodes are invalid")
@@ -947,6 +951,33 @@ def _embedding_write_params(value: dict) -> dict:
         if not np.isclose(float(np.linalg.norm(vector)), 1.0, rtol=1e-4, atol=1e-4):
             raise ValueError("embedding must be L2-normalized")
         parsed.append({**episode, "embedding": embedding})
+    parsed_reused = []
+    for episode in reused_episodes:
+        if not isinstance(episode, dict) or set(episode) != {
+            "episode_ordinal",
+            "event_index_start",
+            "event_index_end",
+            "start_order_time_us",
+            "content_hash",
+        }:
+            raise ValueError("reused embedding episode fields are invalid")
+        if type(episode["episode_ordinal"]) is not int or episode["episode_ordinal"] < 0:
+            raise ValueError("reused embedding episode ordinal is invalid")
+        start_order_time_us = episode["start_order_time_us"]
+        if type(start_order_time_us) is not int or start_order_time_us < 0:
+            raise ValueError("reused embedding episode start order time is invalid")
+        event_index_start = episode["event_index_start"]
+        event_index_end = episode["event_index_end"]
+        if (
+            type(event_index_start) is not int
+            or type(event_index_end) is not int
+            or event_index_start < 0
+            or event_index_end < event_index_start
+        ):
+            raise ValueError("reused embedding episode event range is invalid")
+        if not isinstance(episode["content_hash"], str) or _HASH.fullmatch(episode["content_hash"]) is None:
+            raise ValueError("reused embedding content hash is invalid")
+        parsed_reused.append(dict(episode))
     return {
         "session_id": _uuid(value["session_id"], "session_id"),
         "owner_id": _text(value["owner_id"], "owner_id", 64),
@@ -957,6 +988,7 @@ def _embedding_write_params(value: dict) -> dict:
         "complete": complete,
         "desired_episode_ordinals": desired_episode_ordinals,
         "episodes": parsed,
+        "reused_episodes": parsed_reused,
     }
 
 

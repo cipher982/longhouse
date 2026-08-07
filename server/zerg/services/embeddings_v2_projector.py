@@ -275,6 +275,17 @@ class EmbeddingsV2Projector:
             raise EmbeddingPublicationPending("searchd has not published this render generation")
         hashes = {int(key): value for key, value in (hashes_result.get("hashes") or {}).items() if isinstance(value, str)}
         all_missing = [chunk for chunk in chunks if hashes.get(chunk.chunk_index) != chunk.content_hash]
+        reused = [
+            {
+                "episode_ordinal": chunk.chunk_index,
+                "event_index_start": chunk.event_index_start,
+                "event_index_end": chunk.event_index_end,
+                "start_order_time_us": _record_order_time(records, chunk.source_event_id_start),
+                "content_hash": chunk.content_hash,
+            }
+            for chunk in chunks
+            if hashes.get(chunk.chunk_index) == chunk.content_hash
+        ]
         missing = all_missing[: max(1, EMBEDDING_MAX_CHUNKS_PER_PASS)]
         complete = len(all_missing) == len(missing)
         # `desired_ordinals` is every episode this session should currently have,
@@ -300,6 +311,7 @@ class EmbeddingsV2Projector:
                     "dims": config.dims,
                     "complete": is_last_batch,
                     "desired_episode_ordinals": desired_ordinals if is_last_batch else None,
+                    "reused_episodes": reused if is_last_batch else [],
                     "episodes": [
                         {
                             "episode_ordinal": chunk.chunk_index,
@@ -331,6 +343,7 @@ class EmbeddingsV2Projector:
                     "dims": config.dims,
                     "complete": True,
                     "desired_episode_ordinals": desired_ordinals,
+                    "reused_episodes": reused,
                     "episodes": [],
                 },
             )

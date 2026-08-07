@@ -109,6 +109,7 @@ def test_embedding_write_contract_accepts_full_desired_episode_set():
             "dims": ACTIVE_EMBEDDING_DIMS,
             "complete": True,
             "desired_episode_ordinals": [0, 1, 2],
+            "reused_episodes": [],
             "episodes": [
                 {
                     "episode_ordinal": 2,
@@ -138,6 +139,7 @@ def test_embedding_write_contract_rejects_invalid_desired_episode_set(ordinals):
                 "dims": ACTIVE_EMBEDDING_DIMS,
                 "complete": True,
                 "desired_episode_ordinals": ordinals,
+                "reused_episodes": [],
                 "episodes": [],
             }
         )
@@ -364,7 +366,8 @@ def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
             dims=2,
             complete=True,
             desired_episode_ordinals=[0],
-            episodes=[episode],
+            reused_episodes=[{key: value for key, value in episode.items() if key != "embedding"}],
+            episodes=[],
         ) == {"written": 1, "skipped": 0}
         row = connection.execute(
             "SELECT revision FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = 0 AND model = 'test-model'",
@@ -907,6 +910,7 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
             "dims": ACTIVE_EMBEDDING_DIMS,
             "complete": True,
             "desired_episode_ordinals": [0],
+            "reused_episodes": [],
             "episodes": [
                 {
                     "episode_ordinal": 0,
