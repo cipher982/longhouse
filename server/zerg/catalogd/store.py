@@ -5671,16 +5671,34 @@ class CatalogStore:
                             predecessor_row["state"] != "open",
                         )
                     ):
-                        return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                        return _source_epoch_conflict(
+                            connection,
+                            reason="predecessor_not_open_for_this_identity",
+                            expected_predecessor=expected_predecessor,
+                            predecessor_state=(predecessor_row["state"] if predecessor_row is not None else None),
+                        )
                     if any(row["source_epoch"] != expected_predecessor for row in open_rows):
-                        return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                        return _source_epoch_conflict(
+                            connection,
+                            reason="open_epoch_is_not_the_named_predecessor",
+                            expected_predecessor=expected_predecessor,
+                            open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
+                        )
                     predecessor_raw_rows = list(
                         connection.execute(select(raw).where(raw.c.source_epoch == expected_predecessor, raw.c.retired_at.is_(None)))
                         .mappings()
                         .all()
                     )
                 elif open_rows:
-                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    # The branch that produced the 2026-08-04 incident: an
+                    # initial epoch arrives while this identity already has an
+                    # open one. It returned no reason at all, so the shipper
+                    # could only report that a later manifest probe 404'd.
+                    return _source_epoch_conflict(
+                        connection,
+                        reason="another_epoch_is_already_open_for_this_source",
+                        open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
+                    )
                 # Source offsets are coordinates, not byte counts. An initial
                 # storage-v2 epoch may begin at a proven legacy cursor, so its
                 # first durable envelope defines the contiguous base.
@@ -10806,6 +10824,29 @@ def _workspace_label(path: str, git_repo: str | None, git_branch: str | None) ->
     if len(parts) >= 3 and parts[1] == "Users":
         return "~/" + "/".join(parts[3:]) if len(parts) > 3 else "~"
     return path
+
+
+def _source_epoch_conflict(connection, *, reason: str, **evidence: Any) -> dict[str, Any]:
+    """Refuse an epoch admission and say why.
+
+    The transport already carries this: `catalogd/server.py` forwards
+    `conflict_details` into the 409's `details`. Nothing ever populated it, so
+    every admission refusal reached the shipper as a bare "conflict" and the
+    engine could only record the manifest probe that followed. Two envelopes
+    blocked on 2026-08-04 were still unexplainable three days later for exactly
+    this reason.
+
+    Only identity the caller already owns goes into `evidence` — these rows are
+    filtered by the caller's own tenant, machine, provider and source — so this
+    reveals nothing about anyone else's epochs.
+    """
+    details: dict[str, Any] = {"reason": reason}
+    details.update({key: value for key, value in evidence.items() if value is not None})
+    return {
+        "source_epoch_conflict": True,
+        "conflict_details": details,
+        "commit_seq": str(_current_commit_seq(connection)),
+    }
 
 
 def _current_commit_seq(connection) -> int:

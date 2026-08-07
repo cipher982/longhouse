@@ -385,39 +385,63 @@ pub fn mark_attempt(conn: &Connection, source_epoch: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// How long to wait before re-examining a blocked source, by attempt count.
+/// How long to wait before re-examining a blocked source, by how long it has
+/// already been blocked.
 ///
 /// Blocking no longer removes a row from consideration, which is what fixed the
 /// absorbing state — and immediately created the opposite risk, since every
 /// blocked row would otherwise be re-examined on every watcher tick and every
 /// restart, each costing a Runtime Host manifest fetch.
 ///
-/// The curve is deliberately coarse. Nothing here is time-critical: a source
-/// that has been blocked for a day loses nothing by being looked at hourly
-/// rather than continuously, and the cheapest re-examination is the one that
-/// does not happen.
-fn reexamine_backoff(attempt_count: u64) -> chrono::Duration {
-    match attempt_count {
-        0..=1 => chrono::Duration::minutes(1),
-        2..=3 => chrono::Duration::minutes(15),
-        4..=6 => chrono::Duration::hours(1),
-        _ => chrono::Duration::hours(6),
+/// Keyed on age rather than attempt count because `mark_attempt` only
+/// increments while `blocked_at IS NULL`. Once a row is quarantined its attempt
+/// count is frozen, so the old curve recomputed the *same* delay on every
+/// deferral and never widened. Two envelopes in the 2026-08-04 incident sat at
+/// `attempt_count = 2` and were therefore re-examined every 15 minutes for
+/// three days — several hundred manifest fetches that could not have succeeded.
+///
+/// Age also self-corrects: a row already blocked for days moves straight to the
+/// widest interval instead of having to earn its way there.
+///
+/// The curve is deliberately coarse. Nothing here is time-critical, and the
+/// cheapest re-examination is the one that does not happen.
+fn reexamine_backoff(blocked_for: chrono::Duration) -> chrono::Duration {
+    if blocked_for < chrono::Duration::minutes(5) {
+        chrono::Duration::minutes(1)
+    } else if blocked_for < chrono::Duration::hours(1) {
+        chrono::Duration::minutes(15)
+    } else if blocked_for < chrono::Duration::days(1) {
+        chrono::Duration::hours(1)
+    } else {
+        chrono::Duration::hours(6)
+    }
+}
+
+/// Shortest interval worth spending on a block of this kind.
+///
+/// A block with no local recovery path cannot clear by being looked at — that
+/// is what `block_kind_is_reconciling` returning false means. `retry_paths`
+/// deliberately refuses to filter such rows out, because filtering is what
+/// created the original absorbing state, so the only honest lever is to look
+/// far less often.
+///
+/// Deliberately a floor rather than a replacement curve: a reconciling block
+/// still follows the age curve exactly, and an unresolved one still gets
+/// re-examined, just at a cost that does not matter.
+fn reexamine_floor(block_kind: Option<&str>) -> chrono::Duration {
+    if block_kind_is_reconciling(block_kind) {
+        chrono::Duration::zero()
+    } else {
+        chrono::Duration::hours(6)
     }
 }
 
 pub fn quarantine(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &str) -> Result<bool> {
     let now = Utc::now();
-    // Read the attempt count so repeated blocks back off rather than spinning.
-    let attempts: u64 = conn
-        .query_row(
-            "SELECT attempt_count FROM pending_source_envelope WHERE source_epoch = ?1",
-            [source_epoch.to_string()],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .map(|value| u64::try_from(value).unwrap_or(0))
-        .unwrap_or(0);
-    let wake_at = now + reexamine_backoff(attempts);
+    // A row being blocked right now has age zero, so it earns the shortest
+    // interval. Widening is `defer_reexamination`'s job, once the block has
+    // actually persisted.
+    let wake_at = now + reexamine_backoff(chrono::Duration::zero());
     let changed = conn.execute(
         "UPDATE pending_source_envelope
          SET blocked_at = ?1, block_kind = ?2, block_detail = ?3, wake_at = ?5
@@ -442,16 +466,23 @@ pub fn quarantine(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &st
 /// row must move further out rather than coming straight back. Without this the
 /// backoff set at quarantine time only ever applies once.
 pub fn defer_reexamination(conn: &Connection, source_epoch: Uuid) -> Result<()> {
-    let attempts: u64 = conn
+    let now = Utc::now();
+    let row: Option<(Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT attempt_count FROM pending_source_envelope WHERE source_epoch = ?1",
+            "SELECT blocked_at, block_kind FROM pending_source_envelope WHERE source_epoch = ?1",
             [source_epoch.to_string()],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?
-        .map(|value| u64::try_from(value).unwrap_or(0))
-        .unwrap_or(0);
-    let wake_at = Utc::now() + reexamine_backoff(attempts.saturating_add(1));
+        .optional()?;
+    let (blocked_at, block_kind) = row.unwrap_or((None, None));
+    // An unparseable or absent `blocked_at` means we cannot prove the row is
+    // old, so it gets the shortest interval rather than the longest.
+    let blocked_for = blocked_at
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| now.signed_duration_since(value.with_timezone(&Utc)))
+        .unwrap_or_else(chrono::Duration::zero);
+    let interval = reexamine_backoff(blocked_for).max(reexamine_floor(block_kind.as_deref()));
+    let wake_at = now + interval;
     conn.execute(
         "UPDATE pending_source_envelope SET wake_at = ?2 WHERE source_epoch = ?1",
         params![source_epoch.to_string(), wake_at.to_rfc3339()],
@@ -1096,6 +1127,13 @@ mod tests {
     fn repeated_blocks_back_off_instead_of_spinning() {
         // Without a growing interval, removing the absorbing state just trades
         // it for a manifest fetch on every watcher tick.
+        //
+        // The interval must widen with how long the row has been *blocked*.
+        // Driving it from `attempt_count` did not work: `mark_attempt` only
+        // increments while `blocked_at IS NULL`, so a quarantined row's count
+        // is frozen and every deferral recomputed the same delay. Two envelopes
+        // sat at `attempt_count = 2` and were re-examined every 15 minutes for
+        // three days.
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let epoch = Uuid::new_v4();
@@ -1103,28 +1141,94 @@ mod tests {
         persist_or_load(&mut conn, &candidate(epoch, "/tmp/blocked.jsonl")).unwrap();
         quarantine(&mut conn, epoch, "source_epoch_conflict", "gap").unwrap();
 
-        let first: String = conn
-            .query_row("SELECT wake_at FROM pending_source_envelope", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        // Simulate attempts accumulating, then a fruitless re-examination.
+        let read_wake = |conn: &rusqlite::Connection| -> chrono::DateTime<chrono::Utc> {
+            let raw: String = conn
+                .query_row("SELECT wake_at FROM pending_source_envelope", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            chrono::DateTime::parse_from_rfc3339(&raw)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+
+        // Freshly blocked: shortest interval.
+        assert!(
+            read_wake(&conn).signed_duration_since(chrono::Utc::now())
+                < chrono::Duration::minutes(5),
+            "a freshly blocked row should be looked at again soon"
+        );
+
+        // Age the block by three days, exactly as the incident rows had.
+        // attempt_count stays frozen at its pre-block value on purpose: if the
+        // curve still read it, this would not widen.
+        let long_ago = (chrono::Utc::now() - chrono::Duration::days(3)).to_rfc3339();
         conn.execute(
-            "UPDATE pending_source_envelope SET attempt_count = 8",
-            [],
+            "UPDATE pending_source_envelope SET blocked_at = ?1, attempt_count = 2",
+            [&long_ago],
         )
         .unwrap();
         defer_reexamination(&conn, epoch).unwrap();
-        let later: String = conn
-            .query_row("SELECT wake_at FROM pending_source_envelope", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
+
+        let widened = read_wake(&conn).signed_duration_since(chrono::Utc::now());
+        assert!(
+            widened > chrono::Duration::hours(5),
+            "a source blocked for three days must back off to hours, not keep \
+             its original minutes-scale interval (got {widened})"
+        );
+    }
+
+    #[test]
+    fn a_block_with_no_local_recovery_is_examined_far_less_often() {
+        // `retry_paths` refuses to filter blocked rows out, because filtering is
+        // what created the original absorbing state. So the only lever left for
+        // a block that cannot clear locally is to look at it rarely — otherwise
+        // an unresolved source pays a manifest fetch forever for an answer that
+        // cannot change.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let reconciling = Uuid::new_v4();
+        register_epoch(&conn, reconciling, "claude");
+        persist_or_load(&mut conn, &candidate(reconciling, "/tmp/a.jsonl")).unwrap();
+        quarantine(&mut conn, reconciling, "source_epoch_conflict", "gap").unwrap();
+
+        let unresolved = Uuid::new_v4();
+        register_epoch(&conn, unresolved, "claude");
+        persist_or_load(&mut conn, &candidate(unresolved, "/tmp/b.jsonl")).unwrap();
+        quarantine(
+            &mut conn,
+            unresolved,
+            "source_epoch_conflict_unresolved",
+            "host has no epoch",
+        )
+        .unwrap();
+
+        defer_reexamination(&conn, reconciling).unwrap();
+        defer_reexamination(&conn, unresolved).unwrap();
+
+        let wake_of = |epoch: Uuid| -> chrono::Duration {
+            let raw: String = conn
+                .query_row(
+                    "SELECT wake_at FROM pending_source_envelope WHERE source_epoch = ?1",
+                    [epoch.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            chrono::DateTime::parse_from_rfc3339(&raw)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+                .signed_duration_since(chrono::Utc::now())
+        };
 
         assert!(
-            later > first,
-            "a re-examination that found nothing must push the next one further \
-             out, not schedule it again immediately ({later} vs {first})"
+            wake_of(reconciling) < chrono::Duration::hours(1),
+            "a block a local path can settle should still be retried promptly"
+        );
+        assert!(
+            wake_of(unresolved) >= chrono::Duration::hours(5),
+            "a block needing remote authority must not be re-examined on the \
+             same schedule as one this engine can actually fix"
         );
     }
 

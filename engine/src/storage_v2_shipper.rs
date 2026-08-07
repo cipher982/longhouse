@@ -662,6 +662,7 @@ pub(crate) async fn ship_prepared_envelope(
                     client,
                     &pending,
                     &prepared,
+                    conflict,
                     request_timeout,
                 )
                 .await?
@@ -777,6 +778,7 @@ async fn reconcile_storage_v2_conflict(
     client: &ShipperClient,
     pending: &PendingSourceEnvelope,
     prepared: &PreparedStorageV2Envelope,
+    conflict: &crate::shipping::client::StorageV2Conflict,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
     let manifest = match client
@@ -793,12 +795,22 @@ async fn reconcile_storage_v2_conflict(
                 .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
                 .is_some() =>
         {
+            // Record the *admission* refusal, not just the manifest probe that
+            // followed it. This branch used to store only the 404, which says
+            // the epoch does not exist — true but useless, since the host
+            // creates epochs lazily on first commit and never created this one.
+            // The 409 that caused all of it was discarded, which is why the
+            // 2026-08-04 incident could not be root-caused after the fact.
             return block_source(
                 conn,
                 prepared.source_epoch,
                 "source_epoch_conflict_unresolved",
                 &format!(
-                    "Runtime Host rejected the exact envelope and has no manifest for its source epoch: {}",
+                    "Runtime Host refused admission ({}: {}) and has no manifest for the source epoch. \
+                     Admission details: {}. Manifest probe: {}",
+                    conflict.code,
+                    conflict.message,
+                    conflict.response_body,
                     error
                         .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
                         .expect("typed source-not-found checked above")

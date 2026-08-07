@@ -946,9 +946,27 @@ async def storage_v2_source_epoch_manifest(
         ) from exc
     epoch = result.get("source_epoch")
     objects = result.get("objects")
+    # Both branches below answer the client identically on purpose: `machine_id`
+    # is bound to the authenticated device token, so a distinguishable "wrong
+    # machine" reply would tell a caller that an epoch exists on someone else's
+    # machine. The distinction is real and worth having, so it goes to the
+    # operator's logs instead of the wire — without it, a shipper blocked on a
+    # machine rename is indistinguishable from one blocked on a genuinely
+    # missing epoch, which is what made the 2026-08-04 incident unprovable.
     if result.get("found") is not True or not isinstance(epoch, dict):
+        logger.info(
+            "storage-v2 manifest miss: no epoch row source_epoch=%s machine_id=%s",
+            source_epoch,
+            machine_id,
+        )
         raise _http_error(status.HTTP_404_NOT_FOUND, "source_epoch_not_found", "Source epoch was not found.")
     if epoch.get("machine_id") != machine_id:
+        logger.warning(
+            "storage-v2 manifest miss: epoch belongs to another machine source_epoch=%s requested_by=%s owned_by=%s",
+            source_epoch,
+            machine_id,
+            epoch.get("machine_id"),
+        )
         raise _http_error(status.HTTP_404_NOT_FOUND, "source_epoch_not_found", "Source epoch was not found.")
     if not isinstance(objects, list) or any(
         not isinstance(item, dict) or item.get("machine_id") != machine_id or item.get("source_epoch") != str(source_epoch)
