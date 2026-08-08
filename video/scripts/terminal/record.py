@@ -649,13 +649,27 @@ def resolve_secret(secret):
 def seed_demo_repo(parent_dir="/tmp"):
     """Fresh scratch repo with an off-by-one bug, at a per-run path.
 
-    A mkdtemp parent (same parent as the sandbox HOME) avoids rm -rf'ing a
-    fixed shared path across runs; the leaf stays "demo-repo" because the
-    recorded provider prints this cwd and the basename must stay neutral.
+    The provider prints its cwd on screen, so the path must be the clean
+    fixed name /tmp/demo-repo, and it must be a REAL directory: Claude
+    binds its folder-trust grant to the resolved path, so a symlinked cwd
+    resurfaces the per-edit permission dialog mid-task (observed: take
+    stalled on "Do you want to make this edit" and failed the mock gate).
+    Reuse of the fixed path is guarded by a marker inside .git so we
+    never remove a directory we did not seed.
     Returns (repo_path, scratch_parent) — caller removes scratch_parent."""
-    scratch = tempfile.mkdtemp(prefix="demo-", dir=parent_dir)
-    path = os.path.join(scratch, "demo-repo")
+    path = os.path.join(parent_dir, "demo-repo")
+    marker = os.path.join(path, ".git", "longhouse-demo-seed")
+    if os.path.islink(path):
+        os.unlink(path)  # leftover from the abandoned symlink scheme
+    elif os.path.isdir(path):
+        if not os.path.exists(marker):
+            raise SystemExit(f"{path} exists but has no seed marker — refusing to remove it")
+        shutil.rmtree(path)
+    elif os.path.exists(path):
+        raise SystemExit(f"{path} exists and is not a directory — refusing to touch it")
     os.makedirs(path)
+    scratch = path
+    display = path
     Path(path, "inventory.py").write_text(INVENTORY_PY)
     Path(path, "test_inventory.py").write_text(TEST_INVENTORY_PY)
     git = "/usr/bin/git"
@@ -669,7 +683,18 @@ def seed_demo_repo(parent_dir="/tmp"):
     g("config", "user.email", "demo@example.com")
     g("add", "inventory.py", "test_inventory.py")
     g("commit", "-q", "-m", "seed demo repo")
-    return path, scratch
+    Path(path, ".git", "longhouse-demo-seed").write_text("recorder scratch\n")
+    return display, scratch
+
+
+
+
+def _unlink_demo_symlink():
+    """Remove the fixed-name /tmp/demo-repo display symlink if it is ours."""
+    display = "/tmp/demo-repo"
+    if os.path.islink(display):
+        os.unlink(display)
+
 
 
 def build_sandbox(provider_name, prov, cols, rows, demo_repo=None):
@@ -819,6 +844,7 @@ def main():
                     mock_proc.terminate()
                 if scratch_dir:
                     shutil.rmtree(scratch_dir, ignore_errors=True)
+                    _unlink_demo_symlink()
                 if not args.keep_home:
                     shutil.rmtree(home, ignore_errors=True)
                 raise
@@ -960,6 +986,7 @@ def main():
             mock_proc.terminate()
         if scratch_dir:
             shutil.rmtree(scratch_dir, ignore_errors=True)
+            _unlink_demo_symlink()
         if args.sandbox and home and not args.keep_home:
             shutil.rmtree(home, ignore_errors=True)
 

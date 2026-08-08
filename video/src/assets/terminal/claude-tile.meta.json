@@ -12,7 +12,7 @@
   "cols": 64,
   "rows": 14,
   "term": "xterm-256color",
-  "cwd": "/tmp/demo-l0u_ei1q/demo-repo",
+  "cwd": "/tmp/demo-repo",
   "sandbox": true,
   "isolation": "srt",
   "aborted": false,
@@ -45,7 +45,7 @@
       "denied": true
     },
     "mock_health": {
-      "url": "http://127.0.0.1:53497/health",
+      "url": "http://127.0.0.1:55952/health",
       "exit": 0,
       "http_code": "200",
       "reachable": true
@@ -80,21 +80,21 @@
     "mock_completions_match_fixture": true
   },
   "gate_failures": [],
-  "captured_at": "2026-08-08T21:37:03.959150+00:00",
-  "cast_sha256": "0af72b3bc3d7999612d5a052f51ff3fb90c9d924cf46c940bbd5931deefb1482",
+  "captured_at": "2026-08-08T21:59:59.757588+00:00",
+  "cast_sha256": "6f5da39048bb03c8cf8f69edc98516ecdee86d1402f6ce0876551be1709e830e",
   "exit_status": 0,
   "phase_log": [
-    "[   0.002] spawned pid=24858 argv=['/tmp/demo-home-wixn98l0/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 64x14",
-    "[   0.557] dialog 'theme' detected -> keys ['enter']",
-    "[   2.589] dialog 'api-key' detected -> keys ['up', 'enter']",
-    "[   5.047] dialog 'security-notes' detected -> keys ['enter']",
-    "[   7.083] dialog 'trust' detected -> keys ['enter']",
-    "[   9.031] sentinel hit: composer-ready",
-    "[  11.055] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
-    "[  12.858] prompt submitted",
-    "[  12.885] sentinel hit: working-spinner",
-    "[  27.343] sentinel hit: task-complete",
-    "[  29.369] sending exit sequence ['text:/exit', 'enter']",
-    "[  30.620] process exit status: 0"
+    "[   0.003] spawned pid=30327 argv=['/tmp/demo-home-wdn2un2g/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 64x14",
+    "[   0.552] dialog 'theme' detected -> keys ['enter']",
+    "[   2.610] dialog 'api-key' detected -> keys ['up', 'enter']",
+    "[   5.119] dialog 'security-notes' detected -> keys ['enter']",
+    "[   7.145] dialog 'trust' detected -> keys ['enter']",
+    "[   9.117] sentinel hit: composer-ready",
+    "[  11.153] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[  12.892] prompt submitted",
+    "[  12.931] sentinel hit: working-spinner",
+    "[  27.372] sentinel hit: task-complete",
+    "[  29.410] sending exit sequence ['text:/exit', 'enter']",
+    "[  30.667] process exit status: 0"
   ]
 }

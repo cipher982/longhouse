@@ -109,7 +109,7 @@ const Caption: React.FC<{ text: string; delay?: number }> = ({ text, delay = 8 }
 
 /** Real recorded sessions at 64x14: replay windows over the dense work. */
 const TILES = [
-  { provider: 0, timeline: () => claudeTile, startSec: 4.5, endSec: 9.3 },
+  { provider: 0, timeline: () => claudeTile, startSec: 4.0, endSec: 8.7 },
   { provider: 1, timeline: () => codexTile, startSec: 2.6, endSec: 7.5 },
 ];
 
@@ -320,8 +320,8 @@ const STEER_MESSAGE = "Fix the off-by-one bug in count_items, then run the tests
 // replay window opens when the phone's Send fires, so the terminal shows the
 // REAL recorded Claude Code session (sandboxed first-run, mock-API lane)
 // doing exactly what the phone asked.
-const REPLAY_START_SEC = 4.0;
-const REPLAY_END_SEC = 9.4;
+const REPLAY_START_SEC = 3.5;
+const REPLAY_END_SEC = 8.7;
 
 const SteerScene: React.FC = () => {
   const frame = useCurrentFrame();
