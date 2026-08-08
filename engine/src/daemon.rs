@@ -3595,17 +3595,21 @@ fn maybe_start_managed_observation_scan(
                 // session Longhouse has lost track of completely — which is
                 // what these were, since they pointed at temp and worktree
                 // homes this daemon never reads.
-                let mut retained_sessions = std::collections::HashSet::new();
-                retained_sessions.extend(codex_observations.iter().map(|o| o.session_id.clone()));
-                retained_sessions.extend(claude_observations.iter().map(|o| o.session_id.clone()));
-                retained_sessions
+                // Sessions this machine can still see. Kept separate from the
+                // resumability set below, because the two answer different
+                // questions and the receipts sweep needs this one.
+                let mut observed_sessions = std::collections::HashSet::new();
+                observed_sessions.extend(codex_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(claude_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions
                     .extend(opencode_observations.iter().map(|o| o.session_id.clone()));
-                retained_sessions.extend(cursor_observations.iter().map(|o| o.session_id.clone()));
-                retained_sessions.extend(
+                observed_sessions.extend(cursor_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(
                     antigravity_observations
                         .iter()
                         .map(|o| o.session_id.clone()),
                 );
+                let mut retained_sessions = observed_sessions.clone();
                 retained_sessions.extend(retained_codex.iter().cloned());
                 retained_sessions.extend(retained_claude.iter().cloned());
                 // Resume contracts cover four providers, not just Claude
@@ -3619,6 +3623,16 @@ fn maybe_start_managed_observation_scan(
                         .map(|observation| observation.session_id),
                 );
 
+                // Keyed on `observed_sessions`, not `retained_sessions`. The
+                // two answer different questions and the difference is the
+                // whole bug: a resume contract says "you could resume this
+                // later", while a launch-retry receipt says "this launch
+                // failed". Once the launch is over the receipt is history, so
+                // retaining it because the session is *resumable* left health
+                // reporting `managed_launch_recovery_exhausted` indefinitely
+                // for a session that was not running and had nothing wrong
+                // with it.
+                //
                 // Launch-retry receipts are contract files by another name:
                 // `<session>.json`, written when a managed launch cannot reach
                 // the Runtime Host. Nothing swept them, so a receipt for a
@@ -3630,11 +3644,11 @@ fn maybe_start_managed_observation_scan(
                 if let Ok(agent_dir) = crate::config::get_agent_dir() {
                     let swept_receipts = crate::managed_contract_janitor::sweep_orphan_contracts(
                         &agent_dir.join("managed-local/registration-retries"),
-                        &retained_sessions,
+                        &observed_sessions,
                         now,
                     ) + crate::managed_contract_janitor::sweep_orphan_contracts(
                         &agent_dir.join("managed-local/outcome-retries"),
-                        &retained_sessions,
+                        &observed_sessions,
                         now,
                     );
                     if swept_receipts > 0 {
