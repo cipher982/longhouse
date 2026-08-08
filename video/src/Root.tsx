@@ -1,6 +1,7 @@
 import { Composition } from "remotion";
 import { TimelineDemo } from "./compositions/TimelineDemo";
 import { SteerLoop, steerLoopDuration } from "./compositions/SteerLoop";
+import { ControlRoom, controlRoomDuration } from "./compositions/ControlRoom";
 import { HookScene } from "./scenes/HookScene";
 import { SearchWowScene } from "./scenes/SearchWowScene";
 import { TimelineExploreScene } from "./scenes/TimelineExploreScene";
@@ -12,6 +13,16 @@ import { defaultWedgeSpec, type WedgeSpec } from "./lib/wedgeSpec";
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      {/* Hero demo — code-drawn, no screenshot dependencies.
+          Render: bun run render:control */}
+      <Composition
+        id="ControlRoom"
+        component={ControlRoom}
+        durationInFrames={controlRoomDuration()}
+        fps={FPS}
+        width={WIDTH}
+        height={HEIGHT}
+      />
       {/* Wedge demo — parametrized by a JSON spec (agent-authored).
           Render: bunx remotion render SteerLoop out/wedge.mp4 --props=specs/wedge-demo.json
           Still:  bunx remotion still  SteerLoop public/images/hero-poster.png --props=...  */}

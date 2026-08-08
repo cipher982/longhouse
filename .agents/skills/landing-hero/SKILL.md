@@ -70,8 +70,8 @@ If the result does not match what you claimed you shipped, say so out loud befor
 
 Ship and maintain these files:
 
-- `web/public/videos/wedge-demo.mp4`
-- `web/public/images/landing/wedge-poster.png`
+- `web/public/videos/control-room.mp4`
+- `web/public/images/landing/control-poster.png`
 - `web/public/images/landing/timeline-preview.png`
 - `web/public/images/landing/search-preview.png`
 - `web/public/images/landing/session-detail-preview.png`
@@ -110,16 +110,20 @@ If the user says "update the hero image", do this exact loop:
 
 ## Current Canonical Output
 
-The production-facing hero is rendered from `video/specs/wedge-demo.json` with
-`make demo-render`, which now copies the MP4 and poster into `web/public`.
-It is assembled here:
+As of August 8, 2026, the shipping hero video is the **ControlRoom**
+composition (`video/src/compositions/ControlRoom.tsx`), rendered by
+`make demo-render`. It is fully code-drawn — no captured shots, no
+`/tmp/lh-shots` dependency — so every frame stays legible at hero scale.
+Four beats: four provider terminals → unify into one Longhouse panel →
+phone steers the live Claude session (the terminal visibly reacts) →
+wordmark close.
+
+The older SteerLoop/wedge spec lane (`video/specs/wedge-demo.json`) still
+exists for parametrized screenshot-based videos but no longer ships. It is
+assembled here:
 
 - `web/src/components/landing/HeroSection.tsx`
 - `web/src/styles/landing.css`
-
-As of July 9, 2026, the shipping hero uses a four-beat launch → timeline →
-phone-steer → CTA loop. The timeline frame comes from the marketing screenshot
-pipeline; the phone frame comes from the iOS marketing capture.
 
 ## The Narrative
 

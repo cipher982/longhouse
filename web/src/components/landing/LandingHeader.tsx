@@ -15,8 +15,8 @@ interface LandingHeaderProps {
 }
 
 const DEFAULT_NAV_LINKS: LandingNavLink[] = [
-  { label: "Sessions", href: "#sessions" },
   { label: "Remote control", href: "#control" },
+  { label: "Sessions", href: "#sessions" },
   { label: "Providers", href: "#providers" },
   { label: "Pricing", href: "#pricing" },
   { label: "Docs", href: "/docs" },

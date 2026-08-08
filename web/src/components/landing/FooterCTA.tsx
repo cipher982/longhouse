@@ -27,7 +27,7 @@ export function FooterCTA() {
     <footer className="landing-footer">
       <div className="landing-section-inner">
         <div className="landing-footer-cta">
-          <h2 className="landing-footer-quote">Bring your coding-agent sessions into Longhouse.</h2>
+          <h2 className="landing-footer-quote">Take control of your coding agents.</h2>
           <p className="landing-footer-cta-copy">
             Download the macOS app or install from the shell on Linux and WSL.
           </p>

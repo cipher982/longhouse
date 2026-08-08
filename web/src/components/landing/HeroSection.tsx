@@ -79,13 +79,14 @@ export function HeroSection() {
         </p>
 
         <h1 className="landing-hero-headline">
-          Every coding-agent session, <span className="gradient-text">in one place.</span>
+          Remote control for <span className="gradient-text">every coding agent you run.</span>
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse keeps the sessions from the coding agents already installed on your
-          machines in one searchable timeline. Start a session through Longhouse to follow
-          its progress and send instructions from the web or iPhone.
+          Longhouse plugs into the Claude Code, Codex, Cursor, and OpenCode installs
+          already on your machines and normalizes every session into one live system.
+          Watch any agent work, send it the next instruction, interrupt it, or resume
+          it — from the web or your iPhone.
         </p>
 
         <div className="hero-install">
@@ -142,14 +143,14 @@ export function HeroSection() {
         <div className="landing-hero-glow" aria-hidden="true" />
         <video
           className="landing-hero-video"
-          src="/videos/wedge-demo.mp4?v=20260709-2"
-          poster="/images/landing/wedge-poster.png?v=20260709-2"
+          src="/videos/control-room.mp4?v=20260808"
+          poster="/images/landing/control-poster.png?v=20260808"
           autoPlay
           muted
           loop
           playsInline
           preload="metadata"
-          aria-label="Longhouse demo: launch a coding agent, follow it in the timeline, and steer it from your phone"
+          aria-label="Longhouse demo: four coding agents on four machines unify into one system, then a phone steers the live Claude Code session"
         />
       </div>
     </section>

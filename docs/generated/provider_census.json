@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 242,
+  "file_count": 243,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1888,6 +1888,14 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "video/src/compositions/ControlRoom.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
       ]
     },
     {

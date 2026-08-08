@@ -10,6 +10,8 @@
     "render:timeline-demo": "remotion render TimelineDemo out/timeline-demo.mp4",
     "render:wedge": "remotion render SteerLoop out/wedge-demo.mp4 --props=specs/wedge-demo.json --crf=28",
     "render:wedge-poster": "remotion still SteerLoop out/wedge-poster.png --props=specs/wedge-demo.json --frame=270",
+    "render:control": "remotion render ControlRoom out/control-room.mp4 --crf=28",
+    "render:control-poster": "remotion still ControlRoom out/control-poster.png --frame=330",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -4,22 +4,29 @@ export function KernelThesisSection() {
       <div className="landing-section-inner landing-thesis-inner">
         <div className="landing-thesis-copy">
           <h2 className="landing-thesis-title">
-            Start through Longhouse when you want remote control.
+            Send, interrupt, steer, resume — on real sessions.
           </h2>
           <p className="landing-thesis-lead">
-            The provider still runs on the machine you choose, using its normal account,
-            tools, configuration, and repository. Longhouse keeps the connection needed
-            to check progress and use the controls that provider supports.
+            The provider CLI keeps running on your machine with its own account, tools,
+            and repository. Longhouse owns the control path, so the same session is
+            steerable from the browser and the iPhone app: type the next instruction,
+            cut off a bad turn, answer a permission prompt, or pick up one that died.
           </p>
 
           <ul className="landing-thesis-points">
             <li>
-              <strong>Sessions started outside Longhouse</strong>
-              <span>appear in the timeline with their transcripts and tool calls.</span>
+              <strong>Launch through Longhouse</strong>
+              <span>
+                and the full control surface is live: send, interrupt, mid-turn steering,
+                resume — from any device, while the terminal stays usable at your desk.
+              </span>
             </li>
             <li>
-              <strong>Sessions started through Longhouse</strong>
-              <span>can add send, interrupt, mid-turn steering, or resume controls.</span>
+              <strong>Agents you started elsewhere</strong>
+              <span>
+                stream in automatically — watch them work and inspect every tool call
+                alongside everything else.
+              </span>
             </li>
           </ul>
         </div>

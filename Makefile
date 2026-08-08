@@ -939,18 +939,10 @@ ui-capture: ## Capture local dev UI debug bundle
 marketing-screenshots: ## Regenerate landing-page marketing screenshots (retina, realistic demo data). NAME=<entry> for one.
 	@./scripts/marketing-screenshots.sh $(NAME)
 
-demo-render: ## Render the wedge demo (mp4 + hero poster) from real captured shots
-	@echo "Gathering captured shots into video/public/shots/ ..."
-	@mkdir -p video/public/shots
-	@cp web/public/images/landing/timeline-preview.png video/public/shots/timeline-preview.png
-	@if [ -f /tmp/lh-shots/session-dark.png ]; then \
-		cp /tmp/lh-shots/session-dark.png video/public/shots/session-dark.png; \
-	else \
-		echo "  WARN: /tmp/lh-shots/session-dark.png missing — run 'make ios-marketing' first for the steer shot"; \
-	fi
-	@cd video && bun run render:wedge && bun run render:wedge-poster
-	@cp video/out/wedge-demo.mp4 web/public/videos/wedge-demo.mp4
-	@cp video/out/wedge-poster.png web/public/images/landing/wedge-poster.png
+demo-render: ## Render the ControlRoom hero demo (mp4 + poster); fully code-drawn, no captured shots needed
+	@cd video && bun run render:control && bun run render:control-poster
+	@cp video/out/control-room.mp4 web/public/videos/control-room.mp4
+	@cp video/out/control-poster.png web/public/images/landing/control-poster.png
 	@node scripts/generate-og-image.mjs
 	@echo "Wedge demo, poster, and social card rendered into web/public"
 

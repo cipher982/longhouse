@@ -9,11 +9,12 @@ export function DemoSection({ screenshotTheme }: DemoSectionProps) {
     <section className="landing-demo" id="sessions">
       <div className="landing-section-inner">
         <div className="landing-section-heading landing-section-heading--split">
-          <h2>All of your session history, together.</h2>
+          <h2>Four agents&rsquo; output, one normalized system.</h2>
           <p>
-            Longhouse imports existing sessions from every connected machine. Search by the
-            words you remember, inspect the full transcript and tool calls, and return to the
-            exact context you need.
+            Claude Code, Codex, Cursor, and OpenCode each write their own logs, in their
+            own formats, on whichever machine ran them. Longhouse ingests all of it into
+            one schema — transcripts, tool calls, timing, state — so one timeline answers
+            what any agent did on any machine.
           </p>
         </div>
 

@@ -88,9 +88,9 @@ export default function LandingPage() {
   usePublicPageScroll();
   useRootUiEffects(particlesEnabled || heroAnimationsEnabled);
   usePageMeta({
-    title: "Longhouse - One place for every coding-agent session",
+    title: "Longhouse - Remote control for your coding agents",
     description:
-      "Search sessions from Claude Code, Codex, Cursor, and OpenCode in one timeline, with remote control for sessions started through Longhouse.",
+      "Longhouse plugs into Claude Code, Codex, Cursor, and OpenCode, normalizes every session into one system, and lets you steer any of them from the web or your iPhone.",
   });
 
   // Show loading while checking auth or accepting token
@@ -144,8 +144,8 @@ export default function LandingPage() {
 
       <main className="landing-main">
         <HeroSection />
-        <DemoSection screenshotTheme={screenshotTheme} />
         <KernelThesisSection />
+        <DemoSection screenshotTheme={screenshotTheme} />
         <MachineSurfaceSection />
         <IntegrationsSection />
         <PricingSection />
