@@ -143,8 +143,8 @@ export function HeroSection() {
         <div className="landing-hero-glow" aria-hidden="true" />
         <video
           className="landing-hero-video"
-          src="/videos/control-room.mp4?v=20260808-2"
-          poster="/images/landing/control-poster.png?v=20260808-2"
+          src="/videos/control-room.mp4?v=20260808-3"
+          poster="/images/landing/control-poster.png?v=20260808-3"
           autoPlay
           muted
           loop

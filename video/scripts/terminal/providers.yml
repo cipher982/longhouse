@@ -118,8 +118,11 @@ providers:
       # base URL cannot be set by env for a chat-wire mock; the sandbox
       # config.toml below defines a custom provider instead.
     files:
+      # Model id must be one codex's catalog knows, or it prints a
+      # "Model metadata not found … can degrade performance" warning
+      # banner straight into the recording.
       ".codex/config.toml": |
-        model = "mock-model"
+        model = "gpt-5.2-codex"
         model_provider = "mock"
 
         [model_providers.mock]

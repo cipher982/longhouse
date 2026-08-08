@@ -15,8 +15,12 @@ import { KineticText } from "../components/KineticText";
 import { TRANSITION_FRAMES, sec } from "../lib/timing";
 import { TerminalGrid, type GridTimeline } from "../terminal/TerminalGrid";
 import claudeGridJson from "../assets/terminal/claude.grid.json";
+import claudeTileJson from "../assets/terminal/claude-tile.grid.json";
+import codexTileJson from "../assets/terminal/codex-tile.grid.json";
 
 const claudeGrid = claudeGridJson as unknown as GridTimeline;
+const claudeTile = claudeTileJson as unknown as GridTimeline;
+const codexTile = codexTileJson as unknown as GridTimeline;
 
 /**
  * ControlRoom — the hero demo, drawn entirely in code so every frame stays
@@ -43,7 +47,6 @@ interface Provider {
   color: string;
   machine: string;
   task: string;
-  lines: { text: string; tone: "cmd" | "out" | "ok" | "dim" }[];
 }
 
 const PROVIDERS: Provider[] = [
@@ -53,12 +56,6 @@ const PROVIDERS: Provider[] = [
     color: "#E8875A",
     machine: "macbook",
     task: "Fix the inventory count bug",
-    lines: [
-      { text: "$ claude", tone: "cmd" },
-      { text: "⏺ Reading inventory.py…", tone: "out" },
-      { text: "⏺ Bash(python -m pytest -q)", tone: "dim" },
-      { text: "✗ 2 failed — off-by-one in count_items", tone: "out" },
-    ],
   },
   {
     name: "Codex",
@@ -66,12 +63,6 @@ const PROVIDERS: Provider[] = [
     color: "#7BC9A8",
     machine: "devbox",
     task: "Repair release build",
-    lines: [
-      { text: "$ codex", tone: "cmd" },
-      { text: "• exec: cargo build --release", tone: "out" },
-      { text: "• linker flag drift on self-hosted CI", tone: "dim" },
-      { text: "✓ build green in 4m12s", tone: "ok" },
-    ],
   },
   {
     name: "Cursor Agent",
@@ -79,12 +70,6 @@ const PROVIDERS: Provider[] = [
     color: "#9B8CFF",
     machine: "studio",
     task: "Migrate settings page",
-    lines: [
-      { text: "$ cursor-agent", tone: "cmd" },
-      { text: "→ editing web/src/pages/Settings.tsx", tone: "out" },
-      { text: "→ 3 files changed, tests queued", tone: "dim" },
-      { text: "✓ typecheck clean", tone: "ok" },
-    ],
   },
   {
     name: "OpenCode",
@@ -92,106 +77,8 @@ const PROVIDERS: Provider[] = [
     color: "#6FB7E8",
     machine: "homelab",
     task: "Nightly digest job",
-    lines: [
-      { text: "$ opencode", tone: "cmd" },
-      { text: "» tracing empty-email bug in digest cron", tone: "out" },
-      { text: "» found unhandled None in renderer", tone: "dim" },
-      { text: "✓ fix committed, job re-armed", tone: "ok" },
-    ],
   },
 ];
-
-const toneColor = (tone: Provider["lines"][number]["tone"]): string => {
-  switch (tone) {
-    case "cmd":
-      return CREAM;
-    case "out":
-      return "rgba(243, 234, 217, 0.82)";
-    case "dim":
-      return "rgba(243, 234, 217, 0.5)";
-    case "ok":
-      return "#8FC5AC";
-  }
-};
-
-/** macOS-style terminal window with staggered line reveal. */
-const Terminal: React.FC<{
-  provider: Provider;
-  width: number;
-  startFrame: number;
-  fontSize?: number;
-}> = ({ provider, width, startFrame, fontSize = 27 }) => {
-  const frame = useCurrentFrame();
-  const revealEvery = 16;
-
-  return (
-    <div
-      style={{
-        width,
-        borderRadius: 14,
-        overflow: "hidden",
-        background: "#151009",
-        border: "1px solid rgba(201, 166, 107, 0.22)",
-        boxShadow: "0 24px 70px rgba(0,0,0,0.55)",
-        fontFamily: MONO,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          height: 46,
-          padding: "0 16px",
-          background: "#1c1510",
-          borderBottom: "1px solid rgba(201,166,107,0.14)",
-          fontFamily: FONT,
-        }}
-      >
-        {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
-          <span key={c} style={{ width: 12, height: 12, borderRadius: 6, background: c }} />
-        ))}
-        <span
-          style={{
-            marginLeft: 8,
-            fontSize: 22,
-            fontWeight: 600,
-            color: provider.color,
-          }}
-        >
-          {provider.name}
-        </span>
-        <span style={{ marginLeft: "auto", fontSize: 20, color: "rgba(243,234,217,0.45)" }}>
-          {provider.machine}
-        </span>
-      </div>
-      <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
-        {provider.lines.map((line, i) => {
-          const lineStart = startFrame + i * revealEvery;
-          const opacity = interpolate(frame - lineStart, [0, 6], [0, 1], {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-          });
-          return (
-            <div
-              key={i}
-              style={{
-                fontSize,
-                lineHeight: 1.35,
-                color: toneColor(line.tone),
-                opacity,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-              }}
-            >
-              {line.text}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
 
 const Caption: React.FC<{ text: string; delay?: number }> = ({ text, delay = 8 }) => {
   const frame = useCurrentFrame();
@@ -218,39 +105,86 @@ const Caption: React.FC<{ text: string; delay?: number }> = ({ text, delay = 8 }
   );
 };
 
-/* ── Beat 1: four agents, four machines ─────────────────────────────── */
+/* ── Beat 1: real agents, really running ────────────────────────────── */
+
+/** Real recorded sessions at 64x14: replay windows over the dense work. */
+const TILES = [
+  { provider: 0, timeline: () => claudeTile, startSec: 4.5, endSec: 9.3 },
+  { provider: 1, timeline: () => codexTile, startSec: 2.6, endSec: 7.5 },
+];
+
+const TILE_CELL_W = 13.5;
+const TILE_CELL_H = 29;
 
 const AgentsScene: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
   return (
-    <AbsoluteFill style={{ background: BG }}>
+    <AbsoluteFill style={{ background: BG, fontFamily: FONT }}>
       <AbsoluteFill
         style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 34,
-          padding: "70px 90px 170px",
+          display: "flex",
+          flexDirection: "row",
+          gap: 56,
           alignItems: "center",
-          justifyItems: "center",
+          justifyContent: "center",
+          paddingBottom: 150,
         }}
       >
-        {PROVIDERS.map((p, i) => {
+        {TILES.map(({ provider, timeline, startSec, endSec }, i) => {
+          const p = PROVIDERS[provider];
           const enter = spring({
-            frame: frame - i * 7,
+            frame: frame - i * 9,
             fps,
             config: { damping: 16, mass: 0.7 },
           });
+          const tSec = Math.min(startSec + Math.max(0, frame - 12) / fps, endSec);
           return (
             <div
               key={p.name}
               style={{
                 opacity: enter,
                 transform: `translateY(${interpolate(enter, [0, 1], [40, 0])}px)`,
+                borderRadius: 14,
+                overflow: "hidden",
+                background: "#151009",
+                border: "1px solid rgba(201, 166, 107, 0.22)",
+                boxShadow: "0 24px 70px rgba(0,0,0,0.55)",
               }}
             >
-              <Terminal provider={p} width={780} startFrame={i * 7 + 10} />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  height: 46,
+                  padding: "0 16px",
+                  background: "#1c1510",
+                  borderBottom: "1px solid rgba(201,166,107,0.14)",
+                }}
+              >
+                {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
+                  <span
+                    key={c}
+                    style={{ width: 12, height: 12, borderRadius: 6, background: c }}
+                  />
+                ))}
+                <span style={{ marginLeft: 8, fontSize: 22, fontWeight: 600, color: p.color }}>
+                  {p.name}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: 20, color: "rgba(243,234,217,0.45)" }}>
+                  {p.machine}
+                </span>
+              </div>
+              <div style={{ padding: "14px 16px" }}>
+                <TerminalGrid
+                  timeline={timeline()}
+                  tSec={tSec}
+                  cellW={TILE_CELL_W}
+                  cellH={TILE_CELL_H}
+                />
+              </div>
             </div>
           );
         })}
