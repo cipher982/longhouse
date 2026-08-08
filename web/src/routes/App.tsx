@@ -64,14 +64,19 @@ function DemoApp() {
   );
 }
 
-function LandingAliasRedirect() {
-  const location = useLocation();
-  return <Navigate to={{ pathname: "/", search: location.search }} replace />;
-}
-
 export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: RoutingConfig) {
   // Public reference pages — shared by demo and normal modes
   const publicInfoRoutes = [
+    // Always-available landing page, even on single-tenant instances where "/"
+    // goes straight to the timeline. LandingPage skips its auth redirect here.
+    {
+      path: "/landing",
+      element: (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      ),
+    },
     {
       path: "/blog",
       element: (
@@ -205,11 +210,6 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
               <LandingPage />
             </ErrorBoundary>
           ),
-        },
-        // Keep /landing as an alias (bookmarks, old links)
-        {
-          path: "/landing",
-          element: <LandingAliasRedirect />,
         },
   ];
 

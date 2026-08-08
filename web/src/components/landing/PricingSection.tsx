@@ -3,7 +3,6 @@ import { Button } from "../ui";
 import { trackAcquisitionEvent } from "../../lib/analytics";
 
 interface PricingTier {
-  label: string;
   name: string;
   callout: string;
   description: string;
@@ -33,32 +32,30 @@ export function PricingSection() {
 
   const tiers: PricingTier[] = [
     {
-      label: "Start here",
       name: "Self-Hosted",
       callout: "Free",
-      description: "Run everything on hardware you control. No account required.",
+      description: "Run the Longhouse server on hardware you control.",
       features: [
-        "Run it on your laptop first, or on a VPS / Mac mini / homelab box for durability",
-        "Free and open source",
-        "Existing sessions from every supported provider import immediately",
-        "Browser, CLI, and /api/agents/* included",
+        "Try it on a laptop, then move it to a Mac mini, home server, or VPS",
+        "SQLite archive under your control",
+        "Browser, CLI, and machine API included",
+        "Apache-2.0 licensed",
       ],
-      ctaText: "Self-Host Free",
+      ctaText: "Download for macOS",
       ctaAction: handleStartFree,
       highlighted: true,
     },
     {
-      label: "We run it for you",
       name: "Hosted",
-      callout: "$5 / month",
-      description: "Same session model, with us running the always-on Runtime Host for you.",
+      callout: "$5/month",
+      description: "We run a private Longhouse server for you.",
       features: [
-        "Same archive and control loop as self-hosted",
-        "Skip running the box — we keep it up",
-        "Your own subdomain on longhouse.ai",
-        "Migrate from self-hosted any time",
+        "No server setup or maintenance",
+        "A private address on longhouse.ai",
+        "Your timeline stays available when dev machines are offline",
+        "Use the same Mac, Linux, and iPhone clients",
       ],
-      ctaText: "Get Hosted · $5/mo",
+      ctaText: "Get hosted",
       ctaAction: handleGetHosted,
     },
   ];
@@ -67,11 +64,11 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-pricing-heading">
-          Run it yourself, or let us run it.
+          Choose where the Longhouse server runs.
         </h2>
         <p className="landing-pricing-subhead">
-          Free and open source when you self-host. $5/month if you&rsquo;d rather we keep the
-          always-on box up. Same product either way — move between them whenever.
+          The server stores your archive and serves the web UI. Run it yourself for free,
+          or use hosted for $5 per month.
         </p>
 
         <div className="landing-pricing-grid">
@@ -81,7 +78,6 @@ export function PricingSection() {
               className={`landing-pricing-card ${tier.highlighted ? "highlighted" : ""}`}
             >
               <div className="landing-pricing-header">
-                <div className="landing-pricing-badge">{tier.label}</div>
                 <h3 className="landing-pricing-name">{tier.name}</h3>
                 <p className="landing-pricing-callout">{tier.callout}</p>
                 <p className="landing-pricing-description">{tier.description}</p>

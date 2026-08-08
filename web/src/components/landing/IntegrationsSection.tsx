@@ -17,7 +17,7 @@ const CAPABILITY_COLUMNS: { key: keyof LaunchProviderSupport | "sync"; label: st
 function CapabilityCell({ supported }: { supported: boolean }) {
   return (
     <td className={`landing-providers-cell ${supported ? "yes" : "no"}`}>
-      <span aria-hidden="true">{supported ? "✓" : "—"}</span>
+      <span aria-hidden="true">{supported ? "✓" : "No"}</span>
       <span className="landing-visually-hidden">{supported ? "Supported" : "Not supported"}</span>
     </td>
   );
@@ -30,12 +30,11 @@ export function IntegrationsSection() {
     <section id="providers" className="landing-providers">
       <div className="landing-section-inner">
         <h2 className="landing-providers-title">
-          What works with Longhouse
+          Control support, provider by provider.
         </h2>
         <p className="landing-providers-lead">
-          Every provider syncs into the same searchable timeline the moment you
-          install Longhouse. Launch through Longhouse and you can also drive the
-          session remotely — from the browser or your phone.
+          Every provider below can sync sessions into the same searchable timeline.
+          Control depth varies because Longhouse uses each provider&rsquo;s native interfaces.
         </p>
 
         <div className="landing-providers-tablewrap">

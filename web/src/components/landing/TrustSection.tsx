@@ -7,24 +7,24 @@ interface FAQ {
 
 const faqs: FAQ[] = [
   {
-    question: "Do I need hosted to try it?",
+    question: "Is Longhouse another coding agent?",
     answer:
-      "No. Self-hosting is the first path. Install Longhouse locally, import existing sessions, and prove the product before deciding whether you want us to run the always-on box for you.",
+      "No. Claude Code, Codex, Cursor, OpenCode, and the other provider clients still run the agent loop. Longhouse gives their sessions a shared history and control surface.",
   },
   {
-    question: "What runs on my machine versus the always-on box?",
+    question: "Which sessions can I control?",
     answer:
-      "The Machine Agent runs where work happens. The Runtime Host runs where you want durability to live. For a quick tryout, your laptop can run both. For a durable setup, move the Runtime Host to a VPS, Mac mini, or homelab box.",
+      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also expose controls such as send, interrupt, mid-turn steering, and resume. The exact controls depend on the provider.",
   },
   {
     question: "What happens when my laptop sleeps?",
     answer:
-      "If your laptop runs both pieces, everything stops when it sleeps. Put the Runtime Host on a machine that stays on — a VPS, Mac mini, or homelab box — and sessions keep running with the lid closed.",
+      "Work running on that laptop pauses or disconnects until the laptop wakes. Put the Longhouse server on a Mac mini, home server, VPS, or hosted account to keep the timeline and web UI available while the laptop is offline.",
   },
   {
-    question: "Are imported sessions different from sessions started through Longhouse?",
+    question: "Does Longhouse move the work to my phone or to its own cloud?",
     answer:
-      "Yes. Imported sessions are unmanaged: searchable and inspectable, but not steerable. That import path exists so Longhouse is useful immediately. Sessions launched with Longhouse are managed and keep the control path for live control or reattach later.",
+      "No. The provider client keeps running on the machine you selected. The web and iPhone apps show the session and send control requests back to that machine.",
   },
   {
     question: "Which providers are strongest today?",
@@ -34,7 +34,7 @@ const faqs: FAQ[] = [
   {
     question: "Where is my data stored?",
     answer:
-      "When you self-host, everything lives in SQLite on your machine or the box you control. Hosted is the same product with us running the Runtime Host for you.",
+      "A self-hosted archive lives in SQLite on the server you choose. With hosted, the archive lives on the private Longhouse server we operate for you.",
   },
 ];
 

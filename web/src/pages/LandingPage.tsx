@@ -88,9 +88,9 @@ export default function LandingPage() {
   usePublicPageScroll();
   useRootUiEffects(particlesEnabled || heroAnimationsEnabled);
   usePageMeta({
-    title: "Longhouse - Mission control for your AI coding sessions",
+    title: "Longhouse - One place for every coding-agent session",
     description:
-      "Bring Claude Code, Codex CLI, and Antigravity CLI sessions into one timeline, find past work fast, and steer live sessions later.",
+      "Search sessions from Claude Code, Codex, Cursor, and OpenCode in one timeline, with remote control for sessions started through Longhouse.",
   });
 
   // Show loading while checking auth or accepting token
@@ -102,7 +102,8 @@ export default function LandingPage() {
     );
   }
 
-  if (config.authEnabled && !config.demoMode && !disableRedirect && isAuthenticated) {
+  const isPreviewRoute = location.pathname === "/landing";
+  if (config.authEnabled && !config.demoMode && !disableRedirect && !isPreviewRoute && isAuthenticated) {
     return <Navigate to="/timeline" replace />;
   }
 

@@ -6,13 +6,16 @@ interface DemoSectionProps {
 
 export function DemoSection({ screenshotTheme }: DemoSectionProps) {
   return (
-    <section className="landing-demo">
+    <section className="landing-demo" id="sessions">
       <div className="landing-section-inner">
-        <h2 className="landing-demo-heading">Find any past session in seconds.</h2>
-        <p className="landing-demo-subhead">
-          One timeline across every machine and provider. Search it, open the raw transcript,
-          and pick up exactly where it left off.
-        </p>
+        <div className="landing-section-heading landing-section-heading--split">
+          <h2>All of your session history, together.</h2>
+          <p>
+            Longhouse imports existing sessions from every connected machine. Search by the
+            words you remember, inspect the full transcript and tool calls, and return to the
+            exact context you need.
+          </p>
+        </div>
 
         <ProductShowcase screenshotTheme={screenshotTheme} />
       </div>

@@ -15,10 +15,10 @@ interface LandingHeaderProps {
 }
 
 const DEFAULT_NAV_LINKS: LandingNavLink[] = [
-  { label: "How it works", href: "#how-it-works" },
-  { label: "Machine surface", href: "#surface" },
+  { label: "Sessions", href: "#sessions" },
+  { label: "Remote control", href: "#control" },
   { label: "Providers", href: "#providers" },
-  { label: "Blog", href: "/blog" },
+  { label: "Pricing", href: "#pricing" },
   { label: "Docs", href: "/docs" },
 ];
 
@@ -78,7 +78,7 @@ export function LandingHeader({ onSignIn, onGetStarted, navLinks = DEFAULT_NAV_L
             Sign In
           </Button>
           <Button variant="primary" size="sm" onClick={onGetStarted}>
-            Self-Host Free
+            Download
           </Button>
         </div>
 
@@ -121,7 +121,7 @@ export function LandingHeader({ onSignIn, onGetStarted, navLinks = DEFAULT_NAV_L
             Sign In
           </Button>
           <Button variant="primary" size="md" onClick={() => { onGetStarted?.(); setIsMobileMenuOpen(false); }} tabIndex={isMobileMenuOpen ? 0 : -1}>
-            Self-Host Free
+            Download
           </Button>
         </div>
       </div>

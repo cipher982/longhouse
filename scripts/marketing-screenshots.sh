@@ -89,11 +89,18 @@ done
 
 # --- Capture ---
 echo ""
-if [ -n "$1" ]; then
+if [ "$1" = "clips" ]; then
+    # Landing video clips only (timeline scroll, search typing, session detail)
+    uv run --with playwright --with pyyaml scripts/capture_marketing_clips.py \
+        --base-url "$BASE_URL" ${2:+--name "$2"}
+    exit 0
+elif [ -n "$1" ]; then
     uv run --with playwright --with pyyaml scripts/capture_marketing.py \
         --base-url "$BASE_URL" --name "$1"
 else
     uv run --with playwright --with pyyaml scripts/capture_marketing.py \
+        --base-url "$BASE_URL"
+    uv run --with playwright --with pyyaml scripts/capture_marketing_clips.py \
         --base-url "$BASE_URL"
 fi
 

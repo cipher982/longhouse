@@ -4,12 +4,13 @@ import { Button } from "../ui";
 import { trackAcquisitionEvent } from "../../lib/analytics";
 
 export function FooterCTA() {
-  const handleSelfHost = () => {
-    trackAcquisitionEvent("self_host_cta_click", {
+  const handleDownload = () => {
+    trackAcquisitionEvent("mac_download_click", {
       surface: "landing",
       placement: "footer",
+      method: "direct_download",
     });
-    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
+    window.location.assign("/download/macos");
   };
 
   const handleDocs = () => {
@@ -25,18 +26,21 @@ export function FooterCTA() {
   return (
     <footer className="landing-footer">
       <div className="landing-section-inner">
-        {/* Final CTA */}
         <div className="landing-footer-cta">
-          <blockquote className="landing-footer-quote">
-            Launch it. Walk away. Steer it from anywhere.
-          </blockquote>
+          <h2 className="landing-footer-quote">Bring your coding-agent sessions into Longhouse.</h2>
+          <p className="landing-footer-cta-copy">
+            Download the macOS app or install from the shell on Linux and WSL.
+          </p>
           <div className="landing-footer-cta-buttons">
-            <Button variant="primary" size="lg" onClick={handleSelfHost}>
-              Self-Host Free
+            <Button variant="primary" size="lg" onClick={handleDownload}>
+              Download for macOS
+            </Button>
+            <Button variant="secondary" size="lg" onClick={handleDocs}>
+              Read the docs
             </Button>
           </div>
           <p className="landing-footer-subnote">
-            Or skip running the box —{" "}
+            Hosted is $5 per month.{" "}
             <a
               href="https://control.longhouse.ai/signup"
               onClick={() =>
@@ -47,48 +51,31 @@ export function FooterCTA() {
                 })
               }
             >
-              get hosted for $5/mo
-            </a>.{" "}
-            <a href="/docs" className="landing-footer-subnote-docs" onClick={handleDocs}>Read the docs</a>.
+              Create a hosted account
+            </a>.
           </p>
         </div>
 
-        {/* Footer links */}
         <div className="landing-footer-links">
-          <div className="landing-footer-brand">
+          <a href="/" className="landing-footer-brand">
             <SwarmLogo size={32} />
             <span className="landing-footer-name">Longhouse</span>
-          </div>
+          </a>
 
-          <nav className="landing-footer-nav">
-            <div className="landing-footer-nav-group">
-              <h4>Product</h4>
-              <a href="#how-it-works">How it works</a>
-              <a href="#surface">CLI & API</a>
-              <a href="#providers">Providers</a>
-              <a href="#pricing">Deployment</a>
-            </div>
-            <div className="landing-footer-nav-group">
-              <h4>Resources</h4>
-              <Link to="/docs">Documentation</Link>
-              <Link to="/changelog">Changelog</Link>
-              <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">GitHub</a>
-            </div>
-            <div className="landing-footer-nav-group">
-              <h4>Company</h4>
-              <Link to="/security">Security</Link>
-              <Link to="/privacy">Privacy</Link>
-              <a href="mailto:support@longhouse.ai">Contact</a>
-              <a href="https://discord.gg/mekG4Pp5q" target="_blank" rel="noopener noreferrer">Discord</a>
-            </div>
+          <nav className="landing-footer-nav" aria-label="Footer">
+            <Link to="/docs">Docs</Link>
+            <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <Link to="/changelog">Changelog</Link>
+            <Link to="/security">Security</Link>
+            <Link to="/privacy">Privacy</Link>
+            <a href="mailto:support@longhouse.ai">Contact</a>
           </nav>
         </div>
 
         <div className="landing-footer-bottom">
-          <p>© {currentYear} Longhouse. All rights reserved.</p>
+          <p>© {currentYear} Longhouse · Apache-2.0</p>
         </div>
       </div>
-
     </footer>
   );
 }

@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 interface AppScreenshotFrameProps {
   src: string;
   alt: string;
+  /** When set, renders an autoplaying looped clip with `src` as its poster. */
+  videoSrc?: string;
   title?: string;
   aspectRatio?: "16/9" | "4/3" | "21/9";
   showChrome?: boolean;
@@ -15,6 +17,7 @@ interface AppScreenshotFrameProps {
 export function AppScreenshotFrame({
   src,
   alt,
+  videoSrc,
   title,
   aspectRatio = "16/9",
   showChrome = true,
@@ -58,16 +61,32 @@ export function AppScreenshotFrame({
             <p>Screenshot unavailable</p>
           </div>
         )}
-        <img
-          src={src}
-          alt={alt}
-          onLoad={() => setLoaded(true)}
-          onError={() => setError(true)}
-          loading={loading}
-          decoding="async"
-          fetchPriority={fetchPriority}
-          style={{ opacity: loaded ? 1 : 0 }}
-        />
+        {videoSrc ? (
+          <video
+            src={videoSrc}
+            poster={src}
+            aria-label={alt}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            onLoadedData={() => setLoaded(true)}
+            onError={() => setError(true)}
+            style={{ opacity: loaded ? 1 : 0 }}
+          />
+        ) : (
+          <img
+            src={src}
+            alt={alt}
+            onLoad={() => setLoaded(true)}
+            onError={() => setError(true)}
+            loading={loading}
+            decoding="async"
+            fetchPriority={fetchPriority}
+            style={{ opacity: loaded ? 1 : 0 }}
+          />
+        )}
       </div>
     </div>
   );

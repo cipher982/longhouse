@@ -15,6 +15,8 @@ interface TabConfig {
   label: string;
   description: string;
   image: string;
+  /** Autoplaying clip for the tab; the image doubles as its poster. */
+  video?: string;
   alt: string;
 }
 
@@ -22,21 +24,22 @@ const tabs: TabConfig[] = [
   {
     id: "timeline",
     label: "Timeline",
-    description: "See imported and Longhouse-launched sessions in one archive across providers and machines.",
+    description: "Sessions from every provider and machine, ordered by when you last touched them.",
     image: "/images/landing/timeline-preview.webp?v=20260709-3",
+    video: "/videos/timeline-clip.mp4?v=20260808",
     alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
   },
   {
     id: "search",
     label: "Search",
-    description: "Find the session where auth, retries, or that migration was already solved.",
+    description: "Search the words you remember instead of digging through provider log folders.",
     image: "/images/landing/search-preview.webp?v=20260709-3",
     alt: "Search results filtering sessions by keyword with highlighted matches",
   },
   {
     id: "session",
     label: "Session Detail",
-    description: "Read the raw transcript, tool calls, and exact context you want to continue from.",
+    description: "Read the raw transcript and tool calls without opening the original terminal.",
     image: "/images/landing/session-detail-preview.webp?v=20260709-3",
     alt: "Detailed session view showing tool calls and conversation",
   },
@@ -73,24 +76,29 @@ export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
 
   return (
     <div className="product-showcase">
-      <div className="product-showcase-tabs">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`product-showcase-tab ${activeTab === tab.id ? "active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="product-showcase-toolbar">
+        <div className="product-showcase-tabs" role="tablist" aria-label="Longhouse session views">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`product-showcase-tab ${activeTab === tab.id ? "active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <p className="product-showcase-description">{activeConfig.description}</p>
       </div>
 
       <div className="product-showcase-content">
-        <p className="product-showcase-description">{activeConfig.description}</p>
-
         <div className="product-showcase-frame">
           <AppScreenshotFrame
             src={activeConfig.image}
+            videoSrc={activeConfig.video}
             alt={activeConfig.alt}
             title={activeConfig.label}
             aspectRatio="16/9"

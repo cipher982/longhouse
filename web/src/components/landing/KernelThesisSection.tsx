@@ -1,34 +1,25 @@
-/**
- * The "what it actually does" beat. Deliberately NOT the kicker→punchline→
- * three-cards template the rest of the page leans on — an asymmetric feature
- * row that leads with the crux (continue your sessions on the go) and keeps the
- * supporting facts subordinate, not co-equal boxes.
- */
-
 export function KernelThesisSection() {
   return (
-    <section id="how-it-works" className="landing-thesis">
+    <section id="control" className="landing-thesis">
       <div className="landing-section-inner landing-thesis-inner">
         <div className="landing-thesis-copy">
           <h2 className="landing-thesis-title">
-            Leave your desk. Keep driving the session.
+            Start through Longhouse when you want remote control.
           </h2>
           <p className="landing-thesis-lead">
-            Start a session at your desk and pick it back up from your phone or
-            browser — read it, message it, steer it. Or launch a new one
-            remotely and let it run while you&rsquo;re away.
+            The provider still runs on the machine you choose, using its normal account,
+            tools, configuration, and repository. Longhouse keeps the connection needed
+            to check progress and use the controls that provider supports.
           </p>
 
           <ul className="landing-thesis-points">
             <li>
-              <strong>It just syncs.</strong> Install Longhouse and every session —
-              Claude Code, Codex, Cursor, and more — flows into one searchable
-              timeline, live. No import, no setup.
+              <strong>Sessions started outside Longhouse</strong>
+              <span>appear in the timeline with their transcripts and tool calls.</span>
             </li>
             <li>
-              <strong>It stays on.</strong> Run it on your laptop to try it, then
-              move the Runtime Host to a VPS, Mac mini, or homelab box so sessions
-              keep running after you close the lid.
+              <strong>Sessions started through Longhouse</strong>
+              <span>can add send, interrupt, mid-turn steering, or resume controls.</span>
             </li>
           </ul>
         </div>
@@ -36,7 +27,7 @@ export function KernelThesisSection() {
         <div className="landing-thesis-visual">
           <img
             src="/images/landing/phone-session.png"
-            alt="A coding session open on a phone, ready to steer"
+            alt="A Claude Code session open in Longhouse on an iPhone"
             className="landing-thesis-phone"
             width={1206}
             height={2622}
