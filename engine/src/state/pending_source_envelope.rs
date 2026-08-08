@@ -4,7 +4,7 @@
 //! the retry authority until the Runtime Host returns its exact receipt.
 
 use anyhow::{bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use uuid::Uuid;
@@ -29,8 +29,8 @@ pub(crate) fn body_digest(body: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64) -> bool {
-    current_bytes.saturating_add(candidate_bytes) <= MAX_PENDING_OUTBOX_BYTES
+fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64, byte_limit: u64) -> bool {
+    current_bytes.saturating_add(candidate_bytes) <= byte_limit
 }
 
 fn retained_envelope_bytes(conn: &Connection) -> Result<u64> {
@@ -41,6 +41,15 @@ fn retained_envelope_bytes(conn: &Connection) -> Result<u64> {
         |row| row.get(0),
     )?;
     u64::try_from(bytes).context("pending outbox size is negative")
+}
+
+/// Serialize timestamps used in SQLite ordering with a fixed-width fraction.
+///
+/// `DateTime::to_rfc3339()` uses variable precision, so a whole-second value
+/// ending in `Z` sorts after a fractional value from the same second. The due
+/// query compares these values as TEXT; fixed nanoseconds preserve time order.
+fn sortable_wake_at(value: &DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -320,7 +329,7 @@ pub fn retry_paths(conn: &Connection) -> Result<Vec<PendingSourceRetryPath>> {
          GROUP BY epoch.provider, pending.source_path
          ORDER BY MIN(pending.created_at), epoch.provider, pending.source_path",
     )?;
-    let rows = statement.query_map([Utc::now().to_rfc3339()], |row| {
+    let rows = statement.query_map([sortable_wake_at(&Utc::now())], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -344,6 +353,14 @@ pub fn retry_paths(conn: &Connection) -> Result<Vec<PendingSourceRetryPath>> {
 pub fn persist_or_load(
     conn: &mut Connection,
     candidate: &PendingSourceEnvelope,
+) -> Result<PendingSourceEnvelope> {
+    persist_or_load_with_limit(conn, candidate, MAX_PENDING_OUTBOX_BYTES)
+}
+
+fn persist_or_load_with_limit(
+    conn: &mut Connection,
+    candidate: &PendingSourceEnvelope,
+    byte_limit: u64,
 ) -> Result<PendingSourceEnvelope> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let existing = tx
@@ -369,8 +386,8 @@ pub fn persist_or_load(
     let candidate_bytes =
         u64::try_from(candidate.request_body_zstd.len() + candidate.media_objects_zstd.len())
             .context("pending envelope size exceeds u64")?;
-    if !pending_outbox_has_capacity(current_bytes, candidate_bytes) {
-        bail!("storage-v2 pending outbox byte limit exceeded ({MAX_PENDING_OUTBOX_BYTES} bytes)");
+    if !pending_outbox_has_capacity(current_bytes, candidate_bytes, byte_limit) {
+        bail!("storage-v2 pending outbox byte limit exceeded ({byte_limit} bytes)");
     }
     tx.execute(
         "INSERT INTO pending_source_envelope (
@@ -492,7 +509,7 @@ pub fn quarantine(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &st
             kind,
             detail,
             source_epoch.to_string(),
-            wake_at.to_rfc3339()
+            sortable_wake_at(&wake_at)
         ],
     )?;
     if changed > 1 {
@@ -526,7 +543,7 @@ pub fn defer_reexamination(conn: &Connection, source_epoch: Uuid) -> Result<()> 
     let wake_at = now + interval;
     conn.execute(
         "UPDATE pending_source_envelope SET wake_at = ?2 WHERE source_epoch = ?1",
-        params![source_epoch.to_string(), wake_at.to_rfc3339()],
+        params![source_epoch.to_string(), sortable_wake_at(&wake_at)],
     )?;
     Ok(())
 }
@@ -1143,8 +1160,9 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 mod tests {
     use super::{
         block_kind_is_reconciling, body_digest, defer_reexamination, pending_outbox_has_capacity,
-        persist_or_load, quarantine, replace_request_body_after_lineage_repair,
-        retained_envelope_bytes, retire_after_host_replacement, retry_paths, snapshot,
+        persist_or_load, persist_or_load_with_limit, quarantine,
+        replace_request_body_after_lineage_repair, retained_envelope_bytes,
+        retire_after_host_replacement, retry_paths, snapshot, sortable_wake_at,
         PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
@@ -1153,9 +1171,38 @@ mod tests {
 
     #[test]
     fn pending_outbox_capacity_is_exact_and_overflow_safe() {
-        assert!(pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES - 1, 1));
-        assert!(!pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES, 1));
-        assert!(!pending_outbox_has_capacity(u64::MAX, u64::MAX));
+        assert!(pending_outbox_has_capacity(
+            MAX_PENDING_OUTBOX_BYTES - 1,
+            1,
+            MAX_PENDING_OUTBOX_BYTES
+        ));
+        assert!(!pending_outbox_has_capacity(
+            MAX_PENDING_OUTBOX_BYTES,
+            1,
+            MAX_PENDING_OUTBOX_BYTES
+        ));
+        assert!(!pending_outbox_has_capacity(
+            u64::MAX,
+            u64::MAX,
+            MAX_PENDING_OUTBOX_BYTES
+        ));
+    }
+
+    #[test]
+    fn wake_timestamps_sort_in_time_order_within_the_same_second() {
+        let whole = chrono::DateTime::parse_from_rfc3339("2026-08-08T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let fractional = whole + chrono::Duration::milliseconds(500);
+
+        let whole = sortable_wake_at(&whole);
+        let fractional = sortable_wake_at(&fractional);
+        assert_eq!(whole, "2026-08-08T12:00:00.000000000Z");
+        assert_eq!(fractional, "2026-08-08T12:00:00.500000000Z");
+        assert!(
+            whole < fractional,
+            "SQLite TEXT order must match time order"
+        );
     }
 
     #[test]
@@ -1406,6 +1453,44 @@ mod tests {
             state.pending_bytes + state.blocked_bytes,
             "the capacity check must include quarantined evidence"
         );
+    }
+
+    #[test]
+    fn blocked_bytes_at_the_limit_reject_a_new_envelope() {
+        // Use a tiny limit so this exercises the real transactional capacity
+        // gate without allocating a 1 GiB fixture.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let blocked_epoch = Uuid::new_v4();
+        register_epoch(&conn, blocked_epoch, "claude");
+        persist_or_load_with_limit(
+            &mut conn,
+            &candidate(blocked_epoch, "/tmp/blocked.jsonl"),
+            3,
+        )
+        .unwrap();
+        quarantine(
+            &conn,
+            blocked_epoch,
+            "source_epoch_conflict",
+            "proof mismatch",
+        )
+        .unwrap();
+
+        let next_epoch = Uuid::new_v4();
+        register_epoch(&conn, next_epoch, "codex");
+        let error =
+            persist_or_load_with_limit(&mut conn, &candidate(next_epoch, "/tmp/next.jsonl"), 3)
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("pending outbox byte limit exceeded (3 bytes)"),
+            "unexpected capacity error: {error:#}"
+        );
+        assert_eq!(retained_envelope_bytes(&conn).unwrap(), 2);
+        assert!(super::load_for_epoch(&conn, next_epoch).unwrap().is_none());
     }
 
     #[test]
