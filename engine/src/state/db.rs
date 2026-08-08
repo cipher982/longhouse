@@ -485,6 +485,9 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_pending_source_envelope_path
          ON pending_source_envelope(source_path, created_at);
 
+         CREATE INDEX IF NOT EXISTS idx_pending_source_envelope_wake
+         ON pending_source_envelope(wake_at, source_epoch);
+
          CREATE INDEX IF NOT EXISTS idx_pending_source_supersession_epoch
          ON pending_source_envelope_supersession(source_epoch, created_at);",
     )?;
@@ -533,6 +536,40 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn pending_retry_plan_starts_from_due_envelopes() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(tmp.path())).unwrap();
+
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT epoch.provider, pending.source_path,
+                        SUM(pending.raw_bytes), MIN(pending.created_at)
+                 FROM pending_source_envelope AS pending
+                 JOIN source_epoch_registry AS epoch
+                   ON epoch.source_epoch = pending.source_epoch
+                 WHERE pending.wake_at <= ?1
+                 GROUP BY epoch.provider, pending.source_path
+                 ORDER BY MIN(pending.created_at), epoch.provider, pending.source_path",
+            )
+            .unwrap()
+            .query_map(["2026-08-08T00:00:00Z"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_pending_source_envelope_wake")),
+            "pending retry plan must use the due-time index: {plan:?}"
+        );
+        assert!(
+            plan.iter().all(|detail| !detail.contains("SCAN epoch")),
+            "pending retry plan must not scan every source epoch: {plan:?}"
+        );
     }
 
     #[test]
