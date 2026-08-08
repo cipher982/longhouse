@@ -24,6 +24,7 @@ from zerg.qa.provider_native_resume import _claude_input_prompt_visible
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
+from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
@@ -554,6 +555,7 @@ def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> 
 
 def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Path) -> None:
     state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
@@ -563,8 +565,32 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
         events.read_text()
         + "\n".join(
             [
-                json.dumps({"event": "beforeSubmitPrompt", "session_id": "session-1", "conversation_id": "cursor-thread-1"}),
-                json.dumps({"event": "afterAgentResponse", "session_id": "session-1", "conversation_id": "cursor-thread-1"}),
+                json.dumps(
+                    {
+                        "event": "beforeSubmitPrompt",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "payload": {
+                            "session_id": "cursor-thread-1",
+                            "conversation_id": "cursor-thread-1",
+                            "generation_id": "generation-1",
+                            "prompt": _cursor_bootstrap_prompt(marker),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "afterAgentResponse",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "payload": {
+                            "session_id": "cursor-thread-1",
+                            "conversation_id": "cursor-thread-1",
+                            "generation_id": "generation-1",
+                            "text": marker,
+                        },
+                    }
+                ),
             ]
         )
         + "\n",
@@ -573,16 +599,20 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
     sequence = _wait_cursor_bootstrap_hook_sequence(
         state,
         {"LONGHOUSE_HOME": str(longhouse_home)},
+        marker=marker,
         minimum_hook_event_bytes=baseline,
         timeout=1,
     )
 
     assert sequence["events"] == ["beforeSubmitPrompt", "afterAgentResponse"]
+    assert sequence["generation_id"] == "generation-1"
+    assert sequence["hook_response_correlated"] is True
     assert sequence["timed_out"] is False
 
 
 def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: Path) -> None:
     state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
@@ -592,9 +622,151 @@ def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: 
         _wait_cursor_bootstrap_hook_sequence(
             state,
             {"LONGHOUSE_HOME": str(longhouse_home)},
+            marker=marker,
             minimum_hook_event_bytes=0,
             timeout=0.01,
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("session_id", "other-session"),
+        ("conversation_id", "other-thread"),
+        ("generation_id", ""),
+        ("prompt", "Reply with exactly the wrong marker"),
+    ],
+)
+def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path, field: str, value: str) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    marker = "LH_CURSOR_BOOTSTRAP_abc123"
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    before_payload = {
+        "session_id": "cursor-thread-1",
+        "conversation_id": "cursor-thread-1",
+        "generation_id": "generation-1",
+        "prompt": _cursor_bootstrap_prompt(marker),
+    }
+    after_payload = {
+        "session_id": "cursor-thread-1",
+        "conversation_id": "cursor-thread-1",
+        "generation_id": "generation-1",
+        "text": marker,
+    }
+    target = before_payload if field == "prompt" else after_payload if field == "generation_id" else None
+    if target is not None:
+        target[field] = value
+    else:
+        (before_payload if field == "session_id" else before_payload)[field] = value
+    events.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "beforeSubmitPrompt",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "payload": before_payload,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "afterAgentResponse",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "payload": after_payload,
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    with pytest.raises(RuntimeError, match="beforeSubmitPrompt/afterAgentResponse"):
+        _wait_cursor_bootstrap_hook_sequence(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            marker=marker,
+            minimum_hook_event_bytes=0,
+            timeout=0.01,
+        )
+
+
+def test_cursor_bootstrap_hook_sequence_rejects_multiple_matching_generations(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    marker = "LH_CURSOR_BOOTSTRAP_abc123"
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    rows = []
+    for generation in ("generation-1", "generation-2"):
+        rows.append(
+            {
+                "event": "beforeSubmitPrompt",
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "payload": {
+                    "session_id": "cursor-thread-1",
+                    "conversation_id": "cursor-thread-1",
+                    "generation_id": generation,
+                    "prompt": _cursor_bootstrap_prompt(marker),
+                },
+            }
+        )
+    events.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(RuntimeError, match="multiple generations"):
+        _wait_cursor_bootstrap_hook_sequence(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            marker=marker,
+            minimum_hook_event_bytes=0,
+            timeout=1,
+        )
+
+
+def test_cursor_bootstrap_correlation_allows_exact_hook_with_shipped_events() -> None:
+    result = _cursor_bootstrap_correlation(
+        {
+            "marker_observed_in_transcript": False,
+            "marker_observed_in_assistant": False,
+            "new_assistant_events": 0,
+        },
+        {"hook_response_correlated": True},
+        {"status": "pass", "events_shipped": 11},
+    )
+
+    assert result == {
+        "transcript_projection_correlated": False,
+        "hook_response_correlated": True,
+        "method": "cursor_hook_with_transcript_ship",
+        "bootstrap_correlated": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "ship_receipt",
+    [
+        {"status": "failed", "events_shipped": 11},
+        {"status": "pass", "events_shipped": 0},
+        {"status": "pass", "events_shipped": True},
+    ],
+)
+def test_cursor_bootstrap_correlation_rejects_unshipped_hook_fallback(ship_receipt: dict[str, object]) -> None:
+    result = _cursor_bootstrap_correlation(
+        {
+            "marker_observed_in_transcript": False,
+            "marker_observed_in_assistant": False,
+            "new_assistant_events": 0,
+        },
+        {"hook_response_correlated": True},
+        ship_receipt,
+    )
+
+    assert result["bootstrap_correlated"] is False
+    assert result["method"] == "unverified"
 
 
 def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:

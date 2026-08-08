@@ -352,7 +352,15 @@ def registration_for(provider: str) -> ProducerRegistration:
             "initial_transcript",
             "initial_transcript_ship_receipt",
             "native_resume_terminal_recording",
-            *(("resume_bootstrap_response_correlation", "resume_bootstrap_transcript") if provider == "cursor" else ()),
+            *(
+                (
+                    "resume_bootstrap_response_correlation",
+                    "resume_bootstrap_transcript",
+                    "resume_bootstrap_transcript_ship_receipt",
+                )
+                if provider == "cursor"
+                else ()
+            ),
             "resumed_bridge_state",
             "resumed_transcript",
             "post_resume_response_correlation",
@@ -1588,6 +1596,49 @@ def _wait_assistant_response_after_marker(
     }
 
 
+def _cursor_bootstrap_correlation(
+    transcript_correlation: dict[str, Any],
+    hook_sequence: dict[str, Any],
+    ship_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify Cursor's bootstrap response without weakening the final proof.
+
+    Cursor's native hook is provider-owned evidence for the bootstrap turn,
+    while the Runtime Host transcript remains the authority for the later
+    managed Resume marker.  A hook-only bootstrap fallback is valid only when
+    the exact hook sequence passed and the same transcript shipper delivered
+    at least one event.
+    """
+
+    transcript_projection_correlated = bool(
+        transcript_correlation.get("marker_observed_in_transcript")
+        and transcript_correlation.get("marker_observed_in_assistant")
+        and isinstance(transcript_correlation.get("new_assistant_events"), int)
+        and not isinstance(transcript_correlation.get("new_assistant_events"), bool)
+        and transcript_correlation["new_assistant_events"] > 0
+    )
+    hook_response_correlated = hook_sequence.get("hook_response_correlated") is True
+    events_shipped = ship_receipt.get("events_shipped")
+    bootstrap_ship_succeeded = bool(
+        ship_receipt.get("status") == "pass"
+        and isinstance(events_shipped, int)
+        and not isinstance(events_shipped, bool)
+        and events_shipped > 0
+    )
+    if transcript_projection_correlated:
+        method = "transcript_projection"
+    elif hook_response_correlated and bootstrap_ship_succeeded:
+        method = "cursor_hook_with_transcript_ship"
+    else:
+        method = "unverified"
+    return {
+        "transcript_projection_correlated": transcript_projection_correlated,
+        "hook_response_correlated": hook_response_correlated,
+        "method": method,
+        "bootstrap_correlated": transcript_projection_correlated or (hook_response_correlated and bootstrap_ship_succeeded),
+    }
+
+
 def _cursor_hook_event_bytes(state: dict[str, Any], environment: dict[str, str]) -> int:
     """Return the current lifecycle-hook log size for a managed Cursor run."""
 
@@ -1672,6 +1723,7 @@ def _wait_cursor_bootstrap_hook_sequence(
     state: dict[str, Any],
     environment: dict[str, str],
     *,
+    marker: str,
     minimum_hook_event_bytes: int,
     timeout: float = 45.0,
 ) -> dict[str, Any]:
@@ -1680,7 +1732,9 @@ def _wait_cursor_bootstrap_hook_sequence(
     ``sessionStart`` is an idle phase, but it does not prove that the prompt
     written to the PTY was accepted.  The only provider-owned sequence that
     establishes a real foreground turn is ``beforeSubmitPrompt`` followed by
-    ``afterAgentResponse`` for this session and retained conversation.
+    ``afterAgentResponse`` for this session and retained conversation.  The
+    prompt, response text, and generation identity are part of the predicate;
+    an unrelated hook response must never authorize the transcript fallback.
     """
 
     longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
@@ -1688,9 +1742,10 @@ def _wait_cursor_bootstrap_hook_sequence(
         raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
     path = Path(longhouse_home) / "managed-local" / "cursor-helm" / "hook-events" / f"{state['session_id']}.ndjson"
     deadline = time.monotonic() + timeout
+    expected_prompt = _cursor_bootstrap_prompt(marker)
     observed_events: list[str] = []
-    before: dict[str, Any] | None = None
-    after: dict[str, Any] | None = None
+    matching_befores: list[dict[str, Any]] = []
+    matching_afters: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
         try:
             with path.open("rb") as stream:
@@ -1712,12 +1767,31 @@ def _wait_cursor_bootstrap_hook_sequence(
             name = str(event.get("event") or "")
             if name:
                 observed_events.append(name)
-            if before is None and name == "beforeSubmitPrompt":
-                before = event
-            elif before is not None and name == "afterAgentResponse":
-                after = event
-                break
-        if before is not None and after is not None:
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("session_id") != state.get("provider_session_id"):
+                continue
+            if payload.get("conversation_id") != state.get("provider_session_id"):
+                continue
+            generation_id = str(payload.get("generation_id") or "").strip()
+            if not generation_id:
+                continue
+            if name == "beforeSubmitPrompt" and payload.get("prompt") == expected_prompt:
+                matching_befores.append(event)
+            elif name == "afterAgentResponse" and str(payload.get("text") or "").strip() == marker:
+                matching_afters.append(event)
+        before_generations = {str((event.get("payload") or {}).get("generation_id")) for event in matching_befores}
+        if len(before_generations) > 1:
+            raise RuntimeError(
+                "Cursor bootstrap hook observed matching prompts from multiple generations " f"({sorted(before_generations)!r})"
+            )
+        generation_id = next(iter(before_generations), "")
+        matching_response = next(
+            (event for event in matching_afters if str((event.get("payload") or {}).get("generation_id")) == generation_id),
+            None,
+        )
+        if generation_id and matching_response is not None:
             try:
                 end_bytes = path.stat().st_size
             except OSError:
@@ -1726,8 +1800,10 @@ def _wait_cursor_bootstrap_hook_sequence(
                 "start_bytes": minimum_hook_event_bytes,
                 "end_bytes": end_bytes,
                 "events": observed_events,
-                "before_submit_prompt": before,
-                "after_agent_response": after,
+                "before_submit_prompt": matching_befores[0],
+                "after_agent_response": matching_response,
+                "generation_id": generation_id,
+                "hook_response_correlated": True,
                 "timed_out": False,
             }
         time.sleep(0.25)
@@ -2312,6 +2388,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             bootstrap_hook_sequence = _wait_cursor_bootstrap_hook_sequence(
                 resumed_state,
                 environment,
+                marker=bootstrap_marker,
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
             )
             _wait_cursor_idle(
@@ -2319,7 +2396,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 environment,
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
             )
-            _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", shipper.flush("resume-bootstrap"))
+            bootstrap_ship_receipt = shipper.flush("resume-bootstrap")
+            _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", bootstrap_ship_receipt)
             bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
                 args.api_url,
                 args.agents_token,
@@ -2330,12 +2408,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 timeout=args.live_send_timeout_secs,
             )
             bootstrap_response_correlation["hook_sequence"] = bootstrap_hook_sequence
+            bootstrap_response_correlation.update(
+                _cursor_bootstrap_correlation(
+                    bootstrap_response_correlation,
+                    bootstrap_hook_sequence,
+                    bootstrap_ship_receipt,
+                )
+            )
             _write_json(root / "resume-bootstrap-response-correlation.json", bootstrap_response_correlation)
-            if not (
-                bootstrap_response_correlation["marker_observed_in_transcript"]
-                and bootstrap_response_correlation["marker_observed_in_assistant"]
-                and bootstrap_response_correlation["new_assistant_events"] > 0
-            ):
+            if not bootstrap_response_correlation["bootstrap_correlated"]:
                 raise RuntimeError(f"provider transcript did not correlate resumed Cursor bootstrap marker {bootstrap_marker}")
             _write_json(root / "resume-bootstrap-transcript.jsonl", bootstrap_tail)
             # Cursor publishes its afterAgentResponse hook before the TUI has
