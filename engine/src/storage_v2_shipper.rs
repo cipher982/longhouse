@@ -3439,6 +3439,27 @@ fn record_time(record: &StorageV2RenderRecord) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp_micros(record.order_time_us)
 }
 
+/// Render a session id the way the Runtime Host defines canonical.
+///
+/// `_canonical_uuid` in `server/zerg/routers/agents_storage_v2.py:213-220`
+/// rejects anything whose text differs from Python's `str(UUID(...))`, which is
+/// lowercase. Claude names some transcripts with an uppercase UUID — e.g.
+/// `8D188FD9-348C-4D1D-996B-86C8FCE02F04.jsonl` — and the unmanaged path takes
+/// the session id straight from that file stem, so those envelopes were
+/// rejected 422 forever. It went unnoticed because a managed binding normally
+/// supplies a lowercase id that masks it; removing one such binding exposed a
+/// file that had never been shippable.
+///
+/// Only ids that actually parse as a UUID are rewritten. Provider-native ids
+/// are not all UUIDs (OpenCode uses `ses_…`), and lowercasing an opaque
+/// identifier would silently change which session it names.
+fn canonical_session_id(session_id: String) -> String {
+    match Uuid::parse_str(&session_id) {
+        Ok(parsed) => parsed.to_string(),
+        Err(_) => session_id,
+    }
+}
+
 fn resolve_session_id(
     provider: &str,
     parse_result: &ParseResult,
@@ -3446,9 +3467,9 @@ fn resolve_session_id(
 ) -> String {
     let parsed = parse_result.metadata.session_id.clone();
     let Some(override_id) = override_id else {
-        return parsed;
+        return canonical_session_id(parsed);
     };
-    if provider.eq_ignore_ascii_case("codex")
+    let resolved = if provider.eq_ignore_ascii_case("codex")
         && (parse_result.metadata.forked_from_session_id.is_some()
             || parse_result.metadata.is_sidechain)
         && override_id != parsed
@@ -3456,7 +3477,8 @@ fn resolve_session_id(
         parsed
     } else {
         override_id.to_string()
-    }
+    };
+    canonical_session_id(resolved)
 }
 
 fn render_generation_id(session_id: Uuid) -> Uuid {
@@ -3508,6 +3530,30 @@ fn hex_hash(hash: [u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_uppercase_claude_session_id_is_canonicalised() {
+        // Claude names some transcripts with an uppercase UUID and the
+        // unmanaged path takes the session id from that file stem. The Runtime
+        // Host rejects anything that is not byte-identical to the lowercase
+        // rendering, so those envelopes 422'd forever
+        // (server/zerg/routers/agents_storage_v2.py:213-220).
+        assert_eq!(
+            canonical_session_id("8D188FD9-348C-4D1D-996B-86C8FCE02F04".to_string()),
+            "8d188fd9-348c-4d1d-996b-86c8fce02f04"
+        );
+        // Already canonical stays byte-identical.
+        assert_eq!(
+            canonical_session_id("642eef6a-01b1-4054-86d7-30ed152ac0b9".to_string()),
+            "642eef6a-01b1-4054-86d7-30ed152ac0b9"
+        );
+        // Not every provider-native id is a UUID. Lowercasing an opaque
+        // identifier would change which session it names.
+        assert_eq!(
+            canonical_session_id("ses_Longhouse_E2E".to_string()),
+            "ses_Longhouse_E2E"
+        );
+    }
     use std::fs;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
