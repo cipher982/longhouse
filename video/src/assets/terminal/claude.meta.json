@@ -12,29 +12,89 @@
   "cols": 100,
   "rows": 16,
   "term": "xterm-256color",
-  "cwd": "/tmp/demo-repo",
+  "cwd": "/tmp/demo-w2my0l8g/demo-repo",
   "sandbox": true,
   "isolation": "srt",
   "aborted": false,
   "auth_mode": "mock",
+  "canary": {
+    "egress_ip_http": {
+      "url": "http://1.1.1.1",
+      "exit": 0,
+      "http_code": "403",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_ip_https": {
+      "url": "https://1.1.1.1",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_nonallowlisted": {
+      "url": "https://example.com",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "operator_read": {
+      "path": "~/.claude/settings.json",
+      "exit": 1,
+      "denied": true
+    },
+    "mock_health": {
+      "url": "http://127.0.0.1:53252/health",
+      "exit": 0,
+      "http_code": "200",
+      "reachable": true
+    },
+    "passed": true
+  },
   "browser_attempts": [],
   "mock_requests": 6,
-  "captured_at": "2026-08-08T19:22:14.780068+00:00",
-  "cast_sha256": "4aaab8b6c1619b697be81540d0989925e3dd79d889a2f5e33448f2aae9155e79",
+  "mock_stats": {
+    "main_requests": 6,
+    "utility_requests": 0,
+    "by_kind": {
+      "anthropic-main": 6
+    },
+    "main_turns_served": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "distinct_main_turns": 4,
+    "expected_turns": 4
+  },
+  "completion": "quiet-sentinel",
+  "gates": {
+    "exit_status_observed": true,
+    "composer_ready": true,
+    "working_seen": true,
+    "completion_reached": true,
+    "no_browser_attempts": true,
+    "mock_requests_present": true,
+    "mock_completions_match_fixture": true
+  },
+  "gate_failures": [],
+  "captured_at": "2026-08-08T21:36:31.561313+00:00",
+  "cast_sha256": "e2261563ee7c316aa3d7f98d6d224c92b7b57edeb86055cbe334a66f79512318",
   "exit_status": 0,
   "phase_log": [
-    "[   0.002] spawned pid=84997 argv=['/tmp/demo-home-fo4p_62r/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 100x16",
-    "[   1.229] dialog 'theme' detected -> keys ['enter']",
-    "[   5.759] dialog 'theme' answer produced no output -> resending",
-    "[   7.847] dialog 'api-key' detected -> keys ['up', 'enter']",
-    "[  10.353] dialog 'security-notes' detected -> keys ['enter']",
-    "[  12.422] dialog 'trust' detected -> keys ['enter']",
-    "[  14.385] sentinel hit: composer-ready",
-    "[  16.409] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
-    "[  18.176] prompt submitted",
-    "[  18.224] sentinel hit: working-spinner",
-    "[  32.762] sentinel hit: task-complete",
-    "[  34.800] sending exit sequence ['text:/exit', 'enter']",
-    "[  36.077] process exit status: 0"
+    "[   0.002] spawned pid=22443 argv=['/tmp/demo-home-gpvac6u1/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 100x16",
+    "[   1.368] dialog 'theme' detected -> keys ['enter']",
+    "[   3.464] dialog 'api-key' detected -> keys ['up', 'enter']",
+    "[   5.975] dialog 'security-notes' detected -> keys ['enter']",
+    "[   8.047] dialog 'trust' detected -> keys ['enter']",
+    "[  10.018] sentinel hit: composer-ready",
+    "[  12.046] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[  13.807] prompt submitted",
+    "[  13.837] sentinel hit: working-spinner",
+    "[  28.293] sentinel hit: task-complete",
+    "[  30.329] sending exit sequence ['text:/exit', 'enter']",
+    "[  31.632] process exit status: 0"
   ]
 }

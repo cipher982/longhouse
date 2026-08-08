@@ -13,12 +13,17 @@ npm sources: `npm pack pkg@version` (sha256 of the tarball we actually
 installed), then `npm install --prefix <sandbox>` from that tarball.
 release sources: curl the URL, sha256 the archive, extract.
 
+Every fetched artifact is verified against providers.lock.json when a matching
+entry exists (same kind + pinned version): a sha256 mismatch is a hard fail.
+
 Usage:
   uv run fetch.py [provider ...]        # default: all providers
+  uv run fetch.py --only claude         # just claude (+ srt, always)
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import shutil
@@ -83,7 +88,7 @@ def fetch_release(name: str, spec: dict, root: Path) -> dict:
             if not parts:
                 continue
             member.name = str(Path(*parts))
-            tf.extract(member, root, filter="fully_trusted")
+            tf.extract(member, root, filter="data")
     return {
         "kind": "release",
         "url": url,
@@ -93,11 +98,69 @@ def fetch_release(name: str, spec: dict, root: Path) -> dict:
     }
 
 
+HASH_KEYS = {"npm": "tarball_sha256", "release": "archive_sha256"}
+
+
+def verify_against_lock(name: str, entry: dict, prior: dict | None) -> None:
+    """Hard-fail when the lockfile pins this exact version with another hash."""
+    if not prior:
+        return
+    if prior.get("kind") != entry["kind"]:
+        return
+    if prior.get("requested_version") != entry["requested_version"]:
+        return  # intentional version bump; lock entry will be rewritten
+    key = HASH_KEYS[entry["kind"]]
+    expected, actual = prior.get(key), entry[key]
+    if expected and expected != actual:
+        raise SystemExit(
+            f"[{name}] sha256 MISMATCH for pinned {entry['requested_version']}:\n"
+            f"  lock:    {expected}\n"
+            f"  fetched: {actual}\n"
+            f"refusing to proceed — artifact does not match providers.lock.json")
+    print(f"[{name}] sha256 verified against lock", file=sys.stderr)
+
+
+def verify_cached(name: str, root: Path, prior: dict) -> None:
+    """Re-hash the retained artifact of an already-fetched provider."""
+    key = HASH_KEYS.get(prior.get("kind", ""))
+    if not key or not prior.get(key):
+        return
+    if prior["kind"] == "npm":
+        art = root / ".tarball" / prior.get("tarball", "")
+    else:
+        art = root / ".archive.tar.gz"
+    if not art.is_file():
+        return  # artifact not retained; nothing to hash
+    actual = sha256_file(art)
+    if actual != prior[key]:
+        raise SystemExit(
+            f"[{name}] sha256 MISMATCH for cached artifact {art.name}:\n"
+            f"  lock:    {prior[key]}\n"
+            f"  on-disk: {actual}\n"
+            f"refusing to proceed — delete {root} and refetch")
+    print(f"[{name}] cached artifact sha256 verified against lock", file=sys.stderr)
+
+
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("names", nargs="*",
+                    help="providers/runtime components to fetch (default: all)")
+    ap.add_argument("--only", action="append", default=[], metavar="PROV",
+                    help="fetch only this provider plus srt (repeatable)")
+    args = ap.parse_args()
+
     manifest = yaml.safe_load((SCRIPT_DIR / "providers.yml").read_text())
     providers = dict(manifest["providers"])
     providers.update(manifest.get("runtime") or {})
-    wanted = sys.argv[1:] or list(providers)
+    if args.only:
+        # srt is the enforcement layer; it always comes along.
+        wanted = list(dict.fromkeys(args.only + ["srt"]))
+    else:
+        wanted = args.names or list(providers)
+    unknown = [n for n in wanted if n not in providers]
+    if unknown:
+        raise SystemExit(f"unknown provider(s): {', '.join(unknown)} "
+                         f"(known: {', '.join(providers)})")
 
     lock = json.loads(LOCK_PATH.read_text()) if LOCK_PATH.exists() else {}
     for name in wanted:
@@ -105,10 +168,10 @@ def main() -> None:
         spec = prov["source"]
         version = spec["version"]
         root = SANDBOX / name / version
-        if (root / prov["bin"]).exists():
+        if (root / prov["bin"]).exists() and name in lock:
             print(f"[{name}] already fetched at {root}", file=sys.stderr)
-            if name in lock:
-                continue
+            verify_cached(name, root, lock[name])
+            continue
         print(f"[{name}] fetching {spec.get('package', spec.get('url'))} {version}",
               file=sys.stderr)
         if root.exists():
@@ -119,6 +182,7 @@ def main() -> None:
             entry = fetch_release(name, spec, root)
         else:
             raise SystemExit(f"unknown source kind {spec['kind']!r} for {name}")
+        verify_against_lock(name, entry, lock.get(name))
         bin_path = root / prov["bin"]
         if not bin_path.exists():
             raise SystemExit(f"[{name}] expected binary missing after fetch: {bin_path}")

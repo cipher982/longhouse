@@ -15,7 +15,10 @@ V2 (hermetic sandbox — the factory mode):
   * binary comes from .sandbox/<provider>/<version>/ (see fetch.py)
   * HOME is a fresh mktemp dir; env is an explicit allowlist + ONE auth var
     resolved from Infisical at record time
-  * cwd is a freshly seeded scratch repo at a neutral path (/tmp/demo-repo)
+  * cwd is a freshly seeded per-run scratch repo (mkdtemp parent, leaf name
+    kept as "demo-repo" because the provider prints its cwd)
+  * srt isolation is PROVEN by a canary before recording; after recording,
+    fail-closed gates make a broken take exit nonzero (see meta "gates")
   * sentinel profile (ready / dialogs / working / exit) comes from providers.yml
 
 Design notes:
@@ -103,8 +106,6 @@ DEFAULTS = {
 }
 EXIT_TIMEOUT = 20.0
 
-DEMO_REPO = "/tmp/demo-repo"
-
 INVENTORY_PY = '''"""Tiny inventory helpers for the demo shop."""
 
 
@@ -181,6 +182,7 @@ class Recorder:
         self.dialog_counts = {}
         self._pending_dialog = None
         self.ready_seen = False
+        self.completion = None  # "quiet-sentinel" | "done-timeout" | None
         self.aborted = False
         self.phase_log = []
         self.master = None
@@ -353,6 +355,8 @@ class Recorder:
         tmo = self.timeouts
         # Phase 1: composer ready
         ok = self.wait_for(self._composer_ready, tmo["composer_timeout"], "composer-ready")
+        if ok:
+            self.ready_seen = True
         if not ok and require_ready:
             # Never type the prompt into an unknown screen (take2: the prompt
             # landed in an onboarding dialog and confirmed its default).
@@ -380,7 +384,13 @@ class Recorder:
                 return False
             return (now - self.last_working_at) > tmo["quiet_secs"]
 
-        self.wait_for(done, tmo["done_timeout"], "task-complete")
+        # Both outcomes are recorded so the take gates can name which path
+        # completed the take: the quiet-period sentinel, or the bounded
+        # done_timeout (still a defined completion, just the slow lane).
+        if self.wait_for(done, tmo["done_timeout"], "task-complete"):
+            self.completion = "quiet-sentinel"
+        elif self.saw_working:
+            self.completion = "done-timeout"
         self.pump(2.0)
         return ok
 
@@ -442,7 +452,8 @@ def run_isolated(argv, env, cwd):
     allowAppleEvents off (the browser/OAuth blocker). The PATH shims +
     BROWSER=false stay as telemetry; srt is the enforcement layer."""
     if SRT_WRAP:
-        return [SRT_WRAP["bin"], "-s", SRT_WRAP["settings"], *argv], env
+        # "--" so srt never re-parses provider flags (e.g. a "-s") as its own.
+        return [SRT_WRAP["bin"], "-s", SRT_WRAP["settings"], "--", *argv], env
     return argv, env
 
 
@@ -487,6 +498,99 @@ def find_srt(manifest):
     return str(p) if p.exists() else None
 
 
+def run_canary(env, srt_wrap, mock_url, extra_domains):
+    """Prove the srt sandbox is actually enforcing before anything records.
+
+    Isolation is asserted by the settings file; this runs cheap probes under
+    the SAME srt binary + settings the take will use and refuses to record if
+    any expectation fails:
+      (a) egress is blocked (direct IP; plus a non-allowlisted domain when the
+          provider needs preflight hosts allowlisted, e.g. Claude Code)
+      (b) operator files (~/.claude/settings.json) are unreadable
+      (c) the loopback mock health endpoint IS reachable (when mock lane)
+    Returns the results dict for the take's meta sidecar."""
+
+    def srt_run(cmd):
+        # "--" is load-bearing: srt (commander) would otherwise re-parse a
+        # later "-s"/"-v" from the probe command as its OWN flags.
+        return subprocess.run(
+            [srt_wrap["bin"], "-s", srt_wrap["settings"], "--", *cmd],
+            env=env, capture_output=True, text=True, timeout=60)
+
+    def curl_probe(url):
+        """Returns (exit, http_code, proxy_blocked). srt's filtering proxy
+        answers plain-http denials with 403 + X-Proxy-Error:
+        blocked-by-allowlist (https CONNECT is refused outright: exit 56)."""
+        r = srt_run(["curl", "-s", "-D", "-", "-o", "/dev/null",
+                     "-w", "\\n%{http_code}", "--max-time", "3", url])
+        out = (r.stdout or "").strip()
+        code = out.rsplit("\n", 1)[-1].strip() if out else ""
+        proxy_blocked = "x-proxy-error: blocked-by-allowlist" in out.lower()
+        return r.returncode, code, proxy_blocked
+
+    def egress_blocked(rc, code, proxy_blocked):
+        return rc != 0 or code == "000" or (code == "403" and proxy_blocked)
+
+    results = {}
+    failures = []
+
+    for url in ("http://1.1.1.1", "https://1.1.1.1"):
+        rc, code, pb = curl_probe(url)
+        blocked = egress_blocked(rc, code, pb)
+        key = "egress_ip_http" if url.startswith("http:") else "egress_ip_https"
+        results[key] = {"url": url, "exit": rc, "http_code": code,
+                        "proxy_blocked": pb, "blocked": blocked}
+        if not blocked:
+            failures.append(f"{key}: curl {url} escaped the sandbox "
+                            f"(exit {rc}, http {code})")
+
+    if extra_domains:
+        # Provider allowlists real hosts (Claude Code's mandatory preflight);
+        # prove a host OUTSIDE that allowlist is still blocked.
+        rc, code, pb = curl_probe("https://example.com")
+        blocked = egress_blocked(rc, code, pb)
+        results["egress_nonallowlisted"] = {
+            "url": "https://example.com", "exit": rc, "http_code": code,
+            "proxy_blocked": pb, "blocked": blocked}
+        if not blocked:
+            failures.append(f"egress_nonallowlisted: curl https://example.com "
+                            f"escaped the sandbox (exit {rc}, http {code})")
+
+    # Path stored tilde-form so the meta sidecar never carries /Users/<name>.
+    probe = os.path.expanduser("~/.claude/settings.json")
+    if os.path.exists(probe):
+        r = srt_run(["cat", probe])
+        denied = r.returncode != 0 and not r.stdout.strip()
+        results["operator_read"] = {"path": "~/.claude/settings.json",
+                                    "exit": r.returncode, "denied": denied}
+    else:
+        r = srt_run(["ls", os.path.expanduser("~")])
+        denied = r.returncode != 0
+        results["operator_read"] = {"path": "~", "exit": r.returncode,
+                                    "denied": denied}
+    if not denied:
+        failures.append("operator_read: sandbox can read operator files "
+                        f"({results['operator_read']['path']})")
+
+    if mock_url:
+        rc, code, pb = curl_probe(mock_url + "/health")
+        reachable = rc == 0 and code == "200" and not pb
+        results["mock_health"] = {"url": mock_url + "/health", "exit": rc,
+                                  "http_code": code, "reachable": reachable}
+        if not reachable:
+            failures.append(f"mock_health: loopback mock unreachable from "
+                            f"sandbox (exit {rc}, http {code})")
+
+    results["passed"] = not failures
+    for f in failures:
+        print(f"CANARY FAILED: {f}", file=sys.stderr)
+    if failures:
+        raise SystemExit(
+            "canary failed: srt isolation not proven; refusing to record")
+    print(f"canary passed: {json.dumps(results)}", file=sys.stderr)
+    return results
+
+
 def free_port():
     import socket
     s = socket.socket()
@@ -496,16 +600,18 @@ def free_port():
     return port
 
 
-def start_mock(fixture_path, home):
+def start_mock(fixture_path, home, demo_repo=None):
     """Start mock_llm.py; returns (proc, base_url)."""
     import urllib.request
     port = free_port()
     log = os.path.join(home, ".mock-requests.ndjson")
+    argv = [sys.executable, str(SCRIPT_DIR / "mock_llm.py"),
+            "--port", str(port), "--fixture", str(SCRIPT_DIR / fixture_path),
+            "--log", log]
+    if demo_repo:
+        argv += ["--demo-repo", demo_repo]
     proc = subprocess.Popen(
-        [sys.executable, str(SCRIPT_DIR / "mock_llm.py"),
-         "--port", str(port), "--fixture", str(SCRIPT_DIR / fixture_path),
-         "--log", log],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = f"http://127.0.0.1:{port}"
     for _ in range(50):
         try:
@@ -540,13 +646,15 @@ def resolve_secret(secret):
     return out.stdout.strip()
 
 
-def seed_demo_repo(path=DEMO_REPO):
-    """Fresh scratch repo with an off-by-one bug, at a neutral path.
+def seed_demo_repo(parent_dir="/tmp"):
+    """Fresh scratch repo with an off-by-one bug, at a per-run path.
 
-    The path basename is deliberately neutral ("demo-repo") so recorded casts
-    carry no operator identity — the recorded provider prints this cwd."""
-    if os.path.isdir(path):
-        shutil.rmtree(path)
+    A mkdtemp parent (same parent as the sandbox HOME) avoids rm -rf'ing a
+    fixed shared path across runs; the leaf stays "demo-repo" because the
+    recorded provider prints this cwd and the basename must stay neutral.
+    Returns (repo_path, scratch_parent) — caller removes scratch_parent."""
+    scratch = tempfile.mkdtemp(prefix="demo-", dir=parent_dir)
+    path = os.path.join(scratch, "demo-repo")
     os.makedirs(path)
     Path(path, "inventory.py").write_text(INVENTORY_PY)
     Path(path, "test_inventory.py").write_text(TEST_INVENTORY_PY)
@@ -561,10 +669,10 @@ def seed_demo_repo(path=DEMO_REPO):
     g("config", "user.email", "demo@example.com")
     g("add", "inventory.py", "test_inventory.py")
     g("commit", "-q", "-m", "seed demo repo")
-    return path
+    return path, scratch
 
 
-def build_sandbox(provider_name, prov, cols, rows):
+def build_sandbox(provider_name, prov, cols, rows, demo_repo=None):
     """Blank HOME + allowlisted env + PATH shim dir + auth lane.
 
     Returns (env, home, argv, mock_proc, mock_url, auth_mode)."""
@@ -614,7 +722,7 @@ def build_sandbox(provider_name, prov, cols, rows):
     mock_proc = None
     mock_url = None
     if mode == "mock":
-        mock_proc, mock_url = start_mock(auth["fixture"], home)
+        mock_proc, mock_url = start_mock(auth["fixture"], home, demo_repo)
         env[auth["env"]] = "sk-mock-longhouse"
         if auth.get("base_url_env"):
             env[auth["base_url_env"]] = mock_url
@@ -672,6 +780,8 @@ def main():
                     help="skip the srt enforcement wrapper (debugging only)")
     args = ap.parse_args()
 
+    canary = None
+    scratch_dir = None
     if args.sandbox:
         if not args.provider:
             raise SystemExit("--sandbox requires --provider")
@@ -684,18 +794,34 @@ def main():
         profile = prov["sentinels"]
         timeouts = {k: float(prov.get(k, defaults.get(k, DEFAULTS[k])))
                     for k in DEFAULTS}
-        env, home, argv, mock_proc, mock_url, auth_mode = build_sandbox(args.provider, prov, cols, rows)
-        cwd = args.cwd or seed_demo_repo()
+        if args.cwd:
+            cwd = args.cwd
+        else:
+            cwd, scratch_dir = seed_demo_repo()
+        env, home, argv, mock_proc, mock_url, auth_mode = build_sandbox(
+            args.provider, prov, cols, rows, demo_repo=cwd)
         run_setup(prov, env, cwd)
         binary_label = f"{prov['source'].get('package', prov['source'].get('url'))}@{prov['source']['version']}"
+        preflight_domains = (prov.get("auth") or {}).get("preflight_domains", [])
         srt_bin = None if args.no_srt else find_srt(manifest)
         if srt_bin:
             settings_path = write_srt_settings(
-                home, SCRIPT_DIR, mock_url,
-                extra_domains=(prov.get("auth") or {}).get("preflight_domains", []))
+                home, SCRIPT_DIR, mock_url, extra_domains=preflight_domains)
             global SRT_WRAP
             SRT_WRAP = {"bin": srt_bin, "settings": settings_path}
             print(f"srt enforcement: {srt_bin} settings={settings_path}", file=sys.stderr)
+            # Enforced canary: no recording unless isolation is PROVEN under
+            # the exact srt binary + settings this take will run with.
+            try:
+                canary = run_canary(env, SRT_WRAP, mock_url, preflight_domains)
+            except BaseException:
+                if mock_proc is not None:
+                    mock_proc.terminate()
+                if scratch_dir:
+                    shutil.rmtree(scratch_dir, ignore_errors=True)
+                if not args.keep_home:
+                    shutil.rmtree(home, ignore_errors=True)
+                raise
         elif not args.no_srt:
             raise SystemExit("srt not fetched (run fetch.py srt) — use --no-srt to override")
     else:
@@ -719,71 +845,123 @@ def main():
         cwd = args.cwd
         home = None
         mock_proc = None
+        mock_url = None
         auth_mode = "operator-env"
         argv = [args.bin] + args.arg
         binary_label = args.bin
 
-    rec = Recorder(args.out, cols, rows, cwd, argv, env, profile, timeouts)
-    rec.start()
-    if args.raw_command:
-        end = time.monotonic() + timeouts["done_timeout"]
-        while time.monotonic() < end and rec.proc.poll() is None:
-            rec._drain(0.1)
-    else:
-        rec.run_session(prompt, require_ready=bool(args.sandbox))
-    rc = rec.shutdown()
-
-    if mock_proc is not None:
-        mock_proc.terminate()
-
-    sha = hashlib.sha256(open(args.out, "rb").read()).hexdigest()
-    version = ""
     try:
-        version = subprocess.run([argv[0], "--version"], capture_output=True,
-                                 text=True, timeout=30, env=env).stdout.strip()
-    except Exception as e:  # noqa: BLE001
-        version = f"unavailable: {e}"
+        rec = Recorder(args.out, cols, rows, cwd, argv, env, profile, timeouts)
+        rec.start()
+        if args.raw_command:
+            end = time.monotonic() + timeouts["done_timeout"]
+            while time.monotonic() < end and rec.proc.poll() is None:
+                rec._drain(0.1)
+        else:
+            rec.run_session(prompt, require_ready=bool(args.sandbox))
+        rc = rec.shutdown()
 
-    browser_attempts = []
-    mock_requests = 0
-    if home:
-        attempts_log = Path(home, ".browser-attempts.log")
-        if attempts_log.exists():
-            browser_attempts = attempts_log.read_text().strip().splitlines()
-        mock_log = Path(home, ".mock-requests.ndjson")
-        if mock_log.exists():
-            mock_requests = len(mock_log.read_text().strip().splitlines())
-    if browser_attempts:
-        print(f"WARNING: {len(browser_attempts)} browser attempt(s) suppressed",
-              file=sys.stderr)
+        # Query the mock's request stats BEFORE tearing it down: the take gate
+        # needs proof the fixture's completion lane was actually exercised.
+        mock_stats = None
+        if mock_proc is not None:
+            import urllib.request
+            try:
+                with urllib.request.urlopen(mock_url + "/stats", timeout=5) as resp:
+                    mock_stats = json.load(resp)
+            except Exception as e:  # noqa: BLE001
+                mock_stats = {"error": str(e)}
+            mock_proc.terminate()
 
-    meta = {
-        "binary": binary_label,
-        "binary_version": version,
-        "argv": [os.path.basename(argv[0])] + argv[1:],
-        "prompt": prompt,
-        "cols": cols,
-        "rows": rows,
-        "term": env["TERM"],
-        "cwd": cwd,
-        "sandbox": bool(args.sandbox),
-        "isolation": "srt" if SRT_WRAP else "env-allowlist",
-        "aborted": rec.aborted,
-        "auth_mode": auth_mode,
-        "browser_attempts": browser_attempts,
-        "mock_requests": mock_requests,
-        "captured_at": datetime.now(timezone.utc).isoformat(),
-        "cast_sha256": sha,
-        "exit_status": rc,
-        "phase_log": rec.phase_log,
-    }
-    meta_path = os.path.splitext(args.out)[0] + ".meta.json"
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-    print(f"wrote {args.out} (sha256 {sha[:12]}...) and {meta_path}", file=sys.stderr)
+        sha = hashlib.sha256(open(args.out, "rb").read()).hexdigest()
+        version = ""
+        try:
+            version = subprocess.run([argv[0], "--version"], capture_output=True,
+                                     text=True, timeout=30, env=env).stdout.strip()
+        except Exception as e:  # noqa: BLE001
+            version = f"unavailable: {e}"
 
-    if args.sandbox and home and not args.keep_home:
-        shutil.rmtree(home, ignore_errors=True)
+        browser_attempts = []
+        mock_requests = 0
+        if home:
+            attempts_log = Path(home, ".browser-attempts.log")
+            if attempts_log.exists():
+                browser_attempts = attempts_log.read_text().strip().splitlines()
+            mock_log = Path(home, ".mock-requests.ndjson")
+            if mock_log.exists():
+                mock_requests = len(mock_log.read_text().strip().splitlines())
+
+        # Fail-closed take gates: a take only exits 0 when every observable
+        # says the recorded story actually happened. Anything else is a broken
+        # take and must not be publishable.
+        gates = None
+        gate_failures = []
+        if args.sandbox and not args.raw_command:
+            gates = {
+                "exit_status_observed": rc is not None,
+                "composer_ready": rec.ready_seen,
+                "working_seen": rec.saw_working,
+                "completion_reached": rec.completion is not None,
+                "no_browser_attempts": len(browser_attempts) == 0,
+            }
+            if auth_mode == "mock":
+                gates["mock_requests_present"] = mock_requests > 0
+                # Every fixture turn must have been served on the main lane
+                # (see mock_llm.py: distinct turns, not raw request count,
+                # because providers add warmup/summarizer main-model calls).
+                expected = (mock_stats or {}).get("expected_turns")
+                gates["mock_completions_match_fixture"] = (
+                    isinstance(mock_stats, dict)
+                    and "error" not in mock_stats
+                    and mock_stats.get("main_requests", 0) > 0
+                    and expected is not None
+                    and mock_stats.get("distinct_main_turns") == expected)
+            gate_failures = [k for k, v in gates.items() if not v]
+
+        meta = {
+            "binary": binary_label,
+            "binary_version": version,
+            "argv": [os.path.basename(argv[0])] + argv[1:],
+            "prompt": prompt,
+            "cols": cols,
+            "rows": rows,
+            "term": env["TERM"],
+            "cwd": cwd,
+            "sandbox": bool(args.sandbox),
+            "isolation": "srt" if SRT_WRAP else "env-allowlist",
+            "aborted": rec.aborted,
+            "auth_mode": auth_mode,
+            "canary": canary,
+            "browser_attempts": browser_attempts,
+            "mock_requests": mock_requests,
+            "mock_stats": mock_stats,
+            "completion": rec.completion,
+            "gates": gates,
+            "gate_failures": gate_failures,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "cast_sha256": sha,
+            "exit_status": rc,
+            "phase_log": rec.phase_log,
+        }
+        meta_path = os.path.splitext(args.out)[0] + ".meta.json"
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+            f.write("\n")
+        print(f"wrote {args.out} (sha256 {sha[:12]}...) and {meta_path}", file=sys.stderr)
+
+        for g in gate_failures:
+            print(f"GATE FAILED: {g}", file=sys.stderr)
+        if gate_failures:
+            raise SystemExit(
+                f"take failed {len(gate_failures)} gate(s): "
+                f"{', '.join(gate_failures)} — exiting nonzero so nothing publishes it")
+    finally:
+        if mock_proc is not None and mock_proc.poll() is None:
+            mock_proc.terminate()
+        if scratch_dir:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+        if args.sandbox and home and not args.keep_home:
+            shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":

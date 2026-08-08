@@ -12,6 +12,8 @@ Wire shapes served:
   POST /v1/chat/completions       OpenAI chat-completions SSE (codex wire_api
                                   "chat", opencode via OpenRouter baseURL)
   GET  /health                    readiness probe
+  GET  /stats                     request counters + expected_main_requests
+                                  (the recorder's fail-closed mock gate)
 
 Fixture file = {"turns": [{"text": "...", "tools": [{"name": N, "input": {}}]}]}
 The i-th MAIN-lane completion request gets turns[i] (clamped to the last turn,
@@ -25,6 +27,7 @@ Usage: python3 mock_llm.py --port 8377 --fixture fixtures/claude.json [--log x.n
 import argparse
 import json
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,8 +40,28 @@ FIRST_EVENT_DELAY = 0.5
 FIXTURE = {"turns": []}
 LOG_PATH = None
 
+# Request counters served by /stats. "main" = completion requests on the
+# fixture lane (anthropic-main / openai-chat / openai-responses). The recorder
+# gates a take on DISTINCT fixture turns served == len(fixture turns): raw
+# main-request count over-counts because providers make extra main-model calls
+# outside the task conversation (observed Claude Code 2.1.226: a parallel
+# 1-message startup warmup and a post-completion conversation summarizer),
+# while distinct-turns proves the entire scripted conversation actually
+# played out and nothing more is claimed.
+MAIN_KINDS = {"anthropic-main", "openai-chat", "openai-responses"}
+STATS_LOCK = threading.Lock()
+STATS = {"main_requests": 0, "utility_requests": 0, "by_kind": {}}
+MAIN_TURNS_SERVED = set()
+
 
 def log_request(kind, payload, turn_idx):
+    with STATS_LOCK:
+        STATS["by_kind"][kind] = STATS["by_kind"].get(kind, 0) + 1
+        if kind in MAIN_KINDS:
+            STATS["main_requests"] += 1
+            MAIN_TURNS_SERVED.add(turn_idx)
+        else:
+            STATS["utility_requests"] += 1
     if not LOG_PATH:
         return
     with open(LOG_PATH, "a") as f:
@@ -108,6 +131,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._send_json({"ok": True, "turns": len(FIXTURE["turns"])})
+        elif self.path.startswith("/stats"):
+            with STATS_LOCK:
+                snap = dict(STATS, by_kind=dict(STATS["by_kind"]))
+                snap["main_turns_served"] = sorted(MAIN_TURNS_SERVED)
+            snap["distinct_main_turns"] = len(snap["main_turns_served"])
+            snap["expected_turns"] = len(FIXTURE["turns"])
+            self._send_json(snap)
         elif "/models" in self.path:
             self._send_json({"data": [{"id": "mock-model", "object": "model"}]})
         elif "hello" in self.path:
@@ -315,9 +345,14 @@ def main():
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--fixture", required=True)
     ap.add_argument("--log", default=None)
+    ap.add_argument("--demo-repo", default=None,
+                    help="rewrite the fixture's /tmp/demo-repo paths to this per-run scratch path")
     args = ap.parse_args()
     with open(args.fixture) as f:
-        FIXTURE = json.load(f)
+        raw = f.read()
+    if args.demo_repo:
+        raw = raw.replace("/tmp/demo-repo", args.demo_repo)
+    FIXTURE = json.loads(raw)
     if not FIXTURE.get("turns"):
         raise SystemExit("fixture has no turns")
     last = FIXTURE["turns"][-1]
