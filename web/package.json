@@ -15,6 +15,8 @@
     "validate:bundle-size": "node ./scripts/check-bundle-size.mjs"
   },
   "dependencies": {
+    "@longhouse/video": "workspace:*",
+    "@remotion/player": "4.0.261",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

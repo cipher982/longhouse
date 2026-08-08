@@ -102,7 +102,7 @@ export const TerminalGrid: React.FC<{
         height: rows * cellH,
         background,
         fontFamily:
-          fontFamily ?? '"SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
+          fontFamily ?? '"JetBrains Mono", "SF Mono", Menlo, Consolas, monospace',
         // Lock font size to BOTH cell axes: the monospace advance (~0.62em)
         // must not exceed cellW, or 64-100 column rows drift horizontally.
         fontSize: Math.min(cellH * 0.72, cellW / 0.62),

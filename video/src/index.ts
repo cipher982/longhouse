@@ -1,4 +1,2 @@
-import { registerRoot } from "remotion";
-import { RemotionRoot } from "./Root";
-
-registerRoot(RemotionRoot);
+export { ControlRoom, controlRoomDuration } from "./compositions/ControlRoom";
+export { FPS, WIDTH, HEIGHT } from "./lib/timing";

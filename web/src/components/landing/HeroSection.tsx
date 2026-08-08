@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import config from "../../lib/config";
@@ -6,6 +6,11 @@ import { trackAcquisitionEvent } from "../../lib/analytics";
 
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
+const DEMO_ARIA_LABEL =
+  "Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds";
+const LiveDemo = lazy(() =>
+  import("./LiveDemo").then(({ LiveDemo: Component }) => ({ default: Component })),
+);
 
 function AppleIcon() {
   return (
@@ -142,17 +147,18 @@ export function HeroSection() {
 
       <div className="landing-hero-stage">
         <div className="landing-hero-glow" aria-hidden="true" />
-        <video
-          className="landing-hero-video"
-          src="/videos/control-room.mp4?v=20260808-4"
-          poster="/images/landing/control-poster.png?v=20260808-4"
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          aria-label="Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds"
-        />
+        <Suspense
+          fallback={
+            <img
+              className="landing-hero-video"
+              src="/images/landing/control-poster.png?v=20260808-4"
+              alt={DEMO_ARIA_LABEL}
+              aria-label={DEMO_ARIA_LABEL}
+            />
+          }
+        >
+          <LiveDemo aria-label={DEMO_ARIA_LABEL} />
+        </Suspense>
         <p className="landing-hero-video-note">
           Demo shows real provider CLIs replayed from recordings, with scripted model
           responses.
