@@ -3619,6 +3619,32 @@ fn maybe_start_managed_observation_scan(
                         .map(|observation| observation.session_id),
                 );
 
+                // Launch-retry receipts are contract files by another name:
+                // `<session>.json`, written when a managed launch cannot reach
+                // the Runtime Host. Nothing swept them, so a receipt for a
+                // session that has since exited held local health degraded
+                // forever — one written during a hosted deploy window outlived
+                // its session by hours and reported `recovery_exhausted` for a
+                // process that no longer existed. Same sweep, same grace, same
+                // retained set as contracts.
+                if let Ok(agent_dir) = crate::config::get_agent_dir() {
+                    let swept_receipts = crate::managed_contract_janitor::sweep_orphan_contracts(
+                        &agent_dir.join("managed-local/registration-retries"),
+                        &retained_sessions,
+                        now,
+                    ) + crate::managed_contract_janitor::sweep_orphan_contracts(
+                        &agent_dir.join("managed-local/outcome-retries"),
+                        &retained_sessions,
+                        now,
+                    );
+                    if swept_receipts > 0 {
+                        tracing::info!(
+                            swept = swept_receipts,
+                            "removed launch-retry receipts for sessions that no longer exist"
+                        );
+                    }
+                }
+
                 // Only *identify* here. This closure runs under
                 // `spawn_blocking`, and stopping a process group means waiting
                 // on it; the async consumer of this result does the reaping so
