@@ -95,6 +95,14 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
 }
 
 fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+    // Lead a process group so the timeout can reach the whole tree. Without
+    // this the helper is only bounded on platforms where the shell execs its
+    // single command; see the kill path below.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -111,6 +119,19 @@ fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output
             break status;
         }
         if Instant::now() >= deadline {
+            // Kill the group, not just the leader. A shell that forks rather
+            // than execs its command leaves that child holding the stdout pipe,
+            // so killing only the leader leaves the reader thread blocked on a
+            // pipe nobody will close — and this "bounded" helper then waits out
+            // the full runtime of the very process it was abandoning. On Linux
+            // that made the process-inventory timeout inert: a stalled `ps`
+            // would have blocked the scan for as long as it wanted to run.
+            #[cfg(unix)]
+            if let Ok(pgid) = i32::try_from(child.id()) {
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
+                }
+            }
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader.join();
