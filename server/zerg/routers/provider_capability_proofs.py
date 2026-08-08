@@ -319,6 +319,9 @@ def build_capability_projection_payload(
         # narrow boundary rather than changing the shared loader's
         # CLI-facing contract for every other caller.
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    settings = get_settings()
+    expected_longhouse_sha = expected_longhouse_sha or getattr(settings, "provider_capability_expected_longhouse_sha", None)
+    expected_epoch_digest = expected_epoch_digest or getattr(settings, "provider_capability_expected_epoch_digest", None)
     projections = project_capabilities(
         assertions,
         all_records,

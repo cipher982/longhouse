@@ -292,6 +292,11 @@ class Settings:  # noqa: D401 – simple data container
     # Optional by design: ordinary OSS/self-hosted runtimes do not publish
     # globally trusted executable-provider qualification records.
     provider_capability_factory_token: str | None = None
+    # Optional exact subject fence for the public proof projection. The
+    # factory supplies these at a synchronized deployment; absent values are
+    # reported as an unfenced diagnostic projection rather than guessed.
+    provider_capability_expected_longhouse_sha: str | None = None
+    provider_capability_expected_epoch_digest: str | None = None
 
     # Memory Files -----------------------------------------------------
     memory_files_enabled: bool = False
@@ -617,6 +622,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         apns_topic=os.getenv("APNS_TOPIC", "ai.longhouse.ios"),
         canary_token=os.getenv("LONGHOUSE_CANARY_TOKEN"),
         provider_capability_factory_token=os.getenv("PROVIDER_CAPABILITY_FACTORY_TOKEN"),
+        provider_capability_expected_longhouse_sha=os.getenv("PROVIDER_CAPABILITY_EXPECTED_LONGHOUSE_SHA"),
+        provider_capability_expected_epoch_digest=os.getenv("PROVIDER_CAPABILITY_EXPECTED_EPOCH_DIGEST"),
     )
 
 
