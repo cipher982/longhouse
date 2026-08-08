@@ -2338,6 +2338,13 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             ):
                 raise RuntimeError(f"provider transcript did not correlate resumed Cursor bootstrap marker {bootstrap_marker}")
             _write_json(root / "resume-bootstrap-transcript.jsonl", bootstrap_tail)
+            # Cursor publishes its afterAgentResponse hook before the TUI has
+            # necessarily finished redrawing the restored input surface. The
+            # Helm socket can therefore accept the next send while Cursor is
+            # still in its Working phase, leaving the provider with no
+            # foreground turn. Re-check the provider-owned prompt after the
+            # bootstrap response and before issuing the post-resume marker.
+            _wait_cursor_tui_ready(resumed, root / "native-resume.tty")
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)

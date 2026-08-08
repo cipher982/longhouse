@@ -407,6 +407,33 @@ def test_cursor_readiness_uses_the_latest_prompt_after_resume_loading() -> None:
     assert _cursor_tui_input_ready(f"{restored} Loading conversation") is False
 
 
+def test_cursor_readiness_waits_for_completed_turn_redraw(tmp_path: Path) -> None:
+    recording = tmp_path / "cursor-resume.tty"
+    recording.write_text("Cursor Agent — Add a follow-up Working\n", encoding="utf-8")
+
+    class FakeProcess:
+        cursor_workspace_trust_sent = False
+
+        def __init__(self) -> None:
+            self.recording = recording
+            self.process = SimpleNamespace(poll=lambda: None)
+            self.drains = 0
+
+        def drain(self) -> bytes:
+            self.drains += 1
+            if self.drains == 3:
+                recording.write_text("Cursor Agent — Add a follow-up\n", encoding="utf-8")
+            return b""
+
+        def settle(self, **_kwargs: object) -> bytes:
+            return b""
+
+    process = FakeProcess()
+    _wait_cursor_tui_ready(process, recording, timeout=3)  # type: ignore[arg-type]
+
+    assert process.drains >= 3
+
+
 def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> None:
     marker = _resume_marker("cursor", "SEED")
 
