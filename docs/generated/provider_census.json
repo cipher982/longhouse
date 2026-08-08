@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 240,
+  "file_count": 241,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -76,6 +76,13 @@
     },
     {
       "path": "e2e/tests/live/management-state-live.spec.ts",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "engine/src/claude_lifecycle_hook.rs",
       "providers": [
         "claude",
         "codex"

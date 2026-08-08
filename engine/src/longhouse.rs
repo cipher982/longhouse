@@ -1236,6 +1236,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .arg(&mcp_config.path)
         .current_dir(&cwd)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
+        // Tag the claim with its owner. The session id alone is ambient: any
+        // child process inherits it, and a `claude` launched from inside a
+        // managed Codex session bound its transcripts to that Codex session.
+        .env("LONGHOUSE_MANAGED_PROVIDER", "claude")
         .env("LONGHOUSE_RUN_ID", &run_id)
         .env("LONGHOUSE_CHANNEL_SESSION_ID", &session_id)
         .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
@@ -2615,7 +2619,8 @@ fn build_codex_tui_command(
     command
         .args(["--enable", "tui_app_server", "--remote", ws_url])
         .current_dir(cwd)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
+        .env("LONGHOUSE_MANAGED_SESSION_ID", session_id)
+        .env("LONGHOUSE_MANAGED_PROVIDER", "codex");
     command
 }
 

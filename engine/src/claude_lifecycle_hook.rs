@@ -16,6 +16,32 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Whether the inherited managed-session claim actually belongs to Claude.
+///
+/// `LONGHOUSE_MANAGED_SESSION_ID` is ambient authority: every child process
+/// inherits it, and nothing in the value binds it to the process that should
+/// hold it. A `claude` launched from inside a managed Codex session therefore
+/// inherited that session's id and bound its transcripts to it — four Claude
+/// transcripts ended up owned by one Codex session on the author's machine, and
+/// the Runtime Host correctly refused every upload because the envelope claimed
+/// `provider=claude` for a session it knows is `provider=codex`. That refusal
+/// held local health red indefinitely, and deleting the queued rows only made
+/// the engine rebuild the identical envelope from the same binding.
+///
+/// Every launcher now tags the claim with its owner, so a mismatch is provable.
+/// Absence is not: an older launcher predates the tag, and treating "no tag" as
+/// "not mine" would silently unmanage live sessions across an upgrade. So this
+/// fails closed only on a contradiction, which is the case that caused harm.
+fn managed_claim_belongs_to_claude() -> bool {
+    match std::env::var("LONGHOUSE_MANAGED_PROVIDER") {
+        Ok(provider) => {
+            let provider = provider.trim();
+            provider.is_empty() || provider.eq_ignore_ascii_case("claude")
+        }
+        Err(_) => true,
+    }
+}
+
 fn run_inner() -> anyhow::Result<()> {
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
@@ -30,7 +56,8 @@ fn run_inner() -> anyhow::Result<()> {
     };
     let managed_session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID")
         .ok()
-        .filter(|value| !value.trim().is_empty());
+        .filter(|value| !value.trim().is_empty())
+        .filter(|_| managed_claim_belongs_to_claude());
     let provider_session_id = string(&input, "session_id");
     let session_id = managed_session_id
         .clone()
@@ -190,6 +217,54 @@ fn coordination_bootstrap_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serialized because these mutate process-wide environment.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_provider<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os("LONGHOUSE_MANAGED_PROVIDER");
+        match value {
+            Some(value) => std::env::set_var("LONGHOUSE_MANAGED_PROVIDER", value),
+            None => std::env::remove_var("LONGHOUSE_MANAGED_PROVIDER"),
+        }
+        let result = body();
+        match previous {
+            Some(value) => std::env::set_var("LONGHOUSE_MANAGED_PROVIDER", value),
+            None => std::env::remove_var("LONGHOUSE_MANAGED_PROVIDER"),
+        }
+        result
+    }
+
+    #[test]
+    fn a_claude_run_inside_a_managed_codex_session_is_not_that_session() {
+        // The exact impersonation: `claude` launched from inside managed Codex
+        // inherits LONGHOUSE_MANAGED_SESSION_ID and, before this check, bound
+        // its transcripts to the Codex session. The Runtime Host then refused
+        // every upload because the envelope claimed provider=claude for a
+        // session it knows is provider=codex.
+        assert!(
+            !with_provider(Some("codex"), managed_claim_belongs_to_claude),
+            "a Codex-owned managed claim must not be adopted by Claude"
+        );
+        assert!(with_provider(
+            Some("claude"),
+            managed_claim_belongs_to_claude
+        ));
+        assert!(with_provider(
+            Some("CLAUDE"),
+            managed_claim_belongs_to_claude
+        ));
+    }
+
+    #[test]
+    fn an_untagged_claim_is_still_honoured() {
+        // Absence means "launcher older than the tag", not "not mine". Treating
+        // it as a mismatch would silently unmanage live sessions on upgrade.
+        assert!(with_provider(None, managed_claim_belongs_to_claude));
+        assert!(with_provider(Some("  "), managed_claim_belongs_to_claude));
+    }
+
     #[test]
     fn maps_claude_events_without_guessing_unknown_notifications() {
         assert_eq!(state_for_event("PreToolUse", &json!({})), Some("running"));

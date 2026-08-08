@@ -127,6 +127,7 @@ pub async fn start_claude_print_turn(
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
+        .env("LONGHOUSE_MANAGED_PROVIDER", "claude")
         .env("LONGHOUSE_RUN_ID", &config.run_id)
         .env_remove("LONGHOUSE_SESSION_ID")
         .env_remove("LONGHOUSE_CHANNEL_SESSION_ID")

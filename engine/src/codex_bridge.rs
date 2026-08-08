@@ -2560,6 +2560,7 @@ fn build_codex_bridge_attach_command(
         .arg("--remote")
         .arg(&ws_url)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
+        .env("LONGHOUSE_MANAGED_PROVIDER", "codex")
         .current_dir(PathBuf::from(state.cwd));
 
     Ok((command, codex_bin))
@@ -2832,6 +2833,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     command
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
+        .env("LONGHOUSE_MANAGED_PROVIDER", "codex")
         .env("LONGHOUSE_HOOK_URL", &config.api_url)
         .env("LONGHOUSE_HOOK_TOKEN", &config.api_token)
         .current_dir(&config.cwd)
