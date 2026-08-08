@@ -676,6 +676,26 @@ pub(crate) async fn ship_prepared_envelope(
                     &conflict.response_body,
                 );
             }
+            // A structurally invalid envelope is terminal. The stored request
+            // body is what gets retried, byte for byte, so re-sending it cannot
+            // change the verdict — it just retries until someone reads the log.
+            // Quarantining makes it visible in health and clearable through
+            // `longhouse shipping discard`, after which the source re-prepares
+            // from current code.
+            if let Some(rejected) =
+                error.downcast_ref::<crate::shipping::client::StorageV2EnvelopeRejected>()
+            {
+                return block_source(
+                    conn,
+                    prepared.source_epoch,
+                    "envelope_rejected",
+                    &format!(
+                        "Runtime Host rejected the envelope as invalid ({}: {}). Retrying the \
+                         stored body cannot change this. Details: {}",
+                        rejected.code, rejected.message, rejected.response_body
+                    ),
+                );
+            }
             return Err(error);
         }
     };

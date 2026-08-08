@@ -89,6 +89,31 @@ impl std::fmt::Display for StorageV2Conflict {
 
 impl std::error::Error for StorageV2Conflict {}
 
+/// The Runtime Host refused an envelope as structurally invalid.
+///
+/// Distinct from a conflict: a conflict is about lineage the host might later
+/// accept, this is about bytes it will never accept. Retrying a stored request
+/// body verbatim cannot change the verdict, so this has to be terminal or the
+/// envelope retries until someone notices.
+#[derive(Debug, Clone)]
+pub struct StorageV2EnvelopeRejected {
+    pub code: String,
+    pub message: String,
+    pub response_body: String,
+}
+
+impl std::fmt::Display for StorageV2EnvelopeRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "storage-v2 envelope rejected {}: {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl std::error::Error for StorageV2EnvelopeRejected {}
+
 #[derive(Debug, Clone)]
 pub struct StorageV2SourceNotFound {
     pub source_epoch: String,
@@ -538,6 +563,9 @@ impl ShipperClient {
             if let Some(conflict) = parse_storage_v2_conflict(status.as_u16(), &body) {
                 return Err(conflict.into());
             }
+            if let Some(rejected) = parse_storage_v2_envelope_rejected(status.as_u16(), &body) {
+                return Err(rejected.into());
+            }
             anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
         }
         let receipt = response
@@ -601,6 +629,22 @@ impl ShipperClient {
             Err(_) => Ok(false),
         }
     }
+}
+
+/// Classify a structurally invalid envelope, which no retry can fix.
+fn parse_storage_v2_envelope_rejected(
+    status: u16,
+    body: &str,
+) -> Option<StorageV2EnvelopeRejected> {
+    if !matches!(status, 400 | 422) {
+        return None;
+    }
+    let parsed = serde_json::from_str::<StorageV2ErrorResponse>(body).ok()?;
+    Some(StorageV2EnvelopeRejected {
+        code: parsed.detail.code,
+        message: parsed.detail.message,
+        response_body: body.to_string(),
+    })
 }
 
 fn parse_storage_v2_conflict(status: u16, body: &str) -> Option<StorageV2Conflict> {

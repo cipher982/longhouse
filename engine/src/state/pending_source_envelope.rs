@@ -76,6 +76,9 @@ pub enum BlockKind {
     SourceEpochConflictUnresolved,
     /// The envelope names a tenant or machine that is not the current one.
     StorageTargetChanged,
+    /// The host refused the envelope as structurally invalid. The stored body
+    /// is what gets retried, so no retry can change the verdict.
+    EnvelopeRejected,
     /// A code from a Runtime Host this engine does not know about.
     Unrecognized(String),
 }
@@ -86,6 +89,7 @@ impl BlockKind {
             "source_epoch_conflict" => Self::SourceEpochConflict,
             "source_epoch_conflict_unresolved" => Self::SourceEpochConflictUnresolved,
             "storage_target_changed" => Self::StorageTargetChanged,
+            "envelope_rejected" => Self::EnvelopeRejected,
             other => Self::Unrecognized(other.to_string()),
         }
     }
@@ -95,6 +99,7 @@ impl BlockKind {
             Self::SourceEpochConflict => "source_epoch_conflict",
             Self::SourceEpochConflictUnresolved => "source_epoch_conflict_unresolved",
             Self::StorageTargetChanged => "storage_target_changed",
+            Self::EnvelopeRejected => "envelope_rejected",
             Self::Unrecognized(value) => value,
         }
     }
@@ -118,6 +123,9 @@ pub fn block_kind_is_reconciling(block_kind: Option<&str>) -> bool {
         // The machine or tenant changed underneath this envelope. Recovering
         // would mean re-deriving identity, which nothing does today.
         BlockKind::StorageTargetChanged => false,
+        // Nothing local can rewrite a stored body the host already refused.
+        // Clearing it is a person's decision, via `longhouse shipping discard`.
+        BlockKind::EnvelopeRejected => false,
         // Fail closed. A code this engine does not recognise may well be
         // recoverable by a newer engine, but reporting "healing" for something
         // no code here can act on is exactly the false green the health
