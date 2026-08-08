@@ -262,7 +262,7 @@ def _reuse_failures(
     for field, value in expected.items():
         if proof.get(field) != value:
             failures.append(field)
-    if proof.get("provider_artifact_required", cell.get("provider") != "antigravity") and cell.get("provider") != "antigravity":
+    if proof.get("evidence_class") != "hermetic" and cell.get("provider") != "antigravity":
         for field in ("provider_version", "provider_executable_identity", "provider_build_identity"):
             expected_value = artifact.get(
                 {
