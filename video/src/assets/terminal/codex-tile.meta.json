@@ -13,20 +13,74 @@
   "isolation": "srt",
   "aborted": false,
   "auth_mode": "mock",
+  "canary": {
+    "egress_ip_http": {
+      "url": "http://1.1.1.1",
+      "exit": 0,
+      "http_code": "403",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_ip_https": {
+      "url": "https://1.1.1.1",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "operator_read": {
+      "path": "~/.claude/settings.json",
+      "exit": 1,
+      "denied": true
+    },
+    "mock_health": {
+      "url": "http://127.0.0.1:58385/health",
+      "exit": 0,
+      "http_code": "200",
+      "reachable": true
+    },
+    "passed": true
+  },
   "browser_attempts": [],
   "mock_requests": 4,
-  "captured_at": "2026-08-08T21:03:49.662487+00:00",
-  "cast_sha256": "1dd72f9c783bbc99aaa256adc8bb7d5c9b0026dc565f29374f45ee45c3d4a1f5",
+  "mock_stats": {
+    "main_requests": 4,
+    "utility_requests": 0,
+    "by_kind": {
+      "openai-responses": 4
+    },
+    "main_turns_served": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "distinct_main_turns": 4,
+    "expected_turns": 4
+  },
+  "completion": "quiet-sentinel",
+  "gates": {
+    "exit_status_observed": true,
+    "composer_ready": true,
+    "working_seen": true,
+    "completion_reached": true,
+    "no_browser_attempts": true,
+    "mock_requests_present": true,
+    "mock_completions_match_fixture": true
+  },
+  "gate_failures": [],
+  "captured_at": "2026-08-08T22:36:53.753234+00:00",
+  "cast_sha256": "e81eb868cb076c96ece8e2a49c578d499ddf40370c6539776ac37d6358a5a314",
   "exit_status": 0,
   "phase_log": [
-    "[   0.003] spawned pid=16374 argv=['/tmp/demo-home-lmxqxqin/bin/codex'] 64x14",
-    "[   0.458] dialog 'trust' detected -> keys ['enter']",
-    "[   2.391] sentinel hit: composer-ready",
-    "[   4.395] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
-    "[   7.341] prompt submitted",
-    "[   7.341] sentinel hit: working-spinner",
-    "[  20.475] sentinel hit: task-complete",
-    "[  22.487] sending exit sequence ['text:/quit', 'enter']",
-    "[  23.791] process exit status: 0"
+    "[   0.002] spawned pid=69978 argv=['/tmp/demo-home-e9keyx0w/bin/codex'] 64x14",
+    "[   0.268] dialog 'trust' detected -> keys ['enter']",
+    "[   2.231] sentinel hit: composer-ready",
+    "[   4.250] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[   7.266] prompt submitted",
+    "[   7.267] sentinel hit: working-spinner",
+    "[  20.340] sentinel hit: task-complete",
+    "[  22.366] sending exit sequence ['text:/quit', 'enter']",
+    "[  23.668] process exit status: 0"
   ]
 }

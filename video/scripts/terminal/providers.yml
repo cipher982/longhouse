@@ -120,9 +120,10 @@ providers:
     files:
       # Model id must be one codex's catalog knows, or it prints a
       # "Model metadata not found … can degrade performance" warning
-      # banner straight into the recording.
+      # banner straight into the recording. Keep this CURRENT — the id is
+      # visible in the demo's status bar (marketing checks it).
       ".codex/config.toml": |
-        model = "gpt-5.2-codex"
+        model = "gpt-5.6-luna"
         model_provider = "mock"
 
         [model_providers.mock]
