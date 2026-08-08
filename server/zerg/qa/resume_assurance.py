@@ -38,6 +38,20 @@ def content_digest(payload: Mapping[str, Any], field: str) -> str:
     return sha256_json({key: value for key, value in payload.items() if key != field})
 
 
+def execution_variant_key(
+    *,
+    provider: str,
+    assertion_id: str,
+    scenario_id: str,
+    variant: object,
+) -> str:
+    """Return the durable execution key for one authored assertion cell."""
+
+    if isinstance(variant, str) and variant:
+        return variant
+    return f"cell:{provider}:{assertion_id}:{scenario_id}"
+
+
 @dataclass(frozen=True)
 class ProducerRegistration:
     producer_id: str
@@ -255,7 +269,12 @@ def _reuse_failures(
     expected = {
         "provider": cell.get("provider"),
         "assertion_id": cell.get("assertion_id"),
-        "variant": str(cell.get("variant") or ""),
+        "variant": execution_variant_key(
+            provider=str(cell.get("provider") or ""),
+            assertion_id=str(cell.get("assertion_id") or ""),
+            scenario_id=str(cell.get("scenario_id") or ""),
+            variant=cell.get("variant"),
+        ),
         "longhouse_source_sha": subject.get("longhouse_source_sha"),
         "accepted_epoch_digest": epoch.get("epoch_digest"),
     }
@@ -410,10 +429,16 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             command = {
                 "producer_id": registration["producer_id"],
                 "producer_revision": registration["producer_revision"],
-                "scenario_id": registration["scenario_id"],
+                "scenario_id": cell["scenario_id"],
                 "scenario_revision": registration["scenario_revision"],
                 "assertion_id": selected["assertion_id"],
                 "variant": selected["variant"],
+                "execution_variant": execution_variant_key(
+                    provider=str(selected["provider"]),
+                    assertion_id=str(selected["assertion_id"]),
+                    scenario_id=str(cell["scenario_id"]),
+                    variant=selected.get("variant"),
+                ),
                 "module": registration["executable_module"],
                 "oracle_source": registration["oracle_source"],
                 "oracle_entrypoint": registration["oracle_entrypoint"],
@@ -506,6 +531,7 @@ __all__ = [
     "compile_resume_plan",
     "content_digest",
     "sha256_json",
+    "execution_variant_key",
 ]
 
 
