@@ -63,6 +63,10 @@ class ProducerRegistration:
     executable_module: str
     provider_artifact_required: bool = True
     executable: bool = True
+    # Most producers own one native scenario.  A provider-neutral producer can
+    # advertise a bounded set of scenario ids while retaining one immutable
+    # registration and one executable entrypoint.
+    scenario_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -78,6 +82,7 @@ class ProducerRegistration:
             "credential_binding_ids",
             "required_artifacts",
             "required_cleanup",
+            "scenario_ids",
         ):
             payload[field] = list(payload[field])
         return payload
@@ -221,7 +226,8 @@ def _producer_supports_cell(
         failures.append("network_policy")
     if registration.get("executable") is not True or not registration.get("executable_module"):
         failures.append("executable")
-    if registration.get("scenario_id") != cell.get("scenario_id"):
+    supported_scenarios = registration.get("scenario_ids") or [registration.get("scenario_id")]
+    if cell.get("scenario_id") not in supported_scenarios:
         failures.append("scenario_id")
     scenario_revision = registration.get("scenario_revision")
     if not isinstance(scenario_revision, int) or scenario_revision < cell.get("minimum_scenario_revision", 0):
@@ -249,14 +255,14 @@ def _reuse_failures(
     expected = {
         "provider": cell.get("provider"),
         "assertion_id": cell.get("assertion_id"),
-        "variant": cell.get("variant"),
+        "variant": str(cell.get("variant") or ""),
         "longhouse_source_sha": subject.get("longhouse_source_sha"),
         "accepted_epoch_digest": epoch.get("epoch_digest"),
     }
     for field, value in expected.items():
         if proof.get(field) != value:
             failures.append(field)
-    if cell.get("provider") != "antigravity":
+    if proof.get("provider_artifact_required", cell.get("provider") != "antigravity") and cell.get("provider") != "antigravity":
         for field in ("provider_version", "provider_executable_identity", "provider_build_identity"):
             expected_value = artifact.get(
                 {
@@ -421,6 +427,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "disposition": cell.get("disposition", "implemented"),
                 "subject_id": provider_subject.get("subject_id"),
                 "provider_artifact": dict(provider_subject.get("provider_artifact") or {}),
+                "provider_artifact_required": registration.get("provider_artifact_required", True),
                 "provider_contract_digest": sha256_json(cell),
                 "adapter_digest": producer.get("code_digest"),
                 "oracle_digest": producer.get("oracle_digest"),

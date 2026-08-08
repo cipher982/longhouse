@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 241,
+  "file_count": 242,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1620,6 +1620,15 @@
       "path": "server/zerg/qa/provider_factory_model.py",
       "providers": [
         "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/provider_generic_resume.py",
+      "providers": [
         "claude",
         "codex",
         "cursor",
