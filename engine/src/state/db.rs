@@ -415,6 +415,37 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
              ADD COLUMN proof_json TEXT NOT NULL DEFAULT '{}';",
         )?;
     }
+    // Supersession rows are an audit trail, and each stored both exact request
+    // bodies in full — roughly 2.4MB per row, 1.29GB across 539 rows on the
+    // machine that motivated this, second only to the Cursor store. Nothing in
+    // production reads them back; the only `SELECT`s are in tests.
+    //
+    // Digest and length keep what the audit actually needs: proof of which body
+    // replaced which. The bodies themselves are cleared here, once, so the space
+    // is recovered on databases that already grew.
+    if !supersession_columns.contains("old_request_body_sha256") {
+        conn.execute_batch(
+            "ALTER TABLE pending_source_envelope_supersession
+                 ADD COLUMN old_request_body_sha256 TEXT;
+             ALTER TABLE pending_source_envelope_supersession
+                 ADD COLUMN new_request_body_sha256 TEXT;
+             ALTER TABLE pending_source_envelope_supersession
+                 ADD COLUMN old_request_body_len INTEGER;
+             ALTER TABLE pending_source_envelope_supersession
+                 ADD COLUMN new_request_body_len INTEGER;",
+        )?;
+        // Backfill lengths before dropping the bytes. The digest cannot be
+        // computed in SQLite, so historical rows keep a null hash rather than a
+        // wrong one — length plus reason still identifies them, and inventing a
+        // hash would be worse than admitting it was never recorded.
+        conn.execute_batch(
+            "UPDATE pending_source_envelope_supersession
+                SET old_request_body_len = length(old_request_body_zstd),
+                    new_request_body_len = length(new_request_body_zstd);
+             UPDATE pending_source_envelope_supersession
+                SET old_request_body_zstd = x'', new_request_body_zstd = x'';",
+        )?;
+    }
 
     // Old builds could create duplicate pending pointers for the same file/range.
     // Collapse those rows before enforcing uniqueness so restart recovery becomes idempotent.

@@ -11,6 +11,24 @@ use uuid::Uuid;
 
 const MAX_PENDING_OUTBOX_BYTES: u64 = 1024 * 1024 * 1024;
 
+/// Identify a superseded request body without storing it.
+///
+/// These rows are an audit trail: they record that one exact body replaced
+/// another, and why. Nothing in production ever reads the bodies back — the
+/// only `SELECT`s are in tests — but each row stored both in full, at roughly
+/// 2.4MB a row. 539 rows had accumulated to 1.29GB, second only to the Cursor
+/// store in a 9.7GB local database.
+///
+/// A digest keeps the property the audit trail actually needs: you can still
+/// prove which body was replaced by which. It does not let you reconstruct
+/// them, which nothing asks to do.
+pub(crate) fn body_digest(body: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    format!("{:x}", hasher.finalize())
+}
+
 fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64) -> bool {
     current_bytes.saturating_add(candidate_bytes) <= MAX_PENDING_OUTBOX_BYTES
 }
@@ -734,16 +752,20 @@ pub fn replace_request_body_after_lineage_repair(
     tx.execute(
         "INSERT INTO pending_source_envelope_supersession (
              source_epoch, envelope_id, old_request_body_zstd,
-             new_request_body_zstd, reason, proof_json, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             new_request_body_zstd, reason, proof_json, created_at,
+             old_request_body_sha256, new_request_body_sha256,
+             old_request_body_len, new_request_body_len
+         ) VALUES (?1, ?2, x'', x'', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             source_epoch.to_string(),
             envelope_id,
-            expected_request_body_zstd,
-            replacement_request_body_zstd,
             reason,
             proof_json,
             Utc::now().to_rfc3339(),
+            body_digest(expected_request_body_zstd),
+            body_digest(replacement_request_body_zstd),
+            expected_request_body_zstd.len() as i64,
+            replacement_request_body_zstd.len() as i64,
         ],
     )?;
     tx.commit()?;
@@ -797,16 +819,20 @@ pub fn retire_after_host_replacement(
     tx.execute(
         "INSERT INTO pending_source_envelope_supersession (
              source_epoch, envelope_id, old_request_body_zstd,
-             new_request_body_zstd, reason, proof_json, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             new_request_body_zstd, reason, proof_json, created_at,
+             old_request_body_sha256, new_request_body_sha256,
+             old_request_body_len, new_request_body_len
+         ) VALUES (?1, ?2, x'', x'', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             source_epoch.to_string(),
             envelope_id,
-            expected_request_body_zstd,
-            Vec::<u8>::new(),
             reason,
             proof_json,
             Utc::now().to_rfc3339(),
+            body_digest(expected_request_body_zstd),
+            body_digest(&[]),
+            expected_request_body_zstd.len() as i64,
+            0_i64,
         ],
     )?;
     tx.commit()?;
@@ -863,16 +889,20 @@ pub fn retire_empty_source(
     tx.execute(
         "INSERT INTO pending_source_envelope_supersession (
              source_epoch, envelope_id, old_request_body_zstd,
-             new_request_body_zstd, reason, proof_json, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             new_request_body_zstd, reason, proof_json, created_at,
+             old_request_body_sha256, new_request_body_sha256,
+             old_request_body_len, new_request_body_len
+         ) VALUES (?1, ?2, x'', x'', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             source_epoch.to_string(),
             envelope_id,
-            expected_request_body_zstd,
-            Vec::<u8>::new(),
             reason,
             proof_json,
             Utc::now().to_rfc3339(),
+            body_digest(expected_request_body_zstd),
+            body_digest(&[]),
+            expected_request_body_zstd.len() as i64,
+            0_i64,
         ],
     )?;
     tx.commit()?;
@@ -1106,7 +1136,8 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        block_kind_is_reconciling, pending_outbox_has_capacity, persist_or_load, quarantine,
+        block_kind_is_reconciling, body_digest, pending_outbox_has_capacity, persist_or_load,
+        quarantine,
         replace_request_body_after_lineage_repair, retire_after_host_replacement, retry_paths,
         defer_reexamination, snapshot, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
@@ -1465,18 +1496,39 @@ mod tests {
         let repaired = super::load_for_epoch(&conn, epoch).unwrap().unwrap();
         assert_eq!(repaired.request_body_zstd, b"replacement");
         assert!(repaired.blocked_at.is_none());
-        let audit: (Vec<u8>, Vec<u8>, String, String) = conn
+        // The audit identifies the bodies rather than storing them. Keeping
+        // both in full cost ~2.4MB a row and nothing in production ever read
+        // them back, so a digest carries the property that matters: proof of
+        // which body replaced which.
+        let audit: (Vec<u8>, Vec<u8>, String, String, String, String, i64, i64) = conn
             .query_row(
-                "SELECT old_request_body_zstd, new_request_body_zstd, reason, proof_json
+                "SELECT old_request_body_zstd, new_request_body_zstd, reason, proof_json,
+                        old_request_body_sha256, new_request_body_sha256,
+                        old_request_body_len, new_request_body_len
                  FROM pending_source_envelope_supersession WHERE source_epoch = ?1",
                 [epoch.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
             )
             .unwrap();
-        assert_eq!(audit.0, pending.request_body_zstd);
-        assert_eq!(audit.1, b"replacement");
+        assert!(audit.0.is_empty(), "bodies are no longer retained");
+        assert!(audit.1.is_empty(), "bodies are no longer retained");
         assert_eq!(audit.2, "fixture lineage proof");
         assert_eq!(audit.3, r#"{"v":1,"fixture":true}"#);
+        assert_eq!(audit.4, body_digest(&pending.request_body_zstd));
+        assert_eq!(audit.5, body_digest(b"replacement"));
+        assert_eq!(audit.6, pending.request_body_zstd.len() as i64);
+        assert_eq!(audit.7, b"replacement".len() as i64);
         assert!(replace_request_body_after_lineage_repair(
             &mut conn,
             epoch,
@@ -1550,17 +1602,19 @@ mod tests {
             .unwrap(),
             1
         );
-        let audit: (Vec<u8>, Vec<u8>, String) = conn
+        let audit: (Vec<u8>, String, String, i64) = conn
             .query_row(
-                "SELECT old_request_body_zstd, new_request_body_zstd, reason
+                "SELECT old_request_body_zstd, reason,
+                        old_request_body_sha256, old_request_body_len
                  FROM pending_source_envelope_supersession WHERE source_epoch = ?1",
                 [epoch.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
-        assert_eq!(audit.0, pending.request_body_zstd);
-        assert!(audit.1.is_empty());
-        assert_eq!(audit.2, "fixture host replacement proof");
+        assert!(audit.0.is_empty(), "bodies are no longer retained");
+        assert_eq!(audit.1, "fixture host replacement proof");
+        assert_eq!(audit.2, body_digest(&pending.request_body_zstd));
+        assert_eq!(audit.3, pending.request_body_zstd.len() as i64);
     }
 
     /// Register the epoch a pending row points at.
