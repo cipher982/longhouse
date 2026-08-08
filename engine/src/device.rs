@@ -891,10 +891,17 @@ fn collect_managed_launch_recovery(
                         .and_then(|stem| stem.to_str())
                         .map(str::to_string)
                 });
+            // Suppress only against a list we can actually trust. An empty set
+            // is not evidence that every session is gone — a provider scan that
+            // failed collapses to an empty vector, and treating that as "no
+            // sessions exist" would hide every real degraded launch at exactly
+            // the moment observation is broken. Same trap
+            // `managed_contract_janitor` documents for retained sets.
+            let can_trust_the_list = !known_session_ids.is_empty();
             let names_a_known_session = session_id
                 .as_deref()
                 .is_some_and(|id| known_session_ids.contains(id));
-            if !names_a_known_session {
+            if can_trust_the_list && !names_a_known_session {
                 continue;
             }
             let exhausted =
@@ -6141,11 +6148,14 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         )
         .unwrap();
 
+        // The list has to be non-empty to be trusted: an empty one means the
+        // provider scan produced nothing, which is a broken observation rather
+        // than proof that no session exists.
         let gone = native_fast_health_from_parts(
             &path,
             true,
-            Some(0),
-            Some(json!({"managed_sessions": []})),
+            Some(1),
+            Some(json!({"managed_sessions": [{"session_id": "someone-else"}]})),
             None,
         );
         assert!(
@@ -6168,6 +6178,23 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
                 .reasons
                 .contains(&"managed_launch_recovery_exhausted".to_string()),
             "a live session whose launch never recovered must still surface"
+        );
+
+        // No observations at all is broken observation, not an empty machine.
+        // Suppressing here would hide every degraded launch at exactly the
+        // moment the scanner that would prove otherwise has failed.
+        let unobservable = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(0),
+            Some(json!({"managed_sessions": []})),
+            None,
+        );
+        assert!(
+            unobservable
+                .reasons
+                .contains(&"managed_launch_recovery_exhausted".to_string()),
+            "an empty session list must not be read as proof the session is gone"
         );
     }
 

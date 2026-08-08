@@ -594,7 +594,22 @@ pub(crate) async fn ship_prepared_envelope(
         // Re-examination is a manifest fetch and a watermark comparison, not a
         // re-POST of the frozen body: re-sending an envelope the host already
         // rejected cannot succeed when the disagreement is about position.
-        if reexamine_blocked_source(conn, client, &pending, &prepared, request_timeout).await? {
+        //
+        // One exception, handled inside: a body the host called *invalid* does
+        // get re-POSTed, because that verdict can change under it (a schema
+        // rollout, a half-deployed validator) and quarantining without ever
+        // re-trying would make a temporary opinion permanent.
+        if reexamine_blocked_source(
+            conn,
+            client,
+            capabilities,
+            &pending,
+            &prepared,
+            lane,
+            request_timeout,
+        )
+        .await?
+        {
             return Ok(StorageV2ShipOutcome {
                 bytes_shipped: 0,
                 events_shipped: 0,
@@ -901,11 +916,14 @@ async fn reconcile_storage_v2_conflict(
 /// bytes are still on disk. The Cursor-specific lineage and replacement repairs
 /// remain for the epoch-identity failures only they understand; they are now
 /// reached through this one door rather than gating whether the door opens.
+#[allow(clippy::too_many_arguments)]
 async fn reexamine_blocked_source(
     conn: &mut Connection,
     client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
     pending: &PendingSourceEnvelope,
     prepared: &PreparedStorageV2Envelope,
+    lane: &str,
     request_timeout: Duration,
 ) -> Result<bool> {
     // A source the host has no epoch for cannot be resynced against anything;
@@ -927,6 +945,40 @@ async fn reexamine_blocked_source(
             || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
     {
         return Ok(true);
+    }
+    // An envelope the host called invalid gets its POST retried, not just a
+    // manifest fetch. "Invalid" is the host's opinion at one moment: a schema
+    // rollout or a partially deployed validator can refuse a body it will
+    // accept minutes later. Quarantining without ever re-POSTing would make
+    // that verdict permanent — the absorbing state this whole area exists to
+    // avoid. Re-POSTing costs one request per backoff interval, which the
+    // unresolved floor already spaces to six hours.
+    if pending.block_kind.as_deref() == Some("envelope_rejected") {
+        match client
+            .ship_storage_v2_body(
+                &capabilities.ingest_path,
+                lane,
+                decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?,
+                &pending.envelope_id,
+                Some(request_timeout),
+            )
+            .await
+        {
+            Ok(receipt) => {
+                pending_source_envelope::acknowledge_and_delete(
+                    conn,
+                    prepared.source_epoch,
+                    &receipt.envelope_id,
+                    prepared.range_start,
+                    prepared.range_end,
+                )?;
+                return Ok(true);
+            }
+            Err(_) => {
+                // Still refused. Fall through to the backoff below rather than
+                // surfacing a second identical block.
+            }
+        }
     }
     // Nothing to do this time. Push the next look further out rather than
     // letting the row come straight back: a re-examination that changes nothing
