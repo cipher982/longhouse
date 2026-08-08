@@ -11,12 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.qa.provider_resume_factory import SCENARIOS
-from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
 from zerg.qa.resume_assurance import ProducerRegistration
 
-GENERIC_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario != "resume_unsupported")
+# Keep registration import-safe for the read-only verifier bundle.  The real
+# scenario driver is imported lazily below from the exact paired checkout;
+# importing it here would pull the full catalogd application closure into the
+# small trusted registration bundle.
+GENERIC_SCENARIOS = tuple(scenario for scenario in ASSERTIONS_BY_SCENARIO if scenario != "resume_unsupported")
 GENERIC_ASSERTION_CELLS = tuple((assertion_id, None) for scenario in GENERIC_SCENARIOS for assertion_id in ASSERTIONS_BY_SCENARIO[scenario])
 
 REGISTRATION = ProducerRegistration(
@@ -76,6 +78,8 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
 def run_generic_resume(*, provider: str, scenario_id: str, root: Path) -> dict[str, Any]:
     if scenario_id not in GENERIC_SCENARIOS:
         raise ValueError(f"unknown generic Resume scenario: {scenario_id}")
+    from zerg.qa.provider_resume_factory import run_provider_resume_scenario
+
     result = run_provider_resume_scenario(provider, scenario_id)
     observation = dict(result.get("observation") or {})
     # These facts are producer-owned lifecycle facts, separate from the
