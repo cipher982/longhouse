@@ -13,6 +13,10 @@ import { Vignette } from "../components/Vignette";
 import { Wordmark } from "../components/Wordmark";
 import { KineticText } from "../components/KineticText";
 import { TRANSITION_FRAMES, sec } from "../lib/timing";
+import { TerminalGrid, type GridTimeline } from "../terminal/TerminalGrid";
+import claudeGridJson from "../assets/terminal/claude.grid.json";
+
+const claudeGrid = claudeGridJson as unknown as GridTimeline;
 
 /**
  * ControlRoom — the hero demo, drawn entirely in code so every frame stays
@@ -48,12 +52,12 @@ const PROVIDERS: Provider[] = [
     cmd: "claude",
     color: "#E8875A",
     machine: "macbook",
-    task: "Fix flaky auth test",
+    task: "Fix the inventory count bug",
     lines: [
       { text: "$ claude", tone: "cmd" },
-      { text: "⏺ Reading tests/auth/refresh.test.ts…", tone: "out" },
-      { text: "⏺ Bash(uv run pytest tests/auth -x)", tone: "dim" },
-      { text: "✓ Found the race — patching retry window", tone: "ok" },
+      { text: "⏺ Reading inventory.py…", tone: "out" },
+      { text: "⏺ Bash(python -m pytest -q)", tone: "dim" },
+      { text: "✗ 2 failed — off-by-one in count_items", tone: "out" },
     ],
   },
   {
@@ -376,14 +380,14 @@ const UnifyScene: React.FC = () => {
 
 /* ── Beat 3: steer from the phone; the terminal reacts ──────────────── */
 
-const STEER_MESSAGE = "rebase onto main and open the PR";
+const STEER_MESSAGE = "Fix the off-by-one bug in count_items, then run the tests";
 
-const REACT_LINES: Provider["lines"] = [
-  { text: "⏺ Rebasing onto origin/main…", tone: "out" },
-  { text: "⏺ Bash(uv run pytest tests/auth)", tone: "dim" },
-  { text: "✓ 14 passed in 6.2s", tone: "ok" },
-  { text: "⏺ Opening PR #214 — \"fix auth refresh race\"", tone: "out" },
-];
+// The recording's prompt lands at ~5.5s; work streams until ~9.05s. The
+// replay window opens when the phone's Send fires, so the terminal shows the
+// REAL recorded Claude Code session (sandboxed first-run, mock-API lane)
+// doing exactly what the phone asked.
+const REPLAY_START_SEC = 4.0;
+const REPLAY_END_SEC = 9.4;
 
 const SteerScene: React.FC = () => {
   const frame = useCurrentFrame();
@@ -470,7 +474,7 @@ const SteerScene: React.FC = () => {
               }}
             >
               <div style={{ fontSize: 20, lineHeight: 1.45, color: "rgba(243,234,217,0.75)" }}>
-                ✓ Found the race — patched the retry window. Tests pass locally.
+                Two tests failing — traced it to the loop bounds in count_items.
               </div>
               <div style={{ fontSize: 20, lineHeight: 1.45, color: "rgba(243,234,217,0.5)" }}>
                 Waiting for your next instruction…
@@ -529,8 +533,8 @@ const SteerScene: React.FC = () => {
           }}
         />
 
-        {/* the real terminal, reacting */}
-        <div style={{ width: 900 }}>
+        {/* the real recorded session, reacting: literal PTY output replayed */}
+        <div style={{ width: 1240 }}>
           <div
             style={{
               borderRadius: 14,
@@ -538,7 +542,6 @@ const SteerScene: React.FC = () => {
               background: "#151009",
               border: "1px solid rgba(201,166,107,0.22)",
               boxShadow: "0 24px 70px rgba(0,0,0,0.55)",
-              fontFamily: MONO,
             }}
           >
             <div
@@ -563,41 +566,20 @@ const SteerScene: React.FC = () => {
                 {claude.machine} — still at your desk
               </span>
             </div>
-            <div style={{ padding: "20px 22px", display: "flex", flexDirection: "column", gap: 13 }}>
-              <div style={{ fontSize: 26, color: "rgba(243,234,217,0.5)" }}>
-                ✓ Found the race — patching retry window
-              </div>
-              {/* the steered instruction lands in the real session */}
-              <div
-                style={{
-                  fontSize: 26,
-                  color: GOLD,
-                  opacity: interpolate(frame - (sentAt + 8), [0, 6], [0, 1], {
-                    extrapolateLeft: "clamp",
-                    extrapolateRight: "clamp",
-                  }),
-                }}
-              >
-                &gt; {STEER_MESSAGE}
-              </div>
-              {REACT_LINES.map((line, i) => {
-                const lineStart = sentAt + 20 + i * 16;
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      fontSize: 26,
-                      color: toneColor(line.tone),
-                      opacity: interpolate(frame - lineStart, [0, 6], [0, 1], {
-                        extrapolateLeft: "clamp",
-                        extrapolateRight: "clamp",
-                      }),
-                    }}
-                  >
-                    {line.text}
-                  </div>
-                );
-              })}
+            <div style={{ padding: "16px 20px" }}>
+              <TerminalGrid
+                timeline={claudeGrid}
+                tSec={
+                  sent
+                    ? Math.min(
+                        REPLAY_START_SEC + (frame - (sentAt + 8)) / fps,
+                        REPLAY_END_SEC,
+                      )
+                    : REPLAY_START_SEC
+                }
+                cellW={12}
+                cellH={26}
+              />
             </div>
           </div>
         </div>

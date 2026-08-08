@@ -465,7 +465,9 @@ def write_srt_settings(home, script_dir, mock_url=None, extra_domains=()):
             # binaries are re-allowed underneath /Users.
             "denyRead": ["/Users"],
             "allowRead": [str(script_dir / ".sandbox")],
-            "allowWrite": [home, "/tmp", "/private/tmp", "/dev/null"],
+            # /var/folders is macOS TMPDIR: without it, python inside the
+            # sandbox emits "couldn't create cache file" noise into the take.
+            "allowWrite": [home, "/tmp", "/private/tmp", "/private/var/folders", "/dev/null"],
             "denyWrite": [],
         },
         "allowPty": True,
