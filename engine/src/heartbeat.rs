@@ -15,7 +15,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::SecondsFormat;
@@ -105,6 +105,13 @@ pub struct HeartbeatPayload {
     pub events_per_sec_ewma_10s: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes_per_sec_ewma_10s: Option<f64>,
+    /// Allocated bytes in the local SQLite shipper database.
+    ///
+    /// This is page count times page size, so it exposes retained/free-page
+    /// growth that outbox counters cannot see without putting filesystem paths
+    /// into health payloads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_database_bytes: Option<u64>,
     pub disk_free_bytes: u64,
     pub is_offline: bool,
     #[serde(default)]
@@ -674,6 +681,7 @@ impl HeartbeatPayload {
         );
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
+        let local_database_bytes = allocated_database_bytes(stats.conn).ok();
         let disk_free_bytes = get_disk_free();
         let ship_stats = stats.ship_stats.summary();
 
@@ -712,6 +720,7 @@ impl HeartbeatPayload {
             ship_lanes: ship_stats.lanes,
             events_per_sec_ewma_10s: ship_stats.events_per_sec_ewma_10s,
             bytes_per_sec_ewma_10s: ship_stats.bytes_per_sec_ewma_10s,
+            local_database_bytes,
             disk_free_bytes,
             is_offline: stats.is_offline,
             managed_sessions: Vec::new(),
@@ -729,6 +738,16 @@ impl HeartbeatPayload {
             update: None,
         }
     }
+}
+
+fn allocated_database_bytes(conn: &rusqlite::Connection) -> anyhow::Result<u64> {
+    let page_count: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    let page_count = u64::try_from(page_count).context("database page count is negative")?;
+    let page_size = u64::try_from(page_size).context("database page size is negative")?;
+    page_count
+        .checked_mul(page_size)
+        .context("allocated database byte count overflow")
 }
 
 /// Deterministic digest for the local session truth graph.
@@ -3242,6 +3261,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: Some(123_456),
             disk_free_bytes: 1_000_000_000,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -3269,12 +3289,30 @@ mod tests {
         assert_eq!(parsed["ship_successes_1h"], 5);
         assert_eq!(parsed["ship_attempts_10m"], 4);
         assert_eq!(parsed["ship_successes_10m"], 3);
+        assert_eq!(parsed["local_database_bytes"], 123_456);
         assert_eq!(parsed["is_offline"], false);
         assert_eq!(parsed["managed_sessions"], serde_json::json!([]));
         assert_eq!(parsed["unmanaged_session_bindings"], serde_json::json!([]));
         assert!(parsed["last_ship_at"].is_string());
         assert!(parsed["last_ship_attempt_at"].is_string());
         assert_eq!(parsed["last_ship_result"], "ok");
+    }
+
+    #[test]
+    fn allocated_database_size_uses_sqlite_pages() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(tmp.path())).unwrap();
+        let page_count: u64 = conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        let page_size: u64 = conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(
+            allocated_database_bytes(&conn).unwrap(),
+            page_count * page_size
+        );
     }
 
     #[test]
@@ -3314,6 +3352,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: vec![ManagedSessionLease {
@@ -4465,6 +4504,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 0,
             is_offline: true,
             managed_sessions: Vec::new(),
@@ -4530,6 +4570,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 10,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -4704,6 +4745,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -4794,6 +4836,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -5629,6 +5672,7 @@ mod tests {
             ship_lanes: ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),

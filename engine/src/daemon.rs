@@ -5423,6 +5423,7 @@ mod tests {
             ship_lanes: crate::shipping_stats::ShipLaneSummarySet::default(),
             events_per_sec_ewma_10s: None,
             bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),

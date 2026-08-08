@@ -121,6 +121,8 @@ struct NativeEngineStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     is_offline: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    local_database_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reconciliation: Option<Value>,
 }
 
@@ -1210,6 +1212,9 @@ fn native_fast_health_from_parts(
                 .map(str::to_string),
             daemon_pid: object.and_then(|value| value.get("daemon_pid")).cloned(),
             is_offline,
+            local_database_bytes: object
+                .and_then(|value| value.get("local_database_bytes"))
+                .and_then(Value::as_u64),
             reconciliation: local_projection
                 .and_then(|value| value.get("reconciliation"))
                 .cloned(),
@@ -3686,6 +3691,9 @@ fn print_native_fast_local_health(health: &NativeFastLocalHealth) {
     if let Some(error) = &health.engine_status.error {
         println!("  error: {error}");
     }
+    if let Some(bytes) = health.engine_status.local_database_bytes {
+        println!("  database bytes: {bytes}");
+    }
     println!("Spool");
     println!("  pending: {}", health.spool.pending_count);
     println!("  dead: {}", health.spool.dead_count);
@@ -3731,6 +3739,7 @@ mod tests {
     fn desktop_envelope_satisfies_the_consumer_contract() {
         let engine_payload = serde_json::json!({
             "version": "test",
+            "local_database_bytes": 123456,
             "sessions": [{
                 "session_id": "s1",
                 "provider": "claude",
@@ -3752,6 +3761,7 @@ mod tests {
             Some(engine_payload.clone()),
             None,
         );
+        assert_eq!(fast.engine_status.local_database_bytes, Some(123456));
 
         let envelope = native_desktop_health_from_parts(
             fast,

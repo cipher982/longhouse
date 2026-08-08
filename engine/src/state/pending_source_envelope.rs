@@ -33,6 +33,16 @@ fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64) -> bool
     current_bytes.saturating_add(candidate_bytes) <= MAX_PENDING_OUTBOX_BYTES
 }
 
+fn retained_envelope_bytes(conn: &Connection) -> Result<u64> {
+    let bytes: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(length(request_body_zstd) + length(media_objects_zstd)), 0)
+         FROM pending_source_envelope",
+        [],
+        |row| row.get(0),
+    )?;
+    u64::try_from(bytes).context("pending outbox size is negative")
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StorageV2OutboxSnapshot {
     pub pending_count: u64,
@@ -352,14 +362,10 @@ pub fn persist_or_load(
         tx.commit()?;
         return Ok(existing);
     }
-    let current_bytes: i64 = tx.query_row(
-        "SELECT COALESCE(SUM(length(request_body_zstd) + length(media_objects_zstd)), 0)
-         FROM pending_source_envelope
-         WHERE blocked_at IS NULL",
-        [],
-        |row| row.get(0),
-    )?;
-    let current_bytes = u64::try_from(current_bytes).context("pending outbox size is negative")?;
+    // Blocked rows retain the same compressed evidence as active rows. Exempting
+    // them made the cap disappear precisely when repeated host refusals caused
+    // the durable outbox to grow.
+    let current_bytes = retained_envelope_bytes(&tx)?;
     let candidate_bytes =
         u64::try_from(candidate.request_body_zstd.len() + candidate.media_objects_zstd.len())
             .context("pending envelope size exceeds u64")?;
@@ -1136,10 +1142,10 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        block_kind_is_reconciling, body_digest, pending_outbox_has_capacity, persist_or_load,
-        quarantine,
-        replace_request_body_after_lineage_repair, retire_after_host_replacement, retry_paths,
-        defer_reexamination, snapshot, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
+        block_kind_is_reconciling, body_digest, defer_reexamination, pending_outbox_has_capacity,
+        persist_or_load, quarantine, replace_request_body_after_lineage_repair,
+        retained_envelope_bytes, retire_after_host_replacement, retry_paths, snapshot,
+        PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
     use rusqlite::params;
@@ -1371,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    fn quarantined_bytes_do_not_consume_live_prepare_capacity() {
+    fn quarantined_bytes_remain_inside_the_outbox_cap() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let blocked_epoch = Uuid::new_v4();
@@ -1395,6 +1401,11 @@ mod tests {
         assert_eq!(state.pending_count, 1);
         assert_eq!(state.pending_bytes, 2);
         assert_eq!(state.blocked_bytes, 2);
+        assert_eq!(
+            retained_envelope_bytes(&conn).unwrap(),
+            state.pending_bytes + state.blocked_bytes,
+            "the capacity check must include quarantined evidence"
+        );
     }
 
     #[test]

@@ -64,7 +64,8 @@ pub fn open_connection(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;
     conn.execute_batch(
-        "PRAGMA synchronous=NORMAL;
+        "PRAGMA foreign_keys=ON;
+         PRAGMA synchronous=NORMAL;
          PRAGMA busy_timeout=5000;",
     )?;
     Ok(conn)
@@ -86,6 +87,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     // Pragmas matching Python shipper
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
+         PRAGMA foreign_keys=ON;
          PRAGMA synchronous=NORMAL;
          PRAGMA busy_timeout=5000;",
     )?;
@@ -536,6 +538,33 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn every_connection_enforces_declared_foreign_keys() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(tmp.path())).unwrap();
+        let enabled: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(enabled, 1);
+        drop(conn);
+
+        let conn = open_connection(tmp.path()).unwrap();
+        let enabled: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(enabled, 1);
+        assert!(
+            conn.execute(
+                "INSERT INTO cursor_store_capture_cursor
+                 (source_epoch, last_blob_id, updated_at)
+                 VALUES ('missing-parent', NULL, '2026-08-08T00:00:00Z')",
+                [],
+            )
+            .is_err(),
+            "a fresh connection must reject child evidence without its source epoch"
+        );
     }
 
     #[test]
