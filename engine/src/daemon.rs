@@ -3595,15 +3595,16 @@ fn maybe_start_managed_observation_scan(
                 // session Longhouse has lost track of completely — which is
                 // what these were, since they pointed at temp and worktree
                 // homes this daemon never reads.
-                // Sessions this machine can still see. Kept separate from the
-                // resumability set below, because the two answer different
-                // questions and the receipts sweep needs this one.
-                let observed_sessions = observed_live_session_ids(
-                    &codex_observations,
-                    &claude_observations,
-                    &opencode_observations,
-                    &cursor_observations,
-                    &antigravity_observations,
+                let mut observed_sessions = std::collections::HashSet::new();
+                observed_sessions.extend(codex_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(claude_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions
+                    .extend(opencode_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(cursor_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(
+                    antigravity_observations
+                        .iter()
+                        .map(|o| o.session_id.clone()),
                 );
                 let mut retained_sessions = observed_sessions.clone();
                 retained_sessions.extend(retained_codex.iter().cloned());
@@ -3618,43 +3619,6 @@ fn maybe_start_managed_observation_scan(
                         .filter(|observation| observation.contract_state == "valid")
                         .map(|observation| observation.session_id),
                 );
-
-                // Keyed on `observed_sessions`, not `retained_sessions`. The
-                // two answer different questions and the difference is the
-                // whole bug: a resume contract says "you could resume this
-                // later", while a launch-retry receipt says "this launch
-                // failed". Once the launch is over the receipt is history, so
-                // retaining it because the session is *resumable* left health
-                // reporting `managed_launch_recovery_exhausted` indefinitely
-                // for a session that was not running and had nothing wrong
-                // with it.
-                //
-                // Launch-retry receipts are contract files by another name:
-                // `<session>.json`, written when a managed launch cannot reach
-                // the Runtime Host. Nothing swept them, so a receipt for a
-                // session that has since exited held local health degraded
-                // forever — one written during a hosted deploy window outlived
-                // its session by hours and reported `recovery_exhausted` for a
-                // process that no longer existed. Same sweep, same grace, same
-                // retained set as contracts.
-                if let Ok(agent_dir) = crate::config::get_agent_dir() {
-                    let swept_receipts = crate::managed_contract_janitor::sweep_orphan_contracts(
-                        &agent_dir.join("managed-local/registration-retries"),
-                        &observed_sessions,
-                        now,
-                    )
-                        + crate::managed_contract_janitor::sweep_orphan_contracts(
-                            &agent_dir.join("managed-local/outcome-retries"),
-                            &observed_sessions,
-                            now,
-                        );
-                    if swept_receipts > 0 {
-                        tracing::info!(
-                            swept = swept_receipts,
-                            "removed launch-retry receipts for sessions that no longer exist"
-                        );
-                    }
-                }
 
                 // Only *identify* here. This closure runs under
                 // `spawn_blocking`, and stopping a process group means waiting
@@ -5001,61 +4965,6 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
     result
 }
 
-/// Return sessions that are currently observable as live provider activity.
-///
-/// The receipt janitor must not use the broader retained/resumable set: a
-/// stopped session can remain resumable while its launch-retry receipt is
-/// historical and eligible for cleanup. These predicates intentionally mirror
-/// `ManagedObservationSnapshot::current_only`, except that Cursor evidence is
-/// retained there when it names a run while receipt cleanup requires the
-/// stricter `live` signal.
-fn observed_live_session_ids(
-    codex: &[managed_bridge_scan::CodexBridgeObservation],
-    claude: &[managed_claude_scan::ClaudeChannelObservation],
-    opencode: &[managed_opencode_scan::OpenCodeServerObservation],
-    cursor: &[managed_cursor_helm_scan::CursorHelmObservation],
-    antigravity: &[managed_antigravity_scan::AntigravityHookObservation],
-) -> HashSet<String> {
-    let mut observed = HashSet::new();
-    observed.extend(
-        codex
-            .iter()
-            .filter(|observation| {
-                observation.bridge_alive
-                    || observation.app_server_alive
-                    || observation.has_tui_attachment
-            })
-            .map(|observation| observation.session_id.clone()),
-    );
-    observed.extend(
-        claude
-            .iter()
-            .filter(|observation| observation.claude_alive || observation.bridge_alive)
-            .map(|observation| observation.session_id.clone()),
-    );
-    observed.extend(
-        opencode
-            .iter()
-            .filter(|observation| observation.server_alive || observation.has_tui_attachment)
-            .map(|observation| observation.session_id.clone()),
-    );
-    observed.extend(
-        cursor
-            .iter()
-            .filter(|observation| observation.live)
-            .map(|observation| observation.session_id.clone()),
-    );
-    // Antigravity has no provider process ownership signal. Its hook state is
-    // the only durable observation available, so preserve the existing
-    // evidence-retention behavior until that provider exposes liveness.
-    observed.extend(
-        antigravity
-            .iter()
-            .map(|observation| observation.session_id.clone()),
-    );
-    observed
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -5315,134 +5224,6 @@ mod tests {
             ..ManagedObservationSnapshot::default()
         };
         assert!(without_run.current_only().cursor.is_empty());
-    }
-
-    #[test]
-    fn receipt_observation_set_excludes_dead_provider_state() {
-        let live_codex = codex_bridge_observation(
-            Path::new("/tmp/live-rollout.jsonl"),
-            None,
-            Some("running"),
-            "2026-08-02T00:00:00Z",
-            true,
-        );
-        let mut dead_codex = live_codex.clone();
-        dead_codex.session_id = "dead-codex".to_string();
-        dead_codex.bridge_alive = false;
-
-        let dead_cursor = managed_cursor_helm_scan::CursorHelmObservation {
-            session_id: "dead-cursor".to_string(),
-            provider_session_id: Some("cursor-thread".to_string()),
-            run_id: Some("run-dead-cursor".to_string()),
-            connection_id: None,
-            lease_generation: None,
-            state_file: PathBuf::from("/tmp/dead-cursor.json"),
-            socket_path: Some(PathBuf::from("/tmp/dead-cursor.sock")),
-            cwd: Some("/tmp/project".to_string()),
-            launcher_pid: Some(1234),
-            launcher_process_start_time: Some("Tue Jul  8 22:50:19 2026".to_string()),
-            cursor_pid: Some(1235),
-            cursor_process_start_time: Some("Tue Jul  8 22:50:20 2026".to_string()),
-            started_at: "2026-07-08T22:50:19Z".to_string(),
-            updated_at: "2026-07-08T22:50:19Z".to_string(),
-            launcher_alive: false,
-            live: false,
-        };
-
-        let mut live_cursor = dead_cursor.clone();
-        live_cursor.session_id = "live-cursor".to_string();
-        live_cursor.live = true;
-
-        let dead_claude = managed_claude_scan::ClaudeChannelObservation {
-            session_id: "dead-claude".to_string(),
-            run_id: None,
-            connection_id: None,
-            lease_generation: None,
-            provider_session_id: None,
-            state_file: PathBuf::from("/tmp/dead-claude.json"),
-            cwd: None,
-            claude_pid: None,
-            bridge_pid: None,
-            ready: false,
-            started_at: "2026-08-02T00:00:00Z".to_string(),
-            updated_at: "2026-08-02T00:00:00Z".to_string(),
-            claude_alive: false,
-            bridge_alive: false,
-            claude_foreground_tui: false,
-        };
-        let mut live_claude = dead_claude.clone();
-        live_claude.session_id = "live-claude".to_string();
-        live_claude.bridge_alive = true;
-
-        let dead_opencode = managed_opencode_scan::OpenCodeServerObservation {
-            session_id: "dead-opencode".to_string(),
-            run_id: None,
-            connection_id: None,
-            lease_generation: None,
-            provider_session_id: "opencode-thread".to_string(),
-            state_file: PathBuf::from("/tmp/dead-opencode.json"),
-            cwd: None,
-            server_url: None,
-            pid: None,
-            started_at: "2026-08-02T00:00:00Z".to_string(),
-            updated_at: "2026-08-02T00:00:00Z".to_string(),
-            server_alive: false,
-            health_ready: false,
-            has_tui_attachment: false,
-            launch_mode: "detached".to_string(),
-            owner_wrapper_pid: None,
-            owner_wrapper_start_time: String::new(),
-            process_start_time: String::new(),
-        };
-        let mut live_opencode = dead_opencode.clone();
-        live_opencode.session_id = "live-opencode".to_string();
-        live_opencode.server_alive = true;
-
-        let antigravity = managed_antigravity_scan::AntigravityHookObservation {
-            state_file: PathBuf::from("/tmp/antigravity.json"),
-            schema_version: 1,
-            session_id: "antigravity-evidence".to_string(),
-            provider_session_id: None,
-            cwd: None,
-            transcript_path: None,
-            state: None,
-            updated_at: "2026-08-02T00:00:00Z".to_string(),
-            last_hook_event: None,
-            last_hook_observed_at: None,
-            last_claimed_message_id: None,
-            last_claimed_at: None,
-            last_claim_event: None,
-            last_response_event: None,
-            last_response_at: None,
-            last_response_status: None,
-            last_response_claimed_message_ids: Vec::new(),
-            last_continuation_requested: false,
-        };
-
-        let observed = observed_live_session_ids(
-            &[live_codex, dead_codex],
-            &[live_claude, dead_claude],
-            &[live_opencode, dead_opencode],
-            &[live_cursor, dead_cursor],
-            &[antigravity],
-        );
-
-        assert_eq!(observed.len(), 5);
-        for session_id in [
-            "sess-codex-managed",
-            "live-claude",
-            "live-opencode",
-            "live-cursor",
-            "antigravity-evidence",
-        ] {
-            assert!(observed.contains(session_id), "missing {session_id}");
-        }
-        for session_id in ["dead-codex", "dead-claude", "dead-opencode", "dead-cursor"] {
-            assert!(
-                !observed.contains(session_id),
-                "stale {session_id} retained"
-            );
-        }
     }
 
     #[test]
