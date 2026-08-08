@@ -1316,6 +1316,13 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().to_path_buf();
             std::env::set_var("LONGHOUSE_NATIVE_ROOT_OVERRIDE", &root);
+            // Without this, read_status() resolves through the real
+            // LONGHOUSE_HOME and the assertions read the developer's own
+            // machine: `a_crash_before_the_status_write_still_leaves_a_complete_pair`
+            // asserts no status was written, and failed permanently for anyone
+            // who had ever run an update check. Same class as the open_db(None)
+            // hazard that state/db.rs now panics on.
+            std::env::set_var("LONGHOUSE_HOME", root.join(".longhouse"));
             std::fs::create_dir_all(root.join(".local/share/longhouse/releases")).unwrap();
             std::fs::create_dir_all(root.join(".local/bin")).unwrap();
             Self {

@@ -371,11 +371,20 @@ mod tests {
 
     #[test]
     fn bounded_command_output_terminates_a_stalled_process() {
+        // The claim is "gives up long before the child would finish", so the
+        // gap between the two has to be big enough that a loaded shared CI
+        // runner cannot close it. A 1s sleep against a 500ms bound left 500ms
+        // of headroom and went red on ubuntu-latest; 5s against 2s proves the
+        // same property with room to spare.
         let mut command = Command::new("sh");
-        command.args(["-c", "sleep 1"]);
+        command.args(["-c", "sleep 5"]);
         let started = Instant::now();
         assert!(output_with_timeout(command, Duration::from_millis(10)).is_none());
-        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "returned after {:?}, which is not bounded termination",
+            started.elapsed()
+        );
     }
 
     #[test]

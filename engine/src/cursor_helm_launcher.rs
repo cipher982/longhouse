@@ -657,7 +657,15 @@ fn coordination_token(
         return Ok(None);
     }
     let machine = home(config.config_dir.as_deref())?.join("machine");
-    let state: Value = serde_json::from_slice(&fs::read(machine.join("state.json"))?)?;
+    // Stored state is a fallback for url/token, not a precondition. Reading it
+    // with `?` failed the whole call with a bare "No such file or directory"
+    // even when both were passed explicitly — so an explicitly configured
+    // caller on a machine that had never run `longhouse auth` could not issue
+    // coordination authority at all, and the error named none of that.
+    let state: Value = fs::read(machine.join("state.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| json!({}));
     let url = config
         .url
         .as_deref()

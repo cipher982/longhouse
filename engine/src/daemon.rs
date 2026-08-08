@@ -7182,6 +7182,10 @@ mod tests {
         );
     }
 
+    // caffeinate is a macOS binary. These have never passed on Linux; they
+    // simply never ran, because CI only runs the engine suite when engine/
+    // changes and most commits do not touch it.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn test_spawn_caffeinate_uses_correct_args() {
         let pid = std::process::id();
@@ -7217,6 +7221,7 @@ mod tests {
         child.kill().await.expect("stop fixture caffeinate");
     }
 
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn test_caffeinate_child_exits_when_dropped() {
         let pid = std::process::id();
