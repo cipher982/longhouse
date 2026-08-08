@@ -37,6 +37,13 @@ pub struct StorageV2OutboxSnapshot {
     /// Blocked sources with no local recovery path, which is what should
     /// actually reach a user as "needs you".
     pub unresolved_blocked_source_count: u64,
+    /// Blocked sources whose local transcript file no longer exists.
+    ///
+    /// The only subset where the retained envelope is the last copy. Everything
+    /// else that is blocked is a stuck upload over intact local evidence, which
+    /// needs a person eventually but is not an emergency. Health uses this to
+    /// separate "act now" from "act sometime" instead of painting both red.
+    pub blocked_evidence_at_risk_count: u64,
     pub blocked_bytes: u64,
     pub oldest_blocked_at: Option<String>,
     pub latest_block_kind: Option<String>,
@@ -549,16 +556,31 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
     // CASE expression that can drift from it.
     let mut reconciling_blocked_source_count: u64 = 0;
     let mut unresolved_blocked_source_count: u64 = 0;
+    let mut blocked_evidence_at_risk_count: u64 = 0;
     {
         let mut statement = conn.prepare(
-            "SELECT block_kind FROM pending_source_envelope WHERE blocked_at IS NOT NULL",
+            "SELECT block_kind, source_path FROM pending_source_envelope
+             WHERE blocked_at IS NOT NULL",
         )?;
-        let kinds = statement.query_map([], |row| row.get::<_, Option<String>>(0))?;
-        for kind in kinds {
-            if block_kind_is_reconciling(kind?.as_deref()) {
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (kind, source_path) in rows {
+            if block_kind_is_reconciling(kind.as_deref()) {
                 reconciling_blocked_source_count += 1;
             } else {
                 unresolved_blocked_source_count += 1;
+            }
+            // Whether anything is actually at stake. A blocked envelope whose
+            // transcript is still on disk is a stuck upload: annoying, needs a
+            // human eventually, loses nothing. One whose source file is gone is
+            // the only remaining copy. Presenting both as the same red is why
+            // 84KB of Aug-3 transcript rendered as a broken machine for three
+            // days — and why a red that means something would have been ignored.
+            if !std::path::Path::new(&source_path).exists() {
+                blocked_evidence_at_risk_count += 1;
             }
         }
     }
@@ -586,6 +608,7 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
             .context("blocked source count is negative")?,
         reconciling_blocked_source_count,
         unresolved_blocked_source_count,
+        blocked_evidence_at_risk_count,
         blocked_bytes: u64::try_from(blocked_bytes).context("blocked source bytes are negative")?,
         oldest_blocked_at,
         latest_block_kind: latest_block.as_ref().and_then(|value| value.0.clone()),

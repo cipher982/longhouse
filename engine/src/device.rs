@@ -950,11 +950,30 @@ fn native_fast_health_from_parts(
     ]
     .into_iter()
     .any(storage_counter_is_invalid);
-    let storage_block_requires_repair = match unresolved_blocked_source_count {
-        Some(unresolved) => unresolved > 0,
+    let blocked_evidence_at_risk_count = storage_outbox
+        .and_then(|value| value.get("blocked_evidence_at_risk_count"))
+        .and_then(Value::as_u64);
+    // Red must mean something is at stake, or it stops being read. A blocked
+    // source whose transcript is still on disk is a stuck upload that needs a
+    // person eventually and loses nothing; one whose source file is gone is the
+    // last copy. Both used to render as a broken machine, which is how 84KB of
+    // Aug-3 transcript held this laptop red for three days.
+    //
+    // Not a weighted score. Two fixed cases, and the unknown case stays red:
+    // an engine too old to emit the new counter is not evidence of safety, and
+    // the health contract forbids inventing green.
+    let storage_block_requires_repair = match (
+        unresolved_blocked_source_count,
+        blocked_evidence_at_risk_count,
+    ) {
+        (Some(0), _) => false,
+        (Some(_), Some(at_risk)) => at_risk > 0,
+        // Unresolved blocks present, but this payload cannot say whether any
+        // evidence is at risk. Fail loud.
+        (Some(_), None) => true,
         // A legacy payload has no aggregate proof. The latest block kind
         // cannot classify older retained sources without risking false green.
-        None => false,
+        (None, _) => false,
     };
     let storage_block_proof_unknown = storage_counter_proof_unknown
         || (unresolved_blocked_source_count.is_none() && blocked_source_count > 0);
