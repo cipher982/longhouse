@@ -821,7 +821,23 @@ fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth
     }
 }
 
-fn collect_managed_launch_recovery(status_path: &Path) -> NativeManagedLaunchRecoveryStatus {
+/// Summarise launch-recovery receipts, counting only what is still true.
+///
+/// `known_session_ids` is the set of managed sessions this machine can still
+/// see. A receipt says "this launch could not reach the Runtime Host"; once the
+/// session it names is gone, that is a past event, not a current fault. Counting
+/// those held local health amber indefinitely for a session that had already
+/// exited — on the author's machine, a launch that failed during a hosted
+/// deploy window kept the menu bar in "needs attention" hours later with
+/// nothing wrong and nothing to do.
+///
+/// Deliberately not solved by deleting the receipts: the session remains
+/// resumable and its contract is legitimately retained, so the file is not
+/// garbage. The signal was wrong, not the storage.
+fn collect_managed_launch_recovery(
+    status_path: &Path,
+    known_session_ids: &std::collections::HashSet<String>,
+) -> NativeManagedLaunchRecoveryStatus {
     let Some(agent_dir) = status_path.parent() else {
         return NativeManagedLaunchRecoveryStatus {
             exhausted_count: 0,
@@ -863,6 +879,24 @@ fn collect_managed_launch_recovery(status_path: &Path) -> NativeManagedLaunchRec
                     continue;
                 }
             };
+            // A receipt for a session this machine no longer sees describes a
+            // launch that is over. Reporting it as needing attention is a
+            // permanent alarm about the past.
+            let session_id = payload
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    path.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(str::to_string)
+                });
+            let names_a_known_session = session_id
+                .as_deref()
+                .is_some_and(|id| known_session_ids.contains(id));
+            if !names_a_known_session {
+                continue;
+            }
             let exhausted =
                 payload.get("recovery_exhausted").and_then(Value::as_bool) == Some(true);
             if exhausted {
@@ -1012,7 +1046,17 @@ fn native_fast_health_from_parts(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
-    let managed_launch_recovery = collect_managed_launch_recovery(status_path);
+    let known_session_ids = object
+        .and_then(|value| value.get("managed_sessions"))
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.get("session_id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let managed_launch_recovery = collect_managed_launch_recovery(status_path, &known_session_ids);
 
     let mut reasons = Vec::new();
     if error.is_some() {
@@ -4142,7 +4186,10 @@ mod tests {
             true,
             Some(2),
             Some(json!({
-                "storage_v2_outbox": {"error": "database locked"}
+                "storage_v2_outbox": {"error": "database locked"},
+                // The receipt only counts while the machine can still see the
+                // session it names; otherwise it describes a finished launch.
+                "managed_sessions": [{"session_id": "exhausted"}]
             })),
             None,
         );
@@ -4636,7 +4683,7 @@ mod tests {
         )
         .unwrap();
 
-        let fresh = collect_managed_launch_recovery(&status_path);
+        let fresh = collect_managed_launch_recovery(&status_path, &known_sessions(&["pending"]));
         assert_eq!(fresh.active_count, 0);
 
         std::fs::write(
@@ -4648,7 +4695,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let aged = collect_managed_launch_recovery(&status_path);
+        let aged = collect_managed_launch_recovery(&status_path, &known_sessions(&["pending"]));
         assert_eq!(aged.active_count, 1);
     }
 
@@ -6059,11 +6106,71 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         );
     }
 
+    /// Sessions the machine can still see, for launch-recovery health.
+    fn known_sessions(ids: &[&str]) -> std::collections::HashSet<String> {
+        ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
     /// The degraded-launch receipt writer and this health reader are in
     /// different binaries and only agree by convention. If either side changes
     /// the directory or the `recovery_exhausted` key, a degraded launch stops
     /// being visible in the menu bar and `longhouse doctor` while still being
     /// degraded, which is the exact failure this contract exists to prevent.
+    #[test]
+    fn a_receipt_for_a_session_the_machine_no_longer_sees_is_not_a_current_fault() {
+        // A launch-retry receipt records that a launch could not reach the
+        // Runtime Host. Once that session is gone the receipt describes the
+        // past, and counting it pinned local health to "needs attention"
+        // permanently: a launch that failed during a hosted deploy window kept
+        // the menu bar amber hours later with nothing running and nothing to do.
+        //
+        // Deleting the receipt is the wrong fix — the session stays resumable
+        // and its contract is legitimately retained. The signal was wrong, not
+        // the storage.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let retry_dir = path
+            .parent()
+            .unwrap()
+            .join("managed-local")
+            .join("registration-retries");
+        std::fs::create_dir_all(&retry_dir).unwrap();
+        std::fs::write(
+            retry_dir.join("departed.json"),
+            r#"{"session_id":"departed","recovery_exhausted":true}"#,
+        )
+        .unwrap();
+
+        let gone = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(0),
+            Some(json!({"managed_sessions": []})),
+            None,
+        );
+        assert!(
+            !gone
+                .reasons
+                .contains(&"managed_launch_recovery_exhausted".to_string()),
+            "a finished launch must not report as needing attention: {:?}",
+            gone.reasons
+        );
+
+        let present = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({"managed_sessions": [{"session_id": "departed"}]})),
+            None,
+        );
+        assert!(
+            present
+                .reasons
+                .contains(&"managed_launch_recovery_exhausted".to_string()),
+            "a live session whose launch never recovered must still surface"
+        );
+    }
+
     #[test]
     fn degraded_launch_receipts_drive_native_recovery_health() {
         let root = tempfile::tempdir().unwrap();
@@ -6071,7 +6178,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         std::fs::create_dir_all(&agent_dir).unwrap();
         let status_path = agent_dir.join("engine-status.json");
 
-        let quiet = collect_managed_launch_recovery(&status_path);
+        let quiet = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
         assert_eq!(quiet.active_count, 0);
         assert_eq!(quiet.exhausted_count, 0);
         assert!(!quiet.scan_error);
@@ -6080,7 +6187,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             &agent_dir, "session-a", "Codex", false,
         )
         .unwrap();
-        let retrying = collect_managed_launch_recovery(&status_path);
+        let retrying = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
         assert_eq!(retrying.active_count, 1, "a retrying launch must read as active recovery");
         assert_eq!(retrying.exhausted_count, 0);
 
@@ -6088,12 +6195,12 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             &agent_dir, "session-a", "Codex", true,
         )
         .unwrap();
-        let exhausted = collect_managed_launch_recovery(&status_path);
+        let exhausted = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
         assert_eq!(exhausted.active_count, 0, "an abandoned retry must stop reading as active");
         assert_eq!(exhausted.exhausted_count, 1);
 
         crate::managed_launch_lifecycle::clear_registration_retry(&agent_dir, "session-a");
-        let recovered = collect_managed_launch_recovery(&status_path);
+        let recovered = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
         assert_eq!(recovered.active_count, 0);
         assert_eq!(recovered.exhausted_count, 0);
     }
