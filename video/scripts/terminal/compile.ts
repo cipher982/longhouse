@@ -21,6 +21,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 // @ts-expect-error no bundled types resolution issue under bun is fine for the spike
 import xterm from "@xterm/headless";
 
@@ -82,7 +83,6 @@ const colorOf = (cell: any, which: "Fg" | "Bg"): number | string | undefined => 
 const serializeRow = (line: any): Run[] => {
   const runs: Run[] = [];
   let cur: Run | null = null;
-  const cell = line ? undefined : undefined;
   for (let x = 0; x < cols; x++) {
     const c = line?.getCell(x);
     if (!c) break;
@@ -190,13 +190,14 @@ for (let i = 1; i < lines.length; i++) {
 }
 
 const sha256 = createHash("sha256").update(raw).digest("hex");
+// Deterministic output: same cast in, byte-identical grid out. The cast's
+// sha256 is the provenance link; no absolute paths or wall-clock stamps.
 const doc = {
   meta: {
     cols,
     rows,
-    source: input,
+    source: basename(input),
     sha256,
-    generatedAt: new Date().toISOString(),
     events,
     statesEmitted: states.length,
     rowPoolSize: rowPool.length,

@@ -939,9 +939,10 @@ ui-capture: ## Capture local dev UI debug bundle
 marketing-screenshots: ## Regenerate landing-page marketing screenshots (retina, realistic demo data). NAME=<entry> for one.
 	@./scripts/marketing-screenshots.sh $(NAME)
 
-demo-render: ## Render the ControlRoom hero demo (mp4 + poster); fully code-drawn, no captured shots needed
+demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed real-PTY grid timelines
 	@cd video && bun run render:control && bun run render:control-poster
-	@cp video/out/control-room.mp4 web/public/videos/control-room.mp4
+	@# Strip the silent AAC track Remotion muxes in (halves the asset size).
+	@ffmpeg -y -v error -i video/out/control-room.mp4 -c:v copy -an web/public/videos/control-room.mp4
 	@cp video/out/control-poster.png web/public/images/landing/control-poster.png
 	@node scripts/generate-og-image.mjs
 	@echo "Wedge demo, poster, and social card rendered into web/public"

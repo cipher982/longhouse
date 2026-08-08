@@ -84,9 +84,10 @@ export function HeroSection() {
 
         <p className="landing-hero-subhead">
           Longhouse plugs into the Claude Code, Codex, Cursor, and OpenCode installs
-          already on your machines and normalizes every session into one live system.
-          Watch any agent work, send it the next instruction, interrupt it, or resume
-          it — from the web or your iPhone.
+          already on your machines and normalizes every session into one system.
+          Watch any agent work from anywhere; launch through Longhouse and steer it
+          too — send the next instruction, interrupt, resume — from the web or your
+          iPhone.
         </p>
 
         <div className="hero-install">
@@ -143,15 +144,19 @@ export function HeroSection() {
         <div className="landing-hero-glow" aria-hidden="true" />
         <video
           className="landing-hero-video"
-          src="/videos/control-room.mp4?v=20260808-3"
-          poster="/images/landing/control-poster.png?v=20260808-3"
+          src="/videos/control-room.mp4?v=20260808-4"
+          poster="/images/landing/control-poster.png?v=20260808-4"
           autoPlay
           muted
           loop
           playsInline
           preload="metadata"
-          aria-label="Longhouse demo: four coding agents on four machines unify into one system, then a phone steers the live Claude Code session"
+          aria-label="Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds"
         />
+        <p className="landing-hero-video-note">
+          Demo shows real provider CLIs replayed from recordings, with scripted model
+          responses.
+        </p>
       </div>
     </section>
   );

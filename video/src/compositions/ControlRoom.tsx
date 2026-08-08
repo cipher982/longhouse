@@ -251,7 +251,7 @@ const UnifyScene: React.FC = () => {
                 padding: "6px 16px",
               }}
             >
-              4 live
+              4 sessions
             </span>
           </div>
           {PROVIDERS.map((p, i) => {
@@ -506,7 +506,7 @@ const SteerScene: React.FC = () => {
                 tSec={
                   sent
                     ? Math.min(
-                        REPLAY_START_SEC + (frame - (sentAt + 8)) / fps,
+                        REPLAY_START_SEC + Math.max(0, frame - (sentAt + 8)) / fps,
                         REPLAY_END_SEC,
                       )
                     : REPLAY_START_SEC

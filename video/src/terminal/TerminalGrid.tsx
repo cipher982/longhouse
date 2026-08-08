@@ -103,7 +103,9 @@ export const TerminalGrid: React.FC<{
         background,
         fontFamily:
           fontFamily ?? '"SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
-        fontSize: cellH * 0.72,
+        // Lock font size to BOTH cell axes: the monospace advance (~0.62em)
+        // must not exceed cellW, or 64-100 column rows drift horizontally.
+        fontSize: Math.min(cellH * 0.72, cellW / 0.62),
         lineHeight: `${cellH}px`,
         fontVariantLigatures: "none",
         letterSpacing: 0,
@@ -132,8 +134,8 @@ export const TerminalGrid: React.FC<{
                     left,
                     width: run.n * cellW,
                     height: cellH,
-                    color: run.inv ? bg : fg,
-                    background: run.inv ? fg : bg === "transparent" ? undefined : bg,
+                    color: fg,
+                    background: bg === "transparent" ? undefined : bg,
                     fontWeight: run.b ? 700 : 400,
                     opacity: run.d ? 0.55 : 1,
                     fontStyle: run.i ? "italic" : undefined,
