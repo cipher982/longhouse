@@ -9,6 +9,8 @@ import pytest
 
 from zerg.qa.cursor_helm_gate0 import _auth_report
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
+from zerg.qa.cursor_helm_gate0 import _cursor_terminal_text
+from zerg.qa.cursor_helm_gate0 import _cursor_tui_input_ready
 from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
 from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
 from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
@@ -49,6 +51,26 @@ def test_auth_report_requires_account_session_when_no_api_key() -> None:
     )
 
     assert report["is_authenticated"] is False
+
+
+def test_cursor_prompt_readiness_blocks_reconnect_after_prompt() -> None:
+    assert not _cursor_tui_input_ready("Add a follow-up\nReconnecting (attempt 3, 9s)")
+    assert not _cursor_tui_input_ready("Add a follow-up\nWorking")
+    assert _cursor_tui_input_ready("Reconnecting (attempt 3, 9s)\nAdd a follow-up")
+
+
+def test_cursor_prompt_readiness_requires_post_interrupt_bytes(tmp_path: Path) -> None:
+    terminal = tmp_path / "native-resume.terminal.raw"
+    terminal.write_text("Add a follow-up\n", encoding="utf-8")
+    offset = terminal.stat().st_size
+
+    assert _cursor_terminal_text(terminal, offset=offset) == ""
+
+    terminal.write_text("Add a follow-up\nReconnecting\n", encoding="utf-8")
+    assert not _cursor_tui_input_ready(_cursor_terminal_text(terminal, offset=offset))
+
+    terminal.write_text("Add a follow-up\nReconnecting\nAdd a follow-up\n", encoding="utf-8")
+    assert _cursor_tui_input_ready(_cursor_terminal_text(terminal, offset=offset))
 
 
 def test_cursor_store_agent_id_reads_native_meta(tmp_path: Path) -> None:

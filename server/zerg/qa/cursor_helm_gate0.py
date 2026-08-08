@@ -57,6 +57,7 @@ _ARTIFACT_SECRET_PATTERNS = (
     re.compile(rb"crsr_[A-Za-z0-9]+"),
     re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
 )
+_ANSI_CONTROL_RE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
 
 
 def _artifact_secret_values() -> tuple[bytes, ...]:
@@ -655,6 +656,10 @@ def _cancel_scenario(
             timeout=timeout,
         )
         generation_id = str(shell.get("generation_id") or "")
+        try:
+            terminal_offset = terminal_path.stat().st_size
+        except OSError as exc:
+            raise RuntimeError("Cursor terminal recording was unavailable before Ctrl-C") from exc
         session.interrupt()
         stop = wait_for_hook(
             events_path,
@@ -670,7 +675,6 @@ def _cancel_scenario(
             raise RuntimeError("Ctrl-C did not report provider interruption semantics")
         if not session.alive():
             raise RuntimeError("Ctrl-C exited the Cursor TUI")
-        time.sleep(0.25)
         leaked_response = next(
             (
                 row
@@ -681,6 +685,19 @@ def _cancel_scenario(
         )
         if leaked_response is not None:
             raise RuntimeError("Ctrl-C stopped the tool but allowed the cancelled generation to respond")
+
+        # Cursor can publish the interrupted generation's stop hook while its
+        # transport is still reconnecting. A fixed sleep is not an input
+        # readiness barrier: submitting during that redraw/reconnect window
+        # creates an errored generation and can cause Cursor to retry it
+        # internally without another PTY submission. Require a fresh, stable
+        # prompt after the interrupt before sending the recovery turn.
+        _wait_cursor_post_interrupt_ready(
+            session,
+            terminal_path,
+            offset=terminal_offset,
+            timeout=min(timeout, 30.0),
+        )
 
         marker = f"LONGHOUSE_CURSOR_GATE0_AFTER_CANCEL_{uuid4().hex[:10]}"
         turn_start = len(read_hook_events(events_path))
@@ -717,6 +734,70 @@ def _cancel_scenario(
         }
     finally:
         session.close()
+
+
+def _cursor_terminal_text(path: Path, *, offset: int = 0) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    return _ANSI_CONTROL_RE.sub("", raw[offset:].decode("utf-8", "replace"))
+
+
+def _cursor_tui_input_ready(terminal: str) -> bool:
+    """Recognize a current Cursor prompt without accepting blocked redraws."""
+
+    normalized = re.sub(r"\s+", " ", terminal).lower()
+    compact = re.sub(r"[^a-z0-9?]+", "", normalized)
+    ready_position = max(compact.rfind(marker) for marker in ("plansearchbuildanything", "addafollowup", "promptbar"))
+    if ready_position < 0:
+        return False
+    blocked_positions = [
+        compact.rfind(marker)
+        for marker in (
+            "workspacetrustrequired",
+            "trustingworkspace",
+            "loadingconversation",
+            "restoringconversation",
+            "startingconversation",
+            "working",
+            "reconnecting",
+        )
+    ]
+    return max(blocked_positions) <= ready_position
+
+
+def _wait_cursor_post_interrupt_ready(
+    session: CursorPtySession,
+    terminal_path: Path,
+    *,
+    offset: int,
+    timeout: float,
+) -> None:
+    """Wait for a fresh stable prompt after Ctrl-C before sending recovery input.
+
+    The prompt visible before the interrupt must not satisfy this check. Cursor
+    may keep that prompt painted while its transport reconnects, so the
+    post-interrupt bytes must contain a prompt that remains free of blocked
+    redraw/reconnect markers for a bounded quiet interval.
+    """
+
+    deadline = time.monotonic() + timeout
+    ready_since: float | None = None
+    while time.monotonic() < deadline:
+        if not session.alive():
+            raise RuntimeError("Cursor exited before its post-interrupt TUI became ready")
+        terminal = _cursor_terminal_text(terminal_path, offset=offset)
+        if _cursor_tui_input_ready(terminal):
+            now = time.monotonic()
+            if ready_since is None:
+                ready_since = now
+            elif now - ready_since >= 1.0:
+                return
+        else:
+            ready_since = None
+        time.sleep(0.1)
+    raise RuntimeError("Cursor TUI did not publish a stable post-interrupt input prompt")
 
 
 def _resume_scenario(
