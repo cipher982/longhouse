@@ -1,0 +1,51 @@
+{
+  "claude": {
+    "kind": "npm",
+    "package": "@anthropic-ai/claude-code",
+    "requested_version": "2.1.226",
+    "resolved_version": "2.1.226",
+    "tarball": "anthropic-ai-claude-code-2.1.226.tgz",
+    "tarball_sha256": "6d106d29baba80966345334a2fb12d0b612b016dfb65e73460a1ac98a378c33c",
+    "bin": "claude/2.1.226/node_modules/.bin/claude",
+    "fetched_at": "2026-08-08T18:06:59.760655+00:00"
+  },
+  "codex": {
+    "kind": "npm",
+    "package": "@openai/codex",
+    "requested_version": "0.147.0",
+    "resolved_version": "0.147.0",
+    "tarball": "openai-codex-0.147.0.tgz",
+    "tarball_sha256": "d28b4fd4bd9f07ea71083d0cc40c579595cebbd4c10bc8ca98a6d385432e7255",
+    "bin": "codex/0.147.0/node_modules/.bin/codex",
+    "fetched_at": "2026-08-08T18:07:05.990037+00:00"
+  },
+  "opencode": {
+    "kind": "npm",
+    "package": "opencode-ai",
+    "requested_version": "1.18.15",
+    "resolved_version": "1.18.15",
+    "tarball": "opencode-ai-1.18.15.tgz",
+    "tarball_sha256": "aae2e10aa53da715d097ac109ca03c0feb451bd453dce9d21d335c6fc7a37c0a",
+    "bin": "opencode/1.18.15/node_modules/.bin/opencode",
+    "fetched_at": "2026-08-08T18:07:12.638323+00:00"
+  },
+  "cursor": {
+    "kind": "release",
+    "url": "https://downloads.cursor.com/lab/2026.08.04-aaa8809/darwin/arm64/agent-cli-package.tar.gz",
+    "requested_version": "2026.08.04-aaa8809",
+    "resolved_version": "2026.08.04-aaa8809",
+    "archive_sha256": "fc1d267622ff806a33dbf516148b9fd3957807f4d931c763118c269f92b535fc",
+    "bin": "cursor/2026.08.04-aaa8809/cursor-agent",
+    "fetched_at": "2026-08-08T18:07:33.758026+00:00"
+  },
+  "srt": {
+    "kind": "npm",
+    "package": "@anthropic-ai/sandbox-runtime",
+    "requested_version": "0.0.71",
+    "resolved_version": "0.0.71",
+    "tarball": "anthropic-ai-sandbox-runtime-0.0.71.tgz",
+    "tarball_sha256": "29287f3a3a62804b821bb227a0c35b982309aee716d86eaff2231c6eaedc4d8b",
+    "bin": "srt/0.0.71/node_modules/.bin/srt",
+    "fetched_at": "2026-08-08T18:32:52.811410+00:00"
+  }
+}

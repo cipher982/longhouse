@@ -1,0 +1,201 @@
+# Provider manifest for hermetic terminal recordings (V2).
+#
+# Every recording runs a stock pinned binary fetched by fetch.py into
+# .sandbox/<provider>/<version>/ with a completely blank HOME. Nothing here may
+# reference the operator's real config. Sentinel strings are matched against an
+# ANSI-stripped, lowercased, whitespace-removed rolling tail of the output
+# stream (ink elides spaces, so all sentinels must be space-free).
+#
+# auth.mode:
+#   mock    — CLI is pointed at the local mock LLM server (mock_llm.py) via its
+#             base-URL override with a dummy key. Zero network, zero
+#             credentials. Default lane.
+#   api_key — ONE env var resolved from Infisical at record time. Only for
+#             providers proven non-interactive with a key (no OAuth fallback).
+#   blocked — cannot be recorded hermetically; reason documents why.
+#
+# Browser suppression is unconditional: fake open/xdg-open/osascript shims log
+# to $HOME/.browser-attempts.log and exit 0; BROWSER=/usr/bin/false.
+# Any browser attempt = that auth mode is blocked for that provider.
+
+# Harness runtime components (not recorded providers). srt is the enforcement
+# layer: every recorded process runs under `srt --settings <generated>` with
+# deny-by-default network/filesystem, allowPty, and allowAppleEvents off.
+runtime:
+  srt:
+    source:
+      kind: npm
+      package: "@anthropic-ai/sandbox-runtime"
+      version: "0.0.71"
+    bin: node_modules/.bin/srt
+
+defaults:
+  cols: 100
+  rows: 16
+  prompt: "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py"
+  quiet_secs: 10.0
+  composer_timeout: 60.0
+  working_timeout: 60.0
+  done_timeout: 240.0
+
+providers:
+  claude:
+    name: Claude Code
+    source:
+      kind: npm
+      package: "@anthropic-ai/claude-code"
+      version: "2.1.226"
+    bin: node_modules/.bin/claude
+    needs_node: true
+    args: ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]
+    auth:
+      mode: mock
+      env: ANTHROPIC_API_KEY
+      base_url_env: ANTHROPIC_BASE_URL
+      fixture: fixtures/claude.json
+      # Claude Code 2.1.226 runs a MANDATORY startup connectivity preflight
+      # (FIh -> {api.anthropic.com/api/hello, platform.claude.com/v1/oauth/hello})
+      # whose failure calls process.exit(1) after 100ms. Those endpoints are
+      # hardcoded prod (sa().BASE_API_URL) and NOT overridable to localhost —
+      # CLAUDE_CODE_CUSTOM_OAUTH_URL only accepts a fedstart/staging allowlist.
+      # So srt must permit exactly these two hosts for the CLI to start. The
+      # probe is unauthenticated (User-Agent only, no API key); all model/task
+      # completions stay on the loopback mock via ANTHROPIC_BASE_URL. This is
+      # the minimal egress the binary requires to run at all.
+      preflight_domains: ["api.anthropic.com:443", "platform.claude.com:443"]
+      # api_key mode is a TRAP for this provider: with ANTHROPIC_API_KEY set,
+      # onboarding still defaults to "No (recommended)" on the use-this-key
+      # dialog and falls through to subscription OAuth, which opens a browser
+      # (observed 2026-08-08, take1). See REPORT.md.
+    sentinels:
+      # Composer prompt glyph is U+276F + NBSP (ink elides real spaces).
+      ready_raw: "❯\xA0"
+      dialogs:
+        - id: theme
+          match: ["choosethetextstyle", "choosetheme"]
+          keys: [enter]
+        - id: api-key
+          # "Do you want to use this API key?" — highlight sits on
+          # "2. No (recommended)"; Up moves to "1. Yes".
+          match: ["usethisapikey"]
+          keys: [up, enter]
+        - id: login-method
+          # Tripwire: reaching this screen means the API key was NOT accepted
+          # and the next Enter would trigger browser OAuth. Esc backs out.
+          match: ["selectloginmethod"]
+          keys: [esc]
+          max_times: 2
+        - id: security-notes
+          match: ["securitynotes", "pressentertocontinue"]
+          keys: [enter]
+        - id: terminal-setup
+          match: ["terminalsetup"]
+          keys: [enter]
+        - id: trust
+          match: ["trustthisfolder", "quicksafetycheck", "doyoutrust"]
+          keys: [enter]
+        - id: permission
+          match: ["doyouwant"]
+          keys: [enter]
+      # V1 finding: 2.1.x has no "esc to interrupt"; the working signal is the
+      # token-counter status line "<verb>… (Ns · ↓ N tokens)".
+      working_regex: "esctointerrupt|\\(\\d+s"
+      exit: ["text:/exit", enter]
+
+  codex:
+    name: Codex CLI
+    source:
+      kind: npm
+      package: "@openai/codex"
+      version: "0.147.0"
+    bin: node_modules/.bin/codex
+    needs_node: true
+    args: []
+    auth:
+      mode: mock
+      env: OPENAI_API_KEY
+      fixture: fixtures/codex.json
+      # base URL cannot be set by env for a chat-wire mock; the sandbox
+      # config.toml below defines a custom provider instead.
+    files:
+      ".codex/config.toml": |
+        model = "mock-model"
+        model_provider = "mock"
+
+        [model_providers.mock]
+        name = "Mock"
+        base_url = "{MOCK_URL}/v1"
+        wire_api = "responses"
+        env_key = "OPENAI_API_KEY"
+    sentinels:
+      # The composer box header renders only after the trust dialog clears.
+      ready: ["/modeltochange", "openaicodex(v"]
+      dialogs:
+        - id: trust
+          match: ["doyoutrustthecontents", "trustthisdirectory"]
+          keys: [enter]
+          max_times: 1
+      working_regex: "esctointerrupt|workin|\\(\\d+s|esc to interrupt"
+      exit: ["text:/quit", enter]
+
+  opencode:
+    name: OpenCode
+    source:
+      kind: npm
+      package: "opencode-ai"
+      version: "1.18.15"
+    bin: node_modules/.bin/opencode
+    needs_node: true
+    args: []
+    auth:
+      mode: mock
+      env: OPENROUTER_API_KEY
+      fixture: fixtures/opencode.json
+    # Sandbox-local config (sandbox config, not personal config): pin the model
+    # and point the openrouter provider at the mock server.
+    files:
+      ".config/opencode/opencode.json": |
+        {
+          "$schema": "https://opencode.ai/config.json",
+          "model": "openrouter/anthropic/claude-sonnet-4.5",
+          "provider": {
+            "openrouter": {
+              "options": {
+                "baseURL": "{MOCK_URL}/v1"
+              }
+            }
+          }
+        }
+    sentinels:
+      # Composer placeholder text at idle; the "opencode" wordmark is ASCII art
+      # (block glyphs), so it never appears as literal text in the stream.
+      ready: ["askanything", "tabagents"]
+      dialogs: []
+      working_regex: "esctointerrupt|working|thinking|esc to interrupt|generating"
+      exit: ["text:/exit", enter]
+
+  cursor:
+    name: Cursor Agent
+    source:
+      kind: release
+      url: "https://downloads.cursor.com/lab/2026.08.04-aaa8809/darwin/arm64/agent-cli-package.tar.gz"
+      version: "2026.08.04-aaa8809"
+      strip_components: 1
+    bin: cursor-agent
+    needs_node: false # bundles its own node next to the launcher
+    args: []
+    auth:
+      # Closed backend — no base-URL override exists, so the mock lane is
+      # impossible. CURSOR_API_KEY is documented for non-interactive use;
+      # api_key lane only, watched by the browser shims.
+      mode: api_key
+      env: CURSOR_API_KEY
+      secret: { key: LONGHOUSE_CI_CURSOR_API_KEY, project: ops-infra, env: prod }
+    sentinels:
+      ready: ["addafollow", "planbuild", "forcommands"]
+      dialogs:
+        - id: trust
+          match: ["doyoutrust", "trustthisfolder"]
+          keys: [enter]
+      working_regex: "esctointerrupt|generating|\\(\\d+s"
+      exit: ["ctrl-c", "ctrl-c"]

@@ -1,0 +1,40 @@
+{
+  "binary": "@anthropic-ai/claude-code@2.1.226",
+  "binary_version": "2.1.226 (Claude Code)",
+  "argv": [
+    "claude",
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    "Bash"
+  ],
+  "prompt": "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py",
+  "cols": 100,
+  "rows": 16,
+  "term": "xterm-256color",
+  "cwd": "/tmp/demo-repo",
+  "sandbox": true,
+  "isolation": "srt",
+  "aborted": false,
+  "auth_mode": "mock",
+  "browser_attempts": [],
+  "mock_requests": 6,
+  "captured_at": "2026-08-08T18:46:42.225808+00:00",
+  "cast_sha256": "b116c4a1b6c4824950297b464aee97911c145d88c1007c653166a690b5e66b94",
+  "exit_status": 0,
+  "phase_log": [
+    "[   0.002] spawned pid=12146 argv=['/tmp/demo-home-pg7h4zqk/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 100x16",
+    "[   0.646] dialog 'theme' detected -> keys ['enter']",
+    "[   2.752] dialog 'api-key' detected -> keys ['up', 'enter']",
+    "[   5.260] dialog 'security-notes' detected -> keys ['enter']",
+    "[   7.302] dialog 'trust' detected -> keys ['enter']",
+    "[   9.262] sentinel hit: composer-ready",
+    "[  11.291] dialog 'trust' detected -> keys ['enter']",
+    "[  13.228] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[  14.991] prompt submitted",
+    "[  15.022] sentinel hit: working-spinner",
+    "[  28.297] sentinel hit: task-complete",
+    "[  30.326] sending exit sequence ['text:/exit', 'enter']",
+    "[  31.611] process exit status: 0"
+  ]
+}

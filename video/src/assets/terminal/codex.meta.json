@@ -1,0 +1,32 @@
+{
+  "binary": "@openai/codex@0.147.0",
+  "binary_version": "codex-cli 0.147.0",
+  "argv": [
+    "codex"
+  ],
+  "prompt": "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py",
+  "cols": 100,
+  "rows": 16,
+  "term": "xterm-256color",
+  "cwd": "/tmp/demo-repo",
+  "sandbox": true,
+  "isolation": "srt",
+  "aborted": false,
+  "auth_mode": "mock",
+  "browser_attempts": [],
+  "mock_requests": 4,
+  "captured_at": "2026-08-08T18:53:57.073189+00:00",
+  "cast_sha256": "c0816ccd9b94c88a0a115dfd2471afb85b5b64472e2f6cc706205d571f33ac10",
+  "exit_status": 0,
+  "phase_log": [
+    "[   0.002] spawned pid=55575 argv=['/tmp/demo-home-rg1y7igi/bin/codex'] 100x16",
+    "[   0.326] dialog 'trust' detected -> keys ['enter']",
+    "[   2.281] sentinel hit: composer-ready",
+    "[   4.303] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[   7.341] prompt submitted",
+    "[   7.342] sentinel hit: working-spinner",
+    "[  20.643] sentinel hit: task-complete",
+    "[  22.664] sending exit sequence ['text:/quit', 'enter']",
+    "[  23.982] process exit status: 0"
+  ]
+}
