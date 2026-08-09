@@ -222,7 +222,8 @@ async def publish_provider_capability_proofs(
     records_by_provider: dict[str, tuple[ProviderCapabilityProofRecord, ...]] = {}
     for record in records:
         records_by_provider[record.provider] = (*records_by_provider.get(record.provider, ()), record)
-    available = store.available_blob_digests()
+    referenced_digests = set().union(*(set(record.referenced_content_digests()) for record in records))
+    available = frozenset(digest for digest in referenced_digests if store.has_blob(digest))
     integrity_by_provider = {
         provider: store.integrity_report(provider, records=provider_records, available=available)
         for provider, provider_records in records_by_provider.items()
