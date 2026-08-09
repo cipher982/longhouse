@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - 'web/**'
+      - 'video/src/**'
+      - 'video/package.json'
       - 'bun.lock'
       - 'package.json'
       - '.github/workflows/quality.yml'
   pull_request:
     paths:
       - 'web/**'
+      - 'video/src/**'
+      - 'video/package.json'
       - 'bun.lock'
       - 'package.json'
       - '.github/workflows/quality.yml'

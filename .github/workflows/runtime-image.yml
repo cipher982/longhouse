@@ -14,6 +14,10 @@ on:
       - 'engine/**'
       - 'server/**'
       - 'web/**'
+      # video/src is a web-runtime input: the landing hero imports the demo
+      # script + recordings from @longhouse/video (workspace source).
+      - 'video/src/**'
+      - 'video/package.json'
       - '.github/workflows/runtime-image.yml'
   workflow_dispatch: {}
 

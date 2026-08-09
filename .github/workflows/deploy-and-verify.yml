@@ -12,6 +12,10 @@ on:
       - 'engine/**'
       - 'server/**'
       - 'web/**'
+      # video/src is a web-runtime input: the landing hero imports the demo
+      # script + recordings from @longhouse/video (workspace source).
+      - 'video/src/**'
+      - 'video/package.json'
       - 'scripts/ci/setup-deploy-ssh.sh'
       - 'scripts/ci/wait-for-http.sh'
       - 'scripts/lib/hosted-instance.sh'
