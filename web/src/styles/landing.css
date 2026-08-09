@@ -1056,6 +1056,45 @@
     animation: phone-session-working-pulse 1.1s ease-in-out infinite;
   }
 
+  /* Recording-derived transcript rows (tool calls), per the app's
+     WebTranscriptView styles: left hairline rule, grey title, mono detail. */
+  .phone-session-tool {
+    display: flex;
+    align-items: baseline;
+    gap: calc(8 * var(--pt));
+    margin: 0 0 calc(10 * var(--pt));
+    padding: calc(4 * var(--pt)) calc(10 * var(--pt));
+    border-left: calc(1.5 * var(--pt)) solid rgba(235, 235, 245, 0.18);
+    margin-left: calc(2 * var(--pt));
+  }
+
+  .phone-session-tool-title {
+    flex: 0 0 auto;
+    color: rgba(235, 235, 245, 0.62);
+    font-size: calc(13 * var(--pt));
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .phone-session-tool-subtitle {
+    overflow: hidden;
+    flex: 1 1 auto;
+    min-width: 0;
+    color: rgba(235, 235, 245, 0.34);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: calc(13 * var(--pt));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .phone-session-tool-meta {
+    flex: 0 0 auto;
+    color: rgba(235, 235, 245, 0.34);
+    font-size: calc(11 * var(--pt));
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   @keyframes phone-session-working-pulse {
     0%, 100% { opacity: 0.35; transform: scale(0.8); }
     50% { opacity: 1; transform: scale(1.15); }

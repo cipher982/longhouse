@@ -1,6 +1,10 @@
+import type { SessionEvent } from "./sessionEvents";
+
 interface PhoneSessionTranscript {
   assistantLine: string;
   sentMessage?: string;
+  /** Recording-derived events visible at the current replay time. */
+  events?: SessionEvent[];
 }
 
 export interface PhoneSessionScreenProps {
@@ -88,6 +92,24 @@ export function PhoneSessionScreen({
             {working ? <div className="submitted-status">Working…</div> : null}
           </div>
         ) : null}
+        {transcript.events?.map((event) =>
+          event.kind === "tool" ? (
+            <div className="phone-session-tool" key={`${event.tSec}-${event.title}`}>
+              <span className="phone-session-tool-title">{event.title}</span>
+              <span className="phone-session-tool-subtitle">{event.subtitle}</span>
+              {event.result ? (
+                <span className="phone-session-tool-meta">{event.result}</span>
+              ) : null}
+            </div>
+          ) : (
+            <div
+              className="phone-session-message phone-session-message-assistant"
+              key={`${event.tSec}-${event.title.slice(0, 16)}`}
+            >
+              {event.title}
+            </div>
+          ),
+        )}
       </div>
 
       <div className="phone-session-statusbar">

@@ -7,10 +7,12 @@ import {
   recordingPrompt,
   steerWindow,
 } from "@longhouse/video/demo";
+import { useMemo } from "react";
 import { trackAcquisitionEvent } from "../../lib/analytics";
 import { PhoneFrame } from "./demo/PhoneFrame";
 import { PhoneSessionScreen } from "./demo/PhoneSessionScreen";
 import { ResponsiveTerminal } from "./demo/ResponsiveTerminal";
+import { extractSessionEvents } from "./demo/sessionEvents";
 import { useReplayClock } from "./demo/useReplayClock";
 
 // endSec is the one editorial number per take: freeze on the finished work
@@ -62,6 +64,14 @@ export function SteerPlayground() {
       )
     : window.holdSec;
 
+  // The phone mirrors the session the way the real iOS app does: its
+  // transcript rows are extracted from the recording and appear in sync
+  // with the terminal replay.
+  const sessionEvents = useMemo(() => extractSessionEvents(selected.grid), [selected.grid]);
+  const visibleEvents = sent
+    ? sessionEvents.filter((event) => event.tSec <= replayT)
+    : [];
+
   return (
     <section className="steer-playground" id="steer-playground">
       <div ref={containerRef} className="landing-section-inner">
@@ -107,6 +117,7 @@ export function SteerPlayground() {
                 transcript={{
                   assistantLine: "Two tests failing — traced it to the loop bounds in count_items.",
                   sentMessage: sent ? prompt : undefined,
+                  events: visibleEvents,
                 }}
                 composerText={prompt}
                 sent={sent}
