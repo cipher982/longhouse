@@ -74,7 +74,7 @@ export interface Beat {
 export const BEATS: Beat[] = [
   { id: "agents", durSec: 5, caption: "Your coding agents already run everywhere." },
   { id: "unify", durSec: 4, caption: "Longhouse normalizes all of them into one system." },
-  { id: "steer", durSec: 6.5, caption: "Steer any of them, from anywhere." },
+  { id: "steer", durSec: 8, caption: "Steer any of them, from anywhere." },
   { id: "close", durSec: 2.5, caption: "Remote control for your coding agents." },
 ];
 
@@ -107,12 +107,20 @@ export const DEMO_DURATION_SEC =
  * landing-hero skill runbook) and re-pick these.
  */
 export const REPLAY_WINDOWS = {
+  /**
+   * Steer windows MUST open on the idle-composer frame BEFORE the recorder
+   * types the prompt (both takes: dialog clears ~2.7s, typing runs
+   * 3.2-4.1s, submit ~5.25s). The pre-send hold shows an empty composer;
+   * after Send fires the replay rolls so the instruction visibly ARRIVES
+   * in the terminal. A later start makes the terminal look like it had
+   * the text before the phone sent it.
+   */
   /** 100x16 claude detail take — steer reaction in the export composition. */
-  claude: { startSec: 3.5, endSec: 8.7 },
+  claude: { startSec: 3.0, endSec: 9.0 },
   /** 64x14 claude tile — beat-1 dense work window. */
   claudeTile: { startSec: 4.0, endSec: 8.7 },
-  /** 64x14 claude tile — steer window: prompt lands ~4.8s, work streams to 9.3s. */
-  claudeTileSteer: { startSec: 4.6, endSec: 9.0 },
+  /** 64x14 claude tile — steer window (idle -> typed -> submit -> work). */
+  claudeTileSteer: { startSec: 3.0, endSec: 9.0 },
   /** 64x14 codex tile — beat-1 dense work window. */
   codexTile: { startSec: 2.6, endSec: 7.5 },
 } as const;
@@ -129,9 +137,9 @@ export const STEER_MESSAGE =
   "Fix the off-by-one bug in count_items, then run the tests";
 
 /** Seconds into the steer beat when the composer starts typing. */
-export const STEER_TYPE_START_SEC = 0.7;
+export const STEER_TYPE_START_SEC = 0.4;
 /** Composer typing speed (characters per second). */
-export const STEER_CHARS_PER_SEC = 33;
+export const STEER_CHARS_PER_SEC = 46;
 /** Delay between Send firing and the terminal replay starting. */
 export const STEER_REACT_DELAY_SEC = 0.27;
 
@@ -140,4 +148,4 @@ export const steerSentAtSec = (): number =>
   STEER_TYPE_START_SEC + STEER_MESSAGE.length / STEER_CHARS_PER_SEC;
 
 /** Frozen frame for reduced-motion / posters: steer beat, mid-reaction. */
-export const POSTER_SEC = 12.5;
+export const POSTER_SEC = 13.5;

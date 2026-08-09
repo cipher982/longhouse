@@ -20,7 +20,10 @@ import {
   DEMO_PALETTE,
   PROVIDERS,
   REPLAY_WINDOWS,
+  STEER_CHARS_PER_SEC,
   STEER_MESSAGE,
+  STEER_REACT_DELAY_SEC,
+  STEER_TYPE_START_SEC,
   claudeGrid,
   claudeTile,
   codexTile,
@@ -295,8 +298,8 @@ const SteerScene: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const typeStart = Math.round(0.7 * fps);
-  const charsPerFrame = 1.1;
+  const typeStart = Math.round(STEER_TYPE_START_SEC * fps);
+  const charsPerFrame = STEER_CHARS_PER_SEC / fps;
   const shown = Math.max(
     0,
     Math.min(STEER_MESSAGE.length, Math.floor((frame - typeStart) * charsPerFrame)),
@@ -474,7 +477,12 @@ const SteerScene: React.FC = () => {
                 tSec={
                   sent
                     ? Math.min(
-                        REPLAY_START_SEC + Math.max(0, frame - (sentAt + 8)) / fps,
+                        REPLAY_START_SEC +
+                          Math.max(
+                            0,
+                            frame - (sentAt + Math.round(STEER_REACT_DELAY_SEC * fps)),
+                          ) /
+                            fps,
                         REPLAY_END_SEC,
                       )
                     : REPLAY_START_SEC
