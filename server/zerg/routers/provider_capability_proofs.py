@@ -214,7 +214,11 @@ async def publish_provider_capability_proofs(
     for digest, content in blobs:
         store.write_blob(content, expected_digest=digest)
     for record in records:
-        store.write(record, publication=publication)
+        # The append-only record and publication event are the serving
+        # authority.  Do not synchronously rebuild the full diagnostic index
+        # on every factory receipt; that O(history) work blocks this async
+        # application and makes health/API traffic stall during a proof batch.
+        store.write(record, publication=publication, rebuild_index=False)
     integrity_by_provider = {provider: store.integrity_report(provider) for provider in {record.provider for record in records}}
     trusted_ids = [
         record.artifact_id for record in records if record.artifact_id in integrity_by_provider[record.provider].admissible_artifact_ids

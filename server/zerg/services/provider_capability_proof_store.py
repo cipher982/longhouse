@@ -129,6 +129,7 @@ class ProviderCapabilityProofStore:
         record: ProviderCapabilityProofRecord,
         *,
         publication: ProofPublication | None = None,
+        rebuild_index: bool = True,
     ) -> Path:
         if self.require_authenticated_publication and (publication is None or not publication.authenticated):
             raise ValueError("trusted proof store requires authenticated factory publication")
@@ -159,7 +160,15 @@ class ProviderCapabilityProofStore:
                     epoch_digest=record.accepted_epoch_digest,
                     payload={},
                 )
-        self.rebuild_index(record.provider)
+        # The trusted Runtime Host publication route receives one bundle at a
+        # time and validates the newly written record itself.  Rebuilding the
+        # complete provider index here makes every append scan all retained
+        # records (and their referenced blobs), which turns a normal proof
+        # batch into an increasingly expensive synchronous request.  Keep the
+        # historical default for local callers, while allowing that route to
+        # defer the diagnostic index maintenance.
+        if rebuild_index:
+            self.rebuild_index(record.provider)
         return destination
 
     def _write_publication_event(self, record: ProviderCapabilityProofRecord, publication: ProofPublication) -> Path:
