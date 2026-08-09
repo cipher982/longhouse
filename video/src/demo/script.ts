@@ -135,8 +135,14 @@ export const AGENT_TILES = [
 
 /* ── Steer beat choreography ─────────────────────────────────────────── */
 
+/**
+ * MUST match providers.yml defaults.prompt VERBATIM — it is the exact
+ * string the recorded session received, and the demo's claim is that
+ * this instruction traveled from the phone card into the terminal.
+ * Changing the phrasing means re-recording, not editing this constant.
+ */
 export const STEER_MESSAGE =
-  "Fix the off-by-one bug in count_items, then run the tests";
+  "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py";
 
 /** Seconds into the steer beat when the composer starts typing. */
 export const STEER_TYPE_START_SEC = 0.4;
