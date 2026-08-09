@@ -291,6 +291,7 @@ const UnifyScene: React.FC = () => {
 // The replay window opens when the phone's Send fires, so the terminal shows
 // the REAL recorded Claude Code session (sandboxed first-run, mock-API lane)
 // doing exactly what the phone asked. Window numbers live in demo/script.ts.
+const REPLAY_HOLD_SEC = REPLAY_WINDOWS.claude.holdSec;
 const REPLAY_START_SEC = REPLAY_WINDOWS.claude.startSec;
 const REPLAY_END_SEC = REPLAY_WINDOWS.claude.endSec;
 
@@ -485,7 +486,7 @@ const SteerScene: React.FC = () => {
                             fps,
                         REPLAY_END_SEC,
                       )
-                    : REPLAY_START_SEC
+                    : REPLAY_HOLD_SEC
                 }
                 cellW={12}
                 cellH={26}

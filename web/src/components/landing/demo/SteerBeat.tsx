@@ -36,12 +36,14 @@ function Beat({ tLocal }: { tLocal: number }) {
   const sentAt = steerSentAtSec();
   const caretOn = Math.floor(tLocal * 3.75) % 2 === 0;
 
+  // Pre-send: hold on the idle composer. Post-send: roll from AFTER the
+  // take's typing segment — a remote send arrives as one paste.
   const replayT = sent
     ? Math.min(
         WINDOW.startSec + Math.max(0, tLocal - (sentAt + STEER_REACT_DELAY_SEC)),
         WINDOW.endSec,
       )
-    : WINDOW.startSec;
+    : WINDOW.holdSec;
 
   return (
     <div className="hero-demo-steer">

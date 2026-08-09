@@ -108,19 +108,21 @@ export const DEMO_DURATION_SEC =
  */
 export const REPLAY_WINDOWS = {
   /**
-   * Steer windows MUST open on the idle-composer frame BEFORE the recorder
-   * types the prompt (both takes: dialog clears ~2.7s, typing runs
-   * 3.2-4.1s, submit ~5.25s). The pre-send hold shows an empty composer;
-   * after Send fires the replay rolls so the instruction visibly ARRIVES
-   * in the terminal. A later start makes the terminal look like it had
-   * the text before the phone sent it.
+   * Steer windows model a REMOTE send, which lands in the PTY as one
+   * paste, not human typing. `holdSec` is the pre-send frame (idle
+   * composer, dialog cleared, NOTHING typed — both takes: dialog clears
+   * ~2.7s, recorder types 3.2-4.1s, submit ~5.25s). When Send fires the
+   * replay rolls from `startSec`, AFTER the recorder's typing segment,
+   * so the instruction appears in the terminal in one shot. Holding on
+   * any post-typing frame pre-send makes causality read backwards;
+   * rolling from the typing segment looks like a human at the keyboard.
    */
   /** 100x16 claude detail take — steer reaction in the export composition. */
-  claude: { startSec: 3.0, endSec: 9.0 },
+  claude: { holdSec: 3.0, startSec: 4.2, endSec: 9.0 },
   /** 64x14 claude tile — beat-1 dense work window. */
   claudeTile: { startSec: 4.0, endSec: 8.7 },
-  /** 64x14 claude tile — steer window (idle -> typed -> submit -> work). */
-  claudeTileSteer: { startSec: 3.0, endSec: 9.0 },
+  /** 64x14 claude tile — steer window (idle -> paste -> submit -> work). */
+  claudeTileSteer: { holdSec: 3.0, startSec: 4.2, endSec: 9.0 },
   /** 64x14 codex tile — beat-1 dense work window. */
   codexTile: { startSec: 2.6, endSec: 7.5 },
 } as const;
