@@ -150,4 +150,4 @@ export const steerSentAtSec = (): number =>
   STEER_TYPE_START_SEC + STEER_MESSAGE.length / STEER_CHARS_PER_SEC;
 
 /** Frozen frame for reduced-motion / posters: steer beat, mid-reaction. */
-export const POSTER_SEC = 13.5;
+export const POSTER_SEC = 12.0;
