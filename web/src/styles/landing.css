@@ -893,12 +893,27 @@
     letter-spacing: 0.1em;
   }
 
+  /* Two columns at desktop: controls left, terminal right at hero-tile
+     scale. A full-width 64-col terminal renders billboard-sized type. */
+  .steer-playground-body {
+    display: grid;
+    align-items: start;
+    grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+    gap: 44px;
+    margin-top: 44px;
+  }
+
+  .steer-playground-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
   .steer-playground-chips {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
-    margin: 44px 0 22px;
   }
 
   .steer-playground-chip-label {
@@ -935,14 +950,8 @@
     border-color: var(--color-brand-primary);
   }
 
-  .steer-playground-replay {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-  }
-
   .steer-playground-card {
-    width: min(700px, 100%);
+    width: 100%;
   }
 
   .steer-playground-send {
@@ -961,7 +970,7 @@
   }
 
   .steer-playground-honesty {
-    margin: 14px 0 0;
+    margin: 18px 0 0;
     color: rgba(212, 199, 181, 0.56);
     font-size: 0.78rem;
   }
@@ -1763,10 +1772,15 @@
 
     .landing-section-heading--split,
     .steer-playground-heading,
+    .steer-playground-body,
     .landing-thesis-inner,
     .landing-surface-inner {
       grid-template-columns: 1fr;
       gap: 42px;
+    }
+
+    .steer-playground-body .hero-demo-terminal {
+      width: min(680px, 100%);
     }
 
     .landing-section-heading--split {

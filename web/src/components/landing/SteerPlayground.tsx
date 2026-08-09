@@ -73,49 +73,55 @@ export function SteerPlayground() {
           </p>
         </div>
 
-        <div className="steer-playground-chips" role="group" aria-label="Choose an instruction">
-          <span className="steer-playground-chip-label">Try a real instruction</span>
-          {STEER_OPTIONS.map((option) => {
-            const optionPrompt = recordingPrompt(option.grid);
-            const isSelected = option.id === selectedId;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                className={`steer-playground-chip${isSelected ? " is-selected" : ""}`}
-                aria-pressed={isSelected}
-                onClick={() => handleSelect(option.id)}
-              >
-                {optionPrompt}
-              </button>
-            );
-          })}
-        </div>
+        <div className="steer-playground-body">
+          <div className="steer-playground-controls">
+            <div
+              className="steer-playground-chips"
+              role="group"
+              aria-label="Choose an instruction"
+            >
+              <span className="steer-playground-chip-label">Try a real instruction</span>
+              {STEER_OPTIONS.map((option) => {
+                const optionPrompt = recordingPrompt(option.grid);
+                const isSelected = option.id === selectedId;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`steer-playground-chip${isSelected ? " is-selected" : ""}`}
+                    aria-pressed={isSelected}
+                    onClick={() => handleSelect(option.id)}
+                  >
+                    {optionPrompt}
+                  </button>
+                );
+              })}
+            </div>
 
-        <div className="steer-playground-replay">
-          <div className={`hero-demo-steer-card steer-playground-card${sent ? " is-sent" : ""}`}>
-            <div className="hero-demo-steer-meta">
-              <span className="hero-demo-steer-task">{claude.task}</span>
-              <span className="hero-demo-steer-session">
-                <span style={{ color: claude.color }}>{claude.name}</span>
-                {" · demo-repo · "}
-                <span className="hero-demo-steer-live">recorded</span>
-              </span>
+            <div className={`hero-demo-steer-card steer-playground-card${sent ? " is-sent" : ""}`}>
+              <div className="hero-demo-steer-meta">
+                <span className="hero-demo-steer-task">{claude.task}</span>
+                <span className="hero-demo-steer-session">
+                  <span style={{ color: claude.color }}>{claude.name}</span>
+                  {" · demo-repo · "}
+                  <span className="hero-demo-steer-live">recorded</span>
+                </span>
+              </div>
+              <div className="hero-demo-steer-composer">
+                <span className={`hero-demo-steer-text${prompt ? "" : " is-placeholder"}`}>
+                  {prompt || "Choose an instruction"}
+                </span>
+                <button
+                  type="button"
+                  className={`hero-demo-steer-send steer-playground-send${sent ? " is-sent" : ""}`}
+                  disabled={!selectedId || sent}
+                  onClick={handleSend}
+                >
+                  {sent ? "Sent ✓" : "Send"}
+                </button>
+              </div>
+              <span className="hero-demo-steer-origin">sent from your phone</span>
             </div>
-            <div className="hero-demo-steer-composer">
-              <span className={`hero-demo-steer-text${prompt ? "" : " is-placeholder"}`}>
-                {prompt || "Choose an instruction below"}
-              </span>
-              <button
-                type="button"
-                className={`hero-demo-steer-send steer-playground-send${sent ? " is-sent" : ""}`}
-                disabled={!selectedId || sent}
-                onClick={handleSend}
-              >
-                {sent ? "Sent ✓" : "Send"}
-              </button>
-            </div>
-            <span className="hero-demo-steer-origin">sent from your phone</span>
           </div>
 
           <ResponsiveTerminal
