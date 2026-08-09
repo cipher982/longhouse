@@ -5,6 +5,21 @@
 *
 !.dockerignore
 !bun.lock
+!package.json
+
+# Bun resolves the monorepo lockfile against every declared workspace. The
+# runtime image builds only web, but it still needs the sibling manifests.
+!video/
+video/*
+!video/package.json
+!video/src/
+!video/src/**
+!e2e/
+e2e/*
+!e2e/package.json
+!runner/
+runner/*
+!runner/package.json
 
 !server/
 !server/**

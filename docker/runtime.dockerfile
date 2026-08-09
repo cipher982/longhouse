@@ -14,18 +14,23 @@ FROM oven/bun:alpine AS frontend-builder
 
 WORKDIR /app
 
-# Copy root lockfile + workspace package.json for dependency caching
-# bun.lock lives at monorepo root; no per-workspace lockfile exists
-COPY bun.lock ./
-COPY web/package.json ./
+# Copy the root workspace manifests for dependency caching. The web app imports
+# @longhouse/video, so Bun must see every declared workspace while resolving the
+# lockfile even though only web is built in this image.
+COPY package.json bun.lock ./
+COPY web/package.json ./web/package.json
+COPY video/package.json ./video/package.json
+COPY e2e/package.json ./e2e/package.json
+COPY runner/package.json ./runner/package.json
 
-# Install dependencies (no --frozen-lockfile: root lockfile covers all workspaces
-# but Docker only has this one package.json, causing a mismatch. Lockfile still
-# guides version resolution without strict mode.)
+# Install dependencies (no --frozen-lockfile: the root lockfile is shared by
+# all workspaces and the image intentionally stages manifests before source.)
 RUN bun install
 
 # Copy frontend source
-COPY web/ ./
+COPY web/ ./web/
+COPY video/src/ ./video/src/
+WORKDIR /app/web
 
 # Build for production (same-origin mode - no cross-origin API URLs needed)
 # The backend will serve both static files and API from the same origin
@@ -127,7 +132,7 @@ COPY config/tool-tiers.json /config/tool-tiers.json
 COPY schemas/managed_providers.yml /schemas/managed_providers.yml
 
 # Copy REAL frontend dist from frontend-builder (not placeholder)
-COPY --from=frontend-builder /app/dist /repo/web/dist
+COPY --from=frontend-builder /app/web/dist /repo/web/dist
 
 # Install the project + pysqlite3 wheel (statically links modern SQLite)
 COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
@@ -179,7 +184,7 @@ WORKDIR /app
 COPY --from=backend-builder --chown=longhouse:longhouse /repo/server /app
 
 # Copy frontend dist to where backend expects it
-COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/web/dist
+COPY --from=frontend-builder --chown=longhouse:longhouse /app/web/dist /app/web/dist
 
 # Copy config
 COPY --from=backend-builder --chown=longhouse:longhouse /config /config
