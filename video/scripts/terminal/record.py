@@ -697,7 +697,7 @@ def _unlink_demo_symlink():
 
 
 
-def build_sandbox(provider_name, prov, cols, rows, demo_repo=None):
+def build_sandbox(provider_name, prov, cols, rows, demo_repo=None, fixture_path=None):
     """Blank HOME + allowlisted env + PATH shim dir + auth lane.
 
     Returns (env, home, argv, mock_proc, mock_url, auth_mode)."""
@@ -747,7 +747,7 @@ def build_sandbox(provider_name, prov, cols, rows, demo_repo=None):
     mock_proc = None
     mock_url = None
     if mode == "mock":
-        mock_proc, mock_url = start_mock(auth["fixture"], home, demo_repo)
+        mock_proc, mock_url = start_mock(fixture_path or auth["fixture"], home, demo_repo)
         env[auth["env"]] = "sk-mock-longhouse"
         if auth.get("base_url_env"):
             env[auth["base_url_env"]] = mock_url
@@ -799,6 +799,8 @@ def main():
                     help="hermetic mode: blank HOME, allowlisted env, pinned binary")
     ap.add_argument("--provider", default=None,
                     help="provider name from providers.yml (sandbox mode)")
+    ap.add_argument("--fixture", default=None,
+                    help="override the provider mock fixture path (sandbox mode)")
     ap.add_argument("--keep-home", action="store_true",
                     help="do not delete the sandbox HOME after recording")
     ap.add_argument("--no-srt", action="store_true",
@@ -824,7 +826,7 @@ def main():
         else:
             cwd, scratch_dir = seed_demo_repo()
         env, home, argv, mock_proc, mock_url, auth_mode = build_sandbox(
-            args.provider, prov, cols, rows, demo_repo=cwd)
+            args.provider, prov, cols, rows, demo_repo=cwd, fixture_path=args.fixture)
         run_setup(prov, env, cwd)
         binary_label = f"{prov['source'].get('package', prov['source'].get('url'))}@{prov['source']['version']}"
         preflight_domains = (prov.get("auth") or {}).get("preflight_domains", [])

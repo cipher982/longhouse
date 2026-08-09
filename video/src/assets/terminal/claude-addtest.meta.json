@@ -1,0 +1,100 @@
+{
+  "binary": "@anthropic-ai/claude-code@2.1.226",
+  "binary_version": "2.1.226 (Claude Code)",
+  "argv": [
+    "claude",
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    "Bash"
+  ],
+  "prompt": "Fix count_items and add an empty shelf test, then run the tests",
+  "cols": 64,
+  "rows": 14,
+  "term": "xterm-256color",
+  "cwd": "/tmp/demo-repo",
+  "sandbox": true,
+  "isolation": "srt",
+  "aborted": false,
+  "auth_mode": "mock",
+  "canary": {
+    "egress_ip_http": {
+      "url": "http://1.1.1.1",
+      "exit": 0,
+      "http_code": "403",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_ip_https": {
+      "url": "https://1.1.1.1",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_nonallowlisted": {
+      "url": "https://example.com",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "operator_read": {
+      "path": "~/.claude/settings.json",
+      "exit": 1,
+      "denied": true
+    },
+    "mock_health": {
+      "url": "http://127.0.0.1:65530/health",
+      "exit": 0,
+      "http_code": "200",
+      "reachable": true
+    },
+    "passed": true
+  },
+  "browser_attempts": [],
+  "mock_requests": 6,
+  "mock_stats": {
+    "main_requests": 6,
+    "utility_requests": 0,
+    "by_kind": {
+      "anthropic-main": 6
+    },
+    "main_turns_served": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "distinct_main_turns": 4,
+    "expected_turns": 4
+  },
+  "completion": "quiet-sentinel",
+  "gates": {
+    "exit_status_observed": true,
+    "composer_ready": true,
+    "working_seen": true,
+    "completion_reached": true,
+    "no_browser_attempts": true,
+    "mock_requests_present": true,
+    "mock_completions_match_fixture": true
+  },
+  "gate_failures": [],
+  "captured_at": "2026-08-09T18:02:41.681252+00:00",
+  "cast_sha256": "ac59996ab178f242d14bfc47051cedd5cb3c1369c2592c835ee3b8614e12928e",
+  "exit_status": 0,
+  "phase_log": [
+    "[   0.002] spawned pid=53908 argv=['/tmp/demo-home-k51znbzh/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 64x14",
+    "[   0.599] dialog 'theme' detected -> keys ['enter']",
+    "[   2.651] dialog 'api-key' detected -> keys ['up', 'enter']",
+    "[   5.113] dialog 'security-notes' detected -> keys ['enter']",
+    "[   7.190] dialog 'trust' detected -> keys ['enter']",
+    "[   9.149] sentinel hit: composer-ready",
+    "[  11.167] typing prompt: 'Fix count_items and add an empty shelf test, then run the tests'",
+    "[  12.675] prompt submitted",
+    "[  12.703] sentinel hit: working-spinner",
+    "[  27.411] sentinel hit: task-complete",
+    "[  29.440] sending exit sequence ['text:/exit', 'enter']",
+    "[  30.742] process exit status: 0"
+  ]
+}
