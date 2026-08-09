@@ -553,6 +553,67 @@ def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> 
     assert _wait_cursor_idle(state, {"LONGHOUSE_HOME": str(longhouse_home)})["phase"] == "idle"
 
 
+def test_cursor_native_idle_can_require_the_completed_generation(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
+    longhouse_home = tmp_path / "longhouse"
+    phase = longhouse_home / "managed-local" / "cursor-helm" / "session-1.phase.json"
+    phase.parent.mkdir(parents=True)
+    claim = phase.parent / "binding-probes" / "session-1.json"
+    claim.parent.mkdir(parents=True)
+    claim.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    phase.write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "phase": "idle",
+                "generation_id": "generation-old",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="identity-matched idle phase"):
+        _wait_cursor_idle(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            expected_generation_id="generation-new",
+            timeout=0.01,
+        )
+
+    phase.write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "phase": "idle",
+                "generation_id": "generation-new",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _wait_cursor_idle(
+        state,
+        {"LONGHOUSE_HOME": str(longhouse_home)},
+        expected_generation_id="generation-new",
+    )["generation_id"] == "generation-new"
+
+
 def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Path) -> None:
     state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
     marker = "LH_CURSOR_BOOTSTRAP_abc123"

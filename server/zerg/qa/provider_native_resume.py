@@ -1658,6 +1658,7 @@ def _wait_cursor_idle(
     *,
     timeout: float = 45.0,
     minimum_hook_event_bytes: int | None = None,
+    expected_generation_id: str | None = None,
 ) -> dict[str, Any]:
     """Wait for the provider-owned Cursor hook to publish an idle phase."""
 
@@ -1680,7 +1681,9 @@ def _wait_cursor_idle(
         except (OSError, json.JSONDecodeError):
             claim = {}
         last_identity = {
-            "phase": {key: payload.get(key) for key in ("session_id", "conversation_id", "launch_id", "phase") if key in payload},
+            "phase": {
+                key: payload.get(key) for key in ("session_id", "conversation_id", "launch_id", "phase", "generation_id") if key in payload
+            },
             "binding": {
                 key: claim.get(key)
                 for key in ("schema_version", "provider", "status", "session_id", "conversation_uuid", "launch_id", "run_id")
@@ -1709,6 +1712,7 @@ def _wait_cursor_idle(
             and payload.get("conversation_id") == state.get("provider_session_id")
             and payload.get("launch_id") == claim.get("launch_id")
             and payload.get("phase") == "idle"
+            and (expected_generation_id is None or payload.get("generation_id") == expected_generation_id)
             and binding_matches
         ):
             return payload
@@ -1719,15 +1723,17 @@ def _wait_cursor_idle(
     )
 
 
-def _wait_cursor_bootstrap_hook_sequence(
+def _wait_cursor_hook_sequence(
     state: dict[str, Any],
     environment: dict[str, str],
     *,
     marker: str,
+    expected_prompt: str,
     minimum_hook_event_bytes: int,
+    label: str,
     timeout: float = 45.0,
 ) -> dict[str, Any]:
-    """Require the submitted bootstrap to produce ordered native hook events.
+    """Require one submitted Cursor turn to produce ordered native hook events.
 
     ``sessionStart`` is an idle phase, but it does not prove that the prompt
     written to the PTY was accepted.  The only provider-owned sequence that
@@ -1742,7 +1748,6 @@ def _wait_cursor_bootstrap_hook_sequence(
         raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
     path = Path(longhouse_home) / "managed-local" / "cursor-helm" / "hook-events" / f"{state['session_id']}.ndjson"
     deadline = time.monotonic() + timeout
-    expected_prompt = _cursor_bootstrap_prompt(marker)
     observed_events: list[str] = []
     matching_befores: list[dict[str, Any]] = []
     matching_afters: list[dict[str, Any]] = []
@@ -1808,8 +1813,29 @@ def _wait_cursor_bootstrap_hook_sequence(
             }
         time.sleep(0.25)
     raise RuntimeError(
-        "Cursor bootstrap did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence "
+        f"Cursor {label} did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence "
         f"(start_bytes={minimum_hook_event_bytes}, events={observed_events[-20:]!r})"
+    )
+
+
+def _wait_cursor_bootstrap_hook_sequence(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    *,
+    marker: str,
+    minimum_hook_event_bytes: int,
+    timeout: float = 45.0,
+) -> dict[str, Any]:
+    """Require the submitted bootstrap to produce ordered native hook events."""
+
+    return _wait_cursor_hook_sequence(
+        state,
+        environment,
+        marker=marker,
+        expected_prompt=_cursor_bootstrap_prompt(marker),
+        minimum_hook_event_bytes=minimum_hook_event_bytes,
+        label="bootstrap",
+        timeout=timeout,
     )
 
 
@@ -2436,8 +2462,34 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             resumed_state["session_id"],
         )
         prior_assistant_event_digests = _assistant_event_digests(prior_tail)
+        post_resume_hook_event_bytes: int | None = None
+        if spec.provider == "cursor":
+            # The managed send returns once the Helm socket accepts the
+            # request, not when Cursor has persisted the completed turn. Keep
+            # the hook boundary separate from transcript projection so the
+            # shipper cannot be flushed during that persistence window.
+            post_resume_hook_event_bytes = _cursor_hook_event_bytes(resumed_state, environment)
         post_send = _control_send(spec, args, resumed_state, resumed, _resume_marker_prompt(provider, post_marker))
         _write_json(root / "post-resume-send.json", post_send)
+        if spec.provider == "cursor":
+            post_resume_hook_sequence = _wait_cursor_hook_sequence(
+                resumed_state,
+                environment,
+                marker=post_marker,
+                expected_prompt=_resume_marker_prompt(provider, post_marker),
+                minimum_hook_event_bytes=post_resume_hook_event_bytes or 0,
+                label="post-resume",
+            )
+            _write_json(root / "post-resume-hook-correlation.json", post_resume_hook_sequence)
+            # The exact afterAgentResponse hook proves the provider completed
+            # this generation. Wait for its identity-matched idle boundary as
+            # well before pausing the daemon and forcing transcript shipping.
+            _wait_cursor_idle(
+                resumed_state,
+                environment,
+                minimum_hook_event_bytes=post_resume_hook_event_bytes or 0,
+                expected_generation_id=post_resume_hook_sequence["generation_id"],
+            )
         _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
         resumed_tail, response_correlation = _wait_assistant_response_after_marker(
             args.api_url,
