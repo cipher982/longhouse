@@ -281,6 +281,40 @@ struct LaunchArtifacts {
     launch_id: String,
 }
 
+struct LaunchReservation {
+    path: PathBuf,
+}
+
+impl LaunchReservation {
+    fn create(dir: &Path, session_id: &str, launch_id: &str) -> anyhow::Result<Self> {
+        let reservations = dir.join("launch-reservations");
+        fs::create_dir_all(&reservations)?;
+        fs::set_permissions(
+            &reservations,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )?;
+        let path = reservations.join(format!("{session_id}.json"));
+        write_json(
+            &path,
+            &json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": session_id,
+                "launch_id": launch_id,
+                "expires_at": (Utc::now() + chrono::Duration::minutes(2)).to_rfc3339(),
+            }),
+        )?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for LaunchReservation {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 impl Drop for LaunchArtifacts {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.socket);
@@ -1285,6 +1319,15 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             );
         }
     }
+    // Cursor creates the durable transcript during `create-chat`, before the
+    // conversation-specific binding claim can be written. Reserve the launch
+    // first so the engine holds that fresh source instead of publishing it as
+    // an unmanaged provider conversation during this race window.
+    let launch_reservation = if resume_conversation.is_none() {
+        Some(LaunchReservation::create(&dir, &session_id, &launch_id)?)
+    } else {
+        None
+    };
     let conversation = match resume_conversation.as_deref() {
         Some(value) => value.to_owned(),
         None => cursor_chat(&bin, &cwd)?,
@@ -1316,6 +1359,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         &cwd,
         &bin,
     )?;
+    drop(launch_reservation);
     let socket = match socket_path(&session_id) {
         Ok(socket) => socket,
         Err(error) => {
@@ -1924,7 +1968,9 @@ mod tests {
         .unwrap();
 
         drop(first);
-        assert!(fs::read_to_string(&hooks).unwrap().contains("cursor-lifecycle-hook"));
+        assert!(fs::read_to_string(&hooks)
+            .unwrap()
+            .contains("cursor-lifecycle-hook"));
         drop(second);
         assert_eq!(fs::read(&hooks).unwrap(), original);
     }

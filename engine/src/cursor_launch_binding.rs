@@ -237,6 +237,53 @@ pub fn reset_binding_may_be_pending(conversation_uuid: &str) -> Result<bool> {
     reset_binding_may_be_pending_in(&claim_dir(), conversation_uuid)
 }
 
+/// A native Helm launch creates Cursor's store before it can write the
+/// conversation-specific binding claim.  Keep a fresh source from being
+/// materialized as Shadow during that small window.
+pub fn launch_reservation_may_be_pending() -> Result<bool> {
+    let claims = claim_dir();
+    let Some(state_root) = claims.parent() else {
+        return Ok(false);
+    };
+    launch_reservation_may_be_pending_in(state_root)
+}
+
+fn launch_reservation_may_be_pending_in(state_root: &Path) -> Result<bool> {
+    let reservations = state_root.join("launch-reservations");
+    let mut active = 0usize;
+    for path in claim_paths(&reservations)? {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let expires_at = value
+            .get("expires_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<DateTime<Utc>>().ok());
+        if value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(1)
+            && value.get("provider").and_then(serde_json::Value::as_str) == Some("cursor")
+            && value.get("status").and_then(serde_json::Value::as_str) == Some("pending")
+            && value
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            && value
+                .get("launch_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            && expires_at.is_some_and(|value| value > Utc::now())
+        {
+            active += 1;
+        }
+    }
+    Ok(active > 0)
+}
+
 fn reset_binding_may_be_pending_in(dir: &Path, conversation_uuid: &str) -> Result<bool> {
     let Some(state_root) = dir.parent() else {
         return Ok(false);
@@ -540,5 +587,41 @@ mod tests {
         )
         .unwrap();
         assert!(!pending_claim_for_conversation_in(dir.path(), "cursor-id").unwrap());
+    }
+
+    #[test]
+    fn fresh_source_waits_while_native_launch_reservation_is_active() {
+        let root = tempdir().unwrap();
+        let reservations = root.path().join("launch-reservations");
+        fs::create_dir_all(&reservations).unwrap();
+        fs::write(
+            reservations.join("launch.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "longhouse-id",
+                "launch_id": "launch-id",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(launch_reservation_may_be_pending_in(root.path()).unwrap());
+
+        fs::write(
+            reservations.join("launch.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "longhouse-id",
+                "launch_id": "launch-id",
+                "expires_at": "2000-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!launch_reservation_may_be_pending_in(root.path()).unwrap());
     }
 }

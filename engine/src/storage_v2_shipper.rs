@@ -2344,6 +2344,8 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
                 .map(|age| age <= Duration::from_secs(5))
         })
         .unwrap_or(false);
+    let launch_reservation_may_be_pending =
+        crate::cursor_launch_binding::launch_reservation_may_be_pending()?;
     let claimed_binding = match crate::cursor_launch_binding::launch_binding_state_for_conversation(
         &snapshot.conversation_uuid,
     )? {
@@ -2353,10 +2355,11 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         }
         crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed
             if !source_was_seen
-                && store_is_fresh
-                && crate::cursor_launch_binding::reset_binding_may_be_pending(
-                    &snapshot.conversation_uuid,
-                )? =>
+                && (launch_reservation_may_be_pending
+                    || (store_is_fresh
+                        && crate::cursor_launch_binding::reset_binding_may_be_pending(
+                            &snapshot.conversation_uuid,
+                        )?)) =>
         {
             return Ok(CursorPreparationOutcome::WaitingOnClaim);
         }
@@ -3651,6 +3654,7 @@ mod tests {
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const CURSOR_MESSAGE_C: &str =
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    static CURSOR_BINDING_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn preparation_errors_are_distinct_from_transport_failures() {
@@ -3747,6 +3751,48 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
         }
+    }
+
+    #[test]
+    fn fresh_cursor_source_waits_for_launch_reservation_before_materializing_shadow() {
+        let _guard = CURSOR_BINDING_ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state_root = dir
+            .path()
+            .join("longhouse/managed-local/cursor-helm/launch-reservations");
+        fs::create_dir_all(&state_root).unwrap();
+        fs::write(
+            state_root.join("session.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "session-id",
+                "launch_id": "launch-id",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", dir.path().join("longhouse"));
+        }
+        let path = dir.path().join("store.db");
+        let _store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let outcome = prepare_next_cursor_envelope_outcome_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            LIVE_TARGET_BATCH_BYTES as u64,
+        )
+        .unwrap();
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+        assert!(matches!(outcome, CursorPreparationOutcome::WaitingOnClaim));
     }
 
     fn acknowledge_prepared(conn: &mut Connection, prepared: &PreparedStorageV2Envelope) {

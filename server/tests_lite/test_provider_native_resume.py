@@ -27,10 +27,12 @@ from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
+from zerg.qa.provider_native_resume import _cursor_idle_then_flush
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _opencode_tui_is_connected
+from zerg.qa.provider_native_resume import _post_resume_response_correlated
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
 from zerg.qa.provider_native_resume import _resume_intent_timeout
@@ -612,6 +614,91 @@ def test_cursor_native_idle_can_require_the_completed_generation(tmp_path: Path)
         {"LONGHOUSE_HOME": str(longhouse_home)},
         expected_generation_id="generation-new",
     )["generation_id"] == "generation-new"
+
+
+def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
+    order: list[str] = []
+
+    class FakeShipper:
+        def flush(self, label: str) -> dict[str, object]:
+            order.append(f"flush:{label}")
+            return {"status": "pass", "events_shipped": 1}
+
+    def fake_idle(*_args, **_kwargs) -> dict[str, str]:
+        order.append("idle")
+        return {"phase": "idle", "generation_id": "generation-1"}
+
+    original = provider_native_resume._wait_cursor_idle
+    provider_native_resume._wait_cursor_idle = fake_idle
+    try:
+        receipt = _cursor_idle_then_flush(
+            {"session_id": "session-1"},
+            {},
+            FakeShipper(),  # type: ignore[arg-type]
+            label="post-resume",
+            expected_generation_id="generation-1",
+        )
+    finally:
+        provider_native_resume._wait_cursor_idle = original
+
+    assert receipt["status"] == "pass"
+    assert order == ["idle", "flush:post-resume"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "correlation", "expected"),
+    [
+        (
+            "cursor",
+            {
+                "marker_observed_in_transcript": True,
+                "marker_observed_in_assistant": False,
+                "new_assistant_events": 1,
+            },
+            False,
+        ),
+        (
+            "cursor",
+            {
+                "marker_observed_in_transcript": True,
+                "marker_observed_in_assistant": True,
+                "new_assistant_events": 1,
+            },
+            True,
+        ),
+        (
+            "cursor",
+            {
+                "marker_observed_in_transcript": False,
+                "marker_observed_in_assistant": True,
+                "new_assistant_events": 1,
+            },
+            False,
+        ),
+        (
+            "cursor",
+            {
+                "marker_observed_in_transcript": True,
+                "marker_observed_in_assistant": True,
+                "new_assistant_events": 0,
+            },
+            False,
+        ),
+        (
+            "claude",
+            {
+                "marker_observed_in_transcript": True,
+                "marker_observed_in_assistant": False,
+                "new_assistant_events": 1,
+            },
+            True,
+        ),
+    ],
+)
+def test_post_resume_correlation_requires_strict_assistant_proof(
+    provider: str, correlation: dict[str, object], expected: bool
+) -> None:
+    assert _post_resume_response_correlated(provider, correlation) is expected
 
 
 def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Path) -> None:

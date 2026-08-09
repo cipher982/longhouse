@@ -1596,6 +1596,39 @@ def _wait_assistant_response_after_marker(
     }
 
 
+def _post_resume_response_correlated(provider: str, correlation: dict[str, Any]) -> bool:
+    """Require the Runtime Host transcript to prove the resumed provider turn."""
+
+    new_assistant_events = correlation.get("new_assistant_events")
+    return bool(
+        correlation.get("marker_observed_in_transcript")
+        and isinstance(new_assistant_events, int)
+        and not isinstance(new_assistant_events, bool)
+        and new_assistant_events > 0
+        and (provider == "claude" or correlation.get("marker_observed_in_assistant"))
+    )
+
+
+def _cursor_idle_then_flush(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    shipper: TranscriptShipper,
+    *,
+    label: str,
+    minimum_hook_event_bytes: int | None = None,
+    expected_generation_id: str | None = None,
+) -> dict[str, Any]:
+    """Keep provider completion ahead of the one-shot transcript flush."""
+
+    _wait_cursor_idle(
+        state,
+        environment,
+        minimum_hook_event_bytes=minimum_hook_event_bytes,
+        expected_generation_id=expected_generation_id,
+    )
+    return shipper.flush(label)
+
+
 def _cursor_bootstrap_correlation(
     transcript_correlation: dict[str, Any],
     hook_sequence: dict[str, Any],
@@ -2417,12 +2450,13 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 marker=bootstrap_marker,
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
             )
-            _wait_cursor_idle(
+            bootstrap_ship_receipt = _cursor_idle_then_flush(
                 resumed_state,
                 environment,
+                shipper,
+                label="resume-bootstrap",
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
             )
-            bootstrap_ship_receipt = shipper.flush("resume-bootstrap")
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", bootstrap_ship_receipt)
             bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
                 args.api_url,
@@ -2481,16 +2515,19 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 label="post-resume",
             )
             _write_json(root / "post-resume-hook-correlation.json", post_resume_hook_sequence)
-            # The exact afterAgentResponse hook proves the provider completed
-            # this generation. Wait for its identity-matched idle boundary as
-            # well before pausing the daemon and forcing transcript shipping.
-            _wait_cursor_idle(
+        post_resume_ship_receipt = (
+            _cursor_idle_then_flush(
                 resumed_state,
                 environment,
-                minimum_hook_event_bytes=post_resume_hook_event_bytes or 0,
-                expected_generation_id=post_resume_hook_sequence["generation_id"],
+                shipper,
+                label="post-resume",
+                minimum_hook_event_bytes=post_resume_hook_event_bytes,
+                expected_generation_id=(post_resume_hook_sequence.get("generation_id") if spec.provider == "cursor" else None),
             )
-        _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
+            if spec.provider == "cursor"
+            else shipper.flush("post-resume")
+        )
+        _write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
         resumed_tail, response_correlation = _wait_assistant_response_after_marker(
             args.api_url,
             args.agents_token,
@@ -2500,15 +2537,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             require_assistant_marker=spec.provider != "claude",
             timeout=args.live_send_timeout_secs,
         )
-        post_resume_response_correlated = bool(
-            response_correlation["marker_observed_in_transcript"]
-            and response_correlation["new_assistant_events"] > 0
-            and (spec.provider == "claude" or response_correlation["marker_observed_in_assistant"])
-        )
+        _write_json(root / "post-resume-response-correlation.json", response_correlation)
+        post_resume_response_correlated = _post_resume_response_correlated(provider, response_correlation)
         post_resume_provider_activity = response_correlation["new_assistant_events"] > 0
         if not post_resume_response_correlated:
             raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
-        _write_json(root / "post-resume-response-correlation.json", response_correlation)
         _write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = response_correlation["marker_observed_in_assistant"]
         stale_generation_dispatched = _assistant_contains(resumed_tail, stale_marker)
@@ -2594,6 +2627,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain the exact causal failure
+        if not (root / "post-resume-response-correlation.json").exists():
+            _write_json(
+                root / "post-resume-response-correlation.json",
+                {
+                    "available": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
         try:
             if home is not None:
                 _write_json(root / "state-candidates.json", _state_candidate_diagnostics(spec, home))
