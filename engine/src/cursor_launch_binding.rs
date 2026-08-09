@@ -686,4 +686,27 @@ mod tests {
         .unwrap();
         assert!(launch_reservation_may_be_pending_in(root.path()).unwrap());
     }
+
+    #[test]
+    fn expired_reservation_rejects_a_reused_owner_pid() {
+        let root = tempdir().unwrap();
+        let reservations = root.path().join("launch-reservations");
+        fs::create_dir_all(&reservations).unwrap();
+        fs::write(
+            reservations.join("reused.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "longhouse-id",
+                "launch_id": "launch-id",
+                "owner_pid": std::process::id(),
+                "owner_start_time": "Thu Jan  1 00:00:00 1970",
+                "expires_at": "2000-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!launch_reservation_may_be_pending_in(root.path()).unwrap());
+    }
 }

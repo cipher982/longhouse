@@ -286,6 +286,14 @@ struct LaunchArtifacts {
     _reservation: Option<LaunchReservation>,
 }
 
+impl LaunchArtifacts {
+    fn bind_provider_owner(&self, pid: libc::pid_t) {
+        if let Some(reservation) = self._reservation.as_ref() {
+            reservation.bind_provider_owner(pid);
+        }
+    }
+}
+
 struct LaunchReservation {
     path: PathBuf,
 }
@@ -313,6 +321,24 @@ impl LaunchReservation {
             }),
         )?;
         Ok(Self { path })
+    }
+
+    fn bind_provider_owner(&self, pid: libc::pid_t) {
+        let Some(start_time) = process_start_time(pid) else {
+            return;
+        };
+        let Ok(raw) = fs::read(&self.path) else {
+            return;
+        };
+        let Ok(mut value) = serde_json::from_slice::<Value>(&raw) else {
+            return;
+        };
+        if value.get("status").and_then(Value::as_str) != Some("pending") {
+            return;
+        }
+        value["owner_pid"] = json!(pid);
+        value["owner_start_time"] = json!(start_time);
+        let _ = write_json(&self.path, &value);
     }
 }
 
@@ -1372,7 +1398,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             return Err(error);
         }
     };
-    let _artifacts = LaunchArtifacts {
+    let artifacts = LaunchArtifacts {
         dir: dir.clone(),
         socket: socket.clone(),
         session_id: session_id.clone(),
@@ -1503,6 +1529,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             libc::_exit(127)
         }
     }
+    // Once Cursor exists, liveness belongs to the provider child rather than
+    // the relay process. A stuck relay must not keep a stale global
+    // reservation alive after its provider has exited.
+    artifacts.bind_provider_owner(pid);
     // XNU can discard queued PTY output or hold a session-leader child in the
     // exiting state until the master reads it. Keeping the slave open in the
     // parent makes POLLIN observable; the relay loop drains it and reaps with
