@@ -219,7 +219,14 @@ async def publish_provider_capability_proofs(
         # on every factory receipt; that O(history) work blocks this async
         # application and makes health/API traffic stall during a proof batch.
         store.write(record, publication=publication, rebuild_index=False)
-    integrity_by_provider = {provider: store.integrity_report(provider) for provider in {record.provider for record in records}}
+    records_by_provider: dict[str, tuple[ProviderCapabilityProofRecord, ...]] = {}
+    for record in records:
+        records_by_provider[record.provider] = (*records_by_provider.get(record.provider, ()), record)
+    available = store.available_blob_digests()
+    integrity_by_provider = {
+        provider: store.integrity_report(provider, records=provider_records, available=available)
+        for provider, provider_records in records_by_provider.items()
+    }
     trusted_ids = [
         record.artifact_id for record in records if record.artifact_id in integrity_by_provider[record.provider].admissible_artifact_ids
     ]

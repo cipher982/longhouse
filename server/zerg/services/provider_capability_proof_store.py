@@ -230,9 +230,24 @@ class ProviderCapabilityProofStore:
                     referenced.update(record.referenced_content_digests())
         return frozenset(referenced)
 
-    def integrity_report(self, provider: str) -> ProofStoreIntegrityReport:
-        records = self.records(provider)
-        available = self.available_blob_digests()
+    def integrity_report(
+        self,
+        provider: str,
+        *,
+        records: tuple[ProviderCapabilityProofRecord, ...] | None = None,
+        available: frozenset[str] | None = None,
+    ) -> ProofStoreIntegrityReport:
+        """Check retained records, optionally restricting the scan to a batch.
+
+        The normal diagnostic/reporting path scans all retained records. The
+        authenticated publication endpoint only needs to admit the records in
+        the request, so it can pass that batch and one shared blob inventory;
+        this keeps a one-record publication from re-reading all history.
+        """
+
+        full_scan = records is None
+        records = self.records(provider) if full_scan else records
+        available = self.available_blob_digests() if available is None else available
         # Publication events are content-addressed files, but their filename
         # also includes the publication timestamp and bundle digest. Looking
         # up one event by scanning the whole directory for every record makes
@@ -275,7 +290,7 @@ class ProviderCapabilityProofStore:
             records_scanned=len(records),
             blobs_scanned=len(available),
             artifacts=tuple(artifacts),
-            orphan_blob_digests=tuple(sorted(available - self._all_referenced_content_digests())),
+            orphan_blob_digests=(tuple(sorted(available - self._all_referenced_content_digests())) if full_scan else ()),
         )
 
     def _published_artifact_facts(self, provider: str) -> dict[str, tuple[str, str, str]]:
