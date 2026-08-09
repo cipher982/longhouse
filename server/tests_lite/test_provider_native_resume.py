@@ -515,9 +515,9 @@ def test_opencode_readiness_does_not_treat_disconnected_logs_as_connected() -> N
     assert _opencode_tui_is_connected("  OpenCode   CONNECTED to server  ") is True
     assert _opencode_tui_is_connected("OpenCode connected to server") is True
     assert _opencode_tui_is_connected("OpenCode status: longhouse Connected") is True
-    assert _opencode_tui_is_connected(
-        "\x1b[38;2;238;238;238mlonghouse\x1b[0m \x1b[38;2;128;128;128mConnected\x1b[0mLSPs are disabled"
-    ) is True
+    assert (
+        _opencode_tui_is_connected("\x1b[38;2;238;238;238mlonghouse\x1b[0m \x1b[38;2;128;128;128mConnected\x1b[0mLSPs are disabled") is True
+    )
 
 
 def test_cursor_native_idle_requires_the_provider_hook_phase(tmp_path: Path) -> None:
@@ -610,11 +610,14 @@ def test_cursor_native_idle_can_require_the_completed_generation(tmp_path: Path)
         ),
         encoding="utf-8",
     )
-    assert _wait_cursor_idle(
-        state,
-        {"LONGHOUSE_HOME": str(longhouse_home)},
-        expected_generation_id="generation-new",
-    )["generation_id"] == "generation-new"
+    assert (
+        _wait_cursor_idle(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            expected_generation_id="generation-new",
+        )["generation_id"]
+        == "generation-new"
+    )
 
 
 def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
@@ -644,6 +647,49 @@ def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
 
     assert receipt["status"] == "pass"
     assert order == ["idle", "flush:post-resume"]
+
+
+def test_cursor_projection_diagnostics_capture_marker_and_binding_state(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    transcript = home / ".cursor" / "projects" / "workspace" / "agent-transcripts" / "conversation-1" / "conversation-1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_bytes(b'{"text":"LH_CURSOR_POST_test"}\n')
+    longhouse_home = home / ".longhouse"
+    binding_dir = longhouse_home / "managed-local" / "cursor-helm" / "binding-probes"
+    binding_dir.mkdir(parents=True)
+    (binding_dir / "session-1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "conversation-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = provider_native_resume._cursor_projection_diagnostics(
+        environment={
+            "HOME": str(home),
+            "CURSOR_HOME": str(home / ".cursor"),
+            "LONGHOUSE_HOME": str(longhouse_home),
+        },
+        state={"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_POST_test",
+        engine_db_path=tmp_path / "missing.db",
+        phase="post-resume-before-flush",
+    )
+
+    assert payload["schema"] == "cursor_projection_diagnostics.v1"
+    assert payload["managed_state"][0]["fields"]["conversation_uuid"] == "conversation-1"
+    assert payload["engine_db"]["present"] is False
+    assert len(payload["files"]) == 1
+    assert payload["files"][0]["kind"] == "agent_transcript"
+    assert payload["files"][0]["marker_observed"] is True
+    assert payload["files"][0]["marker_count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -696,9 +742,7 @@ def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
         ),
     ],
 )
-def test_post_resume_correlation_requires_strict_assistant_proof(
-    provider: str, correlation: dict[str, object], expected: bool
-) -> None:
+def test_post_resume_correlation_requires_strict_assistant_proof(provider: str, correlation: dict[str, object], expected: bool) -> None:
     assert _post_resume_response_correlated(provider, correlation) is expected
 
 

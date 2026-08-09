@@ -20,6 +20,7 @@ import re
 import select
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import termios
@@ -205,6 +206,34 @@ class TranscriptShipper:
         if daemon_restart_error:
             result["daemon_restart_error"] = daemon_restart_error
         return result
+
+    def capture_cursor_projection_diagnostics(
+        self,
+        state: dict[str, Any],
+        *,
+        marker: str,
+        label: str,
+    ) -> str:
+        """Retain source and engine state at the strict projection boundary.
+
+        Cursor exposes provider activity through hooks before its transcript
+        projections are necessarily visible to the engine.  This snapshot is
+        diagnostic only: it never participates in acceptance.  It is kept
+        deliberately metadata-only so a failed canary can distinguish provider
+        persistence, source discovery, and engine capture without copying raw
+        transcript content into the proof bundle.
+        """
+
+        payload = _cursor_projection_diagnostics(
+            environment=self.engine_environment,
+            state=state,
+            marker=marker,
+            engine_db_path=self.db_path,
+            phase=label,
+        )
+        path = self.evidence_root / f"cursor-projection-diagnostics-{label}.json"
+        _write_json(path, payload)
+        return str(path)
 
     def _terminate_daemon(self) -> str | None:
         signal_sent: str | None = None
@@ -945,7 +974,7 @@ def _wait_cursor_tui_ready(process: PtyProcess, recording: Path, *, timeout: flo
         time.sleep(0.1)
 
     raise RuntimeError(
-        "Cursor TUI did not publish a stable post-restore input prompt " f"(tail={_terminal_text(process.recording)[-1200:]!r})"
+        f"Cursor TUI did not publish a stable post-restore input prompt (tail={_terminal_text(process.recording)[-1200:]!r})"
     )
 
 
@@ -1617,6 +1646,7 @@ def _cursor_idle_then_flush(
     label: str,
     minimum_hook_event_bytes: int | None = None,
     expected_generation_id: str | None = None,
+    marker: str | None = None,
 ) -> dict[str, Any]:
     """Keep provider completion ahead of the one-shot transcript flush."""
 
@@ -1626,7 +1656,20 @@ def _cursor_idle_then_flush(
         minimum_hook_event_bytes=minimum_hook_event_bytes,
         expected_generation_id=expected_generation_id,
     )
-    return shipper.flush(label)
+    if marker:
+        shipper.capture_cursor_projection_diagnostics(
+            state,
+            marker=marker,
+            label=f"{label}-before-flush",
+        )
+    receipt = shipper.flush(label)
+    if marker:
+        shipper.capture_cursor_projection_diagnostics(
+            state,
+            marker=marker,
+            label=f"{label}-after-flush",
+        )
+    return receipt
 
 
 def _cursor_bootstrap_correlation(
@@ -1683,6 +1726,191 @@ def _cursor_hook_event_bytes(state: dict[str, Any], environment: dict[str, str])
         return path.stat().st_size
     except OSError:
         return 0
+
+
+def _cursor_file_observation(path: Path, *, marker: str) -> dict[str, Any]:
+    """Hash a provider file and report marker presence without retaining text."""
+
+    digest = hashlib.sha256()
+    marker_bytes = marker.encode("utf-8")
+    overlap = b""
+    marker_count = 0
+    total_bytes = 0
+    try:
+        with path.open("rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                total_bytes += len(chunk)
+                window = overlap + chunk
+                marker_count += window.count(marker_bytes)
+                overlap = window[-max(0, len(marker_bytes) - 1) :]
+        stat = path.stat()
+    except OSError as exc:
+        return {
+            "path": str(path),
+            "read_error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "path": str(path),
+        "size": total_bytes,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": f"sha256:{digest.hexdigest()}",
+        "marker_observed": marker_count > 0,
+        "marker_count": marker_count,
+    }
+
+
+def _cursor_sqlite_observation(path: Path, *, marker: str) -> dict[str, Any]:
+    """Observe Cursor SQLite metadata in read-only mode, never checkpointing WAL."""
+
+    observation = _cursor_file_observation(path, marker=marker)
+    if "read_error" in observation:
+        return {"kind": "store_db", **observation}
+    try:
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=1.0)
+        try:
+            tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            table_counts: dict[str, int] = {}
+            for table in ("meta", "blobs"):
+                if table in tables:
+                    table_counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        return {"kind": "store_db", **observation, "sqlite_error": f"{type(exc).__name__}: {exc}"}
+    return {"kind": "store_db", **observation, "sqlite_tables": sorted(tables), "sqlite_counts": table_counts}
+
+
+def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
+    """Summarize engine state tables without copying transcript or credentials."""
+
+    if not path.exists():
+        return {"path": str(path), "present": False}
+    try:
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=1.0)
+        try:
+            tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            table_counts: dict[str, int] = {}
+            for table in (
+                "source_epoch_registry",
+                "source_epoch_lane_state",
+                "pending_source_envelope",
+                "cursor_store_raw_record",
+                "cursor_store_capture_cursor",
+            ):
+                if table in tables:
+                    table_counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        return {"path": str(path), "present": True, "sqlite_error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "path": str(path),
+        "present": True,
+        "sqlite_tables": sorted(tables),
+        "sqlite_counts": table_counts,
+    }
+
+
+def _cursor_managed_state_observation(root: Path, session_id: str) -> list[dict[str, Any]]:
+    """Retain only identity fields from the reservation and binding probes."""
+
+    observations: list[dict[str, Any]] = []
+    for directory in (root / "launch-reservations", root / "binding-probes"):
+        path = directory / f"{session_id}.json"
+        try:
+            payload = _read_json(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        observations.append(
+            {
+                "path": str(path),
+                "fields": {
+                    key: payload.get(key)
+                    for key in (
+                        "schema_version",
+                        "provider",
+                        "status",
+                        "session_id",
+                        "conversation_uuid",
+                        "launch_id",
+                        "run_id",
+                        "owner_pid",
+                        "owner_start_time",
+                    )
+                    if key in payload
+                },
+            }
+        )
+    return observations
+
+
+def _cursor_projection_diagnostics(
+    *,
+    environment: dict[str, str],
+    state: dict[str, Any],
+    marker: str,
+    engine_db_path: Path,
+    phase: str,
+) -> dict[str, Any]:
+    """Capture the minimum evidence needed to locate a Cursor projection gap."""
+
+    provider_session_id = str(state.get("provider_session_id") or "").strip()
+    home = Path(str(environment.get("HOME") or "")).expanduser()
+    cursor_home = Path(str(environment.get("CURSOR_HOME") or home / ".cursor")).expanduser()
+    longhouse_home = Path(str(environment.get("LONGHOUSE_HOME") or home / ".longhouse")).expanduser()
+    roots = (cursor_home / "chats", cursor_home / "projects", home / ".config" / "cursor" / "chats")
+    files: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            candidates = list(root.rglob("store.db")) + [path for path in root.rglob("*.jsonl") if "agent-transcripts" in path.parts]
+        except OSError:
+            continue
+        for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
+            if provider_session_id and provider_session_id not in str(path):
+                if path.name == "store.db":
+                    try:
+                        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=0.5)
+                        try:
+                            row = connection.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
+                        finally:
+                            connection.close()
+                    except sqlite3.Error:
+                        row = None
+                    if not row:
+                        continue
+                else:
+                    continue
+            if path.name == "store.db":
+                files.append(_cursor_sqlite_observation(path, marker=marker))
+            else:
+                observation = _cursor_file_observation(path, marker=marker)
+                observation["kind"] = "agent_transcript"
+                files.append(observation)
+    return {
+        "schema": "cursor_projection_diagnostics.v1",
+        "phase": phase,
+        "captured_at": _now(),
+        "provider": "cursor",
+        "session_id": state.get("session_id"),
+        "provider_session_id": provider_session_id,
+        "marker": marker,
+        "files": files,
+        "managed_state": _cursor_managed_state_observation(
+            longhouse_home / "managed-local" / "cursor-helm",
+            str(state.get("session_id") or ""),
+        ),
+        "engine_db": _cursor_engine_db_observation(engine_db_path),
+    }
 
 
 def _wait_cursor_idle(
@@ -1827,7 +2055,7 @@ def _wait_cursor_hook_sequence(
         before_generations = {str((event.get("payload") or {}).get("generation_id")) for event in matching_befores}
         if len(before_generations) > 1:
             raise RuntimeError(
-                "Cursor bootstrap hook observed matching prompts from multiple generations " f"({sorted(before_generations)!r})"
+                f"Cursor bootstrap hook observed matching prompts from multiple generations ({sorted(before_generations)!r})"
             )
         generation_id = next(iter(before_generations), "")
         matching_response = next(
@@ -2461,6 +2689,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 shipper,
                 label="resume-bootstrap",
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
+                marker=bootstrap_marker,
             )
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", bootstrap_ship_receipt)
             bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
@@ -2576,6 +2805,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     label="post-resume",
                     minimum_hook_event_bytes=post_resume_hook_event_bytes,
                     expected_generation_id=(post_resume_hook_sequence.get("generation_id") if spec.provider == "cursor" else None),
+                    marker=post_marker,
                 )
                 if spec.provider == "cursor"
                 else shipper.flush("post-resume")
