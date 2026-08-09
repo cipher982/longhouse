@@ -8,6 +8,8 @@ import {
   steerWindow,
 } from "@longhouse/video/demo";
 import { trackAcquisitionEvent } from "../../lib/analytics";
+import { PhoneFrame } from "./demo/PhoneFrame";
+import { PhoneSessionScreen } from "./demo/PhoneSessionScreen";
 import { ResponsiveTerminal } from "./demo/ResponsiveTerminal";
 import { useReplayClock } from "./demo/useReplayClock";
 
@@ -27,6 +29,7 @@ export function SteerPlayground() {
   const window = steerWindow(selected.grid, selected.endSec);
   const replayDuration = window.endSec - window.startSec + STEER_REACT_DELAY_SEC;
   const { tSec, containerRef, start } = useReplayClock(replayDuration, selected.id);
+  const clockRunning = sent && tSec < replayDuration;
 
   const handleSelect = (id: string) => {
     setSelectedId(id);
@@ -98,30 +101,19 @@ export function SteerPlayground() {
               })}
             </div>
 
-            <div className={`hero-demo-steer-card steer-playground-card${sent ? " is-sent" : ""}`}>
-              <div className="hero-demo-steer-meta">
-                <span className="hero-demo-steer-task">{claude.task}</span>
-                <span className="hero-demo-steer-session">
-                  <span style={{ color: claude.color }}>{claude.name}</span>
-                  {" · demo-repo · "}
-                  <span className="hero-demo-steer-live">recorded</span>
-                </span>
-              </div>
-              <div className="hero-demo-steer-composer">
-                <span className={`hero-demo-steer-text${prompt ? "" : " is-placeholder"}`}>
-                  {prompt || "Choose an instruction"}
-                </span>
-                <button
-                  type="button"
-                  className={`hero-demo-steer-send steer-playground-send${sent ? " is-sent" : ""}`}
-                  disabled={!selectedId || sent}
-                  onClick={handleSend}
-                >
-                  {sent ? "Sent ✓" : "Send"}
-                </button>
-              </div>
-              <span className="hero-demo-steer-origin">sent from your phone</span>
-            </div>
+            <PhoneFrame>
+              <PhoneSessionScreen
+                title="Fix the inventory count bug"
+                transcript={{
+                  assistantLine: "Two tests failing — traced it to the loop bounds in count_items.",
+                  sentMessage: sent ? prompt : undefined,
+                }}
+                composerText={prompt}
+                sent={sent}
+                working={clockRunning}
+                onSend={handleSend}
+              />
+            </PhoneFrame>
           </div>
 
           <ResponsiveTerminal
@@ -134,7 +126,7 @@ export function SteerPlayground() {
         </div>
 
         <p className="steer-playground-honesty">
-          Real Claude Code, replayed from a recording. Model responses are scripted.
+          Real Claude Code, replayed from a recording. Model responses are scripted; phone UI recreates the Longhouse iOS app.
         </p>
       </div>
     </section>

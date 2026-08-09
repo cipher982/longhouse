@@ -25,7 +25,7 @@ describe("SteerPlayground", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses each recording's prompt as its chip label", () => {
+  it("chip-label-equals-recordingPrompt", () => {
     render(<SteerPlayground />);
 
     for (const option of STEER_OPTIONS) {
@@ -41,9 +41,12 @@ describe("SteerPlayground", () => {
 
     const send = screen.getByRole("button", { name: "Send" });
     expect(send).toBeEnabled();
-    expect(screen.getAllByText(recordingPrompt(option.grid))).toHaveLength(2);
+    expect(screen.getByRole("textbox", { name: "Message to live session" })).toHaveValue(
+      recordingPrompt(option.grid),
+    );
 
     fireEvent.click(send);
-    expect(screen.getByRole("button", { name: "Sent ✓" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Message sent" })).toBeDisabled();
+    expect(screen.getAllByText(recordingPrompt(option.grid))).toHaveLength(2);
   });
 });
