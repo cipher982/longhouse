@@ -166,7 +166,17 @@ Compile/render:
 Process:
 - The pre-commit end-of-file fixer rewrites grid JSONs mid-commit; when a
   commit reports "files were modified by this hook", `git add` those and
-  commit again.
+  commit again. The provider-census hook regenerates
+  `docs/generated/provider_census.json` when provider literals change —
+  include it in the commit.
+- **video/src is a web-runtime input.** Deploy, runtime-image, and web
+  quality workflows trigger on `video/src/**` (added 2026-08-09 after a
+  video-only timing fix silently skipped deploy). If a new workflow
+  gates on `web/**`, give it the video paths too.
+- **Steer causality:** the pre-send hold frame must show an EMPTY
+  composer (see REPLAY_WINDOWS comment). If the terminal ever shows the
+  instruction before the card's Send fires, the window start drifted
+  past the take's typing phase.
 - Casts are committable ONLY from the blank sandbox. The sanitization gate
   greps cast + grid + meta for operator identity; keep it that way.
 - Honesty line: the page carries "Demo shows real provider CLIs replayed
