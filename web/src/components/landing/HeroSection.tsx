@@ -8,8 +8,8 @@ const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
 const DEMO_ARIA_LABEL =
   "Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds";
-const LiveDemo = lazy(() =>
-  import("./LiveDemo").then(({ LiveDemo: Component }) => ({ default: Component })),
+const HeroDemo = lazy(() =>
+  import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({ default: Component })),
 );
 
 function AppleIcon() {
@@ -157,7 +157,7 @@ export function HeroSection() {
             />
           }
         >
-          <LiveDemo aria-label={DEMO_ARIA_LABEL} />
+          <HeroDemo aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
         <p className="landing-hero-video-note">
           Demo shows real provider CLIs replayed from recordings, with scripted model
