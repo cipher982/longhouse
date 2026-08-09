@@ -75,53 +75,60 @@ export function SteerPlayground() {
   return (
     <section className="steer-playground" id="steer-playground">
       <div ref={containerRef} className="landing-section-inner">
-        <div className="steer-playground-heading">
-          <div>
+        <div className="steer-playground-body">
+          {/* Narrative + chips live BESIDE the phone they feed: the chips
+              are the phone's suggestions, so they must read as attached
+              to it, and the heading sharing the row keeps the whole
+              interaction inside one viewport. */}
+          <div className="steer-playground-narrative">
             <p className="steer-playground-kicker">STEER IT YOURSELF</p>
             <h2>Send the next move.</h2>
+            <p className="steer-playground-lead">
+              Pick an instruction, send it to the session, and watch the recorded Claude Code
+              terminal carry it out.
+            </p>
+            <div
+              className="steer-playground-chips"
+              role="group"
+              aria-label="Choose an instruction"
+            >
+              <span className="steer-playground-chip-label">Try a real instruction</span>
+              {STEER_OPTIONS.map((option) => {
+                const optionPrompt = recordingPrompt(option.grid);
+                const isSelected = option.id === selectedId;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`steer-playground-chip${isSelected ? " is-selected" : ""}`}
+                    aria-pressed={isSelected}
+                    onClick={() => handleSelect(option.id)}
+                  >
+                    {optionPrompt}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="steer-playground-honesty">
+              Real Claude Code, replayed from a recording. Model responses are scripted; phone
+              UI recreates the Longhouse iOS app.
+            </p>
           </div>
-          <p>
-            Pick an instruction, send it to the session, and watch the recorded Claude Code
-            terminal carry it out.
-          </p>
-        </div>
 
-        <div className="steer-playground-chips" role="group" aria-label="Choose an instruction">
-          <span className="steer-playground-chip-label">Try a real instruction</span>
-          {STEER_OPTIONS.map((option) => {
-            const optionPrompt = recordingPrompt(option.grid);
-            const isSelected = option.id === selectedId;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                className={`steer-playground-chip${isSelected ? " is-selected" : ""}`}
-                aria-pressed={isSelected}
-                onClick={() => handleSelect(option.id)}
-              >
-                {optionPrompt}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="steer-playground-body">
-          <div className="steer-playground-controls">
-            <PhoneFrame>
-              <PhoneSessionScreen
-                title="Fix the inventory count bug"
-                transcript={{
-                  assistantLine: "Two tests failing — traced it to the loop bounds in count_items.",
-                  sentMessage: sent ? prompt : undefined,
-                  events: visibleEvents,
-                }}
-                composerText={prompt}
-                sent={sent}
-                working={clockRunning}
-                onSend={handleSend}
-              />
-            </PhoneFrame>
-          </div>
+          <PhoneFrame>
+            <PhoneSessionScreen
+              title="Fix the inventory count bug"
+              transcript={{
+                assistantLine: "Two tests failing — traced it to the loop bounds in count_items.",
+                sentMessage: sent ? prompt : undefined,
+                events: visibleEvents,
+              }}
+              composerText={prompt}
+              sent={sent}
+              working={clockRunning}
+              onSend={handleSend}
+            />
+          </PhoneFrame>
 
           <ResponsiveTerminal
             timeline={selected.grid}
@@ -131,10 +138,6 @@ export function SteerPlayground() {
             detail="64 × 14 recording — demo-repo"
           />
         </div>
-
-        <p className="steer-playground-honesty">
-          Real Claude Code, replayed from a recording. Model responses are scripted; phone UI recreates the Longhouse iOS app.
-        </p>
       </div>
     </section>
   );
