@@ -13,72 +13,41 @@ import { Vignette } from "../components/Vignette";
 import { Wordmark } from "../components/Wordmark";
 import { KineticText } from "../components/KineticText";
 import { TRANSITION_FRAMES, sec } from "../lib/timing";
-import { TerminalGrid, type GridTimeline } from "../terminal/TerminalGrid";
-import claudeGridJson from "../assets/terminal/claude.grid.json";
-import claudeTileJson from "../assets/terminal/claude-tile.grid.json";
-import codexTileJson from "../assets/terminal/codex-tile.grid.json";
-
-const claudeGrid = claudeGridJson as unknown as GridTimeline;
-const claudeTile = claudeTileJson as unknown as GridTimeline;
-const codexTile = codexTileJson as unknown as GridTimeline;
+import { TerminalGrid } from "../terminal/TerminalGrid";
+import {
+  AGENT_TILES,
+  BEATS,
+  DEMO_PALETTE,
+  PROVIDERS,
+  REPLAY_WINDOWS,
+  STEER_MESSAGE,
+  claudeGrid,
+  claudeTile,
+  codexTile,
+} from "../demo";
 
 /**
- * ControlRoom — the hero demo, drawn entirely in code so every frame stays
- * legible at landing-hero scale. Four beats:
+ * ControlRoom — the EXPORT LANE of the hero demo (mp4 / poster / OG for
+ * social embeds, where a fixed 16:9 frame is genuinely required). The
+ * landing page itself runs a native DOM rendering of the same script:
+ * web/src/components/landing/demo/. Both consume ../demo/script.ts —
+ * narrative or replay-window changes belong THERE, not here.
  *
- *   1. Agents   — four real provider CLIs, live on your machines
+ * Four beats:
+ *   1. Agents   — real provider CLIs, live on your machines
  *   2. Unify    — Longhouse normalizes them into one system
  *   3. Steer    — a phone sends the next instruction; the terminal reacts
  *   4. Close    — wordmark
- *
- * No screenshots, no pan/zoom, no text-card hooks.
  */
 
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const MONO = '"SF Mono", "JetBrains Mono", Menlo, Consolas, monospace';
 
-const BG = "#0e0a08";
-const GOLD = "#C9A66B";
-const CREAM = "#F3EAD9";
+const BG = DEMO_PALETTE.bg;
+const GOLD = DEMO_PALETTE.gold;
+const CREAM = DEMO_PALETTE.cream;
 
-interface Provider {
-  name: string;
-  cmd: string;
-  color: string;
-  machine: string;
-  task: string;
-}
-
-const PROVIDERS: Provider[] = [
-  {
-    name: "Claude Code",
-    cmd: "claude",
-    color: "#E8875A",
-    machine: "macbook",
-    task: "Fix the inventory count bug",
-  },
-  {
-    name: "Codex",
-    cmd: "codex",
-    color: "#7BC9A8",
-    machine: "devbox",
-    task: "Repair release build",
-  },
-  {
-    name: "Cursor Agent",
-    cmd: "cursor-agent",
-    color: "#9B8CFF",
-    machine: "studio",
-    task: "Migrate settings page",
-  },
-  {
-    name: "OpenCode",
-    cmd: "opencode",
-    color: "#6FB7E8",
-    machine: "homelab",
-    task: "Nightly digest job",
-  },
-];
+const RECORDINGS = { claudeTile, codexTile } as const;
 
 const Caption: React.FC<{ text: string; delay?: number }> = ({ text, delay = 8 }) => {
   const frame = useCurrentFrame();
@@ -107,11 +76,13 @@ const Caption: React.FC<{ text: string; delay?: number }> = ({ text, delay = 8 }
 
 /* ── Beat 1: real agents, really running ────────────────────────────── */
 
-/** Real recorded sessions at 64x14: replay windows over the dense work. */
-const TILES = [
-  { provider: 0, timeline: () => claudeTile, startSec: 4.0, endSec: 8.7 },
-  { provider: 1, timeline: () => codexTile, startSec: 2.6, endSec: 7.5 },
-];
+/** Real recorded sessions at 64x14; windows come from the shared script. */
+const TILES = AGENT_TILES.map((tile) => ({
+  provider: PROVIDERS.findIndex((p) => p.id === tile.providerId),
+  timeline: () => RECORDINGS[tile.recording],
+  startSec: tile.window.startSec,
+  endSec: tile.window.endSec,
+}));
 
 const TILE_CELL_W = 13.5;
 const TILE_CELL_H = 29;
@@ -189,7 +160,7 @@ const AgentsScene: React.FC = () => {
           );
         })}
       </AbsoluteFill>
-      <Caption text="Your coding agents already run everywhere." delay={26} />
+      <Caption text={BEATS[0].caption} delay={26} />
       <Vignette intensity={0.3} />
     </AbsoluteFill>
   );
@@ -306,7 +277,7 @@ const UnifyScene: React.FC = () => {
           })}
         </div>
       </AbsoluteFill>
-      <Caption text="Longhouse normalizes all of them into one system." delay={16} />
+      <Caption text={BEATS[1].caption} delay={16} />
       <Vignette intensity={0.3} />
     </AbsoluteFill>
   );
@@ -314,14 +285,11 @@ const UnifyScene: React.FC = () => {
 
 /* ── Beat 3: steer from the phone; the terminal reacts ──────────────── */
 
-const STEER_MESSAGE = "Fix the off-by-one bug in count_items, then run the tests";
-
-// The recording's prompt lands at ~5.5s; work streams until ~9.05s. The
-// replay window opens when the phone's Send fires, so the terminal shows the
-// REAL recorded Claude Code session (sandboxed first-run, mock-API lane)
-// doing exactly what the phone asked.
-const REPLAY_START_SEC = 3.5;
-const REPLAY_END_SEC = 8.7;
+// The replay window opens when the phone's Send fires, so the terminal shows
+// the REAL recorded Claude Code session (sandboxed first-run, mock-API lane)
+// doing exactly what the phone asked. Window numbers live in demo/script.ts.
+const REPLAY_START_SEC = REPLAY_WINDOWS.claude.startSec;
+const REPLAY_END_SEC = REPLAY_WINDOWS.claude.endSec;
 
 const SteerScene: React.FC = () => {
   const frame = useCurrentFrame();
@@ -518,7 +486,7 @@ const SteerScene: React.FC = () => {
           </div>
         </div>
       </AbsoluteFill>
-      <Caption text="Steer any of them, from anywhere." delay={10} />
+      <Caption text={BEATS[2].caption} delay={10} />
       <Vignette intensity={0.3} />
     </AbsoluteFill>
   );
@@ -542,7 +510,7 @@ const CloseScene: React.FC = () => {
     >
       <Wordmark enterFrame={4} opacity={0.96} fontSize={72} />
       <KineticText
-        text="Remote control for your coding agents."
+        text={BEATS[3].caption}
         fontSize={38}
         staggerFrames={2}
       />
@@ -572,12 +540,17 @@ const CloseScene: React.FC = () => {
 
 /* ── Composition ─────────────────────────────────────────────────────── */
 
-export const CONTROL_ROOM_SCENES = [
-  { frames: sec(5), scene: <AgentsScene /> },
-  { frames: sec(4), scene: <UnifyScene /> },
-  { frames: sec(6.5), scene: <SteerScene /> },
-  { frames: sec(2.5), scene: <CloseScene /> },
-];
+const BEAT_SCENES = {
+  agents: <AgentsScene />,
+  unify: <UnifyScene />,
+  steer: <SteerScene />,
+  close: <CloseScene />,
+} as const;
+
+export const CONTROL_ROOM_SCENES = BEATS.map((beat) => ({
+  frames: sec(beat.durSec),
+  scene: BEAT_SCENES[beat.id],
+}));
 
 export const controlRoomDuration = (): number =>
   CONTROL_ROOM_SCENES.reduce((acc, s) => acc + s.frames, 0) -

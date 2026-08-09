@@ -12,6 +12,11 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./demo": {
+      "types": "./src/demo/index.ts",
+      "import": "./src/demo/index.ts",
+      "default": "./src/demo/index.ts"
     }
   },
   "scripts": {

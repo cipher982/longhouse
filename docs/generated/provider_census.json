@@ -1891,10 +1891,11 @@
       ]
     },
     {
-      "path": "video/src/compositions/ControlRoom.tsx",
+      "path": "video/src/demo/script.ts",
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
