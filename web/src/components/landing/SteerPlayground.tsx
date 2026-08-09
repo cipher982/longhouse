@@ -11,9 +11,11 @@ import { trackAcquisitionEvent } from "../../lib/analytics";
 import { ResponsiveTerminal } from "./demo/ResponsiveTerminal";
 import { useReplayClock } from "./demo/useReplayClock";
 
+// endSec is the one editorial number per take: freeze on the finished work
+// (tests passed + summary + idle composer), BEFORE the recorder types /exit.
 export const STEER_OPTIONS = [
-  { id: "fix-inventory", grid: claudeTile },
-  { id: "add-empty-shelf-test", grid: claudeAddtest },
+  { id: "fix-inventory", grid: claudeTile, endSec: 9.0 },
+  { id: "add-empty-shelf-test", grid: claudeAddtest, endSec: 8.5 },
 ] as const;
 
 export function SteerPlayground() {
@@ -22,7 +24,7 @@ export function SteerPlayground() {
   const [sent, setSent] = useState(false);
   const selected = STEER_OPTIONS.find((option) => option.id === selectedId) ?? STEER_OPTIONS[0];
   const prompt = selectedId ? recordingPrompt(selected.grid) : "";
-  const window = steerWindow(selected.grid);
+  const window = steerWindow(selected.grid, selected.endSec);
   const replayDuration = window.endSec - window.startSec + STEER_REACT_DELAY_SEC;
   const { tSec, containerRef, start } = useReplayClock(replayDuration, selected.id);
 
