@@ -233,13 +233,25 @@ class ProviderCapabilityProofStore:
     def integrity_report(self, provider: str) -> ProofStoreIntegrityReport:
         records = self.records(provider)
         available = self.available_blob_digests()
+        # Publication events are content-addressed files, but their filename
+        # also includes the publication timestamp and bundle digest. Looking
+        # up one event by scanning the whole directory for every record makes
+        # this check O(records * events), which turns a normal proof batch into
+        # an increasingly slow request. Build the authenticated artifact set
+        # once and use constant-time membership checks below.
+        published_artifact_facts = self._published_artifact_facts(provider) if self.require_authenticated_publication else {}
         artifacts: list[ProofArtifactIntegrity] = []
         for record in records:
             reasons: list[str] = []
             refs = set(record.referenced_content_digests())
             if refs - available:
                 reasons.append("proof_referenced_content_missing")
-            if self.require_authenticated_publication and not self._has_publication_event(record):
+            publication = published_artifact_facts.get(record.artifact_id)
+            if self.require_authenticated_publication and publication != (
+                record.worker_id,
+                record.worker_census_digest,
+                record.auth_mechanism,
+            ):
                 reasons.append("proof_authenticated_publication_missing")
             if self.require_authenticated_publication:
                 root_path = self._epoch_root / f"{record.accepted_epoch_id}.json" if record.accepted_epoch_id else None
@@ -266,32 +278,53 @@ class ProviderCapabilityProofStore:
             orphan_blob_digests=tuple(sorted(available - self._all_referenced_content_digests())),
         )
 
-    def _has_publication_event(self, record: ProviderCapabilityProofRecord) -> bool:
-        root = self._event_root / record.provider
+    def _published_artifact_facts(self, provider: str) -> dict[str, tuple[str, str, str]]:
+        """Return valid authenticated publication identities for one provider.
+
+        The event directory is append-only and each event names its artifact.
+        Parse it once per integrity report instead of re-reading every event
+        for every retained proof record.
+        """
+
+        root = self._event_root / provider
         if not root.exists():
-            return False
+            return {}
+        published: dict[str, tuple[str, str, str]] = {}
         for path in root.glob("*.json"):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(payload, dict):
+                continue
             event_id = payload.get("event_id")
             canonical = {key: value for key, value in payload.items() if key != "event_id"}
             expected_id = hashlib.sha256(self._canonical_json(canonical)).hexdigest()
+            artifact_id = payload.get("artifact_id")
+            worker_id = payload.get("worker_id")
+            worker_census_digest = payload.get("worker_census_digest")
+            auth_mechanism = payload.get("auth_mechanism")
             if (
                 event_id == expected_id
                 and path.stem == expected_id
                 and payload.get("schema_version") == 1
                 and payload.get("artifact_kind") == "provider_capability_proof_publication"
-                and payload.get("artifact_id") == record.artifact_id
-                and payload.get("provider") == record.provider
-                and payload.get("worker_id") == record.worker_id
-                and payload.get("worker_census_digest") == record.worker_census_digest
-                and payload.get("auth_mechanism") == record.auth_mechanism
+                and isinstance(artifact_id, str)
+                and payload.get("provider") == provider
+                and isinstance(worker_id, str)
+                and isinstance(worker_census_digest, str)
+                and isinstance(auth_mechanism, str)
                 and _SHA256.fullmatch(str(payload.get("bundle_digest") or ""))
             ):
-                return True
-        return False
+                published[artifact_id] = (worker_id, worker_census_digest, auth_mechanism)
+        return published
+
+    def _has_publication_event(self, record: ProviderCapabilityProofRecord) -> bool:
+        return self._published_artifact_facts(record.provider).get(record.artifact_id) == (
+            record.worker_id,
+            record.worker_census_digest,
+            record.auth_mechanism,
+        )
 
     def rebuild_index(self, provider: str) -> Path:
         provider_root = self._provider_root(provider)
