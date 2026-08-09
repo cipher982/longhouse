@@ -93,8 +93,15 @@ export default function LandingPage() {
       "Longhouse plugs into Claude Code, Codex, Cursor, and OpenCode, normalizes every session into one system, and lets you steer any of them from the web or your iPhone.",
   });
 
-  // Show loading while checking auth or accepting token
-  if (isLoading) {
+  // Auth only matters when it can redirect us to /timeline. When no redirect
+  // is possible (preview route, demo mode, redirect disabled), render the
+  // marketing page immediately — a slow or unreachable API must never leave
+  // visitors on a spinner.
+  const isPreviewRoute = location.pathname === "/landing";
+  const redirectPossible =
+    config.authEnabled && !config.demoMode && !disableRedirect && !isPreviewRoute;
+
+  if (isLoading && redirectPossible) {
     return (
       <div className="landing-loading">
         <SwarmLogo size={64} className="landing-loading-logo" />
@@ -102,8 +109,7 @@ export default function LandingPage() {
     );
   }
 
-  const isPreviewRoute = location.pathname === "/landing";
-  if (config.authEnabled && !config.demoMode && !disableRedirect && !isPreviewRoute && isAuthenticated) {
+  if (redirectPossible && isAuthenticated) {
     return <Navigate to="/timeline" replace />;
   }
 
