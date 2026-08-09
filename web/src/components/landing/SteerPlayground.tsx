@@ -86,31 +86,27 @@ export function SteerPlayground() {
           </p>
         </div>
 
+        <div className="steer-playground-chips" role="group" aria-label="Choose an instruction">
+          <span className="steer-playground-chip-label">Try a real instruction</span>
+          {STEER_OPTIONS.map((option) => {
+            const optionPrompt = recordingPrompt(option.grid);
+            const isSelected = option.id === selectedId;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                className={`steer-playground-chip${isSelected ? " is-selected" : ""}`}
+                aria-pressed={isSelected}
+                onClick={() => handleSelect(option.id)}
+              >
+                {optionPrompt}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="steer-playground-body">
           <div className="steer-playground-controls">
-            <div
-              className="steer-playground-chips"
-              role="group"
-              aria-label="Choose an instruction"
-            >
-              <span className="steer-playground-chip-label">Try a real instruction</span>
-              {STEER_OPTIONS.map((option) => {
-                const optionPrompt = recordingPrompt(option.grid);
-                const isSelected = option.id === selectedId;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={`steer-playground-chip${isSelected ? " is-selected" : ""}`}
-                    aria-pressed={isSelected}
-                    onClick={() => handleSelect(option.id)}
-                  >
-                    {optionPrompt}
-                  </button>
-                );
-              })}
-            </div>
-
             <PhoneFrame>
               <PhoneSessionScreen
                 title="Fix the inventory count bug"

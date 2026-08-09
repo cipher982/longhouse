@@ -61,6 +61,30 @@ providers.yml (pinned source + auth mode + sentinels)
 - `video/src/compositions/ControlRoom.tsx` — Remotion export composition
 - `Makefile demo-render` — export lane (mp4 has its silent AAC stripped)
 
+## Layout contract (agents miss what humans see instantly)
+
+Humans catch composition problems at a glance; agents verifying "does it
+render / does it click" ship billboard terminals and below-the-fold Send
+buttons. These rules are the formalized substitute — check them the way
+you check tests:
+
+1. **Demo components scale to the page; the page never scales to the
+   demo.** A 64-col terminal at full section width renders billboard
+   type. Give media a column, not the section.
+2. **Media is constrained by BOTH axes.** Tall media (the phone is
+   ~2.26x its width) must cap width by viewport height too, or its
+   interactive bottom edge falls below the fold on short/wide windows:
+   `width: min(340px, 100%, calc((100vh - <chrome above it>px) * <w/h ratio>))`.
+3. **The fold check is part of the verify loop.** Scroll the section to
+   the top of a 1440x900 AND a 1800x850 viewport, screenshot exactly one
+   viewport, and assert the section's interactive elements (chips, Send)
+   are inside it — measure boundingBox in the Playwright script and
+   print `send bottom at y=N of H`; don't eyeball alone.
+4. **Vertical budget:** at 900px the section gets roughly 830px of
+   usable height below the fixed header. Heading + controls + media must
+   fit it; tighten heading scale/rhythm before shrinking the media below
+   legibility.
+
 ## Runbook
 
 Re-record one provider (both geometries, gated, publishes assets):

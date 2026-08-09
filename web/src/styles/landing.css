@@ -859,7 +859,7 @@
   /* Section tints must EASE in and out — a flat overlay starting at the
      section edge reads as a full-width seam against the page background. */
   .steer-playground {
-    padding: 112px 0 128px;
+    padding: 84px 0 112px;
     background:
       radial-gradient(circle at 82% 42%, rgba(143, 197, 172, 0.08), transparent 28rem),
       linear-gradient(
@@ -881,7 +881,7 @@
   .steer-playground-heading h2 {
     margin: 0;
     font-family: var(--font-family-display);
-    font-size: clamp(2.25rem, 4vw, 4rem);
+    font-size: clamp(2rem, 3.4vw, 3.4rem);
     font-weight: var(--font-weight-semibold);
     letter-spacing: -0.045em;
     line-height: 1;
@@ -909,9 +909,9 @@
   .steer-playground-body {
     display: grid;
     align-items: start;
-    grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+    grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.15fr);
     gap: 44px;
-    margin-top: 44px;
+    margin-top: 26px;
   }
 
   .steer-playground-controls {
@@ -925,6 +925,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
+    margin-top: 30px;
   }
 
   .steer-playground-chip-label {
@@ -967,8 +968,14 @@
     font-size: 0.78rem;
   }
 
+  /* LAYOUT CONTRACT: demo media is constrained by BOTH axes. The phone's
+     height is ~2.26x its width (852pt screen + bezel), so its width must
+     also be capped by viewport height or Send falls below the fold on
+     short/wide windows. 0.44 ≈ width/height of the framed phone; 460px ≈
+     header + section heading + chips + breathing room above it. */
   .phone-frame {
-    width: min(340px, 100%);
+    width: min(340px, 100%, calc((100vh - 460px) * 0.44));
+    min-width: 228px;
     align-self: flex-start;
     margin-inline: auto;
   }
@@ -1652,7 +1659,8 @@
   }
 
   .steer-playground .phone-frame {
-    width: min(340px, 100%);
+    width: min(340px, 100%, calc((100vh - 460px) * 0.44));
+    min-width: 228px;
   }
 
   .landing-surface {
