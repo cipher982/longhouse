@@ -261,11 +261,15 @@ class ProviderCapabilityProofStore:
             refs = set(record.referenced_content_digests())
             if refs - available:
                 reasons.append("proof_referenced_content_missing")
-            publication = published_artifact_facts.get(record.artifact_id)
-            if self.require_authenticated_publication and publication != (
-                record.worker_id,
-                record.worker_census_digest,
-                record.auth_mechanism,
+            publication = published_artifact_facts.get(record.artifact_id, frozenset())
+            if (
+                self.require_authenticated_publication
+                and (
+                    record.worker_id,
+                    record.worker_census_digest,
+                    record.auth_mechanism,
+                )
+                not in publication
             ):
                 reasons.append("proof_authenticated_publication_missing")
             if self.require_authenticated_publication:
@@ -293,7 +297,7 @@ class ProviderCapabilityProofStore:
             orphan_blob_digests=(tuple(sorted(available - self._all_referenced_content_digests())) if full_scan else ()),
         )
 
-    def _published_artifact_facts(self, provider: str) -> dict[str, tuple[str, str, str]]:
+    def _published_artifact_facts(self, provider: str) -> dict[str, frozenset[tuple[str, str, str]]]:
         """Return valid authenticated publication identities for one provider.
 
         The event directory is append-only and each event names its artifact.
@@ -304,7 +308,7 @@ class ProviderCapabilityProofStore:
         root = self._event_root / provider
         if not root.exists():
             return {}
-        published: dict[str, tuple[str, str, str]] = {}
+        published: dict[str, set[tuple[str, str, str]]] = {}
         for path in root.glob("*.json"):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
@@ -331,15 +335,15 @@ class ProviderCapabilityProofStore:
                 and isinstance(auth_mechanism, str)
                 and _SHA256.fullmatch(str(payload.get("bundle_digest") or ""))
             ):
-                published[artifact_id] = (worker_id, worker_census_digest, auth_mechanism)
-        return published
+                published.setdefault(artifact_id, set()).add((worker_id, worker_census_digest, auth_mechanism))
+        return {artifact_id: frozenset(facts) for artifact_id, facts in published.items()}
 
     def _has_publication_event(self, record: ProviderCapabilityProofRecord) -> bool:
-        return self._published_artifact_facts(record.provider).get(record.artifact_id) == (
+        return (
             record.worker_id,
             record.worker_census_digest,
             record.auth_mechanism,
-        )
+        ) in self._published_artifact_facts(record.provider).get(record.artifact_id, frozenset())
 
     def rebuild_index(self, provider: str) -> Path:
         provider_root = self._provider_root(provider)
