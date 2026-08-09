@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from zerg.config import get_settings
+from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_title
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,14 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         first_user_message = str(candidate.get("first_user_message") or "")
         if sanitize_title(first_user_message) is None:
             raise ValueError("no_meaningful_user_text")
+        if is_resume_seed_marker(first_user_message):
+            # Automation seed marker (e.g. LONGHOUSE_OPENCODE_RESUME_SEED_<hex>)
+            # from the provider-resume/factory assurance harness. It is a
+            # deterministic synthetic token, not a user request, so it never
+            # deserves an AI title; the fallback title is the marker itself.
+            # Belt-and-suspenders with the candidate-query skip in catalogd.
+            logger.info("Skipping storage-v2 AI title for seed-marker session=%s", session_id)
+            return False
         from zerg.models_config import get_llm_client_for_use_case
         from zerg.services.title_generator import generate_initial_session_title
 

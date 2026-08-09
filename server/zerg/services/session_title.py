@@ -39,6 +39,28 @@ _TRIPLE_QUOTE_RE = re.compile(r'"""|\'\'\'')
 _HEADING_PREFIX_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# Assurance/factory harness seed markers. The resume/provide-factory harness
+# drives synthetic sessions whose first user message is a deterministic marker
+# like LONGHOUSE_OPENCODE_RESUME_SEED_<hex>, not a real user request. AI-titling
+# such a marker adds no information (the fallback title is the marker itself),
+# so we skip LLM work for them. Matching on the well-formed "_RESUME_SEED_"
+# token keeps this honest: content must carry the marker shape, never a loose
+# prefix that could clip a real user's message.
+_RESUME_SEED_TOKEN = "_RESUME_SEED_"
+
+
+def is_resume_seed_marker(text: str | None) -> bool:
+    """True when first-user-message text is an automation seed marker.
+
+    The provider resume/factory assurance harness enqueues synthetic sessions
+    whose first message is a generated resume seed token (a formatted brand
+    like LONGHOUSE_<provider>_RESUME_SEED_<hex>). These are not real user
+    requests and never deserve an AI title: the deterministic fallback title is
+    the marker itself. Returns True only for text containing the well-formed
+    "_RESUME_SEED_" token so a normal prompt can never accidentally match.
+    """
+    return bool(text) and _RESUME_SEED_TOKEN in str(text)
+
 
 def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> str | None:
     """Reduce arbitrary text to a short clean headline phrase, or None.

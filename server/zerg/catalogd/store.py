@@ -86,7 +86,9 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
+from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_title
+from zerg.services.session_title import structured_fallback_title
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
@@ -161,6 +163,15 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
 # cap leaves deterministic headroom below the 8 MiB frame even when all 100
 # rows contain escape-heavy content that doubles during outer JSON encoding.
 _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
+
+# Storage-v2 AI title retry budget. A title that keeps failing (LLM timeout,
+# empty response, ...) must not retry forever at a fixed cadence on a hotspot
+# like a large synthetic backlog. We allow a small bounded number of attempts
+# with exponential backoff, then freeze the session's deterministic non-AI
+# fallback title and stop. The terminal state lives in the database
+# (anchor_title set, title_retry_at cleared) so it survives a restart instead of
+# resuming the loop on every boot.
+MAX_TITLE_ATTEMPTS = 5
 
 
 def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -7009,6 +7020,7 @@ class CatalogStore:
                         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
                         or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
                         table.c.environment.notin_(("test", "e2e")),
+                        table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
                     )
                     .order_by(table.c.last_activity_at.desc(), table.c.session_id)
                     .limit(limit)
@@ -7027,7 +7039,7 @@ class CatalogStore:
                     "attempt_count": int(row["title_attempt_count"] or 0),
                 }
                 for row in rows
-                if str(row["first_user_message_preview"] or "").strip()
+                if str(row["first_user_message_preview"] or "").strip() and not is_resume_seed_marker(row["first_user_message_preview"])
             ],
             "observed_at": observed_at.isoformat(),
         }
@@ -7075,11 +7087,64 @@ class CatalogStore:
         session_key = str(session_id)
         with _write_transaction(self.engine) as connection:
             row = connection.execute(
-                select(table.c.anchor_title, table.c.title_attempt_count).where(table.c.session_id == session_key)
+                select(
+                    table.c.anchor_title,
+                    table.c.title_attempt_count,
+                    table.c.first_user_message_preview,
+                    table.c.project,
+                    table.c.git_branch,
+                    table.c.provider,
+                ).where(table.c.session_id == session_key)
             ).first()
             if row is None or row.anchor_title:
                 return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
             attempts = int(row.title_attempt_count or 0) + 1
+            if attempts >= MAX_TITLE_ATTEMPTS:
+                # Terminal: the AI title keeps failing, so freeze the
+                # deterministic non-AI fallback and STOP. Durable (DB row), so a
+                # restart cannot resume the retry loop. anchor_title being set
+                # also removes the session from the candidate query.
+                fallback = sanitize_title(row.first_user_message_preview, max_words=6)
+                title = fallback or structured_fallback_title(row.project, row.git_branch)
+                commit_seq = _advance_commit_seq(connection, failed_at)
+                connection.execute(
+                    update(table)
+                    .where(table.c.session_id == session_key)
+                    .values(
+                        anchor_title=title,
+                        summary_title=title,
+                        title_attempt_count=attempts,
+                        title_last_attempt_at=failed_at,
+                        title_retry_at=None,
+                        title_last_error=reason[:128],
+                        commit_seq=commit_seq,
+                        updated_at=failed_at,
+                    )
+                )
+                connection.execute(
+                    update(LiveSessionCatalog.__table__)
+                    .where(LiveSessionCatalog.__table__.c.session_id == session_key)
+                    .values(
+                        anchor_title=title,
+                        summary_title=title,
+                        title_retry_at=None,
+                        title_last_error=reason[:128],
+                        updated_at=failed_at,
+                    )
+                )
+                connection.execute(
+                    update(LiveTimelineCard.__table__)
+                    .where(LiveTimelineCard.__table__.c.session_id == session_key)
+                    .values(summary_title=title)
+                )
+                return {
+                    "changed": True,
+                    "terminal": True,
+                    "title": title,
+                    "attempt_count": attempts,
+                    "retry_at": None,
+                    "commit_seq": str(commit_seq),
+                }
             retry_at = None if reason == "no_meaningful_user_text" else failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))
             commit_seq = _advance_commit_seq(connection, failed_at)
             connection.execute(
@@ -7101,6 +7166,8 @@ class CatalogStore:
             )
             return {
                 "changed": True,
+                "terminal": False,
+                "title": None,
                 "attempt_count": attempts,
                 "retry_at": retry_at.isoformat() if retry_at is not None else None,
                 "commit_seq": str(commit_seq),
