@@ -845,19 +845,30 @@
 
   .landing-demo {
     padding: 112px 0 128px;
-    background: rgba(255, 248, 239, 0.018);
-    border-top: 1px solid rgba(201, 166, 107, 0.08);
-    border-bottom: 1px solid rgba(201, 166, 107, 0.08);
+    background: linear-gradient(
+      180deg,
+      transparent,
+      rgba(255, 248, 239, 0.018) 20%,
+      rgba(255, 248, 239, 0.018) 80%,
+      transparent
+    );
   }
 
   /* ── Interactive steer playground ───────────────────────────────────── */
 
+  /* Section tints must EASE in and out — a flat overlay starting at the
+     section edge reads as a full-width seam against the page background. */
   .steer-playground {
     padding: 112px 0 128px;
     background:
       radial-gradient(circle at 82% 42%, rgba(143, 197, 172, 0.08), transparent 28rem),
-      rgba(255, 248, 239, 0.012);
-    border-bottom: 1px solid rgba(201, 166, 107, 0.08);
+      linear-gradient(
+        180deg,
+        transparent,
+        rgba(255, 248, 239, 0.014) 22%,
+        rgba(255, 248, 239, 0.014) 78%,
+        transparent
+      );
   }
 
   .steer-playground-heading {
@@ -1646,9 +1657,13 @@
 
   .landing-surface {
     padding: 116px 0;
-    background: rgba(255, 248, 239, 0.018);
-    border-top: 1px solid rgba(201, 166, 107, 0.08);
-    border-bottom: 1px solid rgba(201, 166, 107, 0.08);
+    background: linear-gradient(
+      180deg,
+      transparent,
+      rgba(255, 248, 239, 0.018) 20%,
+      rgba(255, 248, 239, 0.018) 80%,
+      transparent
+    );
   }
 
   .landing-surface-inner {
@@ -1805,8 +1820,13 @@
 
   .landing-pricing {
     padding: 116px 0 128px;
-    background: rgba(255, 248, 239, 0.018);
-    border-top: 1px solid rgba(201, 166, 107, 0.08);
+    background: linear-gradient(
+      180deg,
+      transparent,
+      rgba(255, 248, 239, 0.018) 20%,
+      rgba(255, 248, 239, 0.018) 85%,
+      transparent
+    );
   }
 
   .landing-pricing-heading,
