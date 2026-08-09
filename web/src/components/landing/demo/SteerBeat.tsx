@@ -1,24 +1,28 @@
 import { memo } from "react";
 import {
   PROVIDERS,
-  REPLAY_WINDOWS,
   STEER_CHARS_PER_SEC,
-  STEER_MESSAGE,
   STEER_REACT_DELAY_SEC,
   STEER_TYPE_START_SEC,
   claudeTile,
+  recordingPrompt,
   steerSentAtSec,
+  steerWindow,
 } from "@longhouse/video/demo";
 import { ResponsiveTerminal } from "./ResponsiveTerminal";
 import { ramp } from "./ease";
 
 /**
- * Beat 3: an instruction typed from your phone; the REAL recorded Claude
+ * Beat 3: an instruction sent from your phone; the REAL recorded Claude
  * Code session reacts (sandboxed first-run, mock-API lane). The message
- * card is a drawn mock; the terminal below it is literal PTY replay.
+ * card is a drawn mock; the terminal below it is literal PTY replay. Both
+ * the message text and the replay window come FROM the recording, so the
+ * card always shows exactly what the session received.
  */
 
-const WINDOW = REPLAY_WINDOWS.claudeTileSteer;
+const MESSAGE = recordingPrompt(claudeTile);
+const WINDOW = steerWindow(claudeTile);
+const SENT_AT = steerSentAtSec(MESSAGE);
 
 function Beat({ tLocal }: { tLocal: number }) {
   const claude = PROVIDERS[0];
@@ -27,20 +31,19 @@ function Beat({ tLocal }: { tLocal: number }) {
   const shown = Math.max(
     0,
     Math.min(
-      STEER_MESSAGE.length,
+      MESSAGE.length,
       Math.floor((tLocal - STEER_TYPE_START_SEC) * STEER_CHARS_PER_SEC),
     ),
   );
-  const typed = STEER_MESSAGE.slice(0, shown);
-  const sent = shown >= STEER_MESSAGE.length;
-  const sentAt = steerSentAtSec();
+  const typed = MESSAGE.slice(0, shown);
+  const sent = shown >= MESSAGE.length;
   const caretOn = Math.floor(tLocal * 3.75) % 2 === 0;
 
   // Pre-send: hold on the idle composer. Post-send: roll from AFTER the
   // take's typing segment — a remote send arrives as one paste.
   const replayT = sent
     ? Math.min(
-        WINDOW.startSec + Math.max(0, tLocal - (sentAt + STEER_REACT_DELAY_SEC)),
+        WINDOW.startSec + Math.max(0, tLocal - (SENT_AT + STEER_REACT_DELAY_SEC)),
         WINDOW.endSec,
       )
     : WINDOW.holdSec;

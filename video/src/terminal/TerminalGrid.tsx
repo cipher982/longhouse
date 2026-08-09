@@ -30,7 +30,17 @@ interface GridState {
 }
 
 export interface GridTimeline {
-  meta: { cols: number; rows: number };
+  meta: {
+    cols: number;
+    rows: number;
+    /** The exact prompt the recorded session received (from the recorder's
+     * meta sidecar) plus mechanically derived anchors — see compile.ts.
+     * Consumers MUST read the steer message/window from these instead of
+     * maintaining display copies that can drift from the footage. */
+    prompt?: string;
+    promptIdleSec?: number;
+    promptTypedSec?: number;
+  };
   rowPool: Run[][];
   states: GridState[];
 }

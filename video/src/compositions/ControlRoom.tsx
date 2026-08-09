@@ -19,11 +19,11 @@ import {
   BEATS,
   DEMO_PALETTE,
   PROVIDERS,
-  REPLAY_WINDOWS,
   STEER_CHARS_PER_SEC,
-  STEER_MESSAGE,
   STEER_REACT_DELAY_SEC,
   STEER_TYPE_START_SEC,
+  recordingPrompt,
+  steerWindow,
   claudeGrid,
   claudeTile,
   codexTile,
@@ -290,10 +290,13 @@ const UnifyScene: React.FC = () => {
 
 // The replay window opens when the phone's Send fires, so the terminal shows
 // the REAL recorded Claude Code session (sandboxed first-run, mock-API lane)
-// doing exactly what the phone asked. Window numbers live in demo/script.ts.
-const REPLAY_HOLD_SEC = REPLAY_WINDOWS.claude.holdSec;
-const REPLAY_START_SEC = REPLAY_WINDOWS.claude.startSec;
-const REPLAY_END_SEC = REPLAY_WINDOWS.claude.endSec;
+// doing exactly what the phone asked. Message and window come FROM the
+// recording (recordingPrompt/steerWindow), so the card cannot drift from it.
+const STEER_MESSAGE = recordingPrompt(claudeGrid);
+const STEER_WINDOW = steerWindow(claudeGrid);
+const REPLAY_HOLD_SEC = STEER_WINDOW.holdSec;
+const REPLAY_START_SEC = STEER_WINDOW.startSec;
+const REPLAY_END_SEC = STEER_WINDOW.endSec;
 
 const SteerScene: React.FC = () => {
   const frame = useCurrentFrame();

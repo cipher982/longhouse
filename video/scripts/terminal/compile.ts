@@ -190,6 +190,47 @@ for (let i = 1; i < lines.length; i++) {
 }
 
 const sha256 = createHash("sha256").update(raw).digest("hex");
+
+// Prompt provenance: the recorder's meta sidecar knows EXACTLY what string
+// the session received. Carry it (plus mechanically derived typing anchors)
+// into the grid so downstream consumers read the message and the steer
+// window from the artifact itself — a display string that could drift from
+// the recording must not exist.
+const sidecarPath = input.replace(/\.(retimed\.)?cast$/, "") + ".meta.json";
+let prompt: string | undefined;
+try {
+  prompt = JSON.parse(await Bun.file(sidecarPath).text()).prompt;
+} catch {
+  // no sidecar (e.g. ad-hoc casts): grid simply omits prompt metadata
+}
+let promptIdleSec: number | undefined;
+let promptTypedSec: number | undefined;
+if (prompt) {
+  // Whitespace-stripped containment: ink wraps the prompt across rows and
+  // elides spaces, so compare on the joined, space-free text.
+  const strip = (s: string) => s.replace(/\s+/g, "");
+  const target = strip(prompt);
+  const seed = target.slice(0, 4); // first typed chars; screens are prompt-free before typing
+  const stateText = (st: State) =>
+    strip(st.rows.map((i) => rowPool[i].map((r) => r.text).join("")).join(""));
+  const firstSeedIdx = states.findIndex((st) => stateText(st).includes(seed));
+  if (firstSeedIdx > 0) {
+    // Pre-send hold: the seed match fires only once `seed.length` chars are
+    // on screen, so step back past the burst that typed them (recorder types
+    // ~20 chars/s; a paste arrives in one state). 0.3s clears both.
+    const seedT = states[firstSeedIdx].t;
+    let idleIdx = firstSeedIdx - 1;
+    while (idleIdx > 0 && states[idleIdx].t > seedT - 0.3) idleIdx--;
+    promptIdleSec = states[idleIdx].t;
+  }
+  for (const st of states) {
+    if (stateText(st).includes(target)) {
+      promptTypedSec = st.t;
+      break;
+    }
+  }
+}
+
 // Deterministic output: same cast in, byte-identical grid out. The cast's
 // sha256 is the provenance link; no absolute paths or wall-clock stamps.
 const doc = {
@@ -201,6 +242,9 @@ const doc = {
     events,
     statesEmitted: states.length,
     rowPoolSize: rowPool.length,
+    ...(prompt !== undefined ? { prompt } : {}),
+    ...(promptIdleSec !== undefined ? { promptIdleSec } : {}),
+    ...(promptTypedSec !== undefined ? { promptTypedSec } : {}),
   },
   rowPool,
   states,

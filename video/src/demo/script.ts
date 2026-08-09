@@ -107,25 +107,63 @@ export const DEMO_DURATION_SEC =
  * landing-hero skill runbook) and re-pick these.
  */
 export const REPLAY_WINDOWS = {
-  /**
-   * Steer windows model a REMOTE send, which lands in the PTY as one
-   * paste, not human typing. `holdSec` is the pre-send frame (idle
-   * composer, dialog cleared, NOTHING typed — both takes: dialog clears
-   * ~2.7s, recorder types 3.2-4.1s, submit ~5.25s). When Send fires the
-   * replay rolls from `startSec`, AFTER the recorder's typing segment,
-   * so the instruction appears in the terminal in one shot. Holding on
-   * any post-typing frame pre-send makes causality read backwards;
-   * rolling from the typing segment looks like a human at the keyboard.
-   */
-  /** 100x16 claude detail take — steer reaction in the export composition. */
-  claude: { holdSec: 3.0, startSec: 4.2, endSec: 9.0 },
   /** 64x14 claude tile — beat-1 dense work window. */
   claudeTile: { startSec: 4.0, endSec: 8.7 },
-  /** 64x14 claude tile — steer window (idle -> paste -> submit -> work). */
-  claudeTileSteer: { holdSec: 3.0, startSec: 4.2, endSec: 9.0 },
   /** 64x14 codex tile — beat-1 dense work window. */
   codexTile: { startSec: 2.6, endSec: 7.5 },
 } as const;
+
+/* ── Steer windows: derived from the recording, never hand-picked ────── */
+
+/** Editorial choice: where the steer replay stops (work has concluded). */
+export const STEER_END_SEC = 9.0;
+/** Small offset past the typed-anchor so the full prompt is on screen. */
+const PASTE_SETTLE_SEC = 0.05;
+
+interface SteerGridMeta {
+  prompt?: string;
+  promptIdleSec?: number;
+  promptTypedSec?: number;
+}
+
+/**
+ * The exact instruction the recorded session received. compile.ts stamps
+ * it into the grid from the recorder's meta sidecar; the phone card MUST
+ * display this — a hand-written display copy can drift from the footage
+ * (that bug shipped once).
+ */
+export function recordingPrompt(grid: { meta: SteerGridMeta }): string {
+  if (!grid.meta.prompt) {
+    throw new Error(
+      "recording has no prompt metadata — recompile its grid with compile.ts",
+    );
+  }
+  return grid.meta.prompt;
+}
+
+/**
+ * Steer replay window for a take, anchored to the recording's own derived
+ * timestamps. A remote send lands in the PTY as one paste, not human
+ * typing: pre-send the demo holds on `holdSec` (last frame with nothing
+ * typed), and on Send it rolls from `startSec` (first frame with the full
+ * prompt on screen) so the instruction arrives in one shot.
+ */
+export function steerWindow(
+  grid: { meta: SteerGridMeta },
+  endSec: number = STEER_END_SEC,
+): { holdSec: number; startSec: number; endSec: number } {
+  const { promptIdleSec, promptTypedSec } = grid.meta;
+  if (promptIdleSec === undefined || promptTypedSec === undefined) {
+    throw new Error(
+      "recording has no prompt anchors — recompile its grid with compile.ts",
+    );
+  }
+  return {
+    holdSec: promptIdleSec,
+    startSec: promptTypedSec + PASTE_SETTLE_SEC,
+    endSec,
+  };
+}
 
 /** Beat 1 lineup: which providers show a real recorded tile. */
 export const AGENT_TILES = [
@@ -135,14 +173,8 @@ export const AGENT_TILES = [
 
 /* ── Steer beat choreography ─────────────────────────────────────────── */
 
-/**
- * MUST match providers.yml defaults.prompt VERBATIM — it is the exact
- * string the recorded session received, and the demo's claim is that
- * this instruction traveled from the phone card into the terminal.
- * Changing the phrasing means re-recording, not editing this constant.
- */
-export const STEER_MESSAGE =
-  "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py";
+// The steer MESSAGE is not defined here: it comes from the recording via
+// recordingPrompt() so the card can never drift from the footage.
 
 /** Seconds into the steer beat when the composer starts typing. */
 export const STEER_TYPE_START_SEC = 0.4;
@@ -152,8 +184,8 @@ export const STEER_CHARS_PER_SEC = 46;
 export const STEER_REACT_DELAY_SEC = 0.27;
 
 /** Seconds into the steer beat when the full message has been typed. */
-export const steerSentAtSec = (): number =>
-  STEER_TYPE_START_SEC + STEER_MESSAGE.length / STEER_CHARS_PER_SEC;
+export const steerSentAtSec = (message: string): number =>
+  STEER_TYPE_START_SEC + message.length / STEER_CHARS_PER_SEC;
 
 /** Frozen frame for reduced-motion / posters: steer beat, mid-reaction. */
 export const POSTER_SEC = 12.0;

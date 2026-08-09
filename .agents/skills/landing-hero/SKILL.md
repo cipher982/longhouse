@@ -144,9 +144,15 @@ Compile/render:
   lookup. compile.ts output is deterministic: same cast -> same bytes.
 - **agg is a visual oracle only** — its GIF clock drifts ~1s; never use it
   for timing decisions.
-- **Replay windows are take-coupled.** `REPLAY_WINDOWS` in demo/script.ts
-  references absolute seconds in specific takes. Every re-record: dump
-  states, re-pick windows there (nowhere else), re-verify screenshots.
+- **The steer message and steer window are DERIVED from the recording,
+  never hand-written.** compile.ts stamps the exact prompt (from the
+  recorder's meta sidecar) plus `promptIdleSec`/`promptTypedSec` anchors
+  into each grid JSON; consumers call `recordingPrompt(grid)` /
+  `steerWindow(grid)`. This exists because a hand-maintained display copy
+  drifted from the footage once (card said one sentence, terminal
+  received another). To change the message: change providers.yml's
+  prompt and re-record. Only the beat-1 dense-work windows and
+  `STEER_END_SEC` remain editorial hand-picks in demo/script.ts.
 - **All web animation derives from the clock's tSec** — pure functions of
   time, like Remotion frames. Never mix in stateful CSS keyframe sequences
   for anything that must stay in sync with a recording (the decorative
