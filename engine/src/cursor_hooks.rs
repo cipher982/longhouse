@@ -118,6 +118,17 @@ fn append_json_line(path: &std::path::Path, value: &Value) -> std::io::Result<()
     file.write_all(&line)
 }
 
+fn clear_launch_reservation(root: &std::path::Path, session_id: &str) {
+    // The reservation protects the short interval before the first native
+    // hook promotes the binding claim. Once that exact observation exists,
+    // leaving a process-lifetime reservation would unnecessarily hold
+    // unrelated fresh Shadow stores behind this managed owner.
+    let _ = std::fs::remove_file(
+        root.join("launch-reservations")
+            .join(format!("{session_id}.json")),
+    );
+}
+
 pub fn lifecycle(event: &str) {
     let Ok(payload) = input() else {
         println!("{{}}");
@@ -189,6 +200,7 @@ pub fn lifecycle(event: &str) {
         observed["status"] = json!("observed");
         observed["hook_observed_at"] = json!(now);
         if write(claim_path, &observed) {
+            clear_launch_reservation(&root, &session_id);
             let _ = std::fs::remove_file(
                 root.join("binding-probes")
                     .join(format!("{session_id}.observed-backup.json")),
@@ -291,6 +303,7 @@ fn rotate_cursor_conversation(
     if !write(claim_path.to_path_buf(), claim) {
         return false;
     }
+    clear_launch_reservation(root, session_id);
 
     let state_path = root.join(format!("{session_id}.json"));
     let Some(mut state) = std::fs::read(&state_path)
