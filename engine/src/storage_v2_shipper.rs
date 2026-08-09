@@ -2271,6 +2271,18 @@ fn prepare_next_cursor_envelope_with_limit(
     )
 }
 
+fn should_wait_for_unclaimed_cursor_source(
+    source_was_seen: bool,
+    launch_reservation_may_be_pending: bool,
+    reset_binding_may_be_pending: bool,
+) -> bool {
+    // A launch reservation is only meaningful for a brand-new source.  A
+    // resumed Cursor conversation can rotate to a new provider store after
+    // the source has already been seen, so the exact single-owner rollover
+    // predicate must remain authoritative in that case.
+    (!source_was_seen && launch_reservation_may_be_pending) || reset_binding_may_be_pending
+}
+
 fn prepare_next_cursor_envelope_outcome_with_limit(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
@@ -2354,13 +2366,21 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             return Ok(CursorPreparationOutcome::WaitingOnClaim);
         }
         crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed
-            if !source_was_seen
-                && (launch_reservation_may_be_pending
-                    || (store_is_fresh
-                        && crate::cursor_launch_binding::reset_binding_may_be_pending(
-                            &snapshot.conversation_uuid,
-                        )?)) =>
+            if should_wait_for_unclaimed_cursor_source(
+                source_was_seen,
+                launch_reservation_may_be_pending,
+                store_is_fresh
+                    && crate::cursor_launch_binding::reset_binding_may_be_pending(
+                        &snapshot.conversation_uuid,
+                    )?,
+            ) =>
         {
+            // A live managed owner can rotate an already-seen Cursor
+            // conversation (including native Resume) before its foreground
+            // hook publishes the new provider identity.  The exact
+            // reset_binding_may_be_pending predicate requires one active
+            // managed state and its observed predecessor, so this does not
+            // turn historical Shadow sources into an unbounded wait.
             return Ok(CursorPreparationOutcome::WaitingOnClaim);
         }
         crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed => None,
@@ -3793,6 +3813,14 @@ mod tests {
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
         }
         assert!(matches!(outcome, CursorPreparationOutcome::WaitingOnClaim));
+    }
+
+    #[test]
+    fn resumed_cursor_source_waits_for_exact_rollover_claim_even_after_source_seen() {
+        assert!(should_wait_for_unclaimed_cursor_source(true, false, true));
+        assert!(!should_wait_for_unclaimed_cursor_source(true, false, false));
+        assert!(should_wait_for_unclaimed_cursor_source(false, true, false));
+        assert!(!should_wait_for_unclaimed_cursor_source(false, false, false));
     }
 
     fn acknowledge_prepared(conn: &mut Connection, prepared: &PreparedStorageV2Envelope) {

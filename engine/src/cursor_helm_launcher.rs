@@ -279,6 +279,11 @@ struct LaunchArtifacts {
     socket: PathBuf,
     session_id: String,
     launch_id: String,
+    // Keep the prelaunch hold until the managed owner exits.  Cursor can
+    // create and expose its durable store before the first lifecycle hook
+    // promotes the pending binding claim; dropping this reservation as soon
+    // as the claim is written leaves that exact race window unprotected.
+    _reservation: Option<LaunchReservation>,
 }
 
 struct LaunchReservation {
@@ -1323,11 +1328,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     // conversation-specific binding claim can be written. Reserve the launch
     // first so the engine holds that fresh source instead of publishing it as
     // an unmanaged provider conversation during this race window.
-    let launch_reservation = if resume_conversation.is_none() {
-        Some(LaunchReservation::create(&dir, &session_id, &launch_id)?)
-    } else {
-        None
-    };
+    // Both a new launch and native Resume can expose a Cursor store before
+    // the first lifecycle hook promotes the pending binding claim.  Keep the
+    // source held for the entire managed-owner lifetime in either case.
+    let launch_reservation = Some(LaunchReservation::create(&dir, &session_id, &launch_id)?);
     let conversation = match resume_conversation.as_deref() {
         Some(value) => value.to_owned(),
         None => cursor_chat(&bin, &cwd)?,
@@ -1359,7 +1363,6 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         &cwd,
         &bin,
     )?;
-    drop(launch_reservation);
     let socket = match socket_path(&session_id) {
         Ok(socket) => socket,
         Err(error) => {
@@ -1372,6 +1375,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         socket: socket.clone(),
         session_id: session_id.clone(),
         launch_id: launch_id.clone(),
+        _reservation: launch_reservation,
     };
     let _ = fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
@@ -1827,6 +1831,17 @@ mod tests {
         }
         write_json(&claim_path(dir, &session_id), &claim).unwrap();
         session_id
+    }
+
+    #[test]
+    fn launch_reservation_lives_until_owner_artifacts_drop() {
+        let root = tempfile::tempdir().unwrap();
+        let reservation =
+            LaunchReservation::create(root.path(), "session-id", "launch-id").unwrap();
+        let path = root.path().join("launch-reservations/session-id.json");
+        assert!(path.is_file());
+        drop(reservation);
+        assert!(!path.exists());
     }
 
     #[test]
