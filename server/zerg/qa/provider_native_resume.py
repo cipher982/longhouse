@@ -1784,6 +1784,7 @@ def _wait_cursor_hook_sequence(
     observed_events: list[str] = []
     matching_befores: list[dict[str, Any]] = []
     matching_afters: list[dict[str, Any]] = []
+    seen_events: set[str] = set()
     while time.monotonic() < deadline:
         try:
             with path.open("rb") as stream:
@@ -1802,6 +1803,10 @@ def _wait_cursor_hook_sequence(
                 continue
             if event.get("conversation_id") != state.get("provider_session_id"):
                 continue
+            event_key = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            if event_key in seen_events:
+                continue
+            seen_events.add(event_key)
             name = str(event.get("event") or "")
             if name:
                 observed_events.append(name)
@@ -2506,37 +2511,85 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         post_send = _control_send(spec, args, resumed_state, resumed, _resume_marker_prompt(provider, post_marker))
         _write_json(root / "post-resume-send.json", post_send)
         if spec.provider == "cursor":
-            post_resume_hook_sequence = _wait_cursor_hook_sequence(
-                resumed_state,
-                environment,
-                marker=post_marker,
-                expected_prompt=_resume_marker_prompt(provider, post_marker),
-                minimum_hook_event_bytes=post_resume_hook_event_bytes or 0,
-                label="post-resume",
-            )
+            try:
+                post_resume_hook_sequence = _wait_cursor_hook_sequence(
+                    resumed_state,
+                    environment,
+                    marker=post_marker,
+                    expected_prompt=_resume_marker_prompt(provider, post_marker),
+                    minimum_hook_event_bytes=post_resume_hook_event_bytes or 0,
+                    label="post-resume",
+                    timeout=args.live_send_timeout_secs,
+                )
+            except RuntimeError as exc:
+                if "did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence" not in str(exc):
+                    raise
+                # Cursor's hook stream is provider-owned activity evidence, not
+                # the durability authority.  A late or missing terminal hook
+                # must not hide a Runtime Host projection that already proves
+                # the exact new assistant response.  Keep the hook failure in
+                # the evidence and let the strict transcript correlation below
+                # decide whether this turn is admissible.
+                post_resume_hook_sequence = {
+                    "available": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "fallback": "runtime_host_transcript_projection",
+                }
             _write_json(root / "post-resume-hook-correlation.json", post_resume_hook_sequence)
-        post_resume_ship_receipt = (
-            _cursor_idle_then_flush(
-                resumed_state,
-                environment,
-                shipper,
-                label="post-resume",
-                minimum_hook_event_bytes=post_resume_hook_event_bytes,
-                expected_generation_id=(post_resume_hook_sequence.get("generation_id") if spec.provider == "cursor" else None),
+        hook_fallback = spec.provider == "cursor" and post_resume_hook_sequence.get("available") is False
+        if hook_fallback:
+            # The background shipper may already have projected the response.
+            # Wait for that exact marker/new-assistant proof before forcing a
+            # scan; flushing while Cursor is still working recreates the race
+            # this canary is intended to catch.
+            resumed_tail, response_correlation = _wait_assistant_response_after_marker(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+                post_marker,
+                prior_assistant_event_digests=prior_assistant_event_digests,
+                require_assistant_marker=spec.provider != "claude",
+                timeout=args.live_send_timeout_secs,
             )
-            if spec.provider == "cursor"
-            else shipper.flush("post-resume")
-        )
+            if not _post_resume_response_correlated(provider, response_correlation):
+                _write_json(root / "post-resume-response-correlation.json", response_correlation)
+                raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
+            post_resume_ship_receipt = shipper.flush("post-resume")
+            # Re-read after the forced scan so the retained final correlation
+            # remains the authority even if the first observation raced the
+            # shipper restart.
+            resumed_tail, response_correlation = _wait_assistant_response_after_marker(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+                post_marker,
+                prior_assistant_event_digests=prior_assistant_event_digests,
+                require_assistant_marker=spec.provider != "claude",
+                timeout=args.live_send_timeout_secs,
+            )
+        else:
+            post_resume_ship_receipt = (
+                _cursor_idle_then_flush(
+                    resumed_state,
+                    environment,
+                    shipper,
+                    label="post-resume",
+                    minimum_hook_event_bytes=post_resume_hook_event_bytes,
+                    expected_generation_id=(post_resume_hook_sequence.get("generation_id") if spec.provider == "cursor" else None),
+                )
+                if spec.provider == "cursor"
+                else shipper.flush("post-resume")
+            )
+            resumed_tail, response_correlation = _wait_assistant_response_after_marker(
+                args.api_url,
+                args.agents_token,
+                resumed_state["session_id"],
+                post_marker,
+                prior_assistant_event_digests=prior_assistant_event_digests,
+                require_assistant_marker=spec.provider != "claude",
+                timeout=args.live_send_timeout_secs,
+            )
         _write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
-        resumed_tail, response_correlation = _wait_assistant_response_after_marker(
-            args.api_url,
-            args.agents_token,
-            resumed_state["session_id"],
-            post_marker,
-            prior_assistant_event_digests=prior_assistant_event_digests,
-            require_assistant_marker=spec.provider != "claude",
-            timeout=args.live_send_timeout_secs,
-        )
         _write_json(root / "post-resume-response-correlation.json", response_correlation)
         post_resume_response_correlated = _post_resume_response_correlated(provider, response_correlation)
         post_resume_provider_activity = response_correlation["new_assistant_events"] > 0

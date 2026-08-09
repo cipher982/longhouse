@@ -26,8 +26,8 @@ from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
-from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
+from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
@@ -43,6 +43,7 @@ from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
+from zerg.qa.provider_native_resume import _wait_cursor_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_session_tail
@@ -756,6 +757,38 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
     assert sequence["generation_id"] == "generation-1"
     assert sequence["hook_response_correlated"] is True
     assert sequence["timed_out"] is False
+
+
+def test_cursor_hook_timeout_diagnostics_do_not_repeat_polling_events(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    row = {
+        "event": "beforeSubmitPrompt",
+        "session_id": "session-1",
+        "conversation_id": "cursor-thread-1",
+        "payload": {
+            "session_id": "cursor-thread-1",
+            "conversation_id": "cursor-thread-1",
+            "generation_id": "generation-1",
+            "prompt": "Reply with exactly LH_CURSOR_POST_abc123",
+        },
+    }
+    events.write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n")
+
+    with pytest.raises(RuntimeError) as raised:
+        _wait_cursor_hook_sequence(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            marker="LH_CURSOR_POST_abc123",
+            expected_prompt="Reply with exactly LH_CURSOR_POST_abc123",
+            minimum_hook_event_bytes=0,
+            label="post-resume",
+            timeout=0.01,
+        )
+
+    assert "events=['beforeSubmitPrompt']" in str(raised.value)
 
 
 def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: Path) -> None:
