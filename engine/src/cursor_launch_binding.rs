@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -276,12 +277,45 @@ fn launch_reservation_may_be_pending_in(state_root: &Path) -> Result<bool> {
                 .get("launch_id")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|value| !value.trim().is_empty())
-            && expires_at.is_some_and(|value| value > Utc::now())
+            && (expires_at.is_some_and(|value| value > Utc::now())
+                || reservation_owner_is_alive(&value))
         {
             active += 1;
         }
     }
     Ok(active > 0)
+}
+
+/// Reservations are normally short-lived, but a managed owner can remain
+/// open while a provider's native hook is delayed. Keep an expired
+/// reservation active only while the exact launcher process that created it
+/// is still alive; a crashed owner still ages out through `expires_at`.
+fn reservation_owner_is_alive(value: &serde_json::Value) -> bool {
+    let Some(pid) = value
+        .get("owner_pid")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|pid| *pid > 0)
+    else {
+        return false;
+    };
+    let Some(expected_start) = value
+        .get("owner_start_time")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Ok(output) = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+    else {
+        return false;
+    };
+    output.status.success()
+        && String::from_utf8(output.stdout)
+            .map(|actual| actual.trim() == expected_start)
+            .unwrap_or(false)
 }
 
 fn reset_binding_may_be_pending_in(dir: &Path, conversation_uuid: &str) -> Result<bool> {
@@ -623,5 +657,33 @@ mod tests {
         )
         .unwrap();
         assert!(!launch_reservation_may_be_pending_in(root.path()).unwrap());
+    }
+
+    #[test]
+    fn expired_reservation_remains_active_for_its_live_owner() {
+        let root = tempdir().unwrap();
+        let reservations = root.path().join("launch-reservations");
+        fs::create_dir_all(&reservations).unwrap();
+        let start_time = Command::new("ps")
+            .args(["-p", &std::process::id().to_string(), "-o", "lstart="])
+            .output()
+            .unwrap();
+        let start_time = String::from_utf8(start_time.stdout).unwrap();
+        fs::write(
+            reservations.join("live.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "longhouse-id",
+                "launch_id": "launch-id",
+                "owner_pid": std::process::id(),
+                "owner_start_time": start_time.trim(),
+                "expires_at": "2000-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(launch_reservation_may_be_pending_in(root.path()).unwrap());
     }
 }

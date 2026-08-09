@@ -307,6 +307,8 @@ impl LaunchReservation {
                 "status": "pending",
                 "session_id": session_id,
                 "launch_id": launch_id,
+                "owner_pid": std::process::id(),
+                "owner_start_time": process_start_time(std::process::id() as libc::pid_t),
                 "expires_at": (Utc::now() + chrono::Duration::minutes(2)).to_rfc3339(),
             }),
         )?;
