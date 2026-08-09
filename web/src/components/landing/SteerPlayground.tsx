@@ -3,7 +3,7 @@ import {
   PROVIDERS,
   STEER_REACT_DELAY_SEC,
   claudeAddtest,
-  claudeTile,
+  claudeSteer,
   recordingPrompt,
   steerWindow,
 } from "@longhouse/video/demo";
@@ -17,9 +17,11 @@ import { useReplayClock } from "./demo/useReplayClock";
 
 // endSec is the one editorial number per take: freeze on the finished work
 // (tests passed + summary + idle composer), BEFORE the recorder types /exit.
+// Both takes are 64x20 — taller than the hero's 64x14 tiles so the terminal
+// holds its own next to the phone.
 export const STEER_OPTIONS = [
-  { id: "fix-inventory", grid: claudeTile, endSec: 9.0 },
-  { id: "add-empty-shelf-test", grid: claudeAddtest, endSec: 8.5 },
+  { id: "fix-inventory", grid: claudeSteer, endSec: 8.8 },
+  { id: "add-empty-shelf-test", grid: claudeAddtest, endSec: 9.1 },
 ] as const;
 
 export function SteerPlayground() {
@@ -135,7 +137,7 @@ export function SteerPlayground() {
             tSec={replayT}
             title={claude.name}
             accent={claude.color}
-            detail="64 × 14 recording — demo-repo"
+            detail={`${selected.grid.meta.cols} × ${selected.grid.meta.rows} recording — demo-repo`}
           />
         </div>
       </div>

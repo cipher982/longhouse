@@ -11,13 +11,16 @@ import type { GridTimeline } from "../terminal/TerminalGrid";
 import claudeGridJson from "../assets/terminal/claude.grid.json";
 import claudeTileJson from "../assets/terminal/claude-tile.grid.json";
 import claudeAddtestJson from "../assets/terminal/claude-addtest.grid.json";
+import claudeSteerJson from "../assets/terminal/claude-steer.grid.json";
 import codexTileJson from "../assets/terminal/codex-tile.grid.json";
 
 /** 100x16 Claude Code detail take. */
 export const claudeGrid = claudeGridJson as unknown as GridTimeline;
 /** 64x14 Claude Code tile take. */
 export const claudeTile = claudeTileJson as unknown as GridTimeline;
-/** 64x14 Claude Code add-test steer take. */
+/** 64x20 Claude Code add-test steer take (playground). */
 export const claudeAddtest = claudeAddtestJson as unknown as GridTimeline;
+/** 64x20 Claude Code fix take (playground; taller than the hero tiles). */
+export const claudeSteer = claudeSteerJson as unknown as GridTimeline;
 /** 64x14 Codex tile take. */
 export const codexTile = codexTileJson as unknown as GridTimeline;

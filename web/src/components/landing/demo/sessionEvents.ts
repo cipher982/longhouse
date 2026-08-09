@@ -21,6 +21,8 @@ export interface SessionEvent {
 
 const TOOL_HEAD = /^(Read|Write|Edit|Update|Bash|Search|Grep|Glob|Task)\b/;
 const NOISE = /\(ctrl\+o to expand\)/g;
+/** Transient progress counters ("Reading 2 files…"), not transcript content. */
+const EPHEMERAL = /^Reading \d+ files?…?$/;
 
 const strip = (s: string) => s.replace(/\s+/g, "");
 
@@ -80,6 +82,7 @@ export function extractSessionEvents(grid: GridTimeline): SessionEvent[] {
   const events: SessionEvent[] = [];
   for (const block of blocks.values()) {
     const body = block.body.replace(NOISE, "").replace(/\s+/g, " ").trim();
+    if (EPHEMERAL.test(body)) continue;
     const toolMatch = body.match(TOOL_HEAD);
     if (toolMatch) {
       const name = toolMatch[1];
