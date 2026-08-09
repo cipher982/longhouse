@@ -1097,6 +1097,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // while a turn-completion wake is already waiting.
             Some(signal) = transcript_wake_rx.recv() => {
                 if let Some(path) = enqueue_transcript_wake_signal(
+                    &conn,
                     &mut scheduler,
                     &mut latest_transcript_wake_observed,
                     signal,
@@ -2091,6 +2092,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     first_event,
                     &providers,
                     &managed_state_dirs,
+                    &conn,
                     &mut transcript_wake_rx,
                     &mut scheduler,
                     &mut latest_transcript_wake_observed,
@@ -3104,6 +3106,7 @@ async fn handle_live_transcript_file_events(
     first_event: WatcherEvent,
     providers: &[ProviderConfig],
     managed_state_dirs: &[PathBuf],
+    conn: &rusqlite::Connection,
     transcript_wake_rx: &mut mpsc::UnboundedReceiver<TranscriptWakeSignal>,
     scheduler: &mut PathScheduler,
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
@@ -3123,6 +3126,7 @@ async fn handle_live_transcript_file_events(
             biased;
             Some(signal) = transcript_wake_rx.recv() => {
                 if let Some(path) = enqueue_transcript_wake_signal(
+                    conn,
                     scheduler,
                     latest_transcript_wake_observed,
                     signal,
@@ -4095,6 +4099,7 @@ fn record_transcript_wake_hint(
 }
 
 fn enqueue_transcript_wake_signal(
+    conn: &rusqlite::Connection,
     scheduler: &mut PathScheduler,
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     signal: TranscriptWakeSignal,
@@ -4102,11 +4107,53 @@ fn enqueue_transcript_wake_signal(
     if let Some((path, provider, observation)) =
         record_transcript_wake_hint(latest_transcript_wake_observed, signal)
     {
+        persist_cursor_agent_transcript_binding(conn, &path, provider, &observation);
         let scheduled_path = path.clone();
         scheduler.enqueue_observation(path, provider, WorkPriority::Live, observation);
         Some(scheduled_path)
     } else {
         None
+    }
+}
+
+/// Preserve the managed session identity before a wake-triggered live job runs.
+///
+/// Cursor's agent-transcript JSONL is rewritten during a turn. A completion
+/// wake carries the exact Longhouse session, but the provider can rewrite the
+/// file again before the live worker gets its turn. If a forced `ship` scan
+/// wins that race, it has no `ObservationTrace` override and would otherwise
+/// create the replacement source epoch from Cursor's provider conversation ID.
+/// The binding is only for this provider-owned projection and is deliberately
+/// best-effort: the live job still carries the wake override, while a failed
+/// SQLite write must not prevent the transcript from being scheduled.
+fn persist_cursor_agent_transcript_binding(
+    conn: &rusqlite::Connection,
+    path: &Path,
+    provider: &str,
+    observation: &ObservationTrace,
+) {
+    if provider != "cursor"
+        || !path
+            .components()
+            .any(|component| component.as_os_str() == "agent-transcripts")
+    {
+        return;
+    }
+    let Some(session_id) = observation.session_id.as_deref() else {
+        return;
+    };
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Err(error) = crate::state::session_binding::SessionBinding::new(conn).bind(
+        &canonical.to_string_lossy(),
+        session_id,
+        provider,
+    ) {
+        tracing::warn!(
+            path = %canonical.display(),
+            session_id,
+            error = %error,
+            "Unable to persist Cursor agent-transcript wake binding"
+        );
     }
 }
 
@@ -6180,10 +6227,13 @@ mod tests {
     #[test]
     fn test_enqueue_transcript_wake_signal_queues_live_work() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
         let mut latest_wakes = HashMap::new();
         let mut scheduler = PathScheduler::new(4);
 
         assert!(enqueue_transcript_wake_signal(
+            &conn,
             &mut scheduler,
             &mut latest_wakes,
             TranscriptWakeSignal {
@@ -6208,6 +6258,40 @@ mod tests {
         assert_eq!(
             launched.observation.wake_reason.as_deref(),
             Some("turn_completed")
+        );
+    }
+
+    #[test]
+    fn test_cursor_agent_transcript_wake_persists_managed_session_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("projects/workspace/agent-transcripts/conversation.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let observation = ObservationTrace {
+            source: "wake_socket",
+            observed_at_ms: 123,
+            latest_observed_at_ms: None,
+            wake_received_at_ms: Some(124),
+            enqueued_at_ms: 125,
+            session_id: Some("managed-session".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            wake_reason: Some("turn_completed".to_string()),
+            file_len_hint: Some(2),
+        };
+
+        persist_cursor_agent_transcript_binding(&conn, &transcript, "cursor", &observation);
+
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        assert_eq!(
+            crate::state::session_binding::SessionBinding::new(&conn)
+                .get(&canonical.to_string_lossy())
+                .unwrap()
+                .as_deref(),
+            Some("managed-session")
         );
     }
 
