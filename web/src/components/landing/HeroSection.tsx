@@ -151,7 +151,7 @@ export function HeroSection() {
           fallback={
             <img
               className="landing-hero-video"
-              src="/images/landing/control-poster.png?v=20260808-4"
+              src="/images/landing/control-poster.png?v=20260809-1"
               alt={DEMO_ARIA_LABEL}
               aria-label={DEMO_ARIA_LABEL}
             />
