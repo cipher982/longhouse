@@ -249,6 +249,36 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
     assert environments[0]["LONGHOUSE_HOME"] == str(isolation_root / "longhouse")
 
 
+def test_stop_bridge_accepts_closed_ack_only_when_strict_cleanup_is_verified(tmp_path: Path, monkeypatch) -> None:
+    args = _args(tmp_path)
+    isolation_root = tmp_path / "isolation"
+    state_root = canary._bridge_state_root(isolation_root)
+    state_root.mkdir(parents=True)
+    state_file = state_root / "session-1.json"
+    socket_file = state_file.with_suffix(".sock")
+    state_file.write_text(
+        json.dumps({"status": "ready", "active_turn_id": "turn-1"}),
+        encoding="utf-8",
+    )
+    socket_file.touch()
+
+    def fake_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        state_file.write_text(
+            json.dumps({"status": "stopped", "active_turn_id": None}),
+            encoding="utf-8",
+        )
+        socket_file.unlink()
+        return subprocess.CompletedProcess(argv, 1, "", "bridge IPC stop closed without acknowledgement")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+    result = canary._stop_bridge(args, "session-1", isolation_root)
+
+    assert result["evidence"]["returncode"] == 1
+    assert result["verification"]["verified"] is True
+    assert result["verification"]["terminal_state"] is True
+    assert result["verification"]["socket_absent"] is True
+
+
 def test_stop_verification_rejects_zero_exit_shape_without_terminal_cleanup(tmp_path: Path) -> None:
     state_file = tmp_path / "session-1.json"
     state_file.write_text(

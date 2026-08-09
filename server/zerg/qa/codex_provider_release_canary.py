@@ -1206,7 +1206,13 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
         env=stop_environment,
         timeout=30,
     )
-    verification = _verify_bridge_stopped(state_file) if result.returncode == 0 else None
+    # The bridge can commit its terminal state and remove the control socket
+    # before the stop RPC's acknowledgement reaches this short-lived client.
+    # A closed IPC response is therefore not proof that cleanup failed.  Run
+    # the same strict postcondition check for every RPC outcome; callers still
+    # require terminal state, no active turn, and an absent socket before they
+    # admit the transition.
+    verification = _verify_bridge_stopped(state_file)
     return {
         "attempted": True,
         "evidence": _command_evidence(result),
