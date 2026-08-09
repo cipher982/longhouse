@@ -11,6 +11,7 @@ import "../styles/landing.css";
 // Section components
 import { LandingHeader } from "../components/landing/LandingHeader";
 import { HeroSection } from "../components/landing/HeroSection";
+import { SteerPlayground } from "../components/landing/SteerPlayground";
 import { KernelThesisSection } from "../components/landing/KernelThesisSection";
 import { MachineSurfaceSection } from "../components/landing/MachineSurfaceSection";
 import { DemoSection } from "../components/landing/DemoSection";
@@ -150,6 +151,7 @@ export default function LandingPage() {
 
       <main className="landing-main">
         <HeroSection />
+        <SteerPlayground />
         <KernelThesisSection />
         <DemoSection screenshotTheme={screenshotTheme} />
         <MachineSurfaceSection />
