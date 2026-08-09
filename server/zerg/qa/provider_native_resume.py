@@ -145,33 +145,42 @@ class TranscriptShipper:
         daemon_restart_error: str | None = None
         if daemon_was_live:
             self._terminate_daemon()
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=self.repo_root,
-                env=self.engine_environment,
-                capture_output=True,
-                text=True,
-                timeout=90,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            result = {
-                "status": "fail",
-                "label": label,
-                "exit_code": None,
-                "timed_out": True,
-                "stdout_sha256": hashlib.sha256(str(exc.stdout or "").encode()).hexdigest(),
-                "stderr_sha256": hashlib.sha256(str(exc.stderr or "").encode()).hexdigest(),
-            }
-        except OSError as exc:
-            result = {
-                "status": "fail",
-                "label": label,
-                "exit_code": None,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        else:
+        attempts: list[dict[str, Any]] = []
+        log_sections: list[str] = []
+        # A failed admission quarantines the envelope and the next ship
+        # invocation can reconcile a missing Cursor predecessor. Retry only
+        # that exact durable state, never arbitrary engine failures.
+        for attempt in range(1, 3):
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=self.repo_root,
+                    env=self.engine_environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                result = {
+                    "status": "fail",
+                    "label": label,
+                    "exit_code": None,
+                    "timed_out": True,
+                    "stdout_sha256": hashlib.sha256(str(exc.stdout or "").encode()).hexdigest(),
+                    "stderr_sha256": hashlib.sha256(str(exc.stderr or "").encode()).hexdigest(),
+                }
+                attempts.append(result)
+                break
+            except OSError as exc:
+                result = {
+                    "status": "fail",
+                    "label": label,
+                    "exit_code": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                attempts.append(result)
+                break
             stdout = self._redact(completed.stdout or "")
             stderr = self._redact(completed.stderr or "")
             try:
@@ -192,9 +201,17 @@ class TranscriptShipper:
                 "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
                 "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
             }
-            log_path = self.evidence_root / f"transcript-flush-{label}.log"
-            log_path.write_text(f"stdout:\n{stdout}\nstderr:\n{stderr}\n", encoding="utf-8")
-            result["log_path"] = str(log_path)
+            attempts.append(result)
+            log_sections.append(f"attempt {attempt}\nstdout:\n{stdout}\nstderr:\n{stderr}\n")
+            if completed.returncode == 0 or "source_epoch_conflict_unresolved" not in stderr:
+                break
+        result = dict(attempts[-1])
+        result["attempts"] = len(attempts)
+        if len(attempts) > 1:
+            result["retry_reason"] = "source_epoch_conflict_unresolved"
+        log_path = self.evidence_root / f"transcript-flush-{label}.log"
+        log_path.write_text("\n".join(log_sections), encoding="utf-8")
+        result["log_path"] = str(log_path)
         if daemon_was_live:
             try:
                 self._restart_daemon()
