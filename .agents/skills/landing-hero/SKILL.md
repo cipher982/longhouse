@@ -7,12 +7,21 @@ recordings behind it, or the marketing video exports: "update the hero",
 
 ## What the hero is (August 2026)
 
-The hero is NOT a video. The landing page runs the Remotion composition
-live as DOM via `@remotion/player` (lazy chunk, ~21KB gzip), so terminal
-text renders at native resolution on every screen. The content inside it is
-**literal recorded PTY output** from real provider binaries, captured in a
-sandboxed rig and replayed as styled text. An mp4/poster/OG export lane
-exists only for embeds and social.
+The hero is NOT a video and NOT a player frame. The landing page renders
+the demo natively as DOM (`HeroDemo`, lazy chunk ~13KB gzip): a looping
+rAF clock drives four beat components that are ordinary responsive
+flow layout — terminals size their cells from measured container width,
+mobile stacks instead of shrinking, captions are real selectable text,
+and the beat dots seek. The content is **literal recorded PTY output**
+from real provider binaries, captured in a sandboxed rig and replayed as
+styled text. Remotion (`ControlRoom`) survives ONLY as the export lane
+for mp4/poster/OG where a fixed 16:9 frame is genuinely required.
+
+The narrative lives in ONE place: `video/src/demo/script.ts` (providers,
+beat schedule, captions, steer choreography, take-coupled replay
+windows). Both renderers consume it; re-records retune windows there and
+nowhere else. The web imports it via the `@longhouse/video/demo` subpath,
+which has zero Remotion imports — the web bundle carries no Remotion.
 
 Pipeline, end to end:
 
@@ -23,10 +32,10 @@ providers.yml (pinned source + auth mode + sentinels)
                          asciicast v2 + meta sidecar; canary + fail-closed gates
   -> retime.ts           cap idle gaps (timestamps only, never drop events)
   -> compile.ts          offline @xterm/headless replay -> grid timeline JSON
-  -> TerminalGrid.tsx    pure React: frame -> binary-search state -> styled runs
-  -> ControlRoom.tsx     4-beat composition (Remotion)
-  -> web LiveDemo.tsx    @remotion/player runs it live on the landing page
-  -> make demo-render    mp4 + poster + og-image (export lane only)
+  -> demo/script.ts      THE shared narrative: beats, captions, replay windows
+  -> TerminalGrid.tsx    pure React: time -> binary-search state -> styled runs
+  ├-> web landing/demo/  native DOM hero: useDemoClock + beat components
+  └-> ControlRoom.tsx    Remotion composition -> make demo-render (export only)
 ```
 
 ## Key files
@@ -35,13 +44,21 @@ providers.yml (pinned source + auth mode + sentinels)
   `fetch.py`, `record.py`, `mock_llm.py`, `retime.ts`, `compile.ts`,
   `record-all.sh`, `fixtures/<provider>.json` (canned model turns)
 - `video/src/assets/terminal/` — committed casts + compiled grid JSONs
-  (`<prov>.…` = 100x16 detail take; `<prov>-tile.…` = 64x14 beat-1 take)
-- `video/src/terminal/TerminalGrid.tsx` — the grid renderer (shared)
-- `video/src/compositions/ControlRoom.tsx` — beats, captions, phone mock,
-  and the REPLAY WINDOW CONSTANTS (take-coupled, see traps)
-- `web/src/components/landing/LiveDemo.tsx` — Player wrapper (lazy,
-  IntersectionObserver pause, reduced-motion freeze at poster frame)
-- `web/src/components/landing/HeroSection.tsx` — copy + LiveDemo mount
+  (`<prov>.…` = 100x16 detail take; `<prov>-tile.…` = 64x14 tile take;
+  the web hero uses ONLY the 64-col tiles — readable at every width)
+- `video/src/demo/script.ts` — the SINGLE narrative source: providers,
+  beat schedule + captions, steer choreography, REPLAY WINDOWS
+  (take-coupled, see traps), poster second
+- `video/src/demo/recordings.ts` — typed grid-timeline exports
+- `video/src/terminal/TerminalGrid.tsx` — the grid renderer (pure React,
+  shared by both renderers; no Remotion imports, keep it that way)
+- `web/src/components/landing/demo/` — the shipping hero: `HeroDemo.tsx`
+  (beat crossfade, caption, seek dots), `useDemoClock.ts` (rAF loop,
+  offscreen/hidden pause, reduced-motion poster freeze),
+  `ResponsiveTerminal.tsx` (ResizeObserver -> cell metrics), one file per
+  beat, `ease.ts`
+- `web/src/components/landing/HeroSection.tsx` — copy + HeroDemo mount
+- `video/src/compositions/ControlRoom.tsx` — Remotion export composition
 - `Makefile demo-render` — export lane (mp4 has its silent AAC stripped)
 
 ## Runbook
@@ -53,8 +70,8 @@ Re-record one provider (both geometries, gated, publishes assets):
 ```
 
 Then: inspect the new take's story-beat timings and retune the replay
-windows in `ControlRoom.tsx` (`REPLAY_START/END_SEC`, `TILES[].startSec`)
-by dumping states:
+windows in `video/src/demo/script.ts` (`REPLAY_WINDOWS`) by dumping
+states:
 
 ```bash
 python3 - <<'EOF'
@@ -68,12 +85,17 @@ EOF
 ```
 
 Verify loop (never skip; this is the vision-check rule):
-1. `cd video && bunx tsc --noEmit && bun run render:control`
-2. Extract frames per beat with ffmpeg, LOOK at them with vision.
-3. `make demo-render` (exports), page screenshots at 1440x900 + 390x844
-   via Playwright against `http://localhost:47200/landing` (the always-on
-   preview route; works even authenticated), LOOK at them.
-4. `make test-frontend`.
+1. `cd web && bun run build`, then `bunx vite preview --port 4188` and
+   Playwright-screenshot `http://localhost:4188/landing` at 1440x900 AND
+   390x844. Wait for `.hero-demo-dot`, click each dot to reach each beat
+   (steer needs ~4.5s after its dot for send + reaction), LOOK at every
+   shot with vision. If the page hangs on the logo spinner, the preview
+   proxy's `/api` is hanging — `page.route("**/api/**", r => r.abort())`.
+2. `make test-frontend`.
+3. Export lane when it matters (composition or recordings changed):
+   `cd video && bunx tsc --noEmit && bun run render:control`, extract
+   frames per beat with ffmpeg, LOOK at them; `make demo-render` to
+   publish mp4/poster/og.
 
 Add a provider: add its providers.yml entry (source pin, auth mode,
 sentinel profile, fixture), `fetch.py --only <prov>`, one calibration
@@ -117,14 +139,25 @@ Recording:
   reach a browser: shims + BROWSER=false stay as telemetry, srt enforces.
 
 Compile/render:
-- **No emulator in the Remotion frame path** (async writes + out-of-order
-  frames = nondeterminism). Compile offline to a grid timeline; render is a
-  pure lookup. compile.ts output is deterministic: same cast -> same bytes.
+- **No emulator in any frame path** (async writes + out-of-order frames =
+  nondeterminism). Compile offline to a grid timeline; render is a pure
+  lookup. compile.ts output is deterministic: same cast -> same bytes.
 - **agg is a visual oracle only** — its GIF clock drifts ~1s; never use it
   for timing decisions.
-- **Replay windows are take-coupled.** ControlRoom's window constants
-  reference absolute seconds in specific takes. Every re-record: dump
-  states, re-pick windows, re-verify frames.
+- **Replay windows are take-coupled.** `REPLAY_WINDOWS` in demo/script.ts
+  references absolute seconds in specific takes. Every re-record: dump
+  states, re-pick windows there (nowhere else), re-verify screenshots.
+- **All web animation derives from the clock's tSec** — pure functions of
+  time, like Remotion frames. Never mix in stateful CSS keyframe sequences
+  for anything that must stay in sync with a recording (the decorative
+  steer pulse is the one sanctioned exception).
+- **The web hero must never import Remotion.** It consumes the
+  `@longhouse/video/demo` subpath only; `TerminalGrid` and `demo/*` stay
+  free of Remotion imports so the web bundle stays player-free (~13KB
+  gzip lazy chunk, all four recordings included).
+- **The marketing page never blocks on the API.** LandingPage only shows
+  its loading gate when an auth redirect is actually possible; the
+  `/landing` preview route renders immediately even with `/api` dead.
 - **The palette is art-directed**, not literal ANSI (warm theme in
   TerminalGrid). Defensible; do not claim pixel-literal colors.
 - **Cell metrics:** font size locks to BOTH axes (`min(cellH*0.72,
@@ -144,8 +177,12 @@ Process:
 
 The pre-2026-08 approaches live in git history: hand-drawn terminal beats
 (rejected: "doesn't look like the real CLIs"), mp4 hero (rejected:
-compression blur, 694KB vs crisp DOM), AI-image device compositions
-(workshop harness under `workshop/` if layout exploration is ever needed
-again). The steer beat's phone is still a drawn mock and the send->react
-link is composited; the known upgrade is one continuous capture through
-real Longhouse (launch, remote send, PTY reaction, timeline entry).
+compression blur, 694KB vs crisp DOM), `@remotion/player` running the
+composition live in a fixed 16:9 frame (rejected: on a 390px phone the
+1920px stage uniform-scales to ~20% and two 100-col terminals become
+decoration — the frame was the problem, not the codec), AI-image device
+compositions (workshop harness under `workshop/` if layout exploration is
+ever needed again). The steer beat's instruction card is a drawn mock and
+the send->react link is composited; the known upgrade is one continuous
+capture through real Longhouse (launch, remote send, PTY reaction,
+timeline entry).
