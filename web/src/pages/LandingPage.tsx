@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
@@ -11,7 +11,13 @@ import "../styles/landing.css";
 // Section components
 import { LandingHeader } from "../components/landing/LandingHeader";
 import { HeroSection } from "../components/landing/HeroSection";
-import { SteerPlayground } from "../components/landing/SteerPlayground";
+// Lazy: pulls the recorded grids + terminal renderer, which must stay out of
+// the main bundle (same discipline as HeroSection's lazy HeroDemo).
+const SteerPlayground = lazy(() =>
+  import("../components/landing/SteerPlayground").then(
+    ({ SteerPlayground: Component }) => ({ default: Component }),
+  ),
+);
 import { KernelThesisSection } from "../components/landing/KernelThesisSection";
 import { MachineSurfaceSection } from "../components/landing/MachineSurfaceSection";
 import { DemoSection } from "../components/landing/DemoSection";
@@ -151,7 +157,9 @@ export default function LandingPage() {
 
       <main className="landing-main">
         <HeroSection />
-        <SteerPlayground />
+        <Suspense fallback={<section className="steer-playground" aria-hidden="true" />}>
+          <SteerPlayground />
+        </Suspense>
         <KernelThesisSection />
         <DemoSection screenshotTheme={screenshotTheme} />
         <MachineSurfaceSection />
