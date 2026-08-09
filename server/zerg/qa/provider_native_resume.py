@@ -2142,7 +2142,12 @@ def _control_send(
             raise RuntimeError(f"{spec.provider} terminal control owner is no longer live")
         process.send(text + "\r")
         return {"method": "provider_tty_bootstrap" if initial else "provider_tty", "returncode": 0}
-    deadline = time.monotonic() + 30 if spec.provider == "cursor" else time.monotonic()
+    # Cursor can publish its completed-turn hook before the TUI has returned
+    # to the provider-owned idle phase.  Keep the authoritative socket retry
+    # bounded, but give that transition the same live-send budget as the rest
+    # of the Resume canary instead of failing after a fixed 30-second window.
+    cursor_send_timeout = float(getattr(args, "live_send_timeout_secs", 30))
+    deadline = time.monotonic() + cursor_send_timeout if spec.provider == "cursor" else time.monotonic()
     attempts = 0
     completed: subprocess.CompletedProcess[str]
     while True:
@@ -2720,6 +2725,18 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             # foreground turn. Re-check the provider-owned prompt after the
             # bootstrap response and before issuing the post-resume marker.
             _wait_cursor_tui_ready(resumed, root / "native-resume.tty")
+            # The visual TUI readiness check is not the control authority. A
+            # completed transcript can arrive while Cursor still owns a
+            # foreground turn, and the Helm socket must reject sends during
+            # that interval. Require the identity-matched provider hook to
+            # publish idle before issuing the post-resume marker.
+            _wait_cursor_idle(
+                resumed_state,
+                environment,
+                timeout=args.live_send_timeout_secs,
+                minimum_hook_event_bytes=bootstrap_hook_event_bytes,
+                expected_generation_id=bootstrap_hook_sequence.get("generation_id"),
+            )
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         resumed_provider_pid = _provider_process_pid(spec, resumed_state)
