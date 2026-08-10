@@ -2074,6 +2074,14 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         .map(|response| response.session_id.clone())
         .or(expected_session_id)
         .context("degraded Pi launch has no session identity")?;
+    // Drive the turn: the this-device registration only persists the session;
+    // the machine agent dispatches pi_print after a console turn enqueues
+    // `session.turn.start` with the prompt.
+    if response.is_some() {
+        if let Err(error) = enqueue_pi_console_turn(&runtime, &url, &token, &session_id, &args.prompt) {
+            eprintln!("Longhouse warning: Pi turn enqueue failed ({error:#})");
+        }
+    }
     println!(
         "Managed Pi one-shot launched\n→ {}/s/{}",
         url.trim_end_matches('/'),
@@ -2081,6 +2089,44 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
     );
     println!("Provider binary: {pi_bin}");
     Ok(())
+}
+
+fn enqueue_pi_console_turn(
+    runtime: &tokio::runtime::Runtime,
+    url: &str,
+    device_token: &str,
+    session_id: &str,
+    prompt: &str,
+) -> anyhow::Result<()> {
+    let endpoint = format!(
+        "{}/api/agents/sessions/{}/turns",
+        url.trim_end_matches('/'),
+        session_id
+    );
+    let payload = serde_json::json!({
+        "message": prompt,
+        "client_request_id": Uuid::new_v4().to_string(),
+    });
+    runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .post(endpoint)
+            .header("X-Agents-Token", device_token)
+            .json(&payload)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .with_context(|| "enqueue Pi console turn")?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .with_context(|| "read Pi console turn response")?;
+        if !status.is_success() {
+            let short: String = body.trim().chars().take(300).collect();
+            anyhow::bail!("pi console turn failed ({status}): {short}");
+        }
+        Ok(())
+    })
 }
 
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
