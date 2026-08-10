@@ -14,38 +14,10 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
-# Add backend to path
+# Add backend to path when invoked as a repository script.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy.orm import sessionmaker
-
-from zerg.crud import get_user_by_email
-from zerg.database import Base
-from zerg.database import _ensure_agents_fts
-from zerg.database import make_engine
-from zerg.models.models import User
-from zerg.services.demo_seed import seed_missing_demo_sessions
-from zerg.utils.time import utc_now_naive
-
-
-def ensure_owner(db, email: str) -> User:
-    user = get_user_by_email(db, email)
-    if user is not None:
-        return user
-
-    user = User(
-        email=email,
-        provider="dev",
-        provider_user_id=email,
-        role="ADMIN",
-        is_active=True,
-        created_at=utc_now_naive(),
-        updated_at=utc_now_naive(),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+from zerg.services.demo_database import build_demo_database
 
 
 def main() -> int:
@@ -54,7 +26,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Build a demo SQLite database")
     parser.add_argument("--output", default=str(default_output), help="Output SQLite file path")
-    parser.add_argument("--owner-email", default="dev@local", help="Owner email for seeded runs")
+    parser.add_argument("--owner-email", default="local@zerg", help="Owner email for seeded runs")
     parser.add_argument("--force", action="store_true", help="Overwrite existing DB if present")
     parser.add_argument(
         "--anchor",
@@ -82,26 +54,11 @@ def main() -> int:
             return 2
         output_path.unlink()
 
-    db_url = f"sqlite:///{output_path}"
-    engine = make_engine(db_url).execution_options(schema_translate_map={"zerg": None, "agents": None})
-    Base.metadata.create_all(bind=engine)
-
-    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
-    db = SessionLocal()
-    try:
-        ensure_owner(db, args.owner_email)
-
-        # Create FTS5 virtual table + triggers before inserting events
-        _ensure_agents_fts(engine)
-
-        seeded_count, failed_count = seed_missing_demo_sessions(db, now=anchor)
-        if failed_count:
-            raise RuntimeError(f"failed to seed {failed_count} demo sessions")
-
-        print(f"Demo DB created: {output_path} ({seeded_count} sessions seeded)")
-    finally:
-        db.close()
-
+    paths = build_demo_database(output_path, owner_email=args.owner_email, anchor=anchor)
+    print(
+        f"Demo corpus created: {paths['legacy']} (legacy), {paths['live']} (storage-v2), "
+        f"{paths['search']} (searchd)"
+    )
     return 0
 
 

@@ -49,7 +49,7 @@ dev-demo: ## Start demo environment (seeded SQLite DB)
 	@env -u DATABASE_URL ./scripts/dev-demo.sh
 
 demo-db: ## Build demo SQLite database
-	@uv run python server/scripts/build_demo_db.py
+	@uv run --project server python server/scripts/build_demo_db.py --force
 
 stop: ## Stop dev services
 	@pkill -f "uvicorn zerg.main:app" 2>/dev/null || true
