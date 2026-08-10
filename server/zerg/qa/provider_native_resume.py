@@ -48,7 +48,8 @@ _EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|a
 _DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
 _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
 _TRANSCRIPT_SHIP_MAX_ATTEMPTS = 2
-_STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 [^\s]+ lane busy; retry after (?P<milliseconds>\d+)ms")
+_STORAGE_LANE_BUSY_MAX_SLEEP_SECS = 10.0
+_STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 repair lane busy; retry after (?P<milliseconds>\d+)ms")
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -149,7 +150,6 @@ class TranscriptShipper:
             self._terminate_daemon()
         attempts: list[dict[str, Any]] = []
         log_sections: list[str] = []
-        retry_reason: str | None = None
         # A failed admission quarantines the envelope and the next ship
         # invocation can reconcile a missing Cursor predecessor. A typed
         # storage-lane backpressure response is also safe to retry because the
@@ -206,22 +206,44 @@ class TranscriptShipper:
                 "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
                 "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
             }
+            attempt_retry_reason: str | None = None
+            retry_delay_secs: float | None = None
+            if completed.returncode != 0:
+                if "source_epoch_conflict_unresolved" in stderr:
+                    attempt_retry_reason = "source_epoch_conflict_unresolved"
+                else:
+                    busy_match = _STORAGE_LANE_BUSY_RE.search(stderr)
+                    if busy_match is not None:
+                        advertised_delay_ms = int(busy_match.group("milliseconds"))
+                        attempt_retry_reason = "storage_lane_busy"
+                        retry_delay_secs = min(advertised_delay_ms / 1000, _STORAGE_LANE_BUSY_MAX_SLEEP_SECS)
+                        result["retry_after_ms"] = advertised_delay_ms
+                        result["retry_sleep_secs"] = retry_delay_secs
+            if attempt_retry_reason is not None:
+                result["retry_reason"] = attempt_retry_reason
             attempts.append(result)
             log_sections.append(f"attempt {attempt}\nstdout:\n{stdout}\nstderr:\n{stderr}\n")
             if completed.returncode == 0:
                 break
-            if "source_epoch_conflict_unresolved" in stderr:
-                retry_reason = "source_epoch_conflict_unresolved"
+            if attempt_retry_reason == "source_epoch_conflict_unresolved":
                 continue
-            busy_match = _STORAGE_LANE_BUSY_RE.search(stderr)
-            if busy_match is None or attempt >= _TRANSCRIPT_SHIP_MAX_ATTEMPTS:
+            if retry_delay_secs is None or attempt >= _TRANSCRIPT_SHIP_MAX_ATTEMPTS:
                 break
-            retry_reason = "storage_lane_busy"
-            time.sleep(int(busy_match.group("milliseconds")) / 1000)
+            time.sleep(retry_delay_secs)
         result = dict(attempts[-1])
         result["attempts"] = len(attempts)
-        if retry_reason is not None and len(attempts) > 1:
-            result["retry_reason"] = retry_reason
+        retry_reasons = [attempt["retry_reason"] for attempt in attempts if "retry_reason" in attempt]
+        if retry_reasons:
+            result["retry_reasons"] = retry_reasons
+            result["retry_reason"] = retry_reasons[0] if len(set(retry_reasons)) == 1 else "mixed"
+        retry_after_values = [attempt["retry_after_ms"] for attempt in attempts if "retry_after_ms" in attempt]
+        if retry_after_values:
+            result["retry_after_ms"] = retry_after_values[0]
+            result["retry_after_ms_by_attempt"] = retry_after_values
+        retry_sleep_values = [attempt["retry_sleep_secs"] for attempt in attempts if "retry_sleep_secs" in attempt]
+        if retry_sleep_values:
+            result["retry_sleep_secs"] = retry_sleep_values[0]
+            result["retry_sleep_secs_by_attempt"] = retry_sleep_values
         log_path = self.evidence_root / f"transcript-flush-{label}.log"
         log_path.write_text("\n".join(log_sections), encoding="utf-8")
         result["log_path"] = str(log_path)

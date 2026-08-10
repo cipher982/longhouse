@@ -388,6 +388,87 @@ def test_transcript_shipper_retries_storage_lane_backpressure_once(
     assert receipt["events_shipped"] == 1
 
 
+def test_transcript_shipper_caps_storage_lane_backpressure_delay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="Error: storage-v2 repair lane busy; retry after 999999999ms",
+            ),
+            SimpleNamespace(returncode=1, stdout="", stderr="permanent ship failure"),
+        ]
+    )
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        "zerg.qa.provider_native_resume.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = provider_native_resume.TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("post-resume")
+
+    assert sleeps == [10.0]
+    assert receipt["status"] == "fail"
+    assert receipt["attempts"] == 2
+    assert receipt["retry_after_ms"] == 999999999
+    assert receipt["retry_sleep_secs"] == 10.0
+    assert receipt["retry_reasons"] == ["storage_lane_busy"]
+
+
+def test_transcript_shipper_does_not_retry_untyped_ship_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(returncode=1, stdout="", stderr="permanent ship failure")
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", lambda _seconds: pytest.fail("unexpected retry"))
+    shipper = provider_native_resume.TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("post-resume")
+
+    assert calls == 1
+    assert receipt["status"] == "fail"
+    assert receipt["attempts"] == 1
+
+
 def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
