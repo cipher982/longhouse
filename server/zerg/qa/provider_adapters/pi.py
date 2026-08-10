@@ -17,6 +17,12 @@ Its schema:
 
 Only the text path is exercised today (``--no-tools``); tool blocks are mapped
 forwards when present but the first slice does not prove a live tool call.
+
+Live-spending discipline: the real ``pi -p`` path only runs when both an
+OpenRouter key is present AND ``LONGHOUSE_PI_LIVE=1`` is set, so a developer
+laptop or CI with a key exported never silently spends tokens. Without live
+opt-in (or against generated fake binaries) the adapter delegates to the base
+session-safe projection or reports an honest gap.
 """
 
 from __future__ import annotations
@@ -38,16 +44,35 @@ from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import ingest_canonical_events_into_longhouse_db
 from zerg.qa.universal_agent_harness import register_adapter
 
-# Pi's built-in provider id plus the qualification model. Override the model
-# through the env so CI can pin a cheap one without editing the adapter.
+# Pi's built-in provider id plus the qualification model. The model is
+# overridable through the env so CI can pin a concrete one without editing the
+# adapter; the default is a floating -latest alias, so it is cd-only.
 PI_PROVIDER = "openrouter"
 PI_MODEL_ENV = "LONGHOUSE_PI_QUALIFICATION_MODEL"
 PI_DEFAULT_MODEL = "~deepseek/deepseek-v4-flash-latest"
+PI_LIVE_ENV = "LONGHOUSE_PI_LIVE"
 PI_RUN_TIMEOUT_SECS = 120
+PI_INTERRUPT_WAIT_SECS = 20
+PI_EVIDENCE_TEXT_LIMIT = 2000
 
 
 def pi_qualification_model() -> str:
     return os.environ.get(PI_MODEL_ENV) or PI_DEFAULT_MODEL
+
+
+def _scrub(text: str, secret: str | None) -> str:
+    """Redact a known secret from evidence text (never leak the key)."""
+    if not text:
+        return text
+    if secret:
+        text = text.replace(secret, "***REDACTED***")
+    return text
+
+
+def _trunc(text: str, limit: int = PI_EVIDENCE_TEXT_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
 
 
 def _pi_text_content(message: Mapping[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -56,7 +81,7 @@ def _pi_text_content(message: Mapping[str, Any]) -> tuple[str, list[dict[str, An
     tools: list[dict[str, Any]] = []
     content = message.get("content")
     if not isinstance(content, list):
-        return "".join(texts), tools
+        return "\n".join(texts), tools
     for block in content:
         if not isinstance(block, dict):
             continue
@@ -72,15 +97,16 @@ def pi_transcript_rows(transcript: Path) -> tuple[list[dict[str, Any]], str | No
     """Parse a Pi session JSONL into Longhouse raw-event rows.
 
     Returns ``(rows, provider_session_id, metadata)`` where metadata carries the
-    first model_change and the jsonl line count.
+    first model_change, the jsonl line count, and whether a session header was
+    seen (required for a valid transcript binding).
     """
     rows: list[dict[str, Any]] = []
     header_id: str | None = None
-    metadata: dict[str, Any] = {"lines": 0, "model": None}
+    metadata: dict[str, Any] = {"lines": 0, "model": None, "has_header": False}
     try:
         lines = transcript.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
-        return rows, None, {"lines": 0, "model": None, "error": f"{type(exc).__name__}: {exc}"}
+        return rows, None, {"lines": 0, "model": None, "has_header": False, "error": f"{type(exc).__name__}: {exc}"}
 
     for line in lines:
         if not line.strip():
@@ -95,6 +121,8 @@ def pi_transcript_rows(transcript: Path) -> tuple[list[dict[str, Any]], str | No
         kind = str(entry.get("type") or "")
         if kind == "session":
             header_id = str(entry.get("id") or "") or header_id
+            if header_id:
+                metadata["has_header"] = True
         elif kind == "message":
             message = entry.get("message")
             if not isinstance(message, dict):
@@ -145,9 +173,35 @@ class PiHarnessAdapter(UniversalProviderAdapter):
         return binary, None
 
     def _pi_environment(self) -> dict[str, str]:
-        env = dict(os.environ)
-        env.setdefault("PI_DISABLE_AUTOUPDATE", "1")
+        """Minimal allowlisted env. Never forward the full os.environ: a provider
+        auth failure can dump headers/config that carry secrets into stderr."""
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+            "HOME": os.environ.get("HOME", "/tmp"),
+            "PI_OFFLINE": os.environ.get("PI_OFFLINE", ""),
+        }
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if key:
+            env["OPENROUTER_API_KEY"] = key
         return env
+
+    @staticmethod
+    def _has_credential() -> bool:
+        return bool((os.environ.get("OPENROUTER_API_KEY") or "").strip())
+
+    @staticmethod
+    def _live_opted_in() -> bool:
+        return os.environ.get(PI_LIVE_ENV) in {"1", "true", "yes", "on"}
+
+    def _use_live(self) -> bool:
+        """True only when this run should spend a real pi model turn.
+
+        Requires an explicit live opt-in AND a credential, and is never true for
+        generated fake binaries. Without it the adapter never spends tokens.
+        """
+        if self.provider_build is not None and self.provider_build.artifact_provenance == GENERATED_FAKE_PROVENANCE:
+            return False
+        return self._has_credential() and self._live_opted_in()
 
     def _run_pi_turn(self, package: EvidencePackage, prompt: str, marker: str) -> dict[str, Any]:
         binary, error = self._resolve_untyped_binary(package, "pi_turn")
@@ -191,8 +245,9 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             )
             timed_out = True
         elapsed = round(time.monotonic() - started, 3)
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
+        secret = os.environ.get("OPENROUTER_API_KEY")
+        stdout = _scrub(result.stdout or "", secret)
+        stderr = _scrub(result.stderr or "", secret)
         package.write_text("pi/print.stdout.txt", stdout)
         package.write_text("pi/print.stderr.txt", stderr)
         transcript = _newest_session_file(session_dir)
@@ -206,8 +261,8 @@ class PiHarnessAdapter(UniversalProviderAdapter):
                 "returncode": result.returncode,
                 "timed_out": timed_out,
                 "elapsed_secs": elapsed,
-                "stdout": stdout[-2000:],
-                "stderr": stderr[-2000:],
+                "stdout": _trunc(stdout),
+                "stderr": _trunc(stderr),
                 "session_dir": str(session_dir),
             }
         rows, provider_session_id, metadata = pi_transcript_rows(transcript)
@@ -217,8 +272,20 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             rows=rows,
             provider_session_id=provider_session_id,
         )
-        assistant_text = " ".join(str(row.get("text") or "") for row in rows if row.get("role") == "assistant")
-        marker_match = marker in stdout or marker in assistant_text
+        assistant_rows = [row for row in rows if row.get("role") == "assistant" and str(row.get("text") or "").strip()]
+        assistant_text = " ".join(_trunc(str(row.get("text") or "")) for row in assistant_rows)
+        requested_model = pi_qualification_model()
+        evidence_rows = [
+            {
+                "type": row.get("type"),
+                "role": row.get("role"),
+                "text": _trunc(str(row.get("text") or "")),
+                "timestamp": row.get("timestamp"),
+            }
+            for row in rows
+        ]
+        marker_matched = marker in assistant_text
+        transcript_bound = bool(provider_session_id) and bool(metadata.get("has_header"))
         evidence = {
             "status": STATUS_PASS,
             "argv": command,
@@ -228,19 +295,23 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             "transcript_path": transcript_path,
             "transcript_sha256": hashlib.sha256(transcript.read_bytes()).hexdigest(),
             "session_lines": metadata.get("lines"),
-            "model": metadata.get("model") or pi_qualification_model(),
+            "requested_model": requested_model,
+            "observed_model": metadata.get("model") or None,
+            "model_honored": bool(metadata.get("model")) and metadata.get("model") == requested_model,
             "provider_session_id": provider_session_id,
-            "rows": rows,
+            "rows": evidence_rows,
             "marker": marker,
             "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
             "marker_in_prompt": marker in prompt,
-            "marker_matched": marker_match,
+            "marker_matched": marker_matched,
+            "assistant_row_count": len(assistant_rows),
+            "transcript_bound": transcript_bound,
             "ingest": ingested,
         }
         if result.returncode != 0 and not timed_out:
             evidence["status"] = STATUS_FAIL
             evidence["failure_code"] = "pi_print_run_failed"
-            evidence["message"] = f"real pi -p exited {result.returncode} ({stderr[-400:]})"
+            evidence["message"] = f"real pi -p exited {result.returncode} ({_trunc(stderr, 400)})"
         elif timed_out:
             evidence["status"] = STATUS_FAIL
             evidence["failure_code"] = "pi_print_timed_out"
@@ -249,50 +320,30 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             evidence["status"] = STATUS_FAIL
             evidence["failure_code"] = "pi_db_ingest_failed"
             evidence["message"] = str(ingested.get("message") or "pi transcript DB ingest did not pass")
-        elif not marker_match:
+        elif not transcript_bound:
+            evidence["status"] = STATUS_FAIL
+            evidence["failure_code"] = "pi_transcript_unbound"
+            evidence["message"] = "pi transcript had no session header/id to bind to the Longhouse session"
+        elif not assistant_rows:
+            evidence["status"] = STATUS_FAIL
+            evidence["failure_code"] = "pi_assistant_row_missing"
+            evidence["message"] = "real pi run produced no assistant message row"
+        elif not marker_matched:
             evidence["status"] = STATUS_FAIL
             evidence["failure_code"] = "pi_print_marker_missing"
-            evidence["message"] = "real pi -p did not emit the requested marker text"
+            evidence["message"] = "real pi assistant text did not include the requested marker"
         return evidence
 
-    @staticmethod
-    def _has_credential() -> bool:
-        return bool((os.environ.get("OPENROUTER_API_KEY") or "").strip())
-
-    def _use_live(self) -> bool:
-        """True when this run should spend a real pi model turn.
-
-        The factory's hermetic lanes run every provider against generated fake
-        binaries with no credentials; pi delegates those to the base adapter's
-        session-safe projection rather than launching a fake binary that cannot
-        produce a transcript.
-        """
-        if self.provider_build is not None and self.provider_build.artifact_provenance == GENERATED_FAKE_PROVENANCE:
-            return False
-        return self._has_credential()
-
-    def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
+    def terminate_cleanup(self, package: EvidencePackage) -> dict[str, Any]:
         if not self._use_live():
-            return super().launch_managed_session(package)
-        marker = f"LONGHOUSE_PI_LAUNCH_{os.urandom(4).hex()}"
-        payload = self._run_pi_turn(package, f"Reply with exactly {marker} and nothing else.", marker)
-        package.write_json("assertions/launch_managed_session.json", payload)
-        return payload
-
-    def send_receive(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
-        if not self._use_live():
-            return super().send_receive(package, prompt)
-        marker = f"LONGHOUSE_PI_SEND_{os.urandom(4).hex()}"
-        # Keep the prompt single-line: the export_contains_raw assertion matches
-        # the raw user text against the exported JSONL, where embedded newlines
-        # are JSON-escaped and would break the substring check.
-        resolved_prompt = f"{prompt} Include the marker {marker} verbatim in your reply."
-        payload = self._run_pi_turn(package, resolved_prompt, marker)
-        package.write_json("assertions/send_receive.json", payload)
-        return payload
-
-    def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, error = self._resolve_untyped_binary(package, "interrupt_cancel")
+            payload = self._unsupported_payload(
+                "terminate_cleanup",
+                "terminate_cleanup_not_safe_no_token",
+                "terminate_cleanup requires a live pi turn to prove termination of a real child.",
+            )
+            package.write_json("assertions/terminate_cleanup.json", payload)
+            return payload
+        binary, error = self._resolve_untyped_binary(package, "terminate_cleanup")
         if error is not None:
             return error
         session_dir = package.path("pi", "sessions")
@@ -318,8 +369,102 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        # Give the child a beat to start, then interrupt it like Longhouse would.
-        time.sleep(3)
+        # Wait for the child to be alive (in flight) so we are terminating a
+        # live process, not a corpse.
+        in_flight = _wait_alive(process, timeout_secs=PI_INTERRUPT_WAIT_SECS)
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=30)
+            reaped = True
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=10)
+            reaped = False
+        payload = {
+            "status": STATUS_PASS if (reaped and process.returncode is not None) else STATUS_FAIL,
+            "failure_code": None if (reaped and process.returncode is not None) else "pi_terminate_not_reaped",
+            "message": None if (reaped and process.returncode is not None) else "pi child was not reaped after terminate",
+            "terminate_signal": "SIGTERM",
+            "reaped": reaped,
+            "returncode": process.returncode,
+            "in_flight_process": in_flight,
+            "stdout_tail": _trunc(_scrub(stdout or "", os.environ.get("OPENROUTER_API_KEY")), 400),
+            "stderr_tail": _trunc(_scrub(stderr or "", os.environ.get("OPENROUTER_API_KEY")), 400),
+        }
+        package.write_json("assertions/terminate_cleanup.json", payload)
+        return payload
+
+    def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
+        if not self._use_live():
+            return super().launch_managed_session(package)
+        marker = f"LONGHOUSE_PI_LAUNCH_{os.urandom(4).hex()}"
+        payload = self._run_pi_turn(package, f"Reply with exactly {marker} and nothing else.", marker)
+        package.write_json("assertions/launch_managed_session.json", payload)
+        return payload
+
+    def send_receive(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
+        if not self._use_live():
+            return super().send_receive(package, prompt)
+        marker = f"LONGHOUSE_PI_SEND_{os.urandom(4).hex()}"
+        # Keep the prompt single-line: the export_contains_raw assertion matches
+        # the raw user text against the exported JSONL, where embedded newlines
+        # are JSON-escaped and would break the substring check.
+        resolved_prompt = f"{prompt} Include the marker {marker} verbatim in your reply."
+        payload = self._run_pi_turn(package, resolved_prompt, marker)
+        package.write_json("assertions/send_receive.json", payload)
+        return payload
+
+    def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
+        if not self._use_live():
+            payload = self._unsupported_payload(
+                "interrupt_cancel",
+                "interrupt_cancel_not_safe_no_token",
+                "interrupt_cancel requires a live pi turn to prove mid-run interruption.",
+            )
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
+        binary, error = self._resolve_untyped_binary(package, "interrupt_cancel")
+        if error is not None:
+            return error
+        session_dir = package.path("pi", "sessions")
+        session_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            str(binary),
+            "-p",
+            # A long-generation prompt keeps pi in flight long enough (flash can
+            # finish a short reply before an interrupt window opens); the essay
+            # request forces a multi-second generation we can interrupt mid-way.
+            "Write a detailed 500-word essay about the history of computing. Do not use tools.",
+            "--provider",
+            PI_PROVIDER,
+            "--model",
+            pi_qualification_model(),
+            "--session-dir",
+            str(session_dir),
+            "--no-context-files",
+            "--no-tools",
+        ]
+        process = subprocess.Popen(
+            command,
+            cwd=str(package.path("workspace")),
+            env=self._pi_environment(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        # Prove the turn is in flight (process alive) before signaling; if pi
+        # exited first, the interrupt was not exercised.
+        in_flight = _wait_alive(process, timeout_secs=PI_INTERRUPT_WAIT_SECS)
+        if in_flight is None:
+            process.kill()
+            process.communicate(timeout=10)
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "pi_interrupt_not_in_flight",
+                "message": "pi exited before an interrupt could be delivered; cannot prove mid-run interruption",
+            }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
         process.send_signal(subprocess.signal.SIGINT)
         try:
             stdout, stderr = process.communicate(timeout=30)
@@ -329,28 +474,34 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             stdout, stderr = process.communicate(timeout=10)
             terminated = False
         transcript = _newest_session_file(session_dir)
+        killed_by_signal = process.returncode is not None and process.returncode < 0
+        in_flight_transcript = transcript is not None
+        passed = killed_by_signal and in_flight
         payload = {
-            "status": STATUS_PASS if terminated else STATUS_FAIL,
-            "failure_code": None if terminated else "pi_interrupt_not_terminated",
-            "message": None if terminated else "pi child survived SIGINT",
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "failure_code": None if passed else "pi_interrupt_evidence_missing",
+            "message": None if passed else "pi did not die from SIGINT while in flight",
             "interrupt_signal": "SIGINT",
             "terminated": terminated,
             "returncode": process.returncode,
+            "killed_by_signal": killed_by_signal,
+            "in_flight_transcript": in_flight_transcript,
             "transcript_present": transcript is not None,
-            "stdout_tail": (stdout or "")[-400:],
-            "stderr_tail": (stderr or "")[-400:],
+            "stdout_tail": _trunc(_scrub(stdout or "", os.environ.get("OPENROUTER_API_KEY")), 400),
+            "stderr_tail": _trunc(_scrub(stderr or "", os.environ.get("OPENROUTER_API_KEY")), 400),
         }
         package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
-    def terminate_cleanup(self, package: EvidencePackage) -> dict[str, Any]:
-        # No owned child in a terminate-only scenario; the launch/send paths own
-        # their subprocesses and end them synchronously. Terminate is satisfied
-        # by the synchronous run contract plus a parseable transcript.
-        payload = {
-            "status": STATUS_PASS,
-            "scenario": "terminate_cleanup",
-            "note": "pi runs are bounded subprocesses; terminate is subprocess.run completion.",
-        }
-        package.write_json("assertions/terminate_cleanup.json", payload)
-        return payload
+
+def _wait_alive(process: subprocess.Popen[str], timeout_secs: float) -> bool:
+    """Poll until the process is (or was) observed alive; returns True if it
+    was running at any point before the timeout, False if it exited immediately.
+    Used to prove the child was in flight before an interrupt/terminate."""
+    deadline = time.monotonic() + timeout_secs
+    while time.monotonic() < deadline:
+        if process.poll() is None:
+            return True
+        # process exited; give it a final settle then report
+        time.sleep(0.2)
+    return process.poll() is None

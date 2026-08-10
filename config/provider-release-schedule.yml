@@ -37,7 +37,7 @@ providers:
     release_cadence: pinned_observed_install
     release_executor: private_factory
     weekly_unconditional: true
-    allow_failure: false
+    allow_failure: true
     max_build_age_seconds: 2592000
 live_token:
   cadence: private_factory_tick

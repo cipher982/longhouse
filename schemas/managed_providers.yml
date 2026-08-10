@@ -1336,16 +1336,29 @@ providers:
     source_surface: console
     state_mutation_scope: session_model
     evidence_class: live_token
-    disposition: implemented
+    # No interaction-probe producer exists for pi yet (provider_interaction_probe.py
+    # has no pi branch and _PROVIDER_VERSION_PATTERNS lacks pi), so the live canary
+    # cannot run; keep the probe honest until phase 2 adds the producer.
+    disposition: not_implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
-    channel: observed_only
-    coordinate: pi
-    version_discovery: observed_install
-    verification: closure_digest_and_version
-    platform_artifacts: {}
-  permission_prompt_surface: true
+    channel: npm_registry
+    coordinate: "@earendil-works/pi-coding-agent"
+    version_discovery: npm_latest_dist_tag
+    verification: npm_sha512_integrity_and_version
+    # Pi ships a single universal npm package across platforms.
+    platform_artifacts:
+      linux-x86_64: "@earendil-works/pi-coding-agent"
+      linux-aarch64: "@earendil-works/pi-coding-agent"
+      darwin-x86_64: "@earendil-works/pi-coding-agent"
+      darwin-aarch64: "@earendil-works/pi-coding-agent"
+      windows-x86_64: "@earendil-works/pi-coding-agent"
+      windows-aarch64: "@earendil-works/pi-coding-agent"
+  permission_prompt_surface: false
   external_event_channel: null
+  # pause_tool_name is required by the manifest schema as a non-empty string;
+  # with permission_prompt_surface false it is inert until pi exposes a real
+  # permission/pause hook.
   pause_tool_name: "pi_pause_request"
   harness_safe_no_token_prompt: false
   harness_safe_managed_session_scenarios: []

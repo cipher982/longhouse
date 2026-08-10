@@ -1023,10 +1023,11 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
             # status is blocked (supported, no wired evidence) rather than a gap.
             assert actions["permission_prompt"]["status"] == "blocked"
         elif result["provider"] == "pi":
-            # Pi launches with --approve/project-trust; no pull-based Longhouse
-            # permission gate is wired for it yet, so the honest status is
-            # blocked (supported surface, no harness canary), like Cursor.
-            assert actions["permission_prompt"]["status"] == "blocked"
+            # Pi declares no permission-prompt surface (permission_prompt_surface
+            # false), so the action matrix honestly reports a gap rather than a
+            # blocked-but-supported surface.
+            assert actions["permission_prompt"]["status"] == "unsupported_gap"
+            assert actions["permission_prompt"]["failure_code"] == "permission_prompt_unsupported"
         else:
             assert actions["permission_prompt"]["status"] == "pass"
             assert actions["permission_prompt"]["canary"] == "claude_permission_gate_reply"

@@ -2268,18 +2268,25 @@
           "source_surface": "console",
           "state_mutation_scope": "session_model",
           "evidence_class": "live_token",
-          "disposition": "implemented",
+          "disposition": "not_implemented",
           "canary": "server/zerg/qa/provider_interaction_probe.py"
         }
       ],
       "release_channel": {
-        "channel": "observed_only",
-        "coordinate": "pi",
-        "version_discovery": "observed_install",
-        "verification": "closure_digest_and_version",
-        "platform_artifacts": {}
+        "channel": "npm_registry",
+        "coordinate": "@earendil-works/pi-coding-agent",
+        "version_discovery": "npm_latest_dist_tag",
+        "verification": "npm_sha512_integrity_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": "@earendil-works/pi-coding-agent",
+          "linux-aarch64": "@earendil-works/pi-coding-agent",
+          "darwin-x86_64": "@earendil-works/pi-coding-agent",
+          "darwin-aarch64": "@earendil-works/pi-coding-agent",
+          "windows-x86_64": "@earendil-works/pi-coding-agent",
+          "windows-aarch64": "@earendil-works/pi-coding-agent"
+        }
       },
-      "permission_prompt_surface": true,
+      "permission_prompt_surface": false,
       "external_event_channel": null,
       "pause_tool_name": "pi_pause_request",
       "harness_safe_no_token_prompt": false,
@@ -2384,7 +2391,7 @@
         "pi.turn_start",
         "pi.turn_interrupt"
       ],
-      "adapter_digest": "9bcf759b0d41c9eee3cea65df6099de450cc7ef356188c2dc5faf8efccc50f72"
+      "adapter_digest": "7f22e773891ad0c03aca81a8e803760155283648dfed995ee726fc187c867fdc"
     }
   ]
 }
