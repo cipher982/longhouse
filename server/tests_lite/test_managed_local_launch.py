@@ -231,6 +231,65 @@ def test_managed_local_launch_response_contract_rejects_missing_claude_provider_
         )
 
 
+def test_managed_local_launch_response_contract_accepts_pi_print_without_attach_command():
+    from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
+    from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
+    from zerg.session_execution_home import ManagedSessionTransport
+    from zerg.session_execution_home import SessionExecutionHome
+    from zerg.session_loop_mode import SessionLoopMode
+
+    response = ManagedLocalSessionLaunchResponse(
+        session_id="session-pi-1",
+        run_id="22222222-2222-4222-8222-222222222222",
+        provider="pi",
+        provider_session_id=None,
+        execution_home=SessionExecutionHome.MANAGED_LOCAL,
+        managed_transport=ManagedSessionTransport.PI_PRINT,
+        loop_mode=SessionLoopMode.ASSIST,
+        source_runner_id=1,
+        source_runner_name="cinder",
+        managed_session_name="pi-demo",
+        attach_command="",
+    )
+
+    # The one-shot pi_print transport has no attach/resume command; an empty
+    # attach_command must pass the response contract (regression: this used to
+    # raise "Unsupported managed local launch response transport: pi_print",
+    # surfacing as 500 "Managed local launch failed" on launch).
+    _validate_managed_local_launch_response_contract(
+        session_id="session-pi-1",
+        response=response,
+    )
+
+
+def test_managed_local_launch_response_contract_rejects_pi_print_attach_command():
+    from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
+    from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
+    from zerg.session_execution_home import ManagedSessionTransport
+    from zerg.session_execution_home import SessionExecutionHome
+    from zerg.session_loop_mode import SessionLoopMode
+
+    response = ManagedLocalSessionLaunchResponse(
+        session_id="session-pi-2",
+        run_id="33333333-3333-4333-8333-333333333333",
+        provider="pi",
+        provider_session_id=None,
+        execution_home=SessionExecutionHome.MANAGED_LOCAL,
+        managed_transport=ManagedSessionTransport.PI_PRINT,
+        loop_mode=SessionLoopMode.ASSIST,
+        source_runner_id=1,
+        source_runner_name="cinder",
+        managed_session_name="pi-demo",
+        attach_command="longhouse pi --resume-session session-pi-2",
+    )
+
+    with pytest.raises(RuntimeError, match="should not include an attach command"):
+        _validate_managed_local_launch_response_contract(
+            session_id="session-pi-2",
+            response=response,
+        )
+
+
 def test_this_device_launch_discards_session_when_response_contract_fails(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
