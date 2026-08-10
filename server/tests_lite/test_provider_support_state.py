@@ -449,7 +449,7 @@ def test_support_state_tolerates_missing_health_sections() -> None:
         control_channel=None,
     )
 
-    assert support["summary"]["providers_count"] == 5
+    assert support["summary"]["providers_count"] == 6
     assert support["providers"]["claude"]["state"] == "provider_cli_missing"
     assert support["providers"]["codex"]["version_readiness"]["state"] == "not_configured"
 

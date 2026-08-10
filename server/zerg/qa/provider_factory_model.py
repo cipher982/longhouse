@@ -128,7 +128,7 @@ class Trigger(StrEnum):
 DIRECT_RESUME_PRODUCERS: tuple[ProducerRegistration, ...] = (CODEX_NATIVE_RESUME_PRODUCER,)
 
 
-ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor")
+ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor", "pi")
 
 # The release lane's actual deployed profiles per provider. Codex deliberately
 # has two profiles: the tool-result lane owns the complete universal column,

@@ -31,6 +31,7 @@ class ManagedSessionTransport(str, Enum):
     CURSOR_EXEC = "cursor_exec"
     CURSOR_ACP = "cursor_acp"
     CURSOR_HELM = "cursor_helm"
+    PI_PRINT = "pi_print"
 
     @staticmethod
     def for_provider(

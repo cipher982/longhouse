@@ -117,6 +117,22 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     cornerRadiusFactor: 0.28,
     aliases: ["z.ai"],
   },
+  "pi": {
+    displayName: "Pi",
+    marketingName: "Pi Agent",
+    brand: "#A855F7",
+    glyphStyle: "original",
+    markColor: null,
+    chipFillType: "brand_alpha",
+    chipFillAlpha: 0.16,
+    chipFillColor: null,
+    chipStrokeType: "brand_alpha",
+    chipStrokeAlpha: 0.22,
+    chipStrokeColor: null,
+    chipStrokeWidth: 0.5,
+    cornerRadiusFactor: 0.28,
+    aliases: [],
+  },
 };
 
 const PROVIDER_ALIASES: Record<string, string> = {
@@ -135,6 +151,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "cursor": "Cursor",
   "zai": "Z.ai",
   "z.ai": "Z.ai",
+  "pi": "Pi",
 };
 
 const DEFAULT_CONFIG: ProviderBrandConfig = {

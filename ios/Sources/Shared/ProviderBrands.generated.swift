@@ -51,6 +51,7 @@ public enum ProviderBrands {
         case "cursor": return cursor
         case "zai": return zai
         case "z.ai": return zai
+        case "pi": return pi
         default: return defaultConfig
         }
     }
@@ -147,6 +148,21 @@ public enum ProviderBrands {
         displayName: "Z.ai",
         marketingName: "Z.ai",
         brand: Color(red: 0.690196, green: 0.431373, blue: 0.541176, opacity: 1),
+        glyphStyle: "original",
+        markColor: nil,
+        chipFillType: "brand_alpha",
+        chipFillAlpha: 0.16,
+        chipFillColor: nil,
+        chipStrokeType: "brand_alpha",
+        chipStrokeAlpha: 0.22,
+        chipStrokeColor: nil,
+        chipStrokeWidth: 0.5,
+        cornerRadiusFactor: 0.28,
+    )
+    static let pi = ProviderBrandConfig(
+        displayName: "Pi",
+        marketingName: "Pi Agent",
+        brand: Color(red: 0.658824, green: 0.333333, blue: 0.968627, opacity: 1),
         glyphStyle: "original",
         markColor: nil,
         chipFillType: "brand_alpha",

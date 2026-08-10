@@ -58,6 +58,8 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
         "antigravity": _fake_antigravity_provider_live(tmp_path / "bin" / "agy"),
         # cursor-agent prints a bare calendar build, not semver.
         "cursor": _write_exe(tmp_path / "bin" / "cursor-agent", "2026.07.23-e383d2b"),
+        # pi --version is bare semver.
+        "pi": _write_exe(tmp_path / "bin" / "pi", "9.9.9"),
     }
 
 
@@ -592,6 +594,7 @@ EXPECTED_ADAPTER_CLASS_BY_PROVIDER = {
     "opencode": "OpenCodeHarnessAdapter",
     "antigravity": "AntigravityHarnessAdapter",
     "cursor": "CursorHarnessAdapter",
+    "pi": "PiHarnessAdapter",
 }
 
 
@@ -1018,6 +1021,11 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
             # hook proved allow/ask/deny in Gate 0. That proof still lives in the
             # bespoke Gate 0 script rather than a harness canary, so the honest
             # status is blocked (supported, no wired evidence) rather than a gap.
+            assert actions["permission_prompt"]["status"] == "blocked"
+        elif result["provider"] == "pi":
+            # Pi launches with --approve/project-trust; no pull-based Longhouse
+            # permission gate is wired for it yet, so the honest status is
+            # blocked (supported surface, no harness canary), like Cursor.
             assert actions["permission_prompt"]["status"] == "blocked"
         else:
             assert actions["permission_prompt"]["status"] == "pass"
@@ -2840,6 +2848,10 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             # Supported surface, proof not yet wired as a harness canary. See the
             # action-matrix test for the full reasoning.
             assert permission["status"] == "blocked"
+        elif provider == "pi":
+            # No Longhouse pull-based permission gate for pi yet; supported
+            # surface, no wired canary -> blocked.
+            assert permission["status"] == "blocked"
         else:
             assert permission["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
@@ -4160,6 +4172,11 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
         ("cursor", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("cursor", "send_receive"): "send_receive_not_safe_no_token",
         ("cursor", "launch_managed_session"): "managed_session_not_safe_no_token",
+        # Pi's no-token surface is unsupported until a managed bridge exists;
+        # the factory adapter runs real pi turns only when a credential is set.
+        ("pi", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
+        ("pi", "send_receive"): "send_receive_not_safe_no_token",
+        ("pi", "launch_managed_session"): "managed_session_not_safe_no_token",
     }
     for provider in uah.SUPPORTED_PROVIDERS:
         for scenario in scenarios:

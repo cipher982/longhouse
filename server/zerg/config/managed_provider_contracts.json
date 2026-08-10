@@ -2212,6 +2212,179 @@
         "cursor.turn_interrupt"
       ],
       "adapter_digest": "550c9ca52e92f64b5e04ecdea66a3b9546c36425efef474c5159e59313bf72e8"
+    },
+    {
+      "provider": "pi",
+      "display_name": "Pi",
+      "marketing_name": "Pi Agent",
+      "provider_cli_binary": "pi",
+      "provider_cli_env": "LONGHOUSE_PI_BIN",
+      "requires_longhouse_cli": false,
+      "managed_transport": "pi_print",
+      "console_adapter": "pi_print",
+      "control_plane": "pi_print",
+      "control_plane_aliases": [],
+      "adapter_sources": [
+        "server/zerg/qa/provider_adapters/pi.py"
+      ],
+      "wire_families": [
+        "pi_jsonl"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "pi",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "pi_print_model",
+          "surface": "console",
+          "input_sequence": [
+            "pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace>"
+          ],
+          "acknowledgement_oracle": "pi_print_model_metadata",
+          "native_sources": [
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "modelId",
+            "provider"
+          ],
+          "raw_output_markers": [
+            "message"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": true,
+          "changes_provider_state": true,
+          "source_surface": "console",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "observed_only",
+        "coordinate": "pi",
+        "version_discovery": "observed_install",
+        "verification": "closure_digest_and_version",
+        "platform_artifacts": {}
+      },
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "pi_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
+      "harness_real_managed_session_e2e": false,
+      "launch_local": true,
+      "run_once": false,
+      "reattach": false,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": false,
+      "answer_pause": false,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": false,
+      "transcript_binding": true,
+      "live_proof": false,
+      "startup_coordination_context": false,
+      "capabilities": {},
+      "can_resume": false,
+      "turn_start": true,
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_token",
+          "source": "Real `pi -p` completed a bounded OpenRouter turn in a sandbox and wrote a session JSONL; the factory adapter launches the stock pi CLI.",
+          "disposition": "implemented"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "the legacy session.run_once command is Codex-only; pi's one-shot is turn_start",
+          "disposition": "not_implemented",
+          "reason": "run_once is a legacy command the engine routes only for Codex.",
+          "owner_action": "route pi turn_start through a pi engine adapter instead of run_once",
+          "blocker": "budget"
+        },
+        "reattach": {
+          "level": "none",
+          "source": "pi --continue/--session resume exists upstream but the engine reattach path is not wired",
+          "disposition": "not_implemented",
+          "reason": "Pi has --continue/--session resume, but Longhouse has no engine-side reattach launcher yet.",
+          "owner_action": "wire a pi managed bridge (like cursor_helm) that resumes the session JSONL by --session-id",
+          "blocker": "budget"
+        },
+        "send_input": {
+          "level": "live_token",
+          "source": "The pi factory adapter sends a real prompt (`pi -p`) and binds the response transcript to the session jsonl.",
+          "disposition": "implemented"
+        },
+        "interrupt": {
+          "level": "hermetic",
+          "source": "pi -p has no pause channel; a factory adapter interrupt canary SIGINTs the child and confirms clean exit plus a parseable session file.",
+          "disposition": "implemented"
+        },
+        "steer_active_turn": {
+          "level": "none",
+          "source": "pi exposes no stdin mid-turn injection; only the rpc/server mode (unwired) would allow it",
+          "disposition": "not_implemented",
+          "reason": "Stock pi has no active-turn injection surface; rpc/server mode could back it but is not wired.",
+          "owner_action": "prove rpc/server-mode active-turn steer through a pi managed bridge",
+          "blocker": "upstream"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "pi has no pull-based pause-request permission surface",
+          "disposition": "not_implemented",
+          "reason": "Pi exposes no pause-request permission channel.",
+          "owner_action": "confirm pi permission hooks or add a pull-based pause surface",
+          "blocker": "upstream"
+        },
+        "terminate": {
+          "level": "hermetic",
+          "source": "The pi factory adapter terminates the child process and confirms cleanup of the managed session.",
+          "disposition": "implemented"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "The pi factory adapter reads the append-only session JSONL and normalizes entries into raw events.",
+          "disposition": "implemented"
+        },
+        "runtime_phase": {
+          "level": "none",
+          "source": "pi phase observation requires the engine managed bridge",
+          "disposition": "not_implemented",
+          "owner_action": "wire managed_pi_scan into the daemon observers",
+          "blocker": "budget"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "The pi factory adapter parses the session header id and message entries and binds them to the Longhouse session id.",
+          "disposition": "implemented"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "pi -p/--continue one-shot turn semantics exercised by the factory adapter",
+          "disposition": "implemented"
+        }
+      },
+      "machine_control_supports": [
+        "pi.send",
+        "pi.interrupt",
+        "pi.terminate",
+        "pi.turn_start",
+        "pi.turn_interrupt"
+      ],
+      "adapter_digest": "9bcf759b0d41c9eee3cea65df6099de450cc7ef356188c2dc5faf8efccc50f72"
     }
   ]
 }

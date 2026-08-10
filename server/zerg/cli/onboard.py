@@ -45,6 +45,7 @@ _PROVIDER_ONBOARDING_LABELS = {
     "cursor": "Cursor Agent",
     "opencode": "OpenCode",
     "antigravity": "Antigravity",
+    "pi": "Pi",
 }
 _PROVIDER_ONBOARDING_DOCS = {
     "claude": "https://docs.anthropic.com/en/docs/claude-code/overview",
@@ -52,6 +53,7 @@ _PROVIDER_ONBOARDING_DOCS = {
     "cursor": "https://cursor.com/cli",
     "opencode": "https://opencode.ai",
     "antigravity": "https://antigravity.google/product/antigravity-cli",
+    "pi": "https://github.com/earendil-works/pi",
 }
 
 

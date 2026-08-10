@@ -9,6 +9,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "gemini": "Antigravity",
     "openai": "OpenAI",
     "opencode": "OpenCode",
+    "pi": "Pi",
     "z.ai": "Z.ai",
     "zai": "Z.ai"
 }

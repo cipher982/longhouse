@@ -68,7 +68,7 @@ def _manifest_item(provider: str = "test") -> dict:
 
 
 def test_managed_provider_contract_matrix_covers_launch_scope_providers():
-    assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity", "cursor"})
+    assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity", "cursor", "pi"})
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
 
 
@@ -131,7 +131,7 @@ def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypa
 
     validated = validate_generated_contract_manifest(payload)
 
-    assert len(validated["providers"]) == 5
+    assert len(validated["providers"]) == 6
 
 
 def test_generated_runtime_manifest_rejects_invalid_embedded_digest():
@@ -155,6 +155,7 @@ def test_provider_identity_contracts_are_manifest_backed():
         "opencode": False,
         "antigravity": False,
         "cursor": False,
+        "pi": False,
     }
     assert sorted(control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes) == sorted(
         {
@@ -166,6 +167,7 @@ def test_provider_identity_contracts_are_manifest_backed():
             "cursor_acp",
             "cursor_exec",
             "cursor_helm",
+            "pi_print",
         }
     )
 
@@ -177,6 +179,7 @@ def test_startup_coordination_context_support_is_explicit():
         "opencode": False,
         "antigravity": False,
         "cursor": False,
+        "pi": False,
     }
 
 
@@ -629,6 +632,7 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
         "opencode": "opencode",
         "antigravity": "agy",
         "cursor": "cursor-agent",
+        "pi": "pi",
     }
     assert PROVIDER_CLI_ENV_BY_PROVIDER == {
         "codex": "LONGHOUSE_CODEX_BIN",
@@ -636,6 +640,7 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
         "opencode": "LONGHOUSE_OPENCODE_BIN",
         "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
         "cursor": "LONGHOUSE_CURSOR_BIN",
+        "pi": "LONGHOUSE_PI_BIN",
     }
 
 
