@@ -29,6 +29,7 @@ from zerg.crud import get_user_by_email
 from zerg.database import Base
 from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
+from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
@@ -56,6 +57,8 @@ from zerg.storage_v2.render_objects import read_render_object
 from zerg.utils.time import utc_now_naive
 
 _TENANT_ID = "demo-tenant"
+_DEMO_LIVE_STAMP_AHEAD = timedelta(minutes=30)
+_DEMO_LIVE_LEASE_TTL_MS = 24 * 60 * 60 * 1000
 # Keep the public corpus mixed: two currently steerable Helm sessions, one
 # Console session, and one recently closed managed session. The other six
 # sessions remain storage-backed archive/search examples.
@@ -129,10 +132,51 @@ def _build_legacy_source(output_path: Path, *, owner_email: str, anchor: datetim
             raise RuntimeError(f"failed to seed {failed_count} demo sessions")
         if seeded_count != len(DEMO_PRESENTATION):
             raise RuntimeError(f"expected {len(DEMO_PRESENTATION)} demo sessions, seeded {seeded_count}")
+        _complete_demo_tool_call_pairs(db)
         _add_lossless_demo_source_lines(db, anchor=anchor)
     finally:
         db.close()
     return factory
+
+
+def _complete_demo_tool_call_pairs(db) -> None:
+    """Link every authored demo tool call to its result before storage-v2 migration.
+
+    The workspace derives the durable ``completed`` state from matching call IDs.
+    The seed intentionally omits IDs on some simple tool exchanges, so restore
+    those links here without changing the shared, provider-shaped seed corpus.
+    Existing IDs remain authoritative and result timestamps provide the duration.
+    """
+
+    sessions = db.query(AgentSession.id).order_by(AgentSession.id.asc()).all()
+    for (session_id,) in sessions:
+        events = (
+            db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
+        )
+        pending_calls: list[AgentEvent] = []
+        calls_by_id: dict[str, AgentEvent] = {}
+        for event in events:
+            if event.role == "assistant" and event.tool_name:
+                if not event.tool_call_id:
+                    event.tool_call_id = f"demo-tool-{event.id}"
+                pending_calls.append(event)
+                calls_by_id[str(event.tool_call_id)] = event
+                continue
+            if event.role != "tool":
+                continue
+
+            matched = calls_by_id.pop(str(event.tool_call_id), None) if event.tool_call_id else None
+            if matched is None and not event.tool_call_id and pending_calls:
+                matched = pending_calls.pop(0)
+                event.tool_call_id = matched.tool_call_id
+                calls_by_id.pop(str(matched.tool_call_id), None)
+            elif matched is not None:
+                pending_calls.remove(matched)
+
+        if pending_calls:
+            missing_results = ", ".join(str(event.id) for event in pending_calls)
+            raise RuntimeError(f"demo tool calls without results in {session_id}: {missing_results}")
+    db.commit()
 
 
 def _add_lossless_demo_source_lines(db, *, anchor: datetime) -> None:
@@ -257,7 +301,7 @@ def _fact_head(
     valid_until: datetime | None,
 ) -> None:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    evidence_hash = hashlib.sha256(encoded.encode()).hexdigest()
+    evidence_hash = canonical_evidence_hash(value)
     source_epoch = str(uuid5(NAMESPACE_URL, f"demo-fact:{session_id}:{family}"))
     connection.execute(
         FactHead.__table__.insert().values(
@@ -303,7 +347,8 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
             is_finished = config["phase"] == "finished"
             closed_at = anchor - timedelta(minutes=8) if is_finished else None
             ended_at = closed_at
-            last_health_at = anchor if not is_finished else anchor - timedelta(minutes=8)
+            live_stamp = anchor + _DEMO_LIVE_STAMP_AHEAD if not is_finished else anchor - timedelta(minutes=8)
+            last_health_at = live_stamp
             title, summary = DEMO_PRESENTATION[provider_id]
 
             connection.execute(
@@ -449,7 +494,9 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
                     last_progress_at=last_health_at,
                     last_live_at=last_health_at,
                     timeline_anchor_at=storage["last_activity_at"],
-                    freshness_expires_at=(anchor + timedelta(minutes=5) if not is_finished else anchor - timedelta(minutes=1)),
+                    freshness_expires_at=(
+                        live_stamp + timedelta(milliseconds=_DEMO_LIVE_LEASE_TTL_MS) if not is_finished else anchor - timedelta(minutes=1)
+                    ),
                     terminal_state="completed" if is_finished else None,
                     terminal_reason="completed" if is_finished else None,
                     terminal_source=config["control_plane"] if is_finished else None,
@@ -467,9 +514,9 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
                         machine_id=storage["machine_id"],
                         state="attached",
                         sequence=1,
-                        heartbeat_at=anchor,
-                        payload_json=json.dumps({"bridge_status": "ready", "lease_ttl_ms": 300_000}),
-                        updated_at=anchor,
+                        heartbeat_at=live_stamp,
+                        payload_json=json.dumps({"bridge_status": "ready", "lease_ttl_ms": _DEMO_LIVE_LEASE_TTL_MS}),
+                        updated_at=live_stamp,
                     )
                 )
             _fact_head(
@@ -488,12 +535,14 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
                     "tool_name": config["tool"],
                     "source": "provider_runtime",
                     "observed_at": last_health_at.isoformat(),
-                    "valid_until": (anchor + timedelta(minutes=5)).isoformat()
+                    "valid_until": (live_stamp + timedelta(milliseconds=_DEMO_LIVE_LEASE_TTL_MS)).isoformat()
                     if not is_finished
                     else (anchor - timedelta(minutes=1)).isoformat(),
                 },
                 observed_at=last_health_at,
-                valid_until=(anchor + timedelta(minutes=5) if not is_finished else anchor - timedelta(minutes=1)),
+                valid_until=(
+                    live_stamp + timedelta(milliseconds=_DEMO_LIVE_LEASE_TTL_MS) if not is_finished else anchor - timedelta(minutes=1)
+                ),
             )
             if not is_finished and config["origin_kind"] != "console":
                 _fact_head(
@@ -509,14 +558,14 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
                         "run_id": run_id,
                         "connection_id": adapter_connection_id,
                         "lease_generation": lease_generation,
-                        "granted_operations": ["interrupt", "send_input", "terminate", "tail_output", "resume"],
+                        "granted_operations": ["interrupt", "resume", "send_input", "tail_output", "terminate"],
                         "state": "attached",
-                        "lease_ttl_ms": 300_000,
+                        "lease_ttl_ms": _DEMO_LIVE_LEASE_TTL_MS,
                         "source": "provider_control",
-                        "observed_at": anchor.isoformat(),
+                        "observed_at": live_stamp.isoformat(),
                     },
-                    observed_at=anchor,
-                    valid_until=anchor + timedelta(minutes=5),
+                    observed_at=live_stamp,
+                    valid_until=live_stamp + timedelta(milliseconds=_DEMO_LIVE_LEASE_TTL_MS),
                 )
             connection.execute(
                 LiveHeartbeatStamp.__table__.insert().values(
