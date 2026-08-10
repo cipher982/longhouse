@@ -360,6 +360,11 @@ def _damage_session_metadata(db, session_id) -> None:
     db.flush()
 
 
+def _timeline_window_fixture_time() -> datetime:
+    # These parity checks issue real-time days_back queries, so fixed dates expire.
+    return datetime.now(timezone.utc)
+
+
 def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild.db")
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
@@ -504,7 +509,7 @@ def test_session_observation_rebuild_preserves_claude_semantic_boundary(tmp_path
 
 def test_session_observation_rebuild_preserves_product_surface_parity(tmp_path):
     SessionLocal = _make_initialized_sessionmaker(tmp_path, "observation_rebuild_surface_parity.db")
-    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    now = _timeline_window_fixture_time()
     source_path = "/tmp/codex-rollout.jsonl"
     assistant_line = (
         '{"type":"response_item","timestamp":"2026-05-12T12:00:02Z",'
@@ -571,7 +576,7 @@ def test_session_observation_rebuild_preserves_product_surface_parity(tmp_path):
 
 def test_session_observation_rebuild_preserves_agent_api_surface_parity(tmp_path):
     SessionLocal = _make_initialized_sessionmaker(tmp_path, "observation_rebuild_api_surface_parity.db")
-    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    now = _timeline_window_fixture_time()
     source_path = "/tmp/codex-api-rollout.jsonl"
     assistant_line = (
         '{"type":"response_item","timestamp":"2026-05-12T12:00:02Z",'
