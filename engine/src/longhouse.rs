@@ -2014,22 +2014,23 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         "Pi",
         "--pi-bin",
     )?;
-    let mut provider_config = serde_json::Map::new();
-    // The shared `provider` key must stay `pi` for the Runtime Host to route
-    // the launch; Pi's upstream provider id rides under `pi_provider`. These
-    // flow onto the catalog thread so the Console turn dispatches the same
-    // provider/model/session-dir that started the session.
-    provider_config.insert("pi_provider".to_string(), json!(args.provider.clone()));
+    let mut provider_config = json!({
+        // The shared `provider` key must stay `pi` for the Runtime Host to
+        // route the launch; Pi's upstream provider id rides under `pi_provider`.
+        // These flow onto the catalog thread so the Console turn dispatches the
+        // same provider/model/session-dir that started the session.
+        "pi_provider": args.provider.clone(),
+    });
     if let Some(model) = args
         .model
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        provider_config.insert("model".to_string(), json!(model));
+        provider_config["model"] = json!(model);
     }
     if let Some(dir) = &args.session_dir {
-        provider_config.insert("session_dir".to_string(), json!(dir));
+        provider_config["session_dir"] = json!(dir);
     }
     let mut payload = ManagedLaunchRegistration {
         provider: "pi",
@@ -2041,7 +2042,7 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         // Pi has no remote-approval surface: control_channel rejects any
         // non-bypass permission mode for it outright.
         permission_mode: PermissionMode::Bypass,
-        extra: vec![("provider_config", Value::Object(provider_config))],
+        extra: vec![("provider_config", provider_config)],
     }
     .to_json();
     // Mint the session identity locally so a degraded launch owns a stable
