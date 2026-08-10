@@ -2143,7 +2143,8 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.read_storage_session, session_id=session_id)
+        # Session detail is a read snapshot and must not queue behind claims or ingest commits.
+        result = await self._run_read_store(self._store.read_storage_session, session_id=session_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _lookup_storage_canary_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2397,6 +2398,7 @@ class CatalogDaemon:
             "session_id",
             "owner_id",
             "generation_id",
+            "anchor",
             "after_order_key",
             "before_order_key",
             "limit",
@@ -2412,6 +2414,9 @@ class CatalogDaemon:
         owner_id = request.params["owner_id"]
         if not _is_string(owner_id, maximum=64):
             return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
+        anchor = request.params["anchor"]
+        if anchor not in {"start", "tail"}:
+            return self._error(request, "invalid_request", "anchor must be start or tail")
         after_order_key = request.params["after_order_key"]
         before_order_key = request.params["before_order_key"]
         if after_order_key is not None and before_order_key is not None:
@@ -2435,6 +2440,7 @@ class CatalogDaemon:
             session_id=session_id,
             owner_id=owner_id,
             generation_id=generation_id,
+            anchor=anchor,
             after_order_key=after_order_key,
             before_order_key=before_order_key,
             limit=limit,

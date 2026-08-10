@@ -1642,6 +1642,7 @@ async def read_storage_v2_session_events_page(
                     "session_id": str(session_id),
                     "owner_id": owner_id,
                     "generation_id": str(decoded_cursor.render_generation) if decoded_cursor is not None else None,
+                    "anchor": anchor,
                     "after_order_key": cursor_order_key if anchor == "start" else None,
                     "before_order_key": cursor_order_key if anchor == "tail" else None,
                     "limit": _RENDER_MANIFEST_LIMIT,

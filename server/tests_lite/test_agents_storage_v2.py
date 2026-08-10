@@ -702,6 +702,7 @@ async def test_storage_v2_first_claude_effort_envelope_is_admitted(monkeypatch):
                 "session_id": payload["session_id"],
                 "owner_id": "1",
                 "generation_id": None,
+                "anchor": "start",
                 "after_order_key": None,
                 "before_order_key": None,
                 "limit": 20,

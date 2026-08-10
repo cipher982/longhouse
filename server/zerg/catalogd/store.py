@@ -7363,6 +7363,7 @@ class CatalogStore:
         session_id: UUID,
         owner_id: str,
         generation_id: UUID | None,
+        anchor: str,
         after_order_key: str | None,
         before_order_key: str | None,
         limit: int,
@@ -7446,7 +7447,7 @@ class CatalogStore:
                         object_table.c.last_event_subordinal.desc(),
                         object_table.c.object_id.desc(),
                     )
-                    if before_order_key is not None
+                    if anchor == "tail"
                     else (
                         object_table.c.first_order_time_us.asc(),
                         object_table.c.first_machine_id.asc(),

@@ -1057,6 +1057,7 @@ async def get_timeline_session_events(
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
+        anchor=anchor,
         timing=timing,
     )
     if storage_workspace is None and not get_settings().testing:
@@ -1132,6 +1133,7 @@ async def get_timeline_session_projection(
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
+        anchor=anchor,
     )
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
