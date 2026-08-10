@@ -54,7 +54,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8"/>
     <div class="brand">${logoSvg}<span class="name">Longhouse</span></div>
     <div class="kicker">Self-hosted · cross-provider · yours</div>
     <h1>Remote control for <span class="accent">every coding agent you run.</span></h1>
-    <div class="sub">One timeline + live control for every Claude Code, Codex &amp; OpenCode session — on machines you own.</div>
+    <div class="sub">Watch and steer your Claude Code, Codex, Cursor &amp; OpenCode sessions from anywhere. On machines you own.</div>
   </div>
   <div class="shot"><img src="${timelineDataUri}"/></div>
 </body></html>`;
