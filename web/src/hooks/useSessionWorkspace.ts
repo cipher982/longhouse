@@ -213,7 +213,7 @@ export function useSessionWorkspace(
     // fresh onConnected fires.
     setStreamConnected(false);
 
-    if (!sessionId || !documentVisible || !workspaceReady) {
+    if (!sessionId || !documentVisible) {
       return;
     }
 
@@ -327,7 +327,7 @@ export function useSessionWorkspace(
         onError: () => setStreamConnected(false),
       },
       {
-        skipInitial: true,
+        skipInitial: workspaceReady,
         knownWorkspaceFingerprint: knownWorkspaceFingerprintRef.current,
       },
     );

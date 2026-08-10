@@ -316,7 +316,7 @@ describe("useSessionWorkspace", () => {
     });
   });
 
-  it("keeps fallback polling armed when the first workspace snapshot errors", () => {
+  it("opens the stream conservatively when the first workspace snapshot errors", () => {
     const error = new Error("workspace unavailable");
     agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
       data: undefined,
@@ -328,7 +328,14 @@ describe("useSessionWorkspace", () => {
 
     const options = agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1];
     expect(options?.refetchInterval({ state: { data: undefined, error } } as never)).toBe(5_000);
-    expect(streamMocks.connectSessionWorkspaceStream).not.toHaveBeenCalled();
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledWith(
+      baseSession.id,
+      expect.any(Object),
+      {
+        skipInitial: false,
+        knownWorkspaceFingerprint: null,
+      },
+    );
   });
 
   it("opens the workspace stream with the rendered revision fingerprint", () => {
