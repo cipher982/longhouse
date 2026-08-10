@@ -56,8 +56,11 @@ describe("landing provider claims", () => {
 
     await user.click(screen.getByRole("button", { name: /Which providers are strongest today\?/i }));
 
-    expect(
-      screen.getByText(/Claude Code, Codex, Cursor, and OpenCode have native managed control paths/i),
-    ).toBeInTheDocument();
+    // Must match the matrix above it: full set only for Claude Code and Codex,
+    // no mid-turn steering on Cursor/OpenCode, Antigravity sync-only.
+    const answer = screen.getByText(/Claude Code and Codex have the full set/i);
+    expect(answer.textContent).toMatch(/Cursor Agent and OpenCode do everything except mid-turn steering/i);
+    expect(answer.textContent).toMatch(/Antigravity sessions sync into the timeline for watching and search only/i);
+    expect(answer.textContent).not.toMatch(/Antigravity can launch/i);
   });
 });

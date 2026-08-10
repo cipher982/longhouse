@@ -97,7 +97,7 @@ export default function LandingPage() {
   usePageMeta({
     title: "Longhouse - Remote control for your coding agents",
     description:
-      "Longhouse plugs into Claude Code, Codex, Cursor, and OpenCode, normalizes every session into one system, and lets you steer any of them from the web or your iPhone.",
+      "Longhouse plugs into the Claude Code, Codex, Cursor, and OpenCode CLIs already on your machines. Watch any session live, search everything they have done, and send the next instruction from the web or your iPhone while the agent keeps running in its real terminal. Self-hosted and Apache-2.0.",
   });
 
   // Auth only matters when it can redirect us to /timeline. When no redirect

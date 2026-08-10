@@ -14,7 +14,7 @@ const faqs: FAQ[] = [
   {
     question: "Which sessions can I control?",
     answer:
-      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also expose controls such as send, interrupt, mid-turn steering, and resume. The exact controls depend on the provider.",
+      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, resume a dead session. Mid-turn steering works on Claude Code and Codex; on Cursor Agent and OpenCode your message lands when the current turn ends.",
   },
   {
     question: "What happens when my laptop sleeps?",
@@ -29,7 +29,7 @@ const faqs: FAQ[] = [
   {
     question: "Which providers are strongest today?",
     answer:
-      "Claude Code, Codex, Cursor, and OpenCode have native managed control paths. Antigravity can launch and send, with interrupt/steer/resume still incomplete. The provider table above is the exact contract.",
+      "Claude Code and Codex have the full set: launch, send, interrupt, mid-turn steering, and resume. Cursor Agent and OpenCode do everything except mid-turn steering; your next instruction lands when the turn ends. Antigravity sessions sync into the timeline for watching and search only. The table above is generated from the provider contract, so it is the exact answer.",
   },
   {
     question: "Where is my data stored?",
