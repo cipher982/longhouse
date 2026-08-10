@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 244,
+  "file_count": 245,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1888,6 +1888,13 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "video/scripts/terminal/record.py",
+      "providers": [
+        "claude",
+        "cursor"
       ]
     },
     {

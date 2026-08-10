@@ -697,6 +697,20 @@ def _unlink_demo_symlink():
 
 
 
+def stage_system_roots(home):
+    """Make macOS trust roots available to a sandboxed Node CLI."""
+    roots = Path(home, "system-roots.pem")
+    result = subprocess.run(
+        ["/usr/bin/security", "find-certificate", "-a", "-p",
+         "/System/Library/Keychains/SystemRootCertificates.keychain"],
+        capture_output=True,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise SystemExit("failed to export macOS system root certificates")
+    roots.write_bytes(result.stdout)
+    return str(roots)
+
+
 def build_sandbox(provider_name, prov, cols, rows, demo_repo=None, fixture_path=None):
     """Blank HOME + allowlisted env + PATH shim dir + auth lane.
 
@@ -744,6 +758,14 @@ def build_sandbox(provider_name, prov, cols, rows, demo_repo=None, fixture_path=
 
     auth = prov.get("auth") or {}
     mode = auth.get("mode", "blocked")
+    env.update({str(key): str(value) for key, value in (auth.get("extra_env") or {}).items()})
+    if auth.get("system_roots"):
+        roots = stage_system_roots(home)
+        env.update({
+            "SSL_CERT_FILE": roots,
+            "NODE_EXTRA_CA_CERTS": roots,
+            "CURL_CA_BUNDLE": roots,
+        })
     mock_proc = None
     mock_url = None
     if mode == "mock":
@@ -827,6 +849,15 @@ def main():
             cwd, scratch_dir = seed_demo_repo()
         env, home, argv, mock_proc, mock_url, auth_mode = build_sandbox(
             args.provider, prov, cols, rows, demo_repo=cwd, fixture_path=args.fixture)
+        if args.no_srt and args.provider == "cursor":
+            # The manual Cursor fallback retains only the isolated HOME, shim
+            # PATH, task terminal, API key, and local trust/credential inputs.
+            keep = (
+                "HOME", "PATH", "TERM", "COLUMNS", "LINES", "BROWSER",
+                "CURSOR_API_KEY", "AGENT_CLI_CREDENTIAL_STORE",
+                "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
+            )
+            env = {key: env[key] for key in keep if key in env}
         run_setup(prov, env, cwd)
         binary_label = f"{prov['source'].get('package', prov['source'].get('url'))}@{prov['source']['version']}"
         preflight_domains = (prov.get("auth") or {}).get("preflight_domains", [])

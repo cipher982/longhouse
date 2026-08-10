@@ -1,0 +1,85 @@
+{
+  "binary": "opencode-ai@1.18.15",
+  "binary_version": "1.18.15",
+  "argv": [
+    "opencode"
+  ],
+  "prompt": "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py",
+  "cols": 64,
+  "rows": 14,
+  "term": "xterm-256color",
+  "cwd": "/tmp/demo-repo",
+  "sandbox": true,
+  "isolation": "srt",
+  "aborted": false,
+  "auth_mode": "mock",
+  "canary": {
+    "egress_ip_http": {
+      "url": "http://1.1.1.1",
+      "exit": 0,
+      "http_code": "403",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_ip_https": {
+      "url": "https://1.1.1.1",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "operator_read": {
+      "path": "~/.claude/settings.json",
+      "exit": 1,
+      "denied": true
+    },
+    "mock_health": {
+      "url": "http://127.0.0.1:64472/health",
+      "exit": 0,
+      "http_code": "200",
+      "reachable": true
+    },
+    "passed": true
+  },
+  "browser_attempts": [],
+  "mock_requests": 5,
+  "mock_stats": {
+    "main_requests": 5,
+    "utility_requests": 0,
+    "by_kind": {
+      "openai-chat": 5
+    },
+    "main_turns_served": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "distinct_main_turns": 4,
+    "expected_turns": 4
+  },
+  "completion": "quiet-sentinel",
+  "gates": {
+    "exit_status_observed": true,
+    "composer_ready": true,
+    "working_seen": true,
+    "completion_reached": true,
+    "no_browser_attempts": true,
+    "mock_requests_present": true,
+    "mock_completions_match_fixture": true
+  },
+  "gate_failures": [],
+  "captured_at": "2026-08-10T18:20:51.797437+00:00",
+  "cast_sha256": "475be686afb5828812d08ce17be1cba5855c1c8e6559ddb1ff45b393088eceb9",
+  "exit_status": 0,
+  "phase_log": [
+    "[   0.003] spawned pid=94877 argv=['/tmp/demo-home-d_25g6zm/bin/opencode'] 64x14",
+    "[   2.696] sentinel hit: composer-ready",
+    "[   4.739] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[   7.291] prompt submitted",
+    "[   7.372] sentinel hit: working-spinner",
+    "[  21.772] sentinel hit: task-complete",
+    "[  23.797] sending exit sequence ['text:/exit', 'enter']",
+    "[  25.099] process exit status: 0"
+  ]
+}

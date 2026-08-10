@@ -168,14 +168,18 @@ providers:
                 "baseURL": "{MOCK_URL}/v1"
               }
             }
+          },
+          "permission": {
+            "external_directory": {
+              "/tmp/demo-repo/**": "allow"
+            }
           }
-        }
     sentinels:
       # Composer placeholder text at idle; the "opencode" wordmark is ASCII art
       # (block glyphs), so it never appears as literal text in the stream.
       ready: ["askanything", "tabagents"]
       dialogs: []
-      working_regex: "esctointerrupt|working|thinking|esc to interrupt|generating"
+      working_regex: "escinterrupt|working|thinking|generating"
       exit: ["text:/exit", enter]
 
   cursor:
@@ -195,8 +199,15 @@ providers:
       mode: api_key
       env: CURSOR_API_KEY
       secret: { key: LONGHOUSE_CI_CURSOR_API_KEY, project: ops-infra, env: prod }
+      # SRT cannot use the macOS Keychain. Stage the public system roots in the
+      # blank sandbox HOME and point Cursor's bundled Node at that PEM.
+      system_roots: true
+      preflight_domains: ["agentn.global.api5.cursor.sh:443"]
+      # The launcher then avoids the macOS Keychain and uses the empty sandbox
+      # HOME for its credential store.
+      extra_env: { AGENT_CLI_CREDENTIAL_STORE: file }
     sentinels:
-      ready: ["addafollow", "planbuild", "forcommands"]
+      ready: ["addafollow", "plan,search,buildanything", "forcommands"]
       dialogs:
         - id: trust
           match: ["doyoutrust", "trustthisfolder"]

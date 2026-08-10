@@ -65,13 +65,18 @@ def log_request(kind, payload, turn_idx):
     if not LOG_PATH:
         return
     with open(LOG_PATH, "a") as f:
-        f.write(json.dumps({
+        entry = {
             "at": datetime.now(timezone.utc).isoformat(),
             "kind": kind,
             "turn": turn_idx,
             "model": payload.get("model"),
             "n_messages": len(payload.get("messages", [])),
-        }) + "\n")
+        }
+        # OpenCode sends the executed tool result on its next chat request.
+        # Preserve that exact wire payload when calibrating this compatibility lane.
+        if kind == "openai-chat":
+            entry["request"] = payload
+        f.write(json.dumps(entry) + "\n")
 
 
 def chunk_text(text):
