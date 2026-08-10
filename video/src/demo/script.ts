@@ -74,7 +74,7 @@ export interface Beat {
 export const BEATS: Beat[] = [
   { id: "agents", durSec: 5, caption: "Your coding agents already run everywhere." },
   { id: "unify", durSec: 4, caption: "Longhouse normalizes all of them into one system." },
-  { id: "steer", durSec: 8, caption: "Steer any of them, from anywhere." },
+  { id: "steer", durSec: 8, caption: "Send the next instruction from anywhere." },
   { id: "close", durSec: 2.5, caption: "Remote control for your coding agents." },
 ];
 

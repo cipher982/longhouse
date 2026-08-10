@@ -15,7 +15,7 @@ interface LandingHeaderProps {
 }
 
 const DEFAULT_NAV_LINKS: LandingNavLink[] = [
-  { label: "Remote control", href: "#control" },
+  { label: "Remote control", href: "#steer-playground" },
   { label: "Sessions", href: "#sessions" },
   { label: "Providers", href: "#providers" },
   { label: "Pricing", href: "#pricing" },

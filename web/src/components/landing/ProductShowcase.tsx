@@ -24,7 +24,7 @@ const tabs: TabConfig[] = [
   {
     id: "timeline",
     label: "Timeline",
-    description: "Sessions from every provider and machine, ordered by when you last touched them.",
+    description: "Every session across your machines, most recently touched first. Open one to see what it is doing right now and pick up where it stopped.",
     image: "/images/landing/timeline-preview.webp?v=20260709-3",
     video: "/videos/timeline-clip.mp4?v=20260808",
     alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
@@ -32,14 +32,14 @@ const tabs: TabConfig[] = [
   {
     id: "search",
     label: "Search",
-    description: "Search the words you remember instead of digging through provider log folders.",
+    description: "Find the session by what you remember typing, then jump into it. Weeks of sessions across four CLIs, not folders of provider logs.",
     image: "/images/landing/search-preview.webp?v=20260709-3",
     alt: "Search results filtering sessions by keyword with highlighted matches",
   },
   {
     id: "session",
     label: "Session Detail",
-    description: "Read the raw transcript and tool calls without opening the original terminal.",
+    description: "The full transcript and every tool call, plus the composer. Read what it did, then tell it what to do next without going back to the terminal that started it.",
     image: "/images/landing/session-detail-preview.webp?v=20260709-3",
     alt: "Detailed session view showing tool calls and conversation",
   },

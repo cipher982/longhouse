@@ -34,12 +34,12 @@ export function PricingSection() {
     {
       name: "Self-Hosted",
       callout: "Free",
-      description: "Run the Longhouse server on hardware you control.",
+      description: "Run the server on hardware you already own.",
       features: [
-        "Try it on a laptop, then move it to a Mac mini, home server, or VPS",
-        "SQLite archive under your control",
-        "Browser, CLI, and machine API included",
-        "Apache-2.0 licensed",
+        "Start on your laptop, move it to a Mac mini, home server, or VPS later",
+        "Your archive is a SQLite file on your disk",
+        "Web UI, CLI, iPhone app, and machine API all included",
+        "Apache-2.0, no account required",
       ],
       ctaText: "Download for macOS",
       ctaAction: handleStartFree,
@@ -48,12 +48,12 @@ export function PricingSection() {
     {
       name: "Hosted",
       callout: "$5/month",
-      description: "We run a private Longhouse server for you.",
+      description: "We run a private server for you.",
       features: [
-        "No server setup or maintenance",
-        "A private address on longhouse.ai",
-        "Your timeline stays available when dev machines are offline",
-        "Use the same Mac, Linux, and iPhone clients",
+        "Nothing to install, patch, or expose to the internet",
+        "Your own address on longhouse.ai",
+        "Your history and timeline stay reachable when your laptop is asleep",
+        "Same Mac, Linux, and iPhone clients",
       ],
       ctaText: "Get hosted",
       ctaAction: handleGetHosted,
@@ -64,11 +64,12 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-pricing-heading">
-          Choose where the Longhouse server runs.
+          The server is yours to run, or ours.
         </h2>
         <p className="landing-pricing-subhead">
-          The server stores your archive and serves the web UI. Run it yourself for free,
-          or use hosted for $5 per month.
+          Longhouse&rsquo;s server holds your session archive and serves the web UI. Run it
+          on your own hardware for free, or pay $5 a month and we run a private one for
+          you. Either way the agents run on your machines.
         </p>
 
         <div className="landing-pricing-grid">

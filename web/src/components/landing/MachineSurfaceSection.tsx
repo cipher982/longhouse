@@ -39,12 +39,14 @@ export function MachineSurfaceSection() {
 
         <div className="landing-surface-copy">
           <h2 className="landing-surface-title">
-            Your installed agents still do the work.
+            The agent runs on your machine, with your accounts.
           </h2>
           <p className="landing-surface-lead">
-            Longhouse uses the Claude, Codex, Cursor, and OpenCode clients already on
-            your machines. Their accounts, local files, tools, and configuration stay
-            in place. Longhouse records the sessions and exposes the controls.
+            Longhouse drives the Claude Code, Codex, Cursor, and OpenCode binaries you
+            already installed. Your credentials, your files, your MCP servers, and your
+            provider config stay exactly where they are, and the terminal stays usable
+            at your desk. Longhouse carries your instructions to it and records what
+            happens.
           </p>
           <p className="landing-surface-links">
             <a href="/docs/cli">CLI reference</a>

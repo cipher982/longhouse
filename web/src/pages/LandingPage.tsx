@@ -160,10 +160,13 @@ export default function LandingPage() {
         <Suspense fallback={<section className="steer-playground" aria-hidden="true" />}>
           <SteerPlayground />
         </Suspense>
+        {/* Providers table sits directly under the playground: the demo proves
+            steering on Claude Code, the table immediately says how far that
+            extends, and every section below inherits that credibility. */}
+        <IntegrationsSection />
         <KernelThesisSection />
         <DemoSection screenshotTheme={screenshotTheme} />
         <MachineSurfaceSection />
-        <IntegrationsSection />
         <PricingSection />
         <TrustSection />
         <FooterCTA />

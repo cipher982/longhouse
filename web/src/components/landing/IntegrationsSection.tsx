@@ -58,7 +58,7 @@ export function IntegrationsSection() {
                       <span className="landing-provider-row-name">{p.marketingName}</span>
                     </span>
                   </th>
-                  <CapabilityCell supported={true} />
+                  <CapabilityCell supported={p.archiveVisibility === "live"} />
                   <CapabilityCell supported={p.launchAndSend} />
                   <CapabilityCell supported={p.interrupt} />
                   <CapabilityCell supported={p.steerMidTurn} />
