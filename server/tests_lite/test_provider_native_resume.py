@@ -335,6 +335,59 @@ def test_transcript_shipper_retries_a_quarantined_source_epoch_once(
     assert "attempt 2" in log
 
 
+def test_transcript_shipper_retries_storage_lane_backpressure_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="Error: storage-v2 repair lane busy; retry after 5000ms",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"protocol": "storage-v2", "events_shipped": 1}),
+                stderr="",
+            ),
+        ]
+    )
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_run(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return next(responses)
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = provider_native_resume.TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("post-resume")
+
+    assert calls == 2
+    assert sleeps == [5.0]
+    assert receipt["status"] == "pass"
+    assert receipt["attempts"] == 2
+    assert receipt["retry_reason"] == "storage_lane_busy"
+    assert receipt["events_shipped"] == 1
+
+
 def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

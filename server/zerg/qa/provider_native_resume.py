@@ -47,6 +47,8 @@ RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 _EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|access_key|authorization)$")
 _DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
 _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
+_TRANSCRIPT_SHIP_MAX_ATTEMPTS = 2
+_STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 [^\s]+ lane busy; retry after (?P<milliseconds>\d+)ms")
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -147,10 +149,13 @@ class TranscriptShipper:
             self._terminate_daemon()
         attempts: list[dict[str, Any]] = []
         log_sections: list[str] = []
+        retry_reason: str | None = None
         # A failed admission quarantines the envelope and the next ship
-        # invocation can reconcile a missing Cursor predecessor. Retry only
-        # that exact durable state, never arbitrary engine failures.
-        for attempt in range(1, 3):
+        # invocation can reconcile a missing Cursor predecessor. A typed
+        # storage-lane backpressure response is also safe to retry because the
+        # same durable request body remains authoritative. Retry only those
+        # explicit transient states, never arbitrary engine failures.
+        for attempt in range(1, _TRANSCRIPT_SHIP_MAX_ATTEMPTS + 1):
             try:
                 completed = subprocess.run(
                     command,
@@ -203,12 +208,20 @@ class TranscriptShipper:
             }
             attempts.append(result)
             log_sections.append(f"attempt {attempt}\nstdout:\n{stdout}\nstderr:\n{stderr}\n")
-            if completed.returncode == 0 or "source_epoch_conflict_unresolved" not in stderr:
+            if completed.returncode == 0:
                 break
+            if "source_epoch_conflict_unresolved" in stderr:
+                retry_reason = "source_epoch_conflict_unresolved"
+                continue
+            busy_match = _STORAGE_LANE_BUSY_RE.search(stderr)
+            if busy_match is None or attempt >= _TRANSCRIPT_SHIP_MAX_ATTEMPTS:
+                break
+            retry_reason = "storage_lane_busy"
+            time.sleep(int(busy_match.group("milliseconds")) / 1000)
         result = dict(attempts[-1])
         result["attempts"] = len(attempts)
-        if len(attempts) > 1:
-            result["retry_reason"] = "source_epoch_conflict_unresolved"
+        if retry_reason is not None and len(attempts) > 1:
+            result["retry_reason"] = retry_reason
         log_path = self.evidence_root / f"transcript-flush-{label}.log"
         log_path.write_text("\n".join(log_sections), encoding="utf-8")
         result["log_path"] = str(log_path)
