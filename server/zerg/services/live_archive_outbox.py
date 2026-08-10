@@ -197,6 +197,7 @@ def enqueue_managed_local_launch_outbox(
                                 "launch_surface": plan.launch_surface,
                                 "managed_transport": plan.managed_transport,
                                 "attach_command": plan.attach_command,
+                                "provider_config": plan.provider_config,
                             },
                         }
                     )
@@ -563,6 +564,7 @@ def _restore_managed_local_launch_plan(plan_payload: dict[str, Any]) -> ManagedL
         launch_surface=str(plan_payload.get("launch_surface") or "").strip() or None,
         managed_transport=str(plan_payload.get("managed_transport") or ""),
         attach_command=str(plan_payload.get("attach_command") or ""),
+        provider_config=dict(plan_payload.get("provider_config") or {}),
     )
 
 

@@ -108,6 +108,10 @@ class ManagedLocalLaunchParams:
     # degraded mode. Registration must preserve that identity so transcript
     # and resume convergence do not fork a second provider thread.
     provider_session_id: str | None = None
+    # Provider-specific launch config (e.g. pi_provider/model/session_dir for
+    # pi). Stored on the thread so Console turns dispatch with the same
+    # provider configuration that started the session.
+    provider_config: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,7 @@ class ManagedLocalLaunchPlan:
     launch_surface: str | None
     managed_transport: str
     attach_command: str
+    provider_config: dict[str, object] | None = None
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str, *, required: bool = True):
@@ -286,6 +291,7 @@ def build_managed_local_launch_plan(
         launch_surface=launch_surface,
         managed_transport=contract.managed_transport.value,
         attach_command="",
+        provider_config=params.provider_config,
     )
     return replace(plan, attach_command=_build_attach_command_for_plan(plan))
 

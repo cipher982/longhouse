@@ -3586,6 +3586,7 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
     "launch_surface",
     "managed_transport",
     "attach_command",
+    "provider_config",
 }
 _LOCAL_LAUNCH_OUTCOME_FIELDS = {
     "session_id",
@@ -3771,6 +3772,9 @@ def _validate_local_launch_rpc(value: object) -> dict:
     runner_id = plan["source_runner_id"]
     if runner_id is not None and (type(runner_id) is not int or runner_id <= 0):
         raise ValueError("local launch.plan.source_runner_id must be a positive integer or null")
+    provider_config = plan["provider_config"]
+    if provider_config is not None and not isinstance(provider_config, dict):
+        raise ValueError("local launch.plan.provider_config must be an object or null")
     result["plan"] = plan
     return result
 

@@ -251,6 +251,7 @@ async def _write_hot_managed_local_launch_readiness(
                 "launch_surface": plan.launch_surface,
                 "managed_transport": plan.managed_transport,
                 "attach_command": plan.attach_command,
+                "provider_config": plan.provider_config,
             },
         }
         try:
@@ -358,6 +359,7 @@ async def _write_hot_managed_local_launch_readiness(
                 launch_surface=plan.launch_surface,
                 loop_mode=plan.loop_mode,
                 permission_mode=plan.permission_mode,
+                provider_config=plan.provider_config,
             )
             attach_live_catalog_control(
                 live_db,
@@ -435,6 +437,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
         description=(
             "Managed permission policy: 'bypass', 'provider_local', or 'remote_approve' (answer permission prompts via Longhouse)"
         ),
+    )
+    provider_config: dict[str, object] | None = Field(
+        None,
+        description="Provider-specific launch config stored on the thread and spread into Console turn dispatch",
     )
     launch_actor: str | None = Field(None, description="Positive launch actor provenance when known")
     launch_surface: str | None = Field(None, description="Launch surface provenance when known")
@@ -1671,6 +1677,7 @@ async def launch_managed_local_this_device(
             launch_surface=body.launch_surface,
             session_id=body.session_id,
             provider_session_id=body.provider_session_id or body.provider_thread_id,
+            provider_config=body.provider_config,
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.

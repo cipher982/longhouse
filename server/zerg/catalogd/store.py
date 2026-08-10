@@ -3304,6 +3304,7 @@ class CatalogStore:
                     expires_at=launch["expires_at"],
                     launch_actor=plan.launch_actor,
                     launch_surface=plan.launch_surface,
+                    provider_config=plan.provider_config,
                 )
                 requires_readiness_proof = managed_provider_requires_readiness_proof(plan.provider)
                 attach_live_catalog_control(

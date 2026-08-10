@@ -325,6 +325,7 @@ def create_live_launch_catalog_shell(
     launch_surface: str | None,
     loop_mode: str = "assist",
     permission_mode: str = "bypass",
+    provider_config: dict[str, object] | None = None,
 ) -> LiveSessionLaunchAttempt:
     """Create the synchronous launch identity in the live writer transaction."""
 
@@ -413,12 +414,24 @@ def create_live_launch_catalog_shell(
                 id=thread_key,
                 session_id=session_key,
                 provider=provider,
+                device_id=device_id,
+                cwd=cwd,
+                provider_config_json=json.dumps(provider_config or {}, sort_keys=True),
                 branch_kind="root",
                 is_primary=1,
                 created_at=started_at,
                 updated_at=started_at,
             )
         )
+    else:
+        # Replayed/older launches may have created the thread without an
+        # execution target; converge so Console dispatch can route this session
+        # (mirrors bind_thread_execution_target in the archive outbox).
+        thread.device_id = thread.device_id or device_id
+        thread.cwd = thread.cwd or cwd
+        if not thread.provider_config_json:
+            thread.provider_config_json = json.dumps(provider_config or {}, sort_keys=True)
+        thread.updated_at = started_at
 
     if run_key is not None and db.get(LiveSessionRun, run_key) is None:
         db.add(

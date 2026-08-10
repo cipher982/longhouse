@@ -251,6 +251,7 @@ def _launch_payload(
             "launch_surface": "cli",
             "managed_transport": transport,
             "attach_command": "",
+            "provider_config": {},
         },
     }
 

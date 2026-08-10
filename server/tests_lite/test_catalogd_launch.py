@@ -61,6 +61,7 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
             "launch_surface": "cli",
             "managed_transport": "claude_channel",
             "attach_command": "longhouse claude --resume claude-thread-1",
+            "provider_config": {"permission_mode": "bypass"},
         },
     }
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -505,6 +506,7 @@ def _local_launch_payload(
             "launch_surface": "cli",
             "managed_transport": managed_transport,
             "attach_command": attach_command,
+            "provider_config": {},
         },
     }
 
