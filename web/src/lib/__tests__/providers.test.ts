@@ -69,6 +69,7 @@ describe("providers launch support", () => {
       "codex",
       "cursor",
       "opencode",
+      "pi",
       "antigravity",
     ]);
     expect(providers.every((provider) => provider.archiveVisibility === "live")).toBe(true);

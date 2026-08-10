@@ -34,6 +34,7 @@ describe("landing provider claims", () => {
       "Codex CLI",
       "Cursor Agent",
       "OpenCode",
+      "Pi Agent",
       "Antigravity CLI",
     ]);
 
@@ -46,6 +47,8 @@ describe("landing provider claims", () => {
     expect(cellsFor("Claude Code")).toEqual(["yes", "yes", "yes", "yes", "yes"]);
     expect(cellsFor("Cursor Agent")).toEqual(["yes", "yes", "yes", "no", "yes"]);
     expect(cellsFor("OpenCode")).toEqual(["yes", "yes", "yes", "no", "yes"]);
+    // Pi: launch/send/interrupt live, no mid-turn steer, no resume yet.
+    expect(cellsFor("Pi Agent")).toEqual(["yes", "yes", "yes", "no", "no"]);
     // Shadow-only: Longhouse archives Antigravity but cannot launch or send.
     expect(cellsFor("Antigravity CLI")).toEqual(["yes", "no", "no", "no", "no"]);
   });

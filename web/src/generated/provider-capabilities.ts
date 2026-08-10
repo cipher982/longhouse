@@ -7,7 +7,7 @@
 // archive visibility, hooks support and telemetry quality have no contract
 // counterpart and remain hand-maintained in ../lib/providers.ts.
 
-export type GeneratedProviderId = "antigravity" | "claude" | "codex" | "cursor" | "opencode";
+export type GeneratedProviderId = "antigravity" | "claude" | "codex" | "cursor" | "opencode" | "pi";
 
 export type GeneratedProviderCapabilities = {
   readonly id: GeneratedProviderId;
@@ -64,5 +64,14 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     resume: true,
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse opencode",
+  },
+  pi: {
+    id: "pi",
+    launchAndSend: true,
+    interrupt: true,
+    steerMidTurn: false,
+    resume: false,
+    cloudSessionStart: "live",
+    nativeLaunchCommand: "longhouse pi",
   },
 };

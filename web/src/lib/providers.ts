@@ -9,7 +9,7 @@
 import { GENERATED_PROVIDER_CAPABILITIES } from "../generated/provider-capabilities";
 import { lookupProviderBrand, providerDisplayName } from "../generated/provider-brands";
 
-export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor";
+export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor" | "pi";
 
 export type LaunchProviderSupport = {
   id: LaunchProviderId;
@@ -67,6 +67,11 @@ const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProvider
   cursor: {
     archiveVisibility: "live",
     hooksSupport: "live",
+    telemetryQuality: "structured",
+  },
+  pi: {
+    archiveVisibility: "live",
+    hooksSupport: "none",
     telemetryQuality: "structured",
   },
 };
@@ -135,6 +140,7 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
     LAUNCH_PROVIDER_SUPPORT.codex,
     LAUNCH_PROVIDER_SUPPORT.cursor,
     LAUNCH_PROVIDER_SUPPORT.opencode,
+    LAUNCH_PROVIDER_SUPPORT.pi,
     LAUNCH_PROVIDER_SUPPORT.antigravity,
   ];
 }
