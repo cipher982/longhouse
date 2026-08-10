@@ -4,13 +4,14 @@ import {
   PROVIDERS,
   claudeTile,
   codexTile,
+  opencodeTile,
 } from "@longhouse/video/demo";
 import { ResponsiveTerminal } from "./ResponsiveTerminal";
 import { ramp } from "./ease";
 
 /** Beat 1: real provider CLIs, really running — recorded PTY replays. */
 
-const RECORDINGS = { claudeTile, codexTile } as const;
+const RECORDINGS = { claudeTile, codexTile, opencodeTile } as const;
 
 function Beat({ tLocal }: { tLocal: number }) {
   return (

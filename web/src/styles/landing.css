@@ -472,7 +472,7 @@
   }
 
   .hero-demo-agents-tile {
-    width: 84%;
+    width: 76%;
   }
 
   .hero-demo-agents-tile:nth-child(1) {
@@ -483,7 +483,13 @@
   .hero-demo-agents-tile:nth-child(2) {
     z-index: 2;
     align-self: flex-end;
-    margin-top: -56px;
+    margin-top: -52px;
+  }
+
+  .hero-demo-agents-tile:nth-child(3) {
+    z-index: 3;
+    align-self: center;
+    margin-top: -52px;
   }
 
   /* beat 2: unify — the Longhouse panel */

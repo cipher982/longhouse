@@ -111,6 +111,8 @@ export const REPLAY_WINDOWS = {
   claudeTile: { startSec: 4.0, endSec: 8.7 },
   /** 64x14 codex tile — beat-1 dense work window. */
   codexTile: { startSec: 2.6, endSec: 7.5 },
+  /** 64x14 opencode tile — read, diagnose, edit, tests pass. */
+  opencodeTile: { startSec: 5.09, endSec: 7.96 },
 } as const;
 
 /* ── Steer windows: derived from the recording, never hand-picked ────── */
@@ -169,6 +171,7 @@ export function steerWindow(
 export const AGENT_TILES = [
   { providerId: "claude", recording: "claudeTile", window: REPLAY_WINDOWS.claudeTile },
   { providerId: "codex", recording: "codexTile", window: REPLAY_WINDOWS.codexTile },
+  { providerId: "opencode", recording: "opencodeTile", window: REPLAY_WINDOWS.opencodeTile },
 ] as const;
 
 /* ── Steer beat choreography ─────────────────────────────────────────── */
