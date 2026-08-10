@@ -16,6 +16,7 @@ from zerg.qa.provider_interaction_semantics import evaluate_observation
         ("opencode", "1.2.3\n", "1.2.3"),
         ("antigravity", "1.2.3\n", "1.2.3"),
         ("cursor", "2026.07.23-e383d2b\n", "2026.07.23-e383d2b"),
+        ("pi", "0.84.1\n", "0.84.1"),
     ),
 )
 def test_provider_version_probe_returns_the_request_normalized_value(
@@ -39,6 +40,16 @@ def test_provider_version_probe_returns_the_request_normalized_value(
         )
         == expected
     )
+
+
+def test_pi_version_grammar_accepts_bare_semver_and_rejects_junk() -> None:
+    pattern = provider_interaction_probe._PROVIDER_VERSION_PATTERNS["pi"]  # noqa: SLF001
+    assert pattern.fullmatch("0.84.1") is not None
+    assert pattern.fullmatch("84.1") is None
+    assert pattern.fullmatch("0.84") is None
+    assert pattern.fullmatch("v0.84.1") is None
+    assert pattern.fullmatch("0.84.1-beta") is None
+    assert pattern.fullmatch("") is None
 
 
 @pytest.mark.parametrize(
@@ -362,8 +373,9 @@ def test_live_producer_dispatches_one_adapter_for_every_managed_provider(monkeyp
     monkeypatch.setattr(provider_interaction_probe, "_codex_model_probe", fake_adapter("codex"))
     monkeypatch.setattr(provider_interaction_probe, "_opencode_interaction_probes", fake_adapter("opencode"))
     monkeypatch.setattr(provider_interaction_probe, "_cursor_model_probe", fake_adapter("cursor"))
+    monkeypatch.setattr(provider_interaction_probe, "_pi_model_probe", fake_adapter("pi"))
 
-    for provider in ("codex", "opencode", "cursor"):
+    for provider in ("codex", "opencode", "cursor", "pi"):
         observation = provider_interaction_probe.produce_live_observation(
             provider,
             provider_bin=None,

@@ -36,6 +36,12 @@ from zerg.qa import claude_release_identity
 from zerg.qa import codex_release_identity
 from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_release_identity
+from zerg.qa import pi_qualification
+from zerg.qa.provider_adapters.pi import PI_LIVE_ENV
+from zerg.qa.provider_adapters.pi import PI_PROVIDER
+from zerg.qa.provider_adapters.pi import _newest_session_file  # noqa: SLF001
+from zerg.qa.provider_adapters.pi import pi_qualification_model
+from zerg.qa.provider_adapters.pi import pi_transcript_rows
 from zerg.qa.claude_conversation_reset import _terminal_text
 from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.codex_auth import CodexAuthError
@@ -57,6 +63,7 @@ _PROVIDER_VERSION_PATTERNS = {
     "codex": codex_release_identity._VERSION_LINE,
     "cursor": cursor_release_identity.VERSION_LINE,
     "opencode": opencode_release_identity.VERSION_LINE,
+    "pi": pi_qualification.PI_VERSION_GRAMMAR,
 }
 _NO_TOKEN_AUTH_ENV_NAMES = frozenset(
     {
@@ -126,6 +133,9 @@ _NO_TOKEN_SCRUB_ENV_NAMES = _NO_TOKEN_AUTH_ENV_NAMES | frozenset(
         "LONGHOUSE_ENGINE_BIN",
         "LONGHOUSE_OPENCODE_BIN",
         "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
+        "LONGHOUSE_PI_BIN",
+        "LONGHOUSE_PI_LIVE",
+        "LONGHOUSE_PI_QUALIFICATION_MODEL",
         "LONGHOUSE_PROVIDER_INTERACTION_ARTIFACT",
         "LONGHOUSE_PROVIDER_INTERACTION_LIVE",
     }
@@ -2211,6 +2221,225 @@ def _claude_model_picker_probe(
         shutil.rmtree(runtime_root, ignore_errors=True)
 
 
+def _pi_transcript_json_events(transcript: Path) -> list[dict[str, Any]]:
+    """Parse Pi's append-only session JSONL into raw events for native capture."""
+
+    events: list[dict[str, Any]] = []
+    try:
+        lines = transcript.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return events
+    for line in lines:
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            event = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _pi_model_probe(
+    *,
+    binary: Path,
+    artifact_root: Path,
+    timeout: float,
+    environment: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run one real ``pi -p`` turn and retain Pi's transcript as native evidence.
+
+    Pi's session JSONL is the provider-native qualification record: the
+    session header pins the session id, the ``model_change`` entry carries the
+    ``modelId`` marker, and the assistant message carries the completed turn.
+    Like the Cursor model probe, the run only spends a model turn when the
+    live credential gate is explicit (LONGHOUSE_PI_LIVE plus an OpenRouter
+    key); otherwise it reports an honest blocked row.
+    """
+    contract = contract_for_provider("pi")
+    assert contract is not None
+    probe = next(row for row in contract.interaction_probes if row.probe_id == "pi_print_model")
+    invocation = uuid4().hex
+    output_root = artifact_root / "pi-model" / invocation
+    output_root.mkdir(parents=True, exist_ok=False)
+    workspace = output_root / "workspace"
+    workspace.mkdir()
+    session_dir = output_root / "sessions"
+    session_dir.mkdir()
+    env = dict(environment)
+    secrets = _secret_values(env)
+    requested_model = pi_qualification_model()
+    input_sequence = [f"pi -p <prompt> --provider openrouter --model {requested_model} --session-dir <workspace>"]
+    live_opted_in = str(env.get(PI_LIVE_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+    api_key = str(env.get("OPENROUTER_API_KEY") or "").strip()
+    if not live_opted_in:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="pi_live_not_opted_in",
+            message="pi_print_model requires LONGHOUSE_PI_LIVE=1 (plus OPENROUTER_API_KEY) to spend a real pi model turn.",
+            submitted_input_sequence=input_sequence,
+        )
+        return [row], []
+    if not api_key:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="pi_live_credential_missing",
+            message="pi_print_model requires OPENROUTER_API_KEY to authenticate a real pi model turn.",
+            submitted_input_sequence=input_sequence,
+        )
+        return [row], []
+    marker = f"LONGHOUSE_PI_PROBE_{uuid4().hex}"
+    prompt = f"Reply with exactly {marker} and nothing else."
+    argv = [
+        str(binary),
+        "-p",
+        prompt,
+        "--provider",
+        PI_PROVIDER,
+        "--model",
+        requested_model,
+        "--session-dir",
+        str(session_dir),
+        "--no-context-files",
+        "--no-tools",
+    ]
+    stdout_path = output_root / "stdout.log"
+    stderr_path = output_root / "stderr.log"
+    terminal_path = output_root / "terminal.raw"
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=workspace,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            argv,
+            returncode=124,
+            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
+        )
+    safe_stdout = _redact_bytes((result.stdout or "").encode("utf-8"), secrets=secrets).decode("utf-8", errors="replace")
+    safe_stderr = _redact_bytes((result.stderr or "").encode("utf-8"), secrets=secrets).decode("utf-8", errors="replace")
+    stdout_path.write_text(safe_stdout, encoding="utf-8")
+    stderr_path.write_text(safe_stderr, encoding="utf-8")
+    terminal_path.write_text(f"stdout\n{safe_stdout}\nstderr\n{safe_stderr}", encoding="utf-8")
+    _redact_terminal_file(stdout_path, secrets=secrets)
+    _redact_terminal_file(stderr_path, secrets=secrets)
+    _redact_terminal_file(terminal_path, secrets=secrets)
+    terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root, secrets=secrets)
+    transcript = _newest_session_file(session_dir)
+    native_rows: list[dict[str, Any]] = []
+    if transcript is not None:
+        evidence = _file_evidence(transcript, artifact_root=artifact_root)
+        if evidence is not None:
+            native_rows.append(evidence)
+    transcript_rows, provider_session_id, metadata = (
+        pi_transcript_rows(transcript) if transcript is not None else ([], None, {})
+    )
+    raw_events = _pi_transcript_json_events(transcript) if transcript is not None else []
+    observed_model = metadata.get("model")
+    assistant_rows = [row for row in transcript_rows if row.get("role") == "assistant" and str(row.get("text") or "").strip()]
+    assistant_text = " ".join(str(row.get("text") or "") for row in assistant_rows)
+    marker_matched = marker in assistant_text
+    capture_path = output_root / "pi-transcript.jsonl"
+    stream_source_rows, capture_receipt = _write_native_event_capture(
+        raw_events,
+        path=capture_path,
+        artifact_root=artifact_root,
+        completion_signal="process_exit",
+        completion_status=result.returncode,
+    )
+    transcript_bound = bool(provider_session_id) and bool(metadata.get("has_header"))
+    if transcript is None or not transcript_bound:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="pi_transcript_missing",
+            message="pi -p completed without writing a bound session JSONL.",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=native_rows or stream_source_rows,
+            submitted_input_sequence=input_sequence,
+            raw_events=raw_events,
+        )
+        return [row], stream_source_rows or native_rows
+    if result.returncode != 0:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="interaction_probe_setup_failed",
+            message=f"pi -p exited with {result.returncode}",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows or native_rows,
+            submitted_input_sequence=input_sequence,
+            raw_events=raw_events,
+        )
+        return [row], stream_source_rows or native_rows
+    if observed_model and marker_matched:
+        model_change_event = next((event for event in raw_events if event.get("type") == "model_change"), None)
+        row = _probe_status_row(
+            probe,
+            status="observed",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows,
+            submitted_input_sequence=input_sequence,
+            raw_events=raw_events,
+            terminal_acknowledged=True,
+            capture_complete=True,
+            post_interaction_quiescent=True,
+            provider_state_after=True,
+        )
+        row["capture_receipt"] = capture_receipt
+        row["native_source_root"] = str(artifact_root.resolve())
+        row["provider_model"] = str(observed_model)
+        source_artifacts = [
+            {
+                "path": str(capture_path.resolve()),
+                "sha256": _sha256(capture_path),
+                "kind": "provider_jsonl_stream",
+                "event_type": "model_change",
+                "event_sha256": raw_event_digest(model_change_event) if model_change_event is not None else None,
+            }
+        ]
+        row["live_model_evidence"] = {
+            "source_canary": "pi_print_model",
+            "operation_evidence": {"live_token_behavior": {"status": "pass", "level": "live_token"}},
+            "model": str(observed_model),
+            "auth": {
+                "credential_mode": "api_key",
+                "api_key_source": "env",
+                "api_key_configured": bool(api_key),
+            },
+            "result_event": {
+                "provider": PI_PROVIDER,
+                "modelId": str(observed_model),
+                "type": "model_change",
+            },
+            "source_artifacts": source_artifacts,
+        }
+        return [row], stream_source_rows
+    row = _probe_status_row(
+        probe,
+        status="blocked",
+        failure_code="pi_print_model_metadata_missing",
+        message="pi -p produced a transcript, but the model_change/assistant binding is incomplete.",
+        terminal_evidence=terminal_evidence,
+        native_source_rows=stream_source_rows or native_rows,
+        submitted_input_sequence=input_sequence,
+        raw_events=raw_events,
+        terminal_acknowledged=True,
+    )
+    return [row], stream_source_rows or native_rows
+
+
 def _declared_probe_rows(provider: str) -> list[dict[str, Any]]:
     contract = contract_for_provider(provider)
     if contract is None:
@@ -2296,6 +2525,7 @@ def produce_live_observation(
                 "CODEX_MODEL",
                 "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
                 "CURSOR_MODEL",
+                "LONGHOUSE_PI_QUALIFICATION_MODEL",
             )
             if str(probe_environment.get(name) or "").strip()
         ),
@@ -2366,6 +2596,22 @@ def produce_live_observation(
         observation["native_source_rows"] = source_rows
     elif provider == "cursor":
         rows, source_rows = _cursor_model_probe(
+            binary=binary,
+            artifact_root=artifact_root,
+            timeout=timeout,
+            environment=probe_environment,
+        )
+        observation["probes"] = rows
+        observation["raw_events"] = [event for row in rows for event in row.get("raw_events") or []]
+        observation["native_source_rows"] = source_rows
+        evidence = next(
+            (row.get("live_model_evidence") for row in rows if isinstance(row.get("live_model_evidence"), dict)),
+            None,
+        )
+        if evidence is not None:
+            observation["live_model_evidence"] = evidence
+    elif provider == "pi":
+        rows, source_rows = _pi_model_probe(
             binary=binary,
             artifact_root=artifact_root,
             timeout=timeout,

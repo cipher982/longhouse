@@ -112,6 +112,7 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
         "opencode_server_contract_v1",
         "antigravity_hook_inbox_v1",
         "cursor_observed_install_v1",
+        "pi_print_v1",
     }
 )
 
@@ -140,6 +141,7 @@ DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
     "opencode": ("opencode_server_contract_v1",),
     "antigravity": ("antigravity_hook_inbox_v1",),
     "cursor": ("cursor_observed_install_v1",),
+    "pi": ("pi_print_v1",),
 }
 DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provider, profiles in DEPLOYED_RELEASE_LANE_PROFILES.items()}
 
@@ -237,6 +239,7 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "claude_real_print_v1": ("ANTHROPIC_API_KEY", "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE", "LONGHOUSE_ENGINE_BIN"),
     "opencode_server_contract_v1": ("OPENROUTER_API_KEY",),
     "cursor_observed_install_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
+    "pi_print_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_PI_LIVE", "LONGHOUSE_PI_QUALIFICATION_MODEL"),
 }
 
 
@@ -374,7 +377,9 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
                 status="never_run",
                 reason="Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
             )
-        expected_provenance = BuildProvenance.OBSERVED_INSTALL if provider == "cursor" else BuildProvenance.STAGED_RELEASE
+        expected_provenance = (
+            BuildProvenance.OBSERVED_INSTALL if provider in {"cursor", "pi"} else BuildProvenance.STAGED_RELEASE
+        )
         if build_provenance != expected_provenance:
             return PlanCell(
                 provider=provider,
@@ -384,7 +389,11 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
                 reason=(
                     "Cursor's release lane only runs against its pinned observed install"
                     if provider == "cursor"
-                    else "the release lane only runs against staged upstream releases"
+                    else (
+                        "Pi's release lane only runs against its pinned observed install"
+                        if provider == "pi"
+                        else "the release lane only runs against staged upstream releases"
+                    )
                 ),
             )
         profiles = DEPLOYED_RELEASE_LANE_PROFILES.get(provider)

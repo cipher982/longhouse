@@ -24,7 +24,7 @@
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 32 scenarios |
 | cursor | manual | observed_install | runs — 32 scenarios |
-| pi | release_poll | staged_release | never runs — pi has no registered release lane (no *_lane() in provider_factory/registry.py) |
+| pi | release_poll | observed_install | runs — 1 qualification scenario + 32 harness scenarios |
 | pi | push | generated_fake | runs — 4 scenarios |
 | pi | weekly_cron | generated_fake | runs — 32 scenarios |
 | pi | manual | observed_install | never runs — every capability-proof assertion declared for pi is already satisfiable by an automated trigger |

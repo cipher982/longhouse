@@ -263,6 +263,7 @@ pub(crate) fn is_provider_process(command: &str) -> Option<&'static str> {
         "opencode" | "opencode.js" => Some("opencode"),
         "codex" | "codex.js" if matches!(basename, "node" | "nodejs") => Some("codex"),
         "agy" | "agy.js" | "antigravity" | "antigravity.js" => Some("antigravity"),
+        "pi" | "pi.js" => Some("pi"),
         _ => None,
     }
 }
@@ -312,6 +313,7 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
         "agy" | "antigravity" => Some("antigravity"),
         "gemini" => Some("antigravity"),
         "opencode" => Some("opencode"),
+        "pi" => Some("pi"),
         _ => None,
     }
 }

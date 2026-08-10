@@ -60,7 +60,7 @@ def render_status_table(facts: ProviderFactoryFacts) -> str:
         for trigger, provenance in _WIRED_COMBINATIONS:
             effective_provenance = (
                 BuildProvenance.OBSERVED_INSTALL
-                if provider == "cursor" and trigger == Trigger.RELEASE_POLL
+                if provider in {"cursor", "pi"} and trigger == Trigger.RELEASE_POLL
                 else provenance
             )
             cell = plan_run(facts, provider, effective_provenance, trigger)

@@ -48,6 +48,7 @@ pub fn canonical_provider_name(provider: &str) -> Option<&'static str> {
         "codex" => Some("codex"),
         "antigravity" | "gemini" => Some("antigravity"),
         "opencode" => Some("opencode"),
+        "pi" => Some("pi"),
         "cursor" => Some("cursor"),
         "cursor_acp" => Some("cursor_acp"),
         _ => None,
@@ -80,6 +81,11 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             name: "opencode",
             root: home.join(".local").join("share").join("opencode"),
             extension: "db",
+        },
+        ProviderConfig {
+            name: "pi",
+            root: home.join(".longhouse").join("agent").join("pi-console"),
+            extension: "jsonl",
         },
         ProviderConfig {
             name: "cursor",
@@ -558,15 +564,19 @@ mod tests {
             providers[4].root,
             home.join(".local").join("share").join("opencode")
         );
-        assert_eq!(providers[5].root, home.join(".cursor").join("chats"));
-        assert_eq!(providers[6].root, home.join(".cursor").join("projects"));
         assert_eq!(
-            providers[7].root,
+            providers[5].root,
+            home.join(".longhouse").join("agent").join("pi-console")
+        );
+        assert_eq!(providers[6].root, home.join(".cursor").join("chats"));
+        assert_eq!(providers[7].root, home.join(".cursor").join("projects"));
+        assert_eq!(
+            providers[8].root,
             home.join(".longhouse")
                 .join("agent")
                 .join("cursor-acp-source")
         );
-        assert_eq!(providers[8].root, home.join(".gemini").join("tmp"));
+        assert_eq!(providers[9].root, home.join(".gemini").join("tmp"));
         assert!(providers
             .iter()
             .all(|provider| canonical_provider_name(provider.name) == Some(provider.name)));

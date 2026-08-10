@@ -1336,10 +1336,10 @@ providers:
     source_surface: console
     state_mutation_scope: session_model
     evidence_class: live_token
-    # No interaction-probe producer exists for pi yet (provider_interaction_probe.py
-    # has no pi branch and _PROVIDER_VERSION_PATTERNS lacks pi), so the live canary
-    # cannot run; keep the probe honest until phase 2 adds the producer.
-    disposition: not_implemented
+    # The producer now exists (provider_interaction_probe.py pi branch +
+    # _PROVIDER_VERSION_PATTERNS bare-semver grammar), so the live canary can
+    # run; confirmed by the pi_print_v1 release-lane qualification.
+    disposition: implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
     channel: npm_registry

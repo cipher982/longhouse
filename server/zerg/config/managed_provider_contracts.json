@@ -2268,7 +2268,7 @@
           "source_surface": "console",
           "state_mutation_scope": "session_model",
           "evidence_class": "live_token",
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "canary": "server/zerg/qa/provider_interaction_probe.py"
         }
       ],

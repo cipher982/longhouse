@@ -24,6 +24,7 @@ from zerg.qa import conversation_reset_qualification
 from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_release_identity
 from zerg.qa import opencode_server_qualification
+from zerg.qa import pi_qualification
 
 _PROFILES = {
     ("antigravity", antigravity_release_identity.PROFILE): antigravity_release_identity.run,
@@ -37,6 +38,7 @@ _PROFILES = {
     ("cursor", cursor_release_identity.OBSERVED_INSTALL_PROFILE): cursor_release_identity.run_observed_install,
     ("opencode", opencode_release_identity.PROFILE): opencode_release_identity.run,
     ("opencode", opencode_server_qualification.PROFILE): opencode_server_qualification.run,
+    ("pi", pi_qualification.PROFILE): pi_qualification.run,
     **{
         (provider, profile): (
             lambda request_path, output_root, provider=provider: conversation_reset_qualification.run(provider, request_path, output_root)

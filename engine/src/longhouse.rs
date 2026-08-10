@@ -77,6 +77,14 @@ enum Commands {
         #[command(flatten)]
         launch: CodexLaunchArgs,
     },
+    /// Launch a native Longhouse Pi one-shot turn.
+    #[command(args_conflicts_with_subcommands = true)]
+    Pi {
+        #[command(subcommand)]
+        command: Option<PiCommand>,
+        #[command(flatten)]
+        launch: PiLaunchArgs,
+    },
     /// Launch or manage a native Longhouse OpenCode Helm session.
     #[command(args_conflicts_with_subcommands = true)]
     Opencode {
@@ -147,6 +155,13 @@ enum CodexCommand {
     Attach(CodexAttachArgs),
     /// Stop a managed Codex bridge and its provider execution.
     Stop(CodexStopArgs),
+}
+
+#[derive(Subcommand)]
+enum PiCommand {
+    /// Pi is a one-shot console adapter; only direct launch is supported.
+    #[command(hide = true)]
+    Noop,
 }
 
 #[derive(Subcommand)]
@@ -275,6 +290,23 @@ struct CodexLaunchArgs {
     resume_session: Option<String>,
     #[arg(long)]
     dangerously_bypass_approvals_and_sandbox: bool,
+}
+
+#[derive(Args)]
+struct PiLaunchArgs {
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    #[arg(long)]
+    prompt: String,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long)]
+    session_dir: Option<PathBuf>,
+    /// Pi's upstream provider id (e.g. `openrouter`), passed through `--provider`.
+    #[arg(long, default_value = "openrouter")]
+    provider: String,
+    #[arg(long)]
+    pi_bin: Option<String>,
 }
 
 #[derive(Args)]
@@ -1967,6 +1999,87 @@ fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
     if status.get("loggedIn").and_then(serde_json::Value::as_bool) != Some(true) {
         anyhow::bail!("Claude native channels unavailable: Claude is not logged in");
     }
+    Ok(())
+}
+
+fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
+    let cwd = std::fs::canonicalize(&args.cwd)
+        .with_context(|| format!("resolve {}", args.cwd.display()))?;
+    let (url, token, machine_name) = resolve_codex_config(None, None)?;
+    let pi_bin = resolve_provider_binary(
+        args.pi_bin
+            .clone()
+            .or_else(|| std::env::var("LONGHOUSE_PI_BIN").ok()),
+        "pi",
+        "Pi",
+        "--pi-bin",
+    )?;
+    let mut extra = vec![
+        // The shared `provider` key must stay `pi` for the Runtime Host to
+        // route the launch; Pi's upstream provider id rides under `pi_provider`.
+        ("prompt", json!(args.prompt.clone())),
+        ("pi_provider", json!(args.provider.clone())),
+    ];
+    if let Some(model) = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        extra.push(("model", json!(model)));
+    }
+    if let Some(dir) = &args.session_dir {
+        extra.push(("session_dir", json!(dir)));
+    }
+    let mut payload = ManagedLaunchRegistration {
+        provider: "pi",
+        cwd: &cwd,
+        project: None,
+        display_name: None,
+        loop_mode: "assist",
+        machine_name: &machine_name,
+        // Pi has no remote-approval surface: control_channel rejects any
+        // non-bypass permission mode for it outright.
+        permission_mode: PermissionMode::Bypass,
+        extra,
+    }
+    .to_json();
+    // Mint the session identity locally so a degraded launch owns a stable
+    // session the background retry can register later under the same id.
+    payload["session_id"] = json!(Uuid::new_v4().to_string());
+    let runtime = tokio::runtime::Runtime::new()?;
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let response = match register_managed_launch_with_timeout(
+        &runtime,
+        &url,
+        &token,
+        "Pi",
+        &payload,
+        expected_session_id.as_deref(),
+        Duration::from_millis(2000),
+    ) {
+        Ok(response) => Some(response),
+        Err(error) => {
+            eprintln!(
+                "Longhouse warning: starting Pi without Longhouse control because registration failed ({error:#})"
+            );
+            None
+        }
+    };
+    let session_id = response
+        .as_ref()
+        .map(|response| response.session_id.clone())
+        .or(expected_session_id)
+        .context("degraded Pi launch has no session identity")?;
+    println!(
+        "Managed Pi one-shot launched\n→ {}/s/{}",
+        url.trim_end_matches('/'),
+        session_id.split('-').next().unwrap_or(&session_id)
+    );
+    println!("Provider binary: {pi_bin}");
     Ok(())
 }
 
@@ -3744,6 +3857,12 @@ fn main() -> anyhow::Result<()> {
                 finish_codex_teardown(outcome, &args.session_id, None, 0)?;
             }
             None => launch_managed_codex(launch)?,
+        },
+        Commands::Pi { command, launch } => match command {
+            Some(PiCommand::Noop) => {
+                anyhow::bail!("Pi is a one-shot adapter; launch with `longhouse pi --prompt ...`")
+            }
+            None => launch_managed_pi(launch)?,
         },
         Commands::Opencode { command, launch } => match command {
             Some(OpencodeCommand::Attach(args)) => attach_managed_opencode(args)?,

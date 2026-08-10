@@ -35,6 +35,7 @@ use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
+use crate::pi_print::{start_pi_print_turn, PiPrintRunConfig, PI_PRINT_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
 };
@@ -579,6 +580,18 @@ pub fn spawn_control_channel(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile Claude Console turn claims"),
         }
+        match crate::pi_print::recover_pi_print_turns(
+            &config.machine_name,
+            config.db_path.clone(),
+        )
+        .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Recovered Pi Console turn monitors")
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Failed to reconcile Pi Console turn claims"),
+        }
         run_reconnect_loop(config, status).await;
     }))
 }
@@ -926,6 +939,11 @@ async fn execute_command(
                     crate::claude_print::interrupt_claude_print_turn(&run_id, &session_id)
                         .map_err(CommandError::command_failed)?;
                     CLAUDE_PRINT_ADAPTER
+                }
+                "pi" => {
+                    crate::pi_print::interrupt_pi_print_turn(&run_id, &session_id)
+                        .map_err(CommandError::command_failed)?;
+                    PI_PRINT_ADAPTER
                 }
                 _ => {
                     return Err(CommandError {
@@ -1425,7 +1443,7 @@ async fn execute_turn_start(
     let provider = payload_required_string(payload, "provider")?;
     if !matches!(
         provider.as_str(),
-        "codex" | "cursor" | "opencode" | "claude"
+        "codex" | "cursor" | "opencode" | "claude" | "pi"
     ) {
         return Err(CommandError {
             code: "provider_unsupported".to_string(),
@@ -1450,7 +1468,7 @@ async fn execute_turn_start(
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     let permission_mode =
         payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
-            if matches!(provider.as_str(), "cursor" | "opencode" | "claude") {
+            if matches!(provider.as_str(), "cursor" | "opencode" | "claude" | "pi") {
                 "bypass"
             } else {
                 "remote_approve"
@@ -1474,6 +1492,12 @@ async fn execute_turn_start(
             code: "permission_policy_unsupported".to_string(),
             message: "Cursor Console currently supports auto_approve permission policy only"
                 .to_string(),
+        });
+    }
+    if provider == "pi" && permission_mode != "bypass" {
+        return Err(CommandError {
+            code: "permission_mode_unsupported".to_string(),
+            message: "Pi Console currently supports bypass permission mode only".to_string(),
         });
     }
     if provider == "claude" {
@@ -1652,6 +1676,42 @@ async fn execute_turn_start(
                 "argv": summary.argv,
             })
         })
+    } else if provider == "pi" {
+        start_pi_print_turn(PiPrintRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            run_id: run_id.clone(),
+            client_request_id: client_request_id.clone(),
+            cwd,
+            pi_bin: std::env::var("LONGHOUSE_PI_BIN")
+                .unwrap_or_else(|_| crate::pi_print::DEFAULT_PI_BIN.to_string()),
+            prompt: message,
+            provider: payload_optional_string(payload, "pi_provider"),
+            model: payload_optional_string(payload, "model"),
+            session_dir: payload_optional_string(payload, "session_dir").map(PathBuf::from),
+            permission_mode,
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+        })
+        .await
+        .map(|summary| {
+            json!({
+                "session_id": summary.session_id,
+                "thread_id": thread_id,
+                "run_id": summary.run_id,
+                "provider": "pi",
+                "transport": PI_PRINT_ADAPTER,
+                "provider_thread_id": summary.provider_thread_id,
+                "launch_id": summary.launch_id,
+                "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
+                "stdout_path": summary.stdout_path,
+                "stderr_path": summary.stderr_path,
+                "session_dir": summary.session_dir,
+                "argv": summary.argv,
+            })
+        })
     } else if provider == "codex" {
         let api_token = config
             .api_token
@@ -1699,7 +1759,12 @@ async fn execute_turn_start(
         Ok(result) => {
             if matches!(
                 result.get("transport").and_then(Value::as_str),
-                Some(CURSOR_PRINT_ADAPTER | OPENCODE_RUN_ADAPTER | CLAUDE_PRINT_ADAPTER)
+                Some(
+                    CURSOR_PRINT_ADAPTER
+                        | OPENCODE_RUN_ADAPTER
+                        | CLAUDE_PRINT_ADAPTER
+                        | PI_PRINT_ADAPTER,
+                )
             ) {
                 return Ok(result);
             }
@@ -2538,6 +2603,11 @@ mod tests {
         ("cursor", "terminate", COMMAND_TERMINATE),
         ("cursor", "turn_start", COMMAND_TURN_START),
         ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("pi", "send", COMMAND_SEND_TEXT),
+        ("pi", "interrupt", COMMAND_INTERRUPT),
+        ("pi", "terminate", COMMAND_TERMINATE),
+        ("pi", "turn_start", COMMAND_TURN_START),
+        ("pi", "turn_interrupt", COMMAND_TURN_INTERRUPT),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
@@ -3133,6 +3203,7 @@ mod tests {
         write_executable(&dir, "claude");
         write_executable(&dir, "agy");
         write_executable(&dir, "cursor-agent");
+        write_executable(&dir, "pi");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None, true);
         let mut expected = vec![
             "archive.backlog_control".to_string(),

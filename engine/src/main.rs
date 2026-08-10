@@ -50,6 +50,7 @@ mod opencode_control;
 mod opencode_db;
 mod opencode_run;
 mod outbox;
+mod pi_print;
 mod pipeline;
 mod process_group;
 mod process_identity;

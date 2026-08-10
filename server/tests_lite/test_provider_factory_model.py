@@ -83,6 +83,12 @@ def test_release_poll_never_runs_for_cursor_staged_release(facts) -> None:
     assert "observed install" in cell.reason
 
 
+def test_release_poll_never_runs_for_pi_staged_release(facts) -> None:
+    cell = plan_run(facts, "pi", "staged_release", "release_poll")
+    assert cell.status == "never_run"
+    assert "observed install" in cell.reason
+
+
 def test_release_poll_runs_for_cursor_observed_install(facts) -> None:
     cell = plan_run(facts, "cursor", "observed_install", "release_poll")
     assert cell.status == "runs"
@@ -93,6 +99,20 @@ def test_release_poll_runs_for_cursor_observed_install(facts) -> None:
         "CURSOR_MODEL",
         "LONGHOUSE_CLI_BIN",
         "LONGHOUSE_ENGINE_BIN",
+    )
+
+
+def test_release_poll_runs_for_pi_observed_install(facts) -> None:
+    cell = plan_run(facts, "pi", "observed_install", "release_poll")
+    assert cell.status == "runs"
+    assert cell.qualification_profile == "pi_print_v1"
+    assert cell.qualification_profiles == DEPLOYED_RELEASE_LANE_PROFILES["pi"]
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.scenario_ids == ("pi_print",)
+    assert cell.credential_requirement == (
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_PI_LIVE",
+        "LONGHOUSE_PI_QUALIFICATION_MODEL",
     )
 
 
