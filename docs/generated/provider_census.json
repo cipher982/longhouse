@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 243,
+  "file_count": 244,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1926,6 +1926,13 @@
     },
     {
       "path": "web/src/components/__tests__/SessionPickerModal.test.tsx",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/components/landing/ThesisModeCards.tsx",
       "providers": [
         "claude",
         "codex"

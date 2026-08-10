@@ -1,3 +1,5 @@
+import { ThesisModeCards } from "./ThesisModeCards";
+
 export function KernelThesisSection() {
   return (
     <section id="control" className="landing-thesis">
@@ -34,15 +36,7 @@ export function KernelThesisSection() {
         </div>
 
         <div className="landing-thesis-visual">
-          <img
-            src="/images/landing/phone-session.png"
-            alt="A Claude Code session open in Longhouse on an iPhone"
-            className="landing-thesis-phone"
-            width={1206}
-            height={2622}
-            loading="lazy"
-            decoding="async"
-          />
+          <ThesisModeCards />
         </div>
       </div>
     </section>

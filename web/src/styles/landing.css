@@ -969,7 +969,12 @@
     width: min(330px, 100%, calc((100vh - 300px) * 0.44));
     min-width: 240px;
     align-self: center;
+    padding: 8px;
     margin-inline: auto;
+    background: #050505;
+    border: 2px solid #3f3c39;
+    border-radius: 42px;
+    box-shadow: 0 42px 100px rgba(0, 0, 0, 0.58);
   }
 
   .phone-frame-screen {
@@ -1639,15 +1644,139 @@
     filter: blur(12px);
   }
 
-  .landing-thesis-phone {
+  /* Helm vs Shadow session cards — the visual proof of the two bullets. */
+  .thesis-mode-cards {
     position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
     width: 100%;
-    height: auto;
-    padding: 8px;
-    background: #050505;
-    border: 2px solid #3f3c39;
-    border-radius: 42px;
-    box-shadow: 0 42px 100px rgba(0, 0, 0, 0.58);
+  }
+
+  .thesis-mode-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 18px 16px;
+    background: rgba(10, 7, 6, 0.72);
+    border: 1px solid rgba(201, 166, 107, 0.16);
+    border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  }
+
+  .thesis-mode-card--helm {
+    border-color: rgba(201, 166, 107, 0.34);
+  }
+
+  .thesis-mode-card--shadow .thesis-mode-card-line,
+  .thesis-mode-card--shadow .thesis-mode-card-session {
+    opacity: 0.72;
+  }
+
+  .thesis-mode-card-head {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+  }
+
+  .thesis-mode-chip {
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.08em;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    background: rgba(255, 248, 239, 0.05);
+    border: 1px solid rgba(255, 248, 239, 0.12);
+    border-radius: 999px;
+  }
+
+  .thesis-mode-chip--helm {
+    color: var(--color-brand-primary);
+    background: rgba(201, 166, 107, 0.1);
+    border-color: rgba(201, 166, 107, 0.36);
+  }
+
+  .thesis-mode-card-origin {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+  }
+
+  .thesis-mode-card-session {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 13px;
+  }
+
+  .thesis-mode-card-name {
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .thesis-mode-card-machine {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+  }
+
+  .thesis-mode-card-state {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+  }
+
+  .thesis-mode-card-state--live {
+    color: #8fc5ac;
+  }
+
+  .thesis-mode-card-line {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+  }
+
+  .thesis-mode-card-composer {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 12px;
+    font-size: 13px;
+    background: rgba(255, 248, 239, 0.04);
+    border: 1px solid rgba(201, 166, 107, 0.22);
+    border-radius: 10px;
+  }
+
+  .thesis-mode-card-composer--off {
+    background: transparent;
+    border-color: rgba(255, 248, 239, 0.08);
+  }
+
+  .thesis-mode-card-draft {
+    overflow: hidden;
+    color: var(--color-text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .thesis-mode-card-composer--off .thesis-mode-card-draft {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    white-space: normal;
+  }
+
+  .thesis-mode-card-send {
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    font-size: 14px;
+    color: #120b09;
+    background: var(--color-brand-primary);
+    border-radius: 999px;
   }
 
   .steer-playground .phone-frame {
@@ -2249,7 +2378,7 @@
     }
 
     .landing-thesis-visual {
-      width: min(280px, 78vw);
+      width: min(380px, 92vw);
       margin: 0 auto;
     }
 
