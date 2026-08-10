@@ -34,7 +34,7 @@
       "denied": true
     },
     "mock_health": {
-      "url": "http://127.0.0.1:64472/health",
+      "url": "http://127.0.0.1:51197/health",
       "exit": 0,
       "http_code": "200",
       "reachable": true
@@ -69,17 +69,17 @@
     "mock_completions_match_fixture": true
   },
   "gate_failures": [],
-  "captured_at": "2026-08-10T18:20:51.797437+00:00",
-  "cast_sha256": "475be686afb5828812d08ce17be1cba5855c1c8e6559ddb1ff45b393088eceb9",
+  "captured_at": "2026-08-10T20:31:53.162564+00:00",
+  "cast_sha256": "cd0c4783c357e8f9e9edffb3ef3a14f3219a3ef34d23139db238fc1c20f1a474",
   "exit_status": 0,
   "phase_log": [
-    "[   0.003] spawned pid=94877 argv=['/tmp/demo-home-d_25g6zm/bin/opencode'] 64x14",
-    "[   2.696] sentinel hit: composer-ready",
-    "[   4.739] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
-    "[   7.291] prompt submitted",
-    "[   7.372] sentinel hit: working-spinner",
-    "[  21.772] sentinel hit: task-complete",
-    "[  23.797] sending exit sequence ['text:/exit', 'enter']",
-    "[  25.099] process exit status: 0"
+    "[   0.002] spawned pid=2584 argv=['/tmp/demo-home-t_7w31yf/bin/opencode'] 64x14",
+    "[   2.345] sentinel hit: composer-ready",
+    "[   4.372] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[   6.928] prompt submitted",
+    "[   7.013] sentinel hit: working-spinner",
+    "[  21.401] sentinel hit: task-complete",
+    "[  23.413] sending exit sequence ['text:/exit', 'enter']",
+    "[  24.725] process exit status: 0"
   ]
 }

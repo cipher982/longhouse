@@ -253,6 +253,10 @@ class Handler(BaseHTTPRequestHandler):
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
 
         chunk({"role": "assistant", "content": ""})
+        # OpenCode requires reasoning state on every DeepSeek assistant message
+        # when it reconstructs the next tool-call turn.
+        if "deepseek" in model.lower():
+            chunk({"reasoning_content": "Checking the requested change."})
         text = turn.get("text") or ""
         for piece in chunk_text(text):
             chunk({"content": piece})
