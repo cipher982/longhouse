@@ -1911,7 +1911,7 @@ def _cursor_interrupt_to_idle(
     observed_events: list[str] = []
     seen_event_keys: set[str] = set()
     stop_settle_deadline: float | None = None
-    while time.monotonic() < deadline:
+    while time.monotonic() < deadline or (stop_settle_deadline is not None and time.monotonic() < stop_settle_deadline):
         process.drain()
         try:
             with events_path.open("rb") as stream:
