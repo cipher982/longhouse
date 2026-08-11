@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 245,
+  "file_count": 247,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -106,7 +106,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -125,7 +126,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -144,7 +146,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -295,7 +298,8 @@
         "antigravity",
         "claude",
         "codex",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -605,6 +609,13 @@
       ]
     },
     {
+      "path": "server/scripts/render_provider_factory_status.py",
+      "providers": [
+        "cursor",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests/integration/test_shipper_e2e.py",
       "providers": [
         "antigravity",
@@ -722,6 +733,13 @@
       "providers": [
         "codex",
         "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_console_sessions.py",
+      "providers": [
+        "codex",
+        "pi"
       ]
     },
     {
@@ -968,7 +986,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1083,7 +1102,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1103,7 +1123,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1661,7 +1682,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1687,7 +1709,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {

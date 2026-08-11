@@ -35,6 +35,7 @@ from zerg.qa.provider_native_resume import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _post_resume_response_correlated
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
+from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
@@ -1911,6 +1912,27 @@ def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
     assert receipt["verified"] is False
     assert receipt["orphan_count"] == 1
     assert receipt["provider_pid_errors"][0]["session_id"] == "session-without-provider-pid"
+
+
+def test_failure_manifest_is_refreshed_after_final_cleanup(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "cleanup-receipt.json").write_text('{"verified":true}\n')
+    (evidence / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "fail",
+                "artifact_manifest": [],
+            }
+        )
+    )
+
+    _refresh_failure_result_manifest(evidence)
+
+    result = json.loads((evidence / "result.json").read_text())
+    manifest = {entry["path"]: entry for entry in result["artifact_manifest"]}
+    assert manifest["cleanup-receipt.json"]["size"] == (evidence / "cleanup-receipt.json").stat().st_size
+    assert manifest["cleanup-receipt.json"]["sha256"].startswith("sha256:")
 
 
 def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -> None:
