@@ -53,6 +53,7 @@ _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
 _TRANSCRIPT_SHIP_MAX_ATTEMPTS = 3
 _STORAGE_LANE_BUSY_MAX_SLEEP_SECS = 10.0
 _STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 repair lane busy; retry after (?P<milliseconds>\d+)ms")
+_SAFE_DIAGNOSTIC_DETAIL_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -153,6 +154,7 @@ class TranscriptShipper:
             self._terminate_daemon()
         attempts: list[dict[str, Any]] = []
         log_sections: list[str] = []
+        retry_reasons_seen: set[str] = set()
         # A failed admission quarantines the envelope and the next ship
         # invocation can reconcile a missing Cursor predecessor. A typed
         # storage-lane backpressure response is also safe to retry because the
@@ -212,26 +214,26 @@ class TranscriptShipper:
             attempt_retry_reason: str | None = None
             retry_delay_secs: float | None = None
             if completed.returncode != 0:
-                if "source_epoch_conflict_unresolved" in stderr:
+                busy_match = _STORAGE_LANE_BUSY_RE.search(stderr)
+                if busy_match is not None:
+                    advertised_delay_ms = int(busy_match.group("milliseconds"))
+                    attempt_retry_reason = "storage_lane_busy"
+                    retry_delay_secs = min(advertised_delay_ms / 1000, _STORAGE_LANE_BUSY_MAX_SLEEP_SECS)
+                    result["retry_after_ms"] = advertised_delay_ms
+                    result["retry_sleep_secs"] = retry_delay_secs
+                elif "source_epoch_conflict_unresolved" in stderr:
                     attempt_retry_reason = "source_epoch_conflict_unresolved"
-                else:
-                    busy_match = _STORAGE_LANE_BUSY_RE.search(stderr)
-                    if busy_match is not None:
-                        advertised_delay_ms = int(busy_match.group("milliseconds"))
-                        attempt_retry_reason = "storage_lane_busy"
-                        retry_delay_secs = min(advertised_delay_ms / 1000, _STORAGE_LANE_BUSY_MAX_SLEEP_SECS)
-                        result["retry_after_ms"] = advertised_delay_ms
-                        result["retry_sleep_secs"] = retry_delay_secs
             if attempt_retry_reason is not None:
                 result["retry_reason"] = attempt_retry_reason
             attempts.append(result)
             log_sections.append(f"attempt {attempt}\nstdout:\n{stdout}\nstderr:\n{stderr}\n")
             if completed.returncode == 0:
                 break
-            if attempt_retry_reason == "source_epoch_conflict_unresolved":
-                continue
-            if retry_delay_secs is None or attempt >= _TRANSCRIPT_SHIP_MAX_ATTEMPTS:
+            if attempt_retry_reason is None or attempt_retry_reason in retry_reasons_seen or attempt >= _TRANSCRIPT_SHIP_MAX_ATTEMPTS:
                 break
+            retry_reasons_seen.add(attempt_retry_reason)
+            if retry_delay_secs is None:
+                continue
             time.sleep(retry_delay_secs)
         result = dict(attempts[-1])
         result["attempts"] = len(attempts)
@@ -2227,9 +2229,12 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
     try:
         connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=1.0)
         try:
+            connection.execute("BEGIN DEFERRED")
             tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             table_counts: dict[str, int] = {}
+            table_counts_errors: dict[str, str] = {}
             table_rows: dict[str, list[dict[str, Any]]] = {}
+            table_rows_errors: dict[str, str] = {}
             for table in (
                 "source_epoch_registry",
                 "source_epoch_lane_state",
@@ -2238,7 +2243,10 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
                 "cursor_store_capture_cursor",
             ):
                 if table in tables:
-                    table_counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    try:
+                        table_counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    except sqlite3.Error as exc:
+                        table_counts_errors[table] = f"{type(exc).__name__}: {exc}"
             row_specs = {
                 "source_epoch_registry": (
                     "source_epoch",
@@ -2250,6 +2258,8 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
                     "source_revision",
                     "bound_session_id",
                     "provider_session_id",
+                    "file_incarnation",
+                    "wake_at",
                     "created_at",
                     "updated_at",
                     "ended_at",
@@ -2279,24 +2289,44 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
             for table, requested_columns in row_specs.items():
                 if table not in tables:
                     continue
-                available = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
-                columns = [column for column in requested_columns if column in available]
-                if not columns:
-                    continue
-                select_columns = ", ".join(columns)
-                rows = connection.execute(f"SELECT {select_columns} FROM {table} ORDER BY rowid DESC LIMIT 128").fetchall()
-                table_rows[table] = [dict(zip(columns, row, strict=True)) for row in rows]
+                try:
+                    available = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+                    columns = [column for column in requested_columns if column in available]
+                    if not columns:
+                        continue
+                    select_columns = ", ".join(columns)
+                    try:
+                        rows = connection.execute(f"SELECT {select_columns} FROM {table} ORDER BY rowid DESC LIMIT 128").fetchall()
+                    except sqlite3.Error:
+                        rows = connection.execute(f"SELECT {select_columns} FROM {table} LIMIT 128").fetchall()
+                    serialized_rows: list[dict[str, Any]] = []
+                    for row in rows:
+                        serialized = dict(zip(columns, row, strict=True))
+                        raw_detail = serialized.get("block_detail")
+                        if isinstance(raw_detail, str) and not _SAFE_DIAGNOSTIC_DETAIL_RE.fullmatch(raw_detail):
+                            serialized["block_detail_sha256"] = hashlib.sha256(raw_detail.encode()).hexdigest()
+                            serialized["block_detail_length"] = len(raw_detail)
+                            serialized["block_detail"] = "<omitted>"
+                        serialized_rows.append(serialized)
+                    table_rows[table] = serialized_rows
+                except sqlite3.Error as exc:
+                    table_rows_errors[table] = f"{type(exc).__name__}: {exc}"
         finally:
             connection.close()
     except sqlite3.Error as exc:
         return {"path": str(path), "present": True, "sqlite_error": f"{type(exc).__name__}: {exc}"}
-    return {
+    observation = {
         "path": str(path),
         "present": True,
         "sqlite_tables": sorted(tables),
         "sqlite_counts": table_counts,
         "table_rows": table_rows,
     }
+    if table_rows_errors:
+        observation["table_rows_errors"] = table_rows_errors
+    if table_counts_errors:
+        observation["table_counts_errors"] = table_counts_errors
+    return observation
 
 
 def _cursor_managed_state_observation(root: Path, session_id: str) -> list[dict[str, Any]]:

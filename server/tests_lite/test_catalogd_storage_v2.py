@@ -1755,6 +1755,25 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert opened["created"] is True and opened["commit_seq"] == "1"
         assert replay_open["exact_replay"] is True and replay_open["commit_seq"] == "1"
 
+        missing_predecessor = uuid4()
+        missing_predecessor_raw = _raw_params(
+            epoch=uuid4(),
+            predecessor=missing_predecessor,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"orphan\n",),
+            sealed_at=now,
+            opaque_source_id="missing-predecessor.jsonl",
+        )
+        with pytest.raises(CatalogRemoteError) as missing_predecessor_error:
+            await client.call("storage.raw_object.commit.v2", missing_predecessor_raw)
+        assert missing_predecessor_error.value.details == {
+            "reason": "predecessor_not_open_for_this_identity",
+            "predecessor_exists": False,
+            "expected_predecessor": str(missing_predecessor),
+        }
+
         raw = _raw_params(
             epoch=epoch,
             session_id=session_id,
