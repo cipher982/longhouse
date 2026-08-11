@@ -1910,6 +1910,7 @@ def _cursor_interrupt_to_idle(
     leaked_response = False
     observed_events: list[str] = []
     seen_event_keys: set[str] = set()
+    stop_settle_deadline: float | None = None
     while time.monotonic() < deadline:
         process.drain()
         try:
@@ -1946,7 +1947,12 @@ def _cursor_interrupt_to_idle(
                 is_interrupt = payload.get("is_interrupt") is True
                 if status in {"aborted", "cancelled", "error"} or is_interrupt:
                     stop_event = event
-                    break
+                    # Keep scanning briefly after the stop receipt. Cursor's
+                    # hooks are append-only and a late response for the same
+                    # generation must invalidate this recovery rather than be
+                    # hidden by the first terminal event.
+                    stop_settle_deadline = time.monotonic() + 2.0
+                    continue
                 # A late normal completion is safe only if the provider now
                 # proves the same generation idle. Otherwise fail closed.
                 try:
@@ -1973,7 +1979,7 @@ def _cursor_interrupt_to_idle(
                     "observed_events": observed_events,
                     "tui_ready": True,
                 }
-        if stop_event is not None:
+        if stop_event is not None and stop_settle_deadline is not None and time.monotonic() >= stop_settle_deadline:
             break
         time.sleep(0.1)
     if (
@@ -3222,7 +3228,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "stale_generation_dispatched": stale_generation_dispatched,
             "concurrent_resume_refused": concurrent_refused,
             "artifact_secret_scan_passed": not redacted,
-            "clean_stop_verified": args.variant == "clean_exit" and transition["clean"],
+            "clean_stop_verified": args.variant == "clean_exit" and transition["clean"] and final_transition["clean"],
             "old_bridge_process_dead": args.variant == "process_loss" and transition["dead"],
             "old_app_server_process_dead": args.variant == "process_loss" and transition["provider_process_dead"],
             "replacement_started_after_process_loss": args.variant == "process_loss" and resumed_state["run_id"] != initial_state["run_id"],

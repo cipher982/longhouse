@@ -1875,7 +1875,12 @@ def test_cursor_interrupt_recovery_rejects_stale_conversation_before_signal(tmp_
     assert process.sent == []
 
 
-def test_cursor_interrupt_recovery_accepts_identity_matched_error_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("late_response", [False, True])
+def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    late_response: bool,
+) -> None:
     home = tmp_path / "home"
     root = home / "managed-local" / "cursor-helm"
     (root / "binding-probes").mkdir(parents=True)
@@ -1925,25 +1930,35 @@ def test_cursor_interrupt_recovery_accepts_identity_matched_error_stop(tmp_path:
 
         def drain(self) -> bytes:
             if not self.emitted:
-                events_path.write_text(
-                    json.dumps(
+                events = [
+                    {
+                        "event": "stop",
+                        "session_id": "session-1",
+                        "conversation_id": "conversation-1",
+                        "payload": {"generation_id": "generation-1", "status": "error"},
+                    }
+                ]
+                if late_response:
+                    events.append(
                         {
-                            "event": "stop",
+                            "event": "afterAgentResponse",
                             "session_id": "session-1",
                             "conversation_id": "conversation-1",
-                            "payload": {"generation_id": "generation-1", "status": "error"},
+                            "payload": {"generation_id": "generation-1", "text": "late"},
                         }
                     )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                events_path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
                 self.emitted = True
             return b""
 
     process = FakeProcess()
-    receipt = _cursor_interrupt_to_idle(state, {"LONGHOUSE_HOME": str(home)}, process)  # type: ignore[arg-type]
-    assert receipt["method"] == "cursor_ctrl_c_recovery"
-    assert receipt["observed_events"] == ["stop"]
+    if late_response:
+        with pytest.raises(RuntimeError, match="allowed the stranded generation"):
+            _cursor_interrupt_to_idle(state, {"LONGHOUSE_HOME": str(home)}, process)  # type: ignore[arg-type]
+    else:
+        receipt = _cursor_interrupt_to_idle(state, {"LONGHOUSE_HOME": str(home)}, process)  # type: ignore[arg-type]
+        assert receipt["method"] == "cursor_ctrl_c_recovery"
+        assert receipt["observed_events"] == ["stop"]
     assert process.sent == ["\x03"]
 
 
