@@ -53,7 +53,8 @@ _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
 _TRANSCRIPT_SHIP_MAX_ATTEMPTS = 3
 _STORAGE_LANE_BUSY_MAX_SLEEP_SECS = 10.0
 _STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 repair lane busy; retry after (?P<milliseconds>\d+)ms")
-_SAFE_DIAGNOSTIC_DETAIL_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
+_SAFE_DIAGNOSTIC_DETAIL_RE = re.compile(r"^[a-z0-9][a-z0-9_.:+-]{0,127}$")
+_CURSOR_DIAGNOSTIC_PAYLOAD_KEYS = frozenset({"generation_id", "status", "phase", "is_interrupt", "text"})
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -951,6 +952,17 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _read_json_bounded(path: Path, *, max_bytes: int = 65536) -> dict[str, Any]:
+    """Read provider-owned state without allowing an oversized diagnostic input."""
+
+    with path.open("rb") as stream:
+        raw = stream.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError(f"provider JSON exceeds {max_bytes} bytes")
+    payload = json.loads(raw.decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
 def _refresh_result_manifest(root: Path) -> dict[str, Any] | None:
     """Hash result evidence after final cleanup has been written.
 
@@ -1835,6 +1847,7 @@ def _cursor_idle_then_flush(
     minimum_hook_event_bytes: int | None = None,
     expected_generation_id: str | None = None,
     marker: str | None = None,
+    diagnostic_path: Path | None = None,
 ) -> dict[str, Any]:
     """Keep provider completion ahead of the one-shot transcript flush."""
 
@@ -1843,6 +1856,7 @@ def _cursor_idle_then_flush(
         environment,
         minimum_hook_event_bytes=minimum_hook_event_bytes,
         expected_generation_id=expected_generation_id,
+        diagnostic_path=diagnostic_path,
     )
     if marker:
         shipper.capture_cursor_projection_diagnostics(
@@ -1922,6 +1936,7 @@ def _cursor_interrupt_to_idle(
     process: PtyProcess,
     *,
     timeout: float = 30.0,
+    diagnostic_path: Path | None = None,
 ) -> dict[str, Any]:
     """Cancel a stranded Cursor generation and prove the owner is idle again.
 
@@ -1940,13 +1955,19 @@ def _cursor_interrupt_to_idle(
     events_path = root / "hook-events" / f"{state['session_id']}.ndjson"
     phase_path = root / f"{state['session_id']}.phase.json"
     claim_path = root / "binding-probes" / f"{state['session_id']}.json"
+
+    def diagnostic_for(suffix: str) -> Path | None:
+        if diagnostic_path is None:
+            return None
+        return diagnostic_path.with_name(f"{diagnostic_path.stem}-{suffix}{diagnostic_path.suffix}")
+
     try:
         start_bytes = events_path.stat().st_size
     except OSError:
         start_bytes = 0
     try:
-        claim = _read_json(claim_path)
-    except (OSError, json.JSONDecodeError):
+        claim = _read_json_bounded(claim_path)
+    except (OSError, ValueError, json.JSONDecodeError):
         claim = {}
     if (
         claim.get("schema_version") != 2
@@ -1959,11 +1980,11 @@ def _cursor_interrupt_to_idle(
     ):
         raise RuntimeError(
             "Cursor interrupt recovery lacks the enrolled binding "
-            f"(claim_path={claim_path}, binding={json.dumps(claim, sort_keys=True)})"
+            f"(claim_path={claim_path}, binding={json.dumps(_diagnostic_mapping(claim, ('schema_version', 'provider', 'status', 'session_id', 'conversation_uuid', 'launch_id', 'run_id')), sort_keys=True)})"
         )
     try:
-        phase = _read_json(phase_path)
-    except (OSError, json.JSONDecodeError):
+        phase = _read_json_bounded(phase_path)
+    except (OSError, ValueError, json.JSONDecodeError):
         phase = {}
     expected_generation_id = str(phase.get("generation_id") or "").strip()
     phase_identity_matches = (
@@ -1975,7 +1996,7 @@ def _cursor_interrupt_to_idle(
     if not phase_identity_matches:
         raise RuntimeError(
             "Cursor interrupt recovery requires the identity-matched generation "
-            f"(phase_path={phase_path}, phase={json.dumps(phase, sort_keys=True)})"
+            f"(phase_path={phase_path}, phase={json.dumps(_diagnostic_mapping(phase, ('session_id', 'conversation_id', 'launch_id', 'phase', 'generation_id')), sort_keys=True)})"
         )
     if phase.get("phase") == "idle":
         idle_phase = _wait_cursor_idle(
@@ -1983,6 +2004,7 @@ def _cursor_interrupt_to_idle(
             environment,
             timeout=min(timeout, 10.0),
             expected_generation_id=expected_generation_id,
+            diagnostic_path=diagnostic_for("already-idle"),
         )
         _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
         return {
@@ -1997,15 +2019,15 @@ def _cursor_interrupt_to_idle(
     if phase.get("phase") != "active":
         raise RuntimeError(
             "Cursor interrupt recovery requires an active generation "
-            f"(phase_path={phase_path}, phase={json.dumps(phase, sort_keys=True)})"
+            f"(phase_path={phase_path}, phase={json.dumps(_diagnostic_mapping(phase, ('session_id', 'conversation_id', 'launch_id', 'phase', 'generation_id')), sort_keys=True)})"
         )
     # Close the snapshot-to-signal race as far as the provider-owned files
     # allow. If the generation completed between the first read and this
     # final check, preserve the late idle result instead of interrupting a
     # replacement generation.
     try:
-        latest_phase = _read_json(phase_path)
-    except (OSError, json.JSONDecodeError):
+        latest_phase = _read_json_bounded(phase_path)
+    except (OSError, ValueError, json.JSONDecodeError):
         latest_phase = {}
     if (
         latest_phase.get("session_id") != state.get("session_id")
@@ -2015,7 +2037,7 @@ def _cursor_interrupt_to_idle(
     ):
         raise RuntimeError(
             "Cursor active generation changed before interrupt recovery "
-            f"(phase_path={phase_path}, phase={json.dumps(latest_phase, sort_keys=True)})"
+            f"(phase_path={phase_path}, phase={json.dumps(_diagnostic_mapping(latest_phase, ('session_id', 'conversation_id', 'launch_id', 'phase', 'generation_id')), sort_keys=True)})"
         )
     if latest_phase.get("phase") == "idle":
         idle_phase = _wait_cursor_idle(
@@ -2024,6 +2046,7 @@ def _cursor_interrupt_to_idle(
             timeout=min(timeout, 10.0),
             minimum_hook_event_bytes=start_bytes,
             expected_generation_id=expected_generation_id,
+            diagnostic_path=diagnostic_for("late-idle"),
         )
         _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
         return {
@@ -2038,7 +2061,7 @@ def _cursor_interrupt_to_idle(
     if latest_phase.get("phase") != "active":
         raise RuntimeError(
             "Cursor active generation ended before interrupt recovery "
-            f"(phase_path={phase_path}, phase={json.dumps(latest_phase, sort_keys=True)})"
+            f"(phase_path={phase_path}, phase={json.dumps(_diagnostic_mapping(latest_phase, ('session_id', 'conversation_id', 'launch_id', 'phase', 'generation_id')), sort_keys=True)})"
         )
     process.send("\x03")
     deadline = time.monotonic() + timeout
@@ -2046,16 +2069,36 @@ def _cursor_interrupt_to_idle(
     leaked_response = False
     observed_events: list[str] = []
     seen_event_keys: set[str] = set()
+    scan_offset = start_bytes
+    partial_line = b""
+    discard_partial_line = False
     stop_settle_deadline: float | None = None
     while time.monotonic() < deadline or (stop_settle_deadline is not None and time.monotonic() < stop_settle_deadline):
         process.drain()
         try:
             with events_path.open("rb") as stream:
-                stream.seek(start_bytes)
-                raw = stream.read()
+                stream.seek(scan_offset)
+                chunk = stream.read(_CURSOR_HOOK_OBSERVATION_BYTES)
+                scan_offset += len(chunk)
         except OSError:
-            raw = b""
-        for line in raw.splitlines():
+            chunk = b""
+        if discard_partial_line:
+            newline = chunk.find(b"\n")
+            if newline < 0:
+                time.sleep(0.1)
+                continue
+            chunk = chunk[newline + 1 :]
+            discard_partial_line = False
+        raw = partial_line + chunk
+        lines = raw.splitlines(keepends=True)
+        if lines and not lines[-1].endswith((b"\n", b"\r")):
+            partial_line = lines.pop()
+            if len(partial_line) > _CURSOR_HOOK_OBSERVATION_BYTES:
+                partial_line = b""
+                discard_partial_line = True
+        else:
+            partial_line = b""
+        for line in lines:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -2066,6 +2109,8 @@ def _cursor_interrupt_to_idle(
                 continue
             if event.get("conversation_id") != state.get("provider_session_id"):
                 continue
+            if event.get("launch_id") != claim.get("launch_id"):
+                continue
             payload = event.get("payload")
             if not isinstance(payload, dict) or payload.get("generation_id") != expected_generation_id:
                 continue
@@ -2073,8 +2118,10 @@ def _cursor_interrupt_to_idle(
             if event_key in seen_event_keys:
                 continue
             seen_event_keys.add(event_key)
+            if len(seen_event_keys) > 1024:
+                seen_event_keys.clear()
             name = str(event.get("event") or "")
-            if name:
+            if name and len(observed_events) < 256:
                 observed_events.append(name)
             if name == "afterAgentResponse":
                 leaked_response = True
@@ -2098,11 +2145,22 @@ def _cursor_interrupt_to_idle(
                         timeout=2.0,
                         minimum_hook_event_bytes=start_bytes,
                         expected_generation_id=expected_generation_id,
+                        diagnostic_path=diagnostic_for("stop-race"),
                     )
                 except RuntimeError:
+                    diagnostic_payload = {
+                        "generation_id": _diagnostic_scalar(payload.get("generation_id")),
+                        "status": (
+                            payload.get("status")
+                            if isinstance(payload.get("status"), str)
+                            and payload.get("status") in {"aborted", "cancelled", "completed", "error"}
+                            else None
+                        ),
+                        "is_interrupt": payload.get("is_interrupt") if isinstance(payload.get("is_interrupt"), bool) else None,
+                    }
                     raise RuntimeError(
                         "Cursor interrupt recovery observed a non-interrupt stop "
-                        f"(generation_id={expected_generation_id}, payload={json.dumps(payload, sort_keys=True)})"
+                        f"(generation_id={_diagnostic_scalar(expected_generation_id)}, payload={json.dumps(diagnostic_payload, sort_keys=True)})"
                     ) from None
                 _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
                 return {
@@ -2128,12 +2186,39 @@ def _cursor_interrupt_to_idle(
     ):
         raise RuntimeError(
             "Cursor interrupt recovery allowed the stranded generation to publish another response "
-            f"(generation_id={expected_generation_id})"
+            f"(generation_id={_diagnostic_scalar(expected_generation_id)})"
         )
     if stop_event is None:
+        diagnostic_written = False
+        diagnostic_target: Path | None = None
+        if diagnostic_path is not None:
+            diagnostic_target = diagnostic_path.with_name(f"{diagnostic_path.stem}-stop-hook-timeout{diagnostic_path.suffix}")
+            try:
+                stop_observation = _cursor_stop_timeout_observation(
+                    state=state,
+                    phase_path=phase_path,
+                    claim_path=claim_path,
+                    hook_events_path=events_path,
+                    minimum_hook_event_bytes=start_bytes,
+                    expected_generation_id=expected_generation_id,
+                    timeout=timeout,
+                    observed_events=observed_events,
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostics never replace recovery failure
+                stop_observation = {
+                    "schema": "cursor_stop_timeout_observation_unavailable.v1",
+                    "captured_at": _now(),
+                    "provider": "cursor",
+                    "session_id": _diagnostic_scalar(state.get("session_id")),
+                    "error_type": type(exc).__name__,
+                }
+            diagnostic_written = _write_best_effort_json(diagnostic_target, stop_observation)
+        diagnostic_detail = ", diagnostic_path=" + str(diagnostic_target) if diagnostic_written and diagnostic_target else ""
         raise RuntimeError(
             "Cursor interrupt recovery did not publish an identity-matched stop hook "
-            f"(session_id={state['session_id']}, generation_id={expected_generation_id}, events={observed_events[-20:]!r})"
+            f"(session_id={_diagnostic_scalar(state.get('session_id'))}, "
+            f"generation_id={_diagnostic_scalar(expected_generation_id)}, "
+            f"events={_diagnostic_event_names(observed_events, limit=20)!r}{diagnostic_detail})"
         )
     idle_phase = _wait_cursor_idle(
         state,
@@ -2141,6 +2226,7 @@ def _cursor_interrupt_to_idle(
         timeout=min(timeout, 10.0),
         minimum_hook_event_bytes=start_bytes,
         expected_generation_id=expected_generation_id,
+        diagnostic_path=diagnostic_for("final"),
     )
     _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
     try:
@@ -2436,6 +2522,263 @@ def _cursor_projection_diagnostics(
     }
 
 
+_CURSOR_HOOK_OBSERVATION_BYTES = 65536
+_CURSOR_DIAGNOSTIC_JSON_BYTES = 65536
+
+
+def _diagnostic_scalar(value: Any, *, limit: int = 128) -> str | bool | None:
+    """Keep provider-controlled diagnostic scalars bounded and non-secret-shaped."""
+
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value)[:limit]
+    if not _SAFE_DIAGNOSTIC_DETAIL_RE.fullmatch(text.lower()):
+        return None
+    return text
+
+
+def _diagnostic_mapping(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, str | bool]:
+    """Project provider JSON to bounded, syntax-safe diagnostic scalars."""
+
+    result: dict[str, str | bool] = {}
+    for key in keys:
+        value = _diagnostic_scalar(payload.get(key))
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _diagnostic_event_names(values: list[str], *, limit: int = 32) -> list[str]:
+    return [value for value in (_diagnostic_scalar(item) for item in values[-limit:]) if isinstance(value, str)]
+
+
+def _cursor_hook_event_observation(
+    path: Path,
+    *,
+    state: dict[str, Any],
+    minimum_bytes: int | None,
+    expected_launch_id: str | None = None,
+    expected_generation_id: str | None = None,
+) -> dict[str, Any]:
+    """Summarize native hook history without retaining prompt or response text."""
+
+    try:
+        size_bytes = path.stat().st_size
+    except OSError as exc:
+        return {
+            "path": str(path),
+            "present": False,
+            "size_bytes": None,
+            "read_error": type(exc).__name__,
+            "minimum_bytes": minimum_bytes,
+            "events": [],
+            "truncated": False,
+            "undecodable_lines": 0,
+            "malformed_lines": 0,
+        }
+    start_offset = min(max(int(minimum_bytes or 0), 0), size_bytes)
+    available_bytes = max(size_bytes - start_offset, 0)
+    expected_launch = str(expected_launch_id or "").strip()
+    expected_generation = str(expected_generation_id or "").strip()
+    truncated = available_bytes > _CURSOR_HOOK_OBSERVATION_BYTES
+    try:
+        with path.open("rb") as stream:
+            if not truncated:
+                stream.seek(start_offset)
+                encoded = stream.read(available_bytes)
+                chunks = (encoded,)
+            else:
+                first_bytes = _CURSOR_HOOK_OBSERVATION_BYTES // 2
+                last_bytes = _CURSOR_HOOK_OBSERVATION_BYTES - first_bytes
+                stream.seek(start_offset)
+                first = stream.read(first_bytes)
+                stream.seek(size_bytes - last_bytes)
+                last = stream.read(last_bytes)
+                chunks = (first, last)
+    except OSError as exc:
+        return {
+            "path": str(path),
+            "present": True,
+            "size_bytes": size_bytes,
+            "read_error": type(exc).__name__,
+            "minimum_bytes": minimum_bytes,
+            "events": [],
+            "truncated": truncated,
+            "undecodable_lines": 0,
+            "malformed_lines": 0,
+        }
+
+    lines: list[bytes] = []
+    if truncated:
+        first_lines = chunks[0].splitlines()
+        last_lines = chunks[1].splitlines()
+        if first_lines and not chunks[0].endswith(b"\n"):
+            first_lines.pop()
+        if last_lines and not chunks[1].startswith(b"\n"):
+            last_lines.pop(0)
+        lines.extend(first_lines)
+        lines.extend(last_lines)
+    else:
+        lines.extend(chunks[0].splitlines())
+
+    events: list[dict[str, Any]] = []
+    mismatch_event_count = 0
+    mismatch_event_names: list[str] = []
+    undecodable_lines = 0
+    malformed_lines = 0
+    selected_lines = lines if len(lines) <= 32 else [*lines[:16], *lines[-16:]]
+    for line in selected_lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line.decode("utf-8"))
+        except UnicodeDecodeError:
+            undecodable_lines += 1
+            continue
+        except (json.JSONDecodeError, TypeError):
+            malformed_lines += 1
+            continue
+        if not isinstance(event, dict):
+            malformed_lines += 1
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        session_match = event.get("session_id") == state.get("session_id")
+        conversation_match = event.get("conversation_id") == state.get("provider_session_id")
+        launch_match = bool(expected_launch) and event.get("launch_id") == expected_launch
+        generation_match = bool(expected_generation) and payload.get("generation_id") == expected_generation
+        identity_match = session_match and conversation_match and launch_match and generation_match
+        if not identity_match:
+            mismatch_event_count += 1
+            if len(mismatch_event_names) < 16:
+                event_name = _diagnostic_scalar(event.get("event"))
+                if isinstance(event_name, str):
+                    mismatch_event_names.append(event_name)
+            continue
+        events.append(
+            {
+                "event": _diagnostic_scalar(event.get("event")),
+                "observed_at": _diagnostic_scalar(event.get("observed_at") or event.get("captured_at") or event.get("timestamp")),
+                "session_id": _diagnostic_scalar(event.get("session_id")),
+                "conversation_id": _diagnostic_scalar(event.get("conversation_id")),
+                "launch_id": _diagnostic_scalar(event.get("launch_id")),
+                "identity_match": identity_match,
+                "generation_id": _diagnostic_scalar(payload.get("generation_id")),
+                "payload_keys": sorted(key for key in payload if key in _CURSOR_DIAGNOSTIC_PAYLOAD_KEYS),
+                "status": (
+                    _diagnostic_scalar(payload.get("status"))
+                    if isinstance(payload.get("status"), str) and payload.get("status") in {"aborted", "cancelled", "completed", "error"}
+                    else None
+                ),
+                "phase": (
+                    _diagnostic_scalar(payload.get("phase"))
+                    if isinstance(payload.get("phase"), str) and payload.get("phase") in {"active", "idle"}
+                    else None
+                ),
+                "is_interrupt": _diagnostic_scalar(payload.get("is_interrupt")),
+            }
+        )
+    return {
+        "path": str(path),
+        "present": True,
+        "size_bytes": size_bytes,
+        "minimum_bytes": minimum_bytes,
+        "available_bytes": available_bytes,
+        "truncated": truncated,
+        "undecodable_lines": undecodable_lines,
+        "malformed_lines": malformed_lines,
+        "mismatch_event_count": mismatch_event_count,
+        "mismatch_event_names": mismatch_event_names,
+        "events": events,
+    }
+
+
+def _cursor_idle_timeout_observation(
+    *,
+    state: dict[str, Any],
+    phase_path: Path,
+    claim_path: Path,
+    hook_events_path: Path,
+    minimum_hook_event_bytes: int | None,
+    expected_generation_id: str | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Capture the causal native lifecycle boundary when idle never arrives."""
+
+    try:
+        phase = _read_json_bounded(phase_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        phase = {}
+    try:
+        claim = _read_json_bounded(claim_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        claim = {}
+    identity_keys = (
+        "schema_version",
+        "provider",
+        "status",
+        "session_id",
+        "conversation_uuid",
+        "launch_id",
+        "run_id",
+    )
+    phase_keys = ("session_id", "conversation_id", "launch_id", "phase", "generation_id")
+    return {
+        "schema": "cursor_idle_timeout_observation.v1",
+        "captured_at": _now(),
+        "provider": "cursor",
+        "session_id": _diagnostic_scalar(state.get("session_id")),
+        "provider_session_id": _diagnostic_scalar(state.get("provider_session_id")),
+        "wait": {
+            "timeout_seconds": timeout,
+            "minimum_hook_event_bytes": minimum_hook_event_bytes,
+            "expected_generation_id": _diagnostic_scalar(expected_generation_id),
+        },
+        "phase_file": _diagnostic_mapping(phase, phase_keys),
+        "binding": _diagnostic_mapping(claim, identity_keys),
+        "hook_events": _cursor_hook_event_observation(
+            hook_events_path,
+            state=state,
+            minimum_bytes=minimum_hook_event_bytes,
+            expected_launch_id=claim.get("launch_id") or phase.get("launch_id"),
+            expected_generation_id=expected_generation_id or phase.get("generation_id"),
+        ),
+    }
+
+
+def _cursor_stop_timeout_observation(
+    *,
+    state: dict[str, Any],
+    phase_path: Path,
+    claim_path: Path,
+    hook_events_path: Path,
+    minimum_hook_event_bytes: int,
+    expected_generation_id: str,
+    timeout: float,
+    observed_events: list[str],
+) -> dict[str, Any]:
+    """Capture the causal boundary when Ctrl-C yields no native stop hook."""
+
+    observation = _cursor_idle_timeout_observation(
+        state=state,
+        phase_path=phase_path,
+        claim_path=claim_path,
+        hook_events_path=hook_events_path,
+        minimum_hook_event_bytes=minimum_hook_event_bytes,
+        expected_generation_id=expected_generation_id,
+        timeout=timeout,
+    )
+    observation["schema"] = "cursor_stop_timeout_observation.v1"
+    observation["stop"] = {
+        "start_hook_event_bytes": minimum_hook_event_bytes,
+        "expected_generation_id": _diagnostic_scalar(expected_generation_id),
+        "stop_hook_observed": False,
+        "observed_events": _diagnostic_event_names(observed_events),
+    }
+    return observation
+
+
 def _wait_cursor_idle(
     state: dict[str, Any],
     environment: dict[str, str],
@@ -2443,6 +2786,7 @@ def _wait_cursor_idle(
     timeout: float = 45.0,
     minimum_hook_event_bytes: int | None = None,
     expected_generation_id: str | None = None,
+    diagnostic_path: Path | None = None,
 ) -> dict[str, Any]:
     """Wait for the provider-owned Cursor hook to publish an idle phase."""
 
@@ -2457,22 +2801,19 @@ def _wait_cursor_idle(
     last_identity: dict[str, Any] = {}
     while time.monotonic() < deadline:
         try:
-            payload = _read_json(path)
-        except (OSError, json.JSONDecodeError):
+            payload = _read_json_bounded(path)
+        except (OSError, ValueError, json.JSONDecodeError):
             payload = {}
         try:
-            claim = _read_json(claim_path)
-        except (OSError, json.JSONDecodeError):
+            claim = _read_json_bounded(claim_path)
+        except (OSError, ValueError, json.JSONDecodeError):
             claim = {}
         last_identity = {
-            "phase": {
-                key: payload.get(key) for key in ("session_id", "conversation_id", "launch_id", "phase", "generation_id") if key in payload
-            },
-            "binding": {
-                key: claim.get(key)
-                for key in ("schema_version", "provider", "status", "session_id", "conversation_uuid", "launch_id", "run_id")
-                if key in claim
-            },
+            "phase": _diagnostic_mapping(payload, ("session_id", "conversation_id", "launch_id", "phase", "generation_id")),
+            "binding": _diagnostic_mapping(
+                claim,
+                ("schema_version", "provider", "status", "session_id", "conversation_uuid", "launch_id", "run_id"),
+            ),
         }
         binding_matches = (
             claim.get("schema_version") == 2
@@ -2501,9 +2842,32 @@ def _wait_cursor_idle(
         ):
             return payload
         time.sleep(0.25)
+    try:
+        timeout_observation = _cursor_idle_timeout_observation(
+            state=state,
+            phase_path=path,
+            claim_path=claim_path,
+            hook_events_path=hook_events_path,
+            minimum_hook_event_bytes=minimum_hook_event_bytes,
+            expected_generation_id=expected_generation_id,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics never replace the timeout verdict
+        timeout_observation = {
+            "schema": "cursor_idle_timeout_observation_unavailable.v1",
+            "captured_at": _now(),
+            "provider": "cursor",
+            "session_id": _diagnostic_scalar(state.get("session_id")),
+            "error_type": type(exc).__name__,
+        }
+    diagnostic_written = False
+    if diagnostic_path is not None:
+        diagnostic_written = _write_best_effort_json(diagnostic_path, timeout_observation)
+    diagnostic_detail = f", diagnostic_path={diagnostic_path}" if diagnostic_written else ""
     raise RuntimeError(
         "Cursor native hooks did not publish an identity-matched idle phase "
-        f"(phase_path={path}, claim_path={claim_path}, identity={json.dumps(last_identity, sort_keys=True)})"
+        f"(phase_path={path}, claim_path={claim_path}{diagnostic_detail}, "
+        f"identity={json.dumps(last_identity, sort_keys=True)})"
     )
 
 
@@ -2749,6 +3113,7 @@ def _stop(
     *,
     force: bool,
     environment: dict[str, str] | None = None,
+    stop_phase: str = "initial",
 ) -> dict[str, Any]:
     pid = process.pid
     provider_pid = _provider_process_pid(spec, state)
@@ -2764,11 +3129,19 @@ def _stop(
         # reserve the terminate operation for the process-loss variant.
         if environment is None:
             raise RuntimeError("Cursor clean stop requires the qualification environment")
+        evidence_root = getattr(args, "evidence_root", None)
+        evidence_root = Path(evidence_root).resolve() if evidence_root else None
+        phase_label = stop_phase if stop_phase in {"initial", "final"} else "initial"
+        idle_diagnostic_path = Path(evidence_root) / f"cursor-idle-timeout-clean-stop-{phase_label}.json" if evidence_root else None
+        recovery_diagnostic_path = (
+            Path(evidence_root) / f"cursor-idle-timeout-clean-stop-{phase_label}-recovery.json" if evidence_root else None
+        )
         try:
             _wait_cursor_idle(
                 state,
                 environment,
                 timeout=min(float(getattr(args, "live_send_timeout_secs", 30)), 15.0),
+                **({"diagnostic_path": idle_diagnostic_path} if idle_diagnostic_path is not None else {}),
             )
             cursor_recovery = {"method": "cursor_native_idle", "tui_ready": True}
         except RuntimeError as idle_error:
@@ -2781,6 +3154,7 @@ def _stop(
                 environment,
                 process,
                 timeout=float(getattr(args, "live_send_timeout_secs", 30)),
+                **({"diagnostic_path": recovery_diagnostic_path} if recovery_diagnostic_path is not None else {}),
             )
             cursor_recovery["idle_wait_error"] = f"{type(idle_error).__name__}: {idle_error}"
         control_result = _control_send(spec, args, state, process, "/exit")
@@ -3114,7 +3488,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 root / "initial-bootstrap-send.json",
                 {"method": "provider_argv_bootstrap", "returncode": 0},
             )
-            _wait_cursor_idle(initial_state, environment)
+            _wait_cursor_idle(
+                initial_state,
+                environment,
+                diagnostic_path=root / "cursor-idle-timeout-initial.json",
+            )
             _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
@@ -3184,6 +3562,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             initial,
             force=args.variant == "process_loss",
             environment=environment,
+            stop_phase="initial",
         )
         if args.variant == "process_loss" and spec.provider == "opencode":
             transition["terminal_reconciliation"] = _reconcile_opencode_process_loss(args, initial_state, environment)
@@ -3280,6 +3659,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 label="resume-bootstrap",
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
                 marker=bootstrap_marker,
+                diagnostic_path=root / "cursor-idle-timeout-resume-bootstrap.json",
             )
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", bootstrap_ship_receipt)
             bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
@@ -3321,6 +3701,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 timeout=args.live_send_timeout_secs,
                 minimum_hook_event_bytes=bootstrap_hook_event_bytes,
                 expected_generation_id=bootstrap_hook_sequence.get("generation_id"),
+                diagnostic_path=root / "cursor-idle-timeout-resumed.json",
             )
         states.append(resumed_state)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
@@ -3408,6 +3789,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     minimum_hook_event_bytes=post_resume_hook_event_bytes,
                     expected_generation_id=(post_resume_hook_sequence.get("generation_id") if spec.provider == "cursor" else None),
                     marker=post_marker,
+                    diagnostic_path=root / "cursor-idle-timeout-post-resume.json",
                 )
                 if spec.provider == "cursor"
                 else shipper.flush("post-resume")
@@ -3449,7 +3831,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         }
         _write_json(root / "concurrent-resume-receipt.json", concurrent_receipt)
 
-        final_transition = _stop(spec, args, resumed_state, resumed, force=False, environment=environment)
+        final_transition = _stop(
+            spec,
+            args,
+            resumed_state,
+            resumed,
+            force=False,
+            environment=environment,
+            stop_phase="final",
+        )
         _write_json(root / "final-process-transition-receipt.json", final_transition)
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)

@@ -478,9 +478,15 @@ fn locate_session_transcript(session_dir: &Path) -> Option<PathBuf> {
             path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
         })
         .max_by_key(|path| {
-            std::fs::metadata(path)
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(std::time::UNIX_EPOCH)
+            (
+                std::fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH),
+                // Filesystems may report the same modification timestamp for
+                // adjacent writes. Pi prefixes filenames with its creation
+                // timestamp, so use the full path as a deterministic tie-break.
+                path.clone(),
+            )
         })
 }
 

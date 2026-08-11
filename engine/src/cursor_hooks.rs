@@ -215,7 +215,7 @@ pub fn lifecycle(event: &str) {
     }
     let _ = append_json_line(
         &event_path,
-        &json!({"event":event,"observed_at":now,"session_id":session_id,"conversation_id":conversation,"payload":payload}),
+        &json!({"event":event,"observed_at":now,"session_id":session_id,"conversation_id":conversation,"launch_id":launch_id,"payload":payload}),
     );
     if let Some(phase) = phase {
         let _ = write(
