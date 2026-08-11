@@ -30,7 +30,9 @@ from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
+from zerg.qa.provider_native_resume import _cursor_hook_event_observation
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
+from zerg.qa.provider_native_resume import _cursor_idle_timeout_observation
 from zerg.qa.provider_native_resume import _cursor_interrupt_to_idle
 from zerg.qa.provider_native_resume import _cursor_projection_diagnostics
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
@@ -961,6 +963,164 @@ def test_cursor_native_idle_can_require_the_completed_generation(tmp_path: Path)
         )["generation_id"]
         == "generation-new"
     )
+
+
+def test_cursor_idle_timeout_retains_redacted_lifecycle_observation(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
+    longhouse_home = tmp_path / "longhouse"
+    root = longhouse_home / "managed-local" / "cursor-helm"
+    phase = root / "session-1.phase.json"
+    claim = root / "binding-probes" / "session-1.json"
+    events = root / "hook-events" / "session-1.ndjson"
+    claim.parent.mkdir(parents=True)
+    events.parent.mkdir(parents=True)
+    claim.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+                "authorization": "do-not-retain",
+            }
+        ),
+        encoding="utf-8",
+    )
+    phase.write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "phase": "active",
+                "generation_id": "generation-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    events.write_text(
+        json.dumps(
+            {
+                "event": "beforeSubmitPrompt",
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "observed_at": "2026-08-11T16:00:00Z",
+                "payload": {"generation_id": "generation-1", "text": "secret prompt"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "event": "afterAgentResponse",
+                "session_id": "session-1",
+                "conversation_id": "other-conversation",
+                "launch_id": "launch-other",
+                "observed_at": "2026-08-11T16:00:01Z",
+                "payload": {"generation_id": "generation-other", "text": "other secret"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    diagnostic = tmp_path / "cursor-idle-timeout.json"
+
+    with pytest.raises(RuntimeError, match="diagnostic_path"):
+        _wait_cursor_idle(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            timeout=0.01,
+            diagnostic_path=diagnostic,
+        )
+
+    payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+    serialized = json.dumps(payload, sort_keys=True)
+    assert payload["schema"] == "cursor_idle_timeout_observation.v1"
+    assert payload["phase_file"]["phase"] == "active"
+    assert payload["hook_events"]["events"][0]["event"] == "beforeSubmitPrompt"
+    assert "secret prompt" not in serialized
+    assert "other secret" not in serialized
+    assert "do-not-retain" not in serialized
+    assert "text" in payload["hook_events"]["events"][0]["payload_keys"]
+    assert payload["hook_events"]["events"][0]["observed_at"] == "2026-08-11T16:00:00Z"
+    assert len(payload["hook_events"]["events"]) == 1
+    assert payload["hook_events"]["mismatch_event_count"] == 1
+    assert payload["hook_events"]["mismatch_event_names"] == ["afterAgentResponse"]
+    assert "payload_sha256" not in serialized
+    assert "tail_sha256" not in serialized
+
+
+def test_cursor_timeout_observation_bounds_provider_state_and_identity(tmp_path: Path) -> None:
+    longhouse_home = tmp_path / "longhouse"
+    root = longhouse_home / "managed-local" / "cursor-helm"
+    (root / "binding-probes").mkdir(parents=True)
+    (root / "hook-events").mkdir(parents=True)
+    phase = root / "session-1.phase.json"
+    claim = root / "binding-probes" / "session-1.json"
+    phase.write_text(json.dumps({"phase": "active", "padding": "x" * 70000}), encoding="utf-8")
+    claim.write_text(json.dumps({"provider": "cursor", "padding": "x" * 70000}), encoding="utf-8")
+
+    payload = _cursor_idle_timeout_observation(
+        state={"session_id": "secret value", "provider_session_id": "conversation-1"},
+        phase_path=phase,
+        claim_path=claim,
+        hook_events_path=root / "hook-events" / "session-1.ndjson",
+        minimum_hook_event_bytes=0,
+        expected_generation_id="generation-1",
+        timeout=1.0,
+    )
+
+    serialized = json.dumps(payload, sort_keys=True)
+    assert payload["phase_file"] == {}
+    assert payload["binding"] == {}
+    assert "secret value" not in serialized
+    assert "x" * 1000 not in serialized
+
+
+def test_cursor_hook_observation_bounds_unicode_and_starts_at_baseline(tmp_path: Path) -> None:
+    path = tmp_path / "hooks.ndjson"
+    before = json.dumps(
+        {
+            "event": "beforeSubmitPrompt",
+            "session_id": "session-1",
+            "conversation_id": "cursor-thread-1",
+            "payload": {"generation_id": "old"},
+        }
+    ).encode()
+    after = b"\n".join(
+        json.dumps(
+                {
+                    "event": "afterAgentResponse",
+                    "session_id": "session-1",
+                    "conversation_id": "cursor-thread-1",
+                    "launch_id": "launch-1",
+                    "observed_at": "2026-08-11T16:00:02Z",
+                "payload": {"generation_id": f"new-{index}", "text": "x" * 80},
+            }
+        ).encode()
+        for index in range(1000)
+    )
+    path.write_bytes(before + b"\n" + after + b"\n\xff\n")
+
+    payload = _cursor_hook_event_observation(
+        path,
+        state={"session_id": "session-1", "provider_session_id": "cursor-thread-1"},
+        minimum_bytes=len(before) + 1,
+        expected_launch_id="launch-1",
+        expected_generation_id="new-999",
+    )
+
+    assert payload["minimum_bytes"] == len(before) + 1
+    assert payload["truncated"] is True
+    assert payload["size_bytes"] == path.stat().st_size
+    assert payload["undecodable_lines"] == 1
+    assert payload["events"]
+    assert all(event["generation_id"].startswith("new-") for event in payload["events"])
+    assert payload["events"][0]["observed_at"] == "2026-08-11T16:00:02Z"
+    assert "x" * 80 not in json.dumps(payload)
 
 
 def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
@@ -2104,6 +2264,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
 def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     args.live_send_timeout_secs = 17
+    args.evidence_root = tmp_path / "evidence"
     calls: list[tuple[str, object]] = []
 
     class FakeProviderProcess:
@@ -2132,7 +2293,7 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
     monkeypatch.setattr(
         provider_native_resume,
         "_cursor_interrupt_to_idle",
-        lambda *_args, **_kwargs: calls.append(("interrupt", {})) or {"method": "cursor_ctrl_c_recovery"},
+        lambda *_args, **kwargs: calls.append(("interrupt", kwargs)) or {"method": "cursor_ctrl_c_recovery"},
     )
     monkeypatch.setattr(
         provider_native_resume,
@@ -2155,7 +2316,35 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
 
     assert receipt["clean"] is True
     assert receipt["cursor_recovery"]["method"] == "cursor_ctrl_c_recovery"
-    assert calls == [("idle", {"timeout": 15.0}), ("interrupt", {}), ("send", "/exit")]
+    assert calls[0] == (
+        "idle",
+        {
+            "timeout": 15.0,
+            "diagnostic_path": args.evidence_root / "cursor-idle-timeout-clean-stop-initial.json",
+        },
+    )
+    assert calls[1] == (
+            "interrupt",
+            {
+                "timeout": 17.0,
+                "diagnostic_path": args.evidence_root / "cursor-idle-timeout-clean-stop-initial-recovery.json",
+            },
+    )
+    assert calls[0][1]["diagnostic_path"] != calls[1][1]["diagnostic_path"]
+    assert calls[2] == ("send", "/exit")
+
+    provider_native_resume._stop(
+        SPECS["cursor"],
+        args,
+        {"session_id": "session-1", "cursor_pid": 202},
+        FakeProviderProcess(),  # type: ignore[arg-type]
+        force=False,
+        environment={"LONGHOUSE_HOME": str(tmp_path / "home")},
+        stop_phase="final",
+    )
+    assert calls[3][1]["diagnostic_path"] == args.evidence_root / "cursor-idle-timeout-clean-stop-final.json"
+    assert calls[4][1]["diagnostic_path"] == args.evidence_root / "cursor-idle-timeout-clean-stop-final-recovery.json"
+    assert calls[0][1]["diagnostic_path"] != calls[3][1]["diagnostic_path"]
 
 
 def test_cursor_forced_stop_keeps_short_shutdown_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2305,6 +2494,15 @@ def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
                         "event": "stop",
                         "session_id": "session-1",
                         "conversation_id": "conversation-1",
+                        "launch_id": "launch-other",
+                        "padding": "x" * 70000,
+                        "payload": {"generation_id": "generation-1", "status": "error"},
+                    },
+                    {
+                        "event": "stop",
+                        "session_id": "session-1",
+                        "conversation_id": "conversation-1",
+                        "launch_id": "launch-1",
                         "payload": {"generation_id": "generation-1", "status": "error"},
                     }
                 ]
@@ -2314,6 +2512,7 @@ def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
                             "event": "afterAgentResponse",
                             "session_id": "session-1",
                             "conversation_id": "conversation-1",
+                            "launch_id": "launch-1",
                             "payload": {"generation_id": "generation-1", "text": "late"},
                         }
                     )
@@ -2330,6 +2529,68 @@ def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
         assert receipt["method"] == "cursor_ctrl_c_recovery"
         assert receipt["observed_events"] == ["stop"]
     assert process.sent == ["\x03"]
+
+
+def test_cursor_interrupt_recovery_retains_stop_hook_timeout_diagnostic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    root = home / "managed-local" / "cursor-helm"
+    (root / "binding-probes").mkdir(parents=True)
+    (root / "hook-events").mkdir(parents=True)
+    state = {"session_id": "session-1", "provider_session_id": "conversation-1", "run_id": "run-1"}
+    (root / "binding-probes" / "session-1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "conversation-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "session-1.phase.json").write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "conversation-1",
+                "launch_id": "launch-1",
+                "phase": "active",
+                "generation_id": "generation-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+
+    class FakeProcess:
+        recording = tmp_path / "terminal"
+        sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+        def drain(self) -> bytes:
+            return b""
+
+    diagnostic = tmp_path / "cursor-clean-stop-recovery.json"
+    with pytest.raises(RuntimeError, match="diagnostic_path"):
+        _cursor_interrupt_to_idle(
+            state,
+            {"LONGHOUSE_HOME": str(home)},
+            FakeProcess(),  # type: ignore[arg-type]
+            timeout=0.01,
+            diagnostic_path=diagnostic,
+        )
+
+    payload = json.loads(
+        (tmp_path / "cursor-clean-stop-recovery-stop-hook-timeout.json").read_text(encoding="utf-8")
+    )
+    assert payload["schema"] == "cursor_stop_timeout_observation.v1"
+    assert payload["stop"]["stop_hook_observed"] is False
+    assert payload["phase_file"]["generation_id"] == "generation-1"
 
 
 def test_cursor_interrupt_recovery_records_late_normal_completion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2388,6 +2649,7 @@ def test_cursor_interrupt_recovery_records_late_normal_completion(tmp_path: Path
                             "event": "stop",
                             "session_id": "session-1",
                             "conversation_id": "conversation-1",
+                            "launch_id": "launch-1",
                             "payload": {"generation_id": "generation-1", "status": "completed"},
                         }
                     )

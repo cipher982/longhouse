@@ -487,6 +487,7 @@ fn concurrent_lifecycle_hooks_append_complete_ndjson_records() {
         .map(|row| row["payload"]["generation_id"].as_str().unwrap())
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(generation_ids.len(), 32);
+    assert!(rows.iter().all(|row| row["launch_id"] == "launch-id"));
 }
 
 #[test]
