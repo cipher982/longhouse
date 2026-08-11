@@ -276,15 +276,28 @@ class TranscriptShipper:
         transcript content into the proof bundle.
         """
 
-        payload = _cursor_projection_diagnostics(
-            environment=self.engine_environment,
-            state=state,
-            marker=marker,
-            engine_db_path=self.db_path,
-            phase=label,
-        )
         path = self.evidence_root / f"cursor-projection-diagnostics-{label}.json"
-        _write_json(path, payload)
+        try:
+            payload = _cursor_projection_diagnostics(
+                environment=self.engine_environment,
+                state=state,
+                marker=marker,
+                engine_db_path=self.db_path,
+                phase=label,
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics never own the verdict
+            payload = {
+                "schema": "cursor_projection_diagnostics_unavailable.v1",
+                "phase": label,
+                "captured_at": _now(),
+                "provider": "cursor",
+                "session_id": state.get("session_id"),
+                "provider_session_id": state.get("provider_session_id"),
+                "marker": marker,
+                "status": "unavailable",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        _write_best_effort_json(path, payload)
         return str(path)
 
     def _terminate_daemon(self) -> str | None:
@@ -580,6 +593,16 @@ def _write_json(path: Path, payload: object) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def _write_best_effort_json(path: Path, payload: object) -> bool:
+    """Write diagnostic evidence without taking ownership of the verdict."""
+
+    try:
+        _write_json(path, payload)
+    except Exception:  # noqa: BLE001 - diagnostic persistence is non-authoritative
+        return False
+    return True
 
 
 def _sha256(path: Path) -> str:
@@ -2295,6 +2318,15 @@ def _cursor_projection_diagnostics(
                     continue
             if path.name == "store.db":
                 files.append(_cursor_sqlite_observation(path, marker=marker))
+                # SQLite may leave the newest committed pages in an active
+                # WAL. Retain a metadata-only observation of that sidecar so
+                # a missing marker in the main file is not misread as proof
+                # that Cursor never persisted it.
+                wal_path = path.with_name(f"{path.name}-wal")
+                if wal_path.is_file():
+                    wal_observation = _cursor_file_observation(wal_path, marker=marker)
+                    wal_observation["kind"] = "store_db_wal"
+                    files.append(wal_observation)
             else:
                 observation = _cursor_file_observation(path, marker=marker)
                 observation["kind"] = "agent_transcript"
@@ -2998,6 +3030,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
+            # Keep the provider-owned store and engine projection boundary
+            # beside the strict seed correlation. This is diagnostic only; a
+            # missing snapshot must never turn a failed provider turn into a
+            # pass or mask its causal error.
+            shipper.capture_cursor_projection_diagnostics(
+                initial_state,
+                marker=seed_marker,
+                label="initial-seed-before-send",
+            )
             initial_send = _control_send(
                 spec,
                 args,
@@ -3016,6 +3057,12 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             )
         _write_json(root / "initial-seed-send.json", initial_send)
         _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
+        if spec.provider == "cursor":
+            shipper.capture_cursor_projection_diagnostics(
+                initial_state,
+                marker=seed_marker,
+                label="initial-seed-after-flush",
+            )
         initial_tail, initial_response_correlation = _wait_assistant_response_after_marker(
             args.api_url,
             args.agents_token,
@@ -3025,13 +3072,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             require_assistant_marker=spec.provider != "claude",
             timeout=args.live_send_timeout_secs,
         )
+        # Write this before applying the strict predicate so failed cells
+        # retain the exact observation that explains the rejection.
+        _write_best_effort_json(root / "initial-response-correlation.json", initial_response_correlation)
         if not (
             initial_response_correlation["marker_observed_in_transcript"]
             and initial_response_correlation["new_assistant_events"] > 0
             and (spec.provider == "claude" or initial_response_correlation["marker_observed_in_assistant"])
         ):
             raise RuntimeError(f"provider transcript did not correlate initial {provider} marker {seed_marker}")
-        _write_json(root / "initial-response-correlation.json", initial_response_correlation)
         # The correlated assistant response is the completed-turn oracle for
         # the initial marker. Cursor's hook may publish its next idle phase
         # late (or omit that redundant transition while the TUI is redrawing),

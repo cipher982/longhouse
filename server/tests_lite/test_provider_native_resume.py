@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import signal
+import sqlite3
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from zerg.qa.codex_native_resume import _validate_resume_intent
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
 from zerg.qa.provider_native_resume import SPECS
+from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
@@ -30,6 +32,7 @@ from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
 from zerg.qa.provider_native_resume import _cursor_interrupt_to_idle
+from zerg.qa.provider_native_resume import _cursor_projection_diagnostics
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _finalize_result_payload
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
@@ -53,6 +56,7 @@ from zerg.qa.provider_native_resume import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_session_tail
 from zerg.qa.provider_native_resume import _wait_state
+from zerg.qa.provider_native_resume import _write_best_effort_json
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -882,6 +886,77 @@ def test_cursor_projection_diagnostics_capture_marker_and_binding_state(tmp_path
     assert payload["files"][0]["kind"] == "agent_transcript"
     assert payload["files"][0]["marker_observed"] is True
     assert payload["files"][0]["marker_count"] == 1
+
+
+def test_cursor_projection_diagnostics_retains_active_wal_marker(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = home / ".cursor" / "projects" / "conversation-1" / "store.db"
+    store.parent.mkdir(parents=True)
+
+    connection = sqlite3.connect(store)
+    try:
+        connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        connection.execute("CREATE TABLE blobs (id TEXT PRIMARY KEY, value BLOB)")
+        connection.execute("INSERT INTO meta(key, value) VALUES ('0', 'conversation-1')")
+        connection.commit()
+    finally:
+        connection.close()
+    wal = store.with_name("store.db-wal")
+    wal.write_bytes(b"uncheckpointed LH_CURSOR_SEED_wal-marker")
+
+    payload = _cursor_projection_diagnostics(
+        environment={
+            "HOME": str(home),
+            "CURSOR_HOME": str(home / ".cursor"),
+            "LONGHOUSE_HOME": str(home / ".longhouse"),
+        },
+        state={"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_SEED_wal-marker",
+        engine_db_path=tmp_path / "missing.db",
+        phase="initial-seed-after-flush",
+    )
+
+    wal_observation = next(item for item in payload["files"] if item["kind"] == "store_db_wal")
+    assert wal_observation["marker_observed"] is True
+
+
+def test_cursor_projection_diagnostics_are_non_authoritative_on_capture_or_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    shipper = object.__new__(TranscriptShipper)
+    shipper.evidence_root = evidence
+    shipper.engine_environment = {}
+    shipper.db_path = tmp_path / "engine.db"
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_cursor_projection_diagnostics",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("read race")),
+    )
+
+    path = shipper.capture_cursor_projection_diagnostics(
+        {"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_SEED_test",
+        label="initial-seed-before-send",
+    )
+
+    payload = json.loads(Path(path).read_text())
+    assert payload["schema"] == "cursor_projection_diagnostics_unavailable.v1"
+    assert payload["status"] == "unavailable"
+
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    assert shipper.capture_cursor_projection_diagnostics(
+        {"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_SEED_test",
+        label="initial-seed-after-flush",
+    ).endswith("initial-seed-after-flush.json")
+    assert _write_best_effort_json(evidence / "correlation.json", {"ok": True}) is False
 
 
 @pytest.mark.parametrize(
@@ -2473,6 +2548,11 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
 
     assert result["status"] == "fail"
     assert result["error"].startswith("RuntimeError: provider transcript did not correlate initial opencode marker")
+    initial_correlation = json.loads((args.evidence_root / "initial-response-correlation.json").read_text())
+    assert initial_correlation["marker_observed_in_transcript"] is False
+    assert initial_correlation["new_assistant_events"] == 0
+    assert not (args.evidence_root / "cursor-projection-diagnostics-initial-seed-before-send.json").exists()
+    assert not (args.evidence_root / "cursor-projection-diagnostics-initial-seed-after-flush.json").exists()
     assert cleanup_calls == 2
     assert shipper is not None
     assert shipper.stop_calls == 2
