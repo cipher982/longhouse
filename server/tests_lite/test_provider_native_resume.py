@@ -27,6 +27,7 @@ from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
+from zerg.qa.provider_native_resume import _cursor_interrupt_to_idle
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
@@ -1768,7 +1769,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
     )
 
     assert receipt["clean"] is True
-    assert calls == [("idle", {"timeout": 5.0}), ("send", "/exit")]
+    assert calls == [("idle", {"timeout": 15.0}), ("send", "/exit")]
 
 
 def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1825,7 +1826,196 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
 
     assert receipt["clean"] is True
     assert receipt["cursor_recovery"]["method"] == "cursor_ctrl_c_recovery"
-    assert calls == [("idle", {"timeout": 5.0}), ("interrupt", {}), ("send", "/exit")]
+    assert calls == [("idle", {"timeout": 15.0}), ("interrupt", {}), ("send", "/exit")]
+
+
+def test_cursor_interrupt_recovery_rejects_stale_conversation_before_signal(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    root = home / "managed-local" / "cursor-helm"
+    (root / "binding-probes").mkdir(parents=True)
+    (root / "hook-events").mkdir(parents=True)
+    state = {"session_id": "session-1", "provider_session_id": "conversation-1", "run_id": "run-1"}
+    (root / "binding-probes" / "session-1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "conversation-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "session-1.phase.json").write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "stale-conversation",
+                "launch_id": "launch-1",
+                "phase": "active",
+                "generation_id": "generation-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeProcess:
+        recording = tmp_path / "terminal"
+        sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    process = FakeProcess()
+    with pytest.raises(RuntimeError, match="identity-matched generation"):
+        _cursor_interrupt_to_idle(state, {"LONGHOUSE_HOME": str(home)}, process)  # type: ignore[arg-type]
+    assert process.sent == []
+
+
+def test_cursor_interrupt_recovery_accepts_identity_matched_error_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    root = home / "managed-local" / "cursor-helm"
+    (root / "binding-probes").mkdir(parents=True)
+    events_path = root / "hook-events" / "session-1.ndjson"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    state = {"session_id": "session-1", "provider_session_id": "conversation-1", "run_id": "run-1"}
+    (root / "binding-probes" / "session-1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "conversation-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "session-1.phase.json").write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "conversation-1",
+                "launch_id": "launch-1",
+                "phase": "active",
+                "generation_id": "generation-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_wait_cursor_idle",
+        lambda *_args, **_kwargs: {"phase": "idle", "generation_id": "generation-1"},
+    )
+    monkeypatch.setattr(provider_native_resume, "_wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
+
+    class FakeProcess:
+        recording = tmp_path / "terminal"
+        sent: list[str] = []
+        emitted = False
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+        def drain(self) -> bytes:
+            if not self.emitted:
+                events_path.write_text(
+                    json.dumps(
+                        {
+                            "event": "stop",
+                            "session_id": "session-1",
+                            "conversation_id": "conversation-1",
+                            "payload": {"generation_id": "generation-1", "status": "error"},
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self.emitted = True
+            return b""
+
+    process = FakeProcess()
+    receipt = _cursor_interrupt_to_idle(state, {"LONGHOUSE_HOME": str(home)}, process)  # type: ignore[arg-type]
+    assert receipt["method"] == "cursor_ctrl_c_recovery"
+    assert receipt["observed_events"] == ["stop"]
+    assert process.sent == ["\x03"]
+
+
+def test_cursor_interrupt_recovery_records_late_normal_completion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    root = home / "managed-local" / "cursor-helm"
+    (root / "binding-probes").mkdir(parents=True)
+    events_path = root / "hook-events" / "session-1.ndjson"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    state = {"session_id": "session-1", "provider_session_id": "conversation-1", "run_id": "run-1"}
+    (root / "binding-probes" / "session-1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "session-1",
+                "conversation_uuid": "conversation-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "session-1.phase.json").write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "conversation_id": "conversation-1",
+                "launch_id": "launch-1",
+                "phase": "active",
+                "generation_id": "generation-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_wait_cursor_idle",
+        lambda *_args, **_kwargs: {"phase": "idle", "generation_id": "generation-1"},
+    )
+    monkeypatch.setattr(provider_native_resume, "_wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
+
+    class FakeProcess:
+        recording = tmp_path / "terminal"
+        sent: list[str] = []
+        emitted = False
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+        def drain(self) -> bytes:
+            if not self.emitted:
+                events_path.write_text(
+                    json.dumps(
+                        {
+                            "event": "stop",
+                            "session_id": "session-1",
+                            "conversation_id": "conversation-1",
+                            "payload": {"generation_id": "generation-1", "status": "completed"},
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self.emitted = True
+            return b""
+
+    process = FakeProcess()
+    receipt = _cursor_interrupt_to_idle(state, {"LONGHOUSE_HOME": str(home)}, process)  # type: ignore[arg-type]
+    assert receipt["method"] == "cursor_native_idle_late"
+    assert receipt["stop_hook"]["payload"]["status"] == "completed"
 
 
 def test_claude_initial_seed_uses_managed_channel_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

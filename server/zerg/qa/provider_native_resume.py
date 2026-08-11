@@ -1805,15 +1805,9 @@ def _cursor_interrupt_to_idle(
     phase_path = root / f"{state['session_id']}.phase.json"
     claim_path = root / "binding-probes" / f"{state['session_id']}.json"
     try:
-        phase = _read_json(phase_path)
-    except (OSError, json.JSONDecodeError):
-        phase = {}
-    expected_generation_id = str(phase.get("generation_id") or "").strip()
-    if phase.get("session_id") != state.get("session_id") or phase.get("phase") != "active" or not expected_generation_id:
-        raise RuntimeError(
-            "Cursor interrupt recovery requires the identity-matched active generation "
-            f"(phase_path={phase_path}, phase={json.dumps(phase, sort_keys=True)})"
-        )
+        start_bytes = events_path.stat().st_size
+    except OSError:
+        start_bytes = 0
     try:
         claim = _read_json(claim_path)
     except (OSError, json.JSONDecodeError):
@@ -1832,14 +1826,90 @@ def _cursor_interrupt_to_idle(
             f"(claim_path={claim_path}, binding={json.dumps(claim, sort_keys=True)})"
         )
     try:
-        start_bytes = events_path.stat().st_size
-    except OSError:
-        start_bytes = 0
+        phase = _read_json(phase_path)
+    except (OSError, json.JSONDecodeError):
+        phase = {}
+    expected_generation_id = str(phase.get("generation_id") or "").strip()
+    phase_identity_matches = (
+        phase.get("session_id") == state.get("session_id")
+        and phase.get("conversation_id") == state.get("provider_session_id")
+        and phase.get("launch_id") == claim.get("launch_id")
+        and bool(expected_generation_id)
+    )
+    if not phase_identity_matches:
+        raise RuntimeError(
+            "Cursor interrupt recovery requires the identity-matched generation "
+            f"(phase_path={phase_path}, phase={json.dumps(phase, sort_keys=True)})"
+        )
+    if phase.get("phase") == "idle":
+        idle_phase = _wait_cursor_idle(
+            state,
+            environment,
+            timeout=min(timeout, 10.0),
+            expected_generation_id=expected_generation_id,
+        )
+        _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
+        return {
+            "method": "cursor_native_idle_late",
+            "start_bytes": start_bytes,
+            "end_bytes": events_path.stat().st_size if events_path.exists() else start_bytes,
+            "generation_id": expected_generation_id,
+            "idle_phase": idle_phase,
+            "observed_events": [],
+            "tui_ready": True,
+        }
+    if phase.get("phase") != "active":
+        raise RuntimeError(
+            "Cursor interrupt recovery requires an active generation "
+            f"(phase_path={phase_path}, phase={json.dumps(phase, sort_keys=True)})"
+        )
+    # Close the snapshot-to-signal race as far as the provider-owned files
+    # allow. If the generation completed between the first read and this
+    # final check, preserve the late idle result instead of interrupting a
+    # replacement generation.
+    try:
+        latest_phase = _read_json(phase_path)
+    except (OSError, json.JSONDecodeError):
+        latest_phase = {}
+    if (
+        latest_phase.get("session_id") != state.get("session_id")
+        or latest_phase.get("conversation_id") != state.get("provider_session_id")
+        or latest_phase.get("launch_id") != claim.get("launch_id")
+        or latest_phase.get("generation_id") != expected_generation_id
+    ):
+        raise RuntimeError(
+            "Cursor active generation changed before interrupt recovery "
+            f"(phase_path={phase_path}, phase={json.dumps(latest_phase, sort_keys=True)})"
+        )
+    if latest_phase.get("phase") == "idle":
+        idle_phase = _wait_cursor_idle(
+            state,
+            environment,
+            timeout=min(timeout, 10.0),
+            minimum_hook_event_bytes=start_bytes,
+            expected_generation_id=expected_generation_id,
+        )
+        _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
+        return {
+            "method": "cursor_native_idle_late",
+            "start_bytes": start_bytes,
+            "end_bytes": events_path.stat().st_size if events_path.exists() else start_bytes,
+            "generation_id": expected_generation_id,
+            "idle_phase": idle_phase,
+            "observed_events": [],
+            "tui_ready": True,
+        }
+    if latest_phase.get("phase") != "active":
+        raise RuntimeError(
+            "Cursor active generation ended before interrupt recovery "
+            f"(phase_path={phase_path}, phase={json.dumps(latest_phase, sort_keys=True)})"
+        )
     process.send("\x03")
     deadline = time.monotonic() + timeout
     stop_event: dict[str, Any] | None = None
     leaked_response = False
     observed_events: list[str] = []
+    seen_event_keys: set[str] = set()
     while time.monotonic() < deadline:
         process.drain()
         try:
@@ -1862,6 +1932,10 @@ def _cursor_interrupt_to_idle(
             payload = event.get("payload")
             if not isinstance(payload, dict) or payload.get("generation_id") != expected_generation_id:
                 continue
+            event_key = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            if event_key in seen_event_keys:
+                continue
+            seen_event_keys.add(event_key)
             name = str(event.get("event") or "")
             if name:
                 observed_events.append(name)
@@ -1870,17 +1944,46 @@ def _cursor_interrupt_to_idle(
             if name == "stop":
                 status = str(payload.get("status") or "").strip().lower()
                 is_interrupt = payload.get("is_interrupt") is True
-                if status in {"aborted", "cancelled"} or is_interrupt:
+                if status in {"aborted", "cancelled", "error"} or is_interrupt:
                     stop_event = event
                     break
-                raise RuntimeError(
-                    "Cursor interrupt recovery observed a non-interrupt stop "
-                    f"(generation_id={expected_generation_id}, payload={json.dumps(payload, sort_keys=True)})"
-                )
+                # A late normal completion is safe only if the provider now
+                # proves the same generation idle. Otherwise fail closed.
+                try:
+                    idle_phase = _wait_cursor_idle(
+                        state,
+                        environment,
+                        timeout=2.0,
+                        minimum_hook_event_bytes=start_bytes,
+                        expected_generation_id=expected_generation_id,
+                    )
+                except RuntimeError:
+                    raise RuntimeError(
+                        "Cursor interrupt recovery observed a non-interrupt stop "
+                        f"(generation_id={expected_generation_id}, payload={json.dumps(payload, sort_keys=True)})"
+                    ) from None
+                _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
+                return {
+                    "method": "cursor_native_idle_late",
+                    "start_bytes": start_bytes,
+                    "end_bytes": events_path.stat().st_size if events_path.exists() else start_bytes,
+                    "generation_id": expected_generation_id,
+                    "stop_hook": event,
+                    "idle_phase": idle_phase,
+                    "observed_events": observed_events,
+                    "tui_ready": True,
+                }
         if stop_event is not None:
             break
         time.sleep(0.1)
-    if leaked_response:
+    if (
+        leaked_response
+        and stop_event is not None
+        and (
+            str((stop_event.get("payload") or {}).get("status") or "").strip().lower() in {"aborted", "cancelled", "error"}
+            or (stop_event.get("payload") or {}).get("is_interrupt") is True
+        )
+    ):
         raise RuntimeError(
             "Cursor interrupt recovery allowed the stranded generation to publish another response "
             f"(generation_id={expected_generation_id})"
@@ -2431,7 +2534,7 @@ def _stop(
             _wait_cursor_idle(
                 state,
                 environment,
-                timeout=min(float(getattr(args, "live_send_timeout_secs", 30)), 5.0),
+                timeout=min(float(getattr(args, "live_send_timeout_secs", 30)), 15.0),
             )
             cursor_recovery = {"method": "cursor_native_idle", "tui_ready": True}
         except RuntimeError as idle_error:
@@ -3087,7 +3190,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         }
         _write_json(root / "concurrent-resume-receipt.json", concurrent_receipt)
 
-        _stop(spec, args, resumed_state, resumed, force=False, environment=environment)
+        final_transition = _stop(spec, args, resumed_state, resumed, force=False, environment=environment)
+        _write_json(root / "final-process-transition-receipt.json", final_transition)
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
