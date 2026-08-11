@@ -47,7 +47,10 @@ RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 _EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|access_key|authorization)$")
 _DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
 _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
-_TRANSCRIPT_SHIP_MAX_ATTEMPTS = 2
+# A daemon shutdown can expose repair-lane backpressure immediately before a
+# quarantined Cursor epoch becomes eligible for lineage reconciliation. Keep
+# one bounded retry for each typed state, with no retry for arbitrary failures.
+_TRANSCRIPT_SHIP_MAX_ATTEMPTS = 3
 _STORAGE_LANE_BUSY_MAX_SLEEP_SECS = 10.0
 _STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 repair lane busy; retry after (?P<milliseconds>\d+)ms")
 
@@ -2211,7 +2214,13 @@ def _cursor_sqlite_observation(path: Path, *, marker: str) -> dict[str, Any]:
 
 
 def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
-    """Summarize engine state tables without copying transcript or credentials."""
+    """Summarize engine state tables without copying transcript or credentials.
+
+    Counts alone cannot distinguish a host-side source-epoch loss from a local
+    lineage decision. Keep bounded identity and position rows as diagnostic
+    evidence so a retained Cursor failure can be reconstructed without storing
+    the compressed request body or transcript payload.
+    """
 
     if not path.exists():
         return {"path": str(path), "present": False}
@@ -2220,6 +2229,7 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
         try:
             tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             table_counts: dict[str, int] = {}
+            table_rows: dict[str, list[dict[str, Any]]] = {}
             for table in (
                 "source_epoch_registry",
                 "source_epoch_lane_state",
@@ -2229,6 +2239,53 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
             ):
                 if table in tables:
                     table_counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            row_specs = {
+                "source_epoch_registry": (
+                    "source_epoch",
+                    "provider",
+                    "opaque_source_id",
+                    "predecessor_epoch",
+                    "start_reason",
+                    "max_observed_len",
+                    "source_revision",
+                    "bound_session_id",
+                    "provider_session_id",
+                    "created_at",
+                    "updated_at",
+                    "ended_at",
+                    "end_reason",
+                ),
+                "source_epoch_lane_state": ("source_epoch", "lane", "last_position", "updated_at"),
+                "pending_source_envelope": (
+                    "source_epoch",
+                    "source_path",
+                    "range_start",
+                    "range_end",
+                    "envelope_id",
+                    "raw_bytes",
+                    "event_count",
+                    "has_reply_evidence",
+                    "has_more",
+                    "created_at",
+                    "attempt_count",
+                    "last_attempt_at",
+                    "blocked_at",
+                    "block_kind",
+                    "block_detail",
+                ),
+                "cursor_store_raw_record": ("source_epoch", "source_position", "record_hash"),
+                "cursor_store_capture_cursor": ("source_epoch", "last_blob_id", "updated_at"),
+            }
+            for table, requested_columns in row_specs.items():
+                if table not in tables:
+                    continue
+                available = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+                columns = [column for column in requested_columns if column in available]
+                if not columns:
+                    continue
+                select_columns = ", ".join(columns)
+                rows = connection.execute(f"SELECT {select_columns} FROM {table} ORDER BY rowid DESC LIMIT 128").fetchall()
+                table_rows[table] = [dict(zip(columns, row, strict=True)) for row in rows]
         finally:
             connection.close()
     except sqlite3.Error as exc:
@@ -2238,6 +2295,7 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
         "present": True,
         "sqlite_tables": sorted(tables),
         "sqlite_counts": table_counts,
+        "table_rows": table_rows,
     }
 
 
@@ -2332,7 +2390,7 @@ def _cursor_projection_diagnostics(
                 observation["kind"] = "agent_transcript"
                 files.append(observation)
     return {
-        "schema": "cursor_projection_diagnostics.v1",
+        "schema": "cursor_projection_diagnostics.v2",
         "phase": phase,
         "captured_at": _now(),
         "provider": "cursor",
