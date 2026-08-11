@@ -2601,7 +2601,14 @@ def _stop(
             time.sleep(0.2)
             process.send("\x04")
         method = "claude_terminal_eof"
-    exit_code = process.wait(30 if spec.provider == "opencode" else 10)
+    # Cursor's native `/exit` is acknowledged before the outer Helm process
+    # has necessarily finished its shutdown.  Ten seconds is short enough to
+    # turn a slow but graceful exit into a SIGTERM fallback, which is
+    # deliberately unacceptable evidence for the clean-exit assurance cell.
+    # Keep the wait bounded, but give Cursor the same generous window used by
+    # the other interactive wrapper with a known asynchronous teardown.
+    exit_wait_timeout = 30 if spec.provider == "opencode" or (spec.provider == "cursor" and not force) else 10
+    exit_code = process.wait(exit_wait_timeout)
     fallback_signal: str | None = None
     if exit_code is None:
         fallback_signal = "SIGKILL" if force else "SIGTERM"

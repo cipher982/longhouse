@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -1726,6 +1727,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
     args = _args(tmp_path)
     args.live_send_timeout_secs = 17
     calls: list[tuple[str, object]] = []
+    wait_timeouts: list[float] = []
 
     class FakeProviderProcess:
         pid = 101
@@ -1739,6 +1741,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
 
         @staticmethod
         def wait(_timeout: float) -> int:
+            wait_timeouts.append(_timeout)
             return 0
 
         @staticmethod
@@ -1771,6 +1774,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
 
     assert receipt["clean"] is True
     assert calls == [("idle", {"timeout": 15.0}), ("send", "/exit")]
+    assert wait_timeouts == [30]
 
 
 def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1828,6 +1832,47 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
     assert receipt["clean"] is True
     assert receipt["cursor_recovery"]["method"] == "cursor_ctrl_c_recovery"
     assert calls == [("idle", {"timeout": 15.0}), ("interrupt", {}), ("send", "/exit")]
+
+
+def test_cursor_forced_stop_keeps_short_shutdown_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = _args(tmp_path)
+    wait_timeouts: list[float] = []
+    kill_signals: list[int] = []
+
+    class FakeProviderProcess:
+        pid = 101
+
+        class Process:
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        process = Process()
+
+        @staticmethod
+        def wait(timeout: float) -> int:
+            wait_timeouts.append(timeout)
+            return 0
+
+        @staticmethod
+        def kill_group(signal_number: int) -> None:
+            kill_signals.append(signal_number)
+
+    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+
+    receipt = provider_native_resume._stop(
+        SPECS["cursor"],
+        args,
+        {"session_id": "session-1", "cursor_pid": 202},
+        FakeProviderProcess(),  # type: ignore[arg-type]
+        force=True,
+    )
+
+    assert wait_timeouts == [10]
+    assert kill_signals == [signal.SIGKILL]
+    assert receipt["clean"] is False
 
 
 def test_cursor_interrupt_recovery_rejects_stale_conversation_before_signal(tmp_path: Path) -> None:
