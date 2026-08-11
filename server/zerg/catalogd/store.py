@@ -5686,6 +5686,7 @@ class CatalogStore:
                         return _source_epoch_conflict(
                             connection,
                             reason="predecessor_not_open_for_this_identity",
+                            predecessor_exists=predecessor_row is not None,
                             expected_predecessor=expected_predecessor,
                             predecessor_state=(predecessor_row["state"] if predecessor_row is not None else None),
                         )

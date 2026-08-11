@@ -397,6 +397,153 @@ def test_transcript_shipper_retries_storage_lane_backpressure_once(
     assert receipt["events_shipped"] == 1
 
 
+def test_transcript_shipper_retries_mixed_backpressure_then_lineage_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="Error: storage-v2 repair lane busy; retry after 5000ms",
+            ),
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="source_epoch_conflict_unresolved: predecessor_not_open_for_this_identity",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"protocol": "storage-v2", "events_shipped": 1}),
+                stderr="",
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        "zerg.qa.provider_native_resume.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = provider_native_resume.TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("resume-bootstrap")
+
+    assert receipt["status"] == "pass"
+    assert receipt["attempts"] == 3
+    assert receipt["retry_reasons"] == ["storage_lane_busy", "source_epoch_conflict_unresolved"]
+    assert receipt["retry_reason"] == "mixed"
+    assert receipt["events_shipped"] == 1
+    assert sleeps == [5.0]
+
+
+@pytest.mark.parametrize("failure", ["busy", "conflict"])
+def test_transcript_shipper_does_not_retry_the_same_typed_state_twice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    stderr = (
+        "Error: storage-v2 repair lane busy; retry after 5000ms"
+        if failure == "busy"
+        else "source_epoch_conflict_unresolved: predecessor_not_open_for_this_identity"
+    )
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_run(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("repeat-typed-failure")
+
+    assert calls == 2
+    assert receipt["status"] == "fail"
+    assert receipt["attempts"] == 2
+    expected_reason = "storage_lane_busy" if failure == "busy" else "source_epoch_conflict_unresolved"
+    assert receipt["retry_reasons"] == [expected_reason, expected_reason]
+    assert sleeps == ([5.0] if failure == "busy" else [])
+
+
+def test_transcript_shipper_prefers_backpressure_when_stderr_has_both_signals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: storage-v2 repair lane busy; retry after 5000ms; "
+                    "source_epoch_conflict_unresolved"
+                ),
+            ),
+            SimpleNamespace(returncode=0, stdout=json.dumps({"events_shipped": 1}), stderr=""),
+        ]
+    )
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        "zerg.qa.provider_native_resume.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("both-transient-signals")
+
+    assert receipt["status"] == "pass"
+    assert receipt["retry_reason"] == "storage_lane_busy"
+    assert sleeps == [5.0]
+
+
 def test_transcript_shipper_caps_storage_lane_backpressure_delay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -879,13 +1026,113 @@ def test_cursor_projection_diagnostics_capture_marker_and_binding_state(tmp_path
         phase="post-resume-before-flush",
     )
 
-    assert payload["schema"] == "cursor_projection_diagnostics.v1"
+    assert payload["schema"] == "cursor_projection_diagnostics.v2"
     assert payload["managed_state"][0]["fields"]["conversation_uuid"] == "conversation-1"
     assert payload["engine_db"]["present"] is False
     assert len(payload["files"]) == 1
     assert payload["files"][0]["kind"] == "agent_transcript"
     assert payload["files"][0]["marker_observed"] is True
     assert payload["files"][0]["marker_count"] == 1
+
+
+def test_cursor_projection_diagnostics_capture_source_epoch_lineage(tmp_path: Path) -> None:
+    db_path = tmp_path / "shipper.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE source_epoch_registry (
+                source_epoch TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                opaque_source_id TEXT NOT NULL,
+                predecessor_epoch TEXT,
+                start_reason TEXT NOT NULL,
+                max_observed_len INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE source_epoch_lane_state (
+                source_epoch TEXT NOT NULL,
+                lane TEXT NOT NULL,
+                last_position INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE pending_source_envelope (
+                source_epoch TEXT PRIMARY KEY,
+                source_path TEXT NOT NULL,
+                range_start INTEGER NOT NULL,
+                range_end INTEGER NOT NULL,
+                envelope_id TEXT NOT NULL,
+                raw_bytes INTEGER NOT NULL,
+                event_count INTEGER NOT NULL,
+                has_reply_evidence INTEGER NOT NULL,
+                has_more INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL,
+                last_attempt_at TEXT,
+                blocked_at TEXT,
+                block_kind TEXT,
+                block_detail TEXT
+            );
+            INSERT INTO source_epoch_registry VALUES
+                ('new', 'cursor', 'path-sha256:abc', 'old', 'revision_change', 42, 'now', 'now');
+            INSERT INTO source_epoch_lane_state VALUES ('old', 'durable', 42, 'now');
+            INSERT INTO pending_source_envelope VALUES
+                ('new', '/tmp/transcript.jsonl', 0, 42, 'env', 42, 1, 1, 0,
+                 'now', 2, 'now', 'now', 'source_epoch_conflict_unresolved',
+                 'predecessor_not_open_for_this_identity');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    payload = provider_native_resume._cursor_projection_diagnostics(
+        environment={"HOME": str(tmp_path / "home")},
+        state={"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_POST_test",
+        engine_db_path=db_path,
+        phase="post-resume-after-flush",
+    )
+
+    engine_db = payload["engine_db"]
+    assert engine_db["table_rows"]["source_epoch_registry"][0]["predecessor_epoch"] == "old"
+    assert engine_db["table_rows"]["source_epoch_lane_state"][0]["last_position"] == 42
+    pending = engine_db["table_rows"]["pending_source_envelope"][0]
+    assert pending["block_kind"] == "source_epoch_conflict_unresolved"
+    assert pending["block_detail"] == "predecessor_not_open_for_this_identity"
+
+
+def test_cursor_projection_diagnostics_hashes_untrusted_block_detail(tmp_path: Path) -> None:
+    db_path = tmp_path / "shipper.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE pending_source_envelope "
+            "(source_epoch TEXT, block_kind TEXT, block_detail TEXT)"
+        )
+        block_detail = "Authorization: Bearer sk-live-XXX " + ("x" * 2048)
+        connection.execute(
+            "INSERT INTO pending_source_envelope VALUES (?, ?, ?)",
+            ("epoch", "source_epoch_conflict_unresolved", block_detail),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    payload = provider_native_resume._cursor_projection_diagnostics(
+        environment={"HOME": str(tmp_path / "home")},
+        state={"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_POST_test",
+        engine_db_path=db_path,
+        phase="post-resume-after-flush",
+    )
+
+    pending = payload["engine_db"]["table_rows"]["pending_source_envelope"][0]
+    assert pending["block_detail"] == "<omitted>"
+    assert pending["block_detail_length"] == len(block_detail)
+    assert pending["block_detail_sha256"] == hashlib.sha256(block_detail.encode()).hexdigest()
+    assert "Authorization" not in json.dumps(payload)
 
 
 def test_cursor_projection_diagnostics_retains_active_wal_marker(tmp_path: Path) -> None:
