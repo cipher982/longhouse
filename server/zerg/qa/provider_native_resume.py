@@ -2270,7 +2270,15 @@ def _resume_marker_prompt(provider: str, marker: str) -> str:
     return f"Reply exactly {marker} and nothing else."
 
 
-def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], process: PtyProcess, *, force: bool) -> dict[str, Any]:
+def _stop(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    state: dict[str, Any],
+    process: PtyProcess,
+    *,
+    force: bool,
+    environment: dict[str, str] | None = None,
+) -> dict[str, Any]:
     pid = process.pid
     provider_pid = _provider_process_pid(spec, state)
     control_returncode: int | None = None
@@ -2283,6 +2291,19 @@ def _stop(spec: ProviderSpec, args: argparse.Namespace, state: dict[str, Any], p
         # must exercise Cursor's own normal TUI shutdown instead, so submit
         # its supported `/exit` command through the managed Helm socket and
         # reserve the terminate operation for the process-loss variant.
+        # Cursor publishes the completed-turn hook before the managed Helm
+        # socket is necessarily idle.  `/exit` is a managed control action,
+        # so wait for the provider-owned idle boundary before sending it.
+        # Without this, a successful seed turn can make clean-exit teardown
+        # fail with `provider_not_idle`, which falsely turns the Resume proof
+        # into a provider failure.
+        if environment is None:
+            raise RuntimeError("Cursor clean stop requires the qualification environment")
+        _wait_cursor_idle(
+            state,
+            environment,
+            timeout=float(getattr(args, "live_send_timeout_secs", 30)),
+        )
         control_result = _control_send(spec, args, state, process, "/exit")
         control_returncode = int(control_result["returncode"])
         method = "cursor_native_exit"
@@ -2651,7 +2672,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         # a fresh hook event after it.
         _write_json(root / "initial-transcript.jsonl", initial_tail)
 
-        transition = _stop(spec, args, initial_state, initial, force=args.variant == "process_loss")
+        transition = _stop(
+            spec,
+            args,
+            initial_state,
+            initial,
+            force=args.variant == "process_loss",
+            environment=environment,
+        )
         if args.variant == "process_loss" and spec.provider == "opencode":
             transition["terminal_reconciliation"] = _reconcile_opencode_process_loss(args, initial_state, environment)
         _write_json(root / "process-transition-receipt.json", transition)
@@ -2916,7 +2944,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         }
         _write_json(root / "concurrent-resume-receipt.json", concurrent_receipt)
 
-        _stop(spec, args, resumed_state, resumed, force=False)
+        _stop(spec, args, resumed_state, resumed, force=False, environment=environment)
         final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
         _write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
