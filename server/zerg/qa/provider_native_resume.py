@@ -1780,6 +1780,140 @@ def _cursor_hook_event_bytes(state: dict[str, Any], environment: dict[str, str])
         return 0
 
 
+def _cursor_interrupt_to_idle(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    process: PtyProcess,
+    *,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Cancel a stranded Cursor generation and prove the owner is idle again.
+
+    Cursor can persist an assistant response before its native ``stop`` hook
+    runs.  That leaves the TUI painting ``Thinking`` and the Helm socket
+    correctly rejects the next control request.  The response correlation
+    remains the semantic completion oracle; Ctrl-C is a bounded recovery for
+    the provider UI, not a substitute for that oracle.  Every recovery fact is
+    tied to the enrolled session, conversation, launch, and active generation.
+    """
+
+    longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
+    if not longhouse_home:
+        raise RuntimeError("Cursor clean stop requires an explicit Longhouse home")
+    root = Path(longhouse_home) / "managed-local" / "cursor-helm"
+    events_path = root / "hook-events" / f"{state['session_id']}.ndjson"
+    phase_path = root / f"{state['session_id']}.phase.json"
+    claim_path = root / "binding-probes" / f"{state['session_id']}.json"
+    try:
+        phase = _read_json(phase_path)
+    except (OSError, json.JSONDecodeError):
+        phase = {}
+    expected_generation_id = str(phase.get("generation_id") or "").strip()
+    if phase.get("session_id") != state.get("session_id") or phase.get("phase") != "active" or not expected_generation_id:
+        raise RuntimeError(
+            "Cursor interrupt recovery requires the identity-matched active generation "
+            f"(phase_path={phase_path}, phase={json.dumps(phase, sort_keys=True)})"
+        )
+    try:
+        claim = _read_json(claim_path)
+    except (OSError, json.JSONDecodeError):
+        claim = {}
+    if (
+        claim.get("schema_version") != 2
+        or claim.get("provider") != "cursor"
+        or claim.get("status") != "observed"
+        or claim.get("session_id") != state.get("session_id")
+        or claim.get("conversation_uuid") != state.get("provider_session_id")
+        or claim.get("run_id") != state.get("run_id")
+        or not claim.get("launch_id")
+    ):
+        raise RuntimeError(
+            "Cursor interrupt recovery lacks the enrolled binding "
+            f"(claim_path={claim_path}, binding={json.dumps(claim, sort_keys=True)})"
+        )
+    try:
+        start_bytes = events_path.stat().st_size
+    except OSError:
+        start_bytes = 0
+    process.send("\x03")
+    deadline = time.monotonic() + timeout
+    stop_event: dict[str, Any] | None = None
+    leaked_response = False
+    observed_events: list[str] = []
+    while time.monotonic() < deadline:
+        process.drain()
+        try:
+            with events_path.open("rb") as stream:
+                stream.seek(start_bytes)
+                raw = stream.read()
+        except OSError:
+            raw = b""
+        for line in raw.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("session_id") != state.get("session_id"):
+                continue
+            if event.get("conversation_id") != state.get("provider_session_id"):
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or payload.get("generation_id") != expected_generation_id:
+                continue
+            name = str(event.get("event") or "")
+            if name:
+                observed_events.append(name)
+            if name == "afterAgentResponse":
+                leaked_response = True
+            if name == "stop":
+                status = str(payload.get("status") or "").strip().lower()
+                is_interrupt = payload.get("is_interrupt") is True
+                if status in {"aborted", "cancelled"} or is_interrupt:
+                    stop_event = event
+                    break
+                raise RuntimeError(
+                    "Cursor interrupt recovery observed a non-interrupt stop "
+                    f"(generation_id={expected_generation_id}, payload={json.dumps(payload, sort_keys=True)})"
+                )
+        if stop_event is not None:
+            break
+        time.sleep(0.1)
+    if leaked_response:
+        raise RuntimeError(
+            "Cursor interrupt recovery allowed the stranded generation to publish another response "
+            f"(generation_id={expected_generation_id})"
+        )
+    if stop_event is None:
+        raise RuntimeError(
+            "Cursor interrupt recovery did not publish an identity-matched stop hook "
+            f"(session_id={state['session_id']}, generation_id={expected_generation_id}, events={observed_events[-20:]!r})"
+        )
+    idle_phase = _wait_cursor_idle(
+        state,
+        environment,
+        timeout=min(timeout, 10.0),
+        minimum_hook_event_bytes=start_bytes,
+        expected_generation_id=expected_generation_id,
+    )
+    _wait_cursor_tui_ready(process, process.recording, timeout=min(timeout, 30.0))
+    try:
+        end_bytes = events_path.stat().st_size
+    except OSError:
+        end_bytes = start_bytes
+    return {
+        "method": "cursor_ctrl_c_recovery",
+        "start_bytes": start_bytes,
+        "end_bytes": end_bytes,
+        "generation_id": expected_generation_id,
+        "stop_hook": stop_event,
+        "idle_phase": idle_phase,
+        "observed_events": observed_events,
+        "tui_ready": True,
+    }
+
+
 def _cursor_file_observation(path: Path, *, marker: str) -> dict[str, Any]:
     """Hash a provider file and report marker presence without retaining text."""
 
@@ -2291,19 +2425,27 @@ def _stop(
         # must exercise Cursor's own normal TUI shutdown instead, so submit
         # its supported `/exit` command through the managed Helm socket and
         # reserve the terminate operation for the process-loss variant.
-        # Cursor publishes the completed-turn hook before the managed Helm
-        # socket is necessarily idle.  `/exit` is a managed control action,
-        # so wait for the provider-owned idle boundary before sending it.
-        # Without this, a successful seed turn can make clean-exit teardown
-        # fail with `provider_not_idle`, which falsely turns the Resume proof
-        # into a provider failure.
         if environment is None:
             raise RuntimeError("Cursor clean stop requires the qualification environment")
-        _wait_cursor_idle(
-            state,
-            environment,
-            timeout=float(getattr(args, "live_send_timeout_secs", 30)),
-        )
+        try:
+            _wait_cursor_idle(
+                state,
+                environment,
+                timeout=min(float(getattr(args, "live_send_timeout_secs", 30)), 5.0),
+            )
+            cursor_recovery = {"method": "cursor_native_idle", "tui_ready": True}
+        except RuntimeError as idle_error:
+            # The marker was already correlated by run_native_resume before
+            # teardown. If Cursor leaves its UI in Thinking anyway, recover
+            # through the provider's normal interrupt path, prove the exact
+            # generation stopped, and only then send the supported `/exit`.
+            cursor_recovery = _cursor_interrupt_to_idle(
+                state,
+                environment,
+                process,
+                timeout=float(getattr(args, "live_send_timeout_secs", 30)),
+            )
+            cursor_recovery["idle_wait_error"] = f"{type(idle_error).__name__}: {idle_error}"
         control_result = _control_send(spec, args, state, process, "/exit")
         control_returncode = int(control_result["returncode"])
         method = "cursor_native_exit"
@@ -2360,6 +2502,7 @@ def _stop(
         "provider_force_signal_sent": provider_force_signal_sent,
         "provider_process_dead": provider_process_dead,
         "control_returncode": control_returncode,
+        "cursor_recovery": cursor_recovery if spec.provider == "cursor" and not force else None,
         "dead": dead,
         "clean": clean,
     }

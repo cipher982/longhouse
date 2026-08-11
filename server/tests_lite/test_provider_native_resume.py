@@ -1768,7 +1768,64 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
     )
 
     assert receipt["clean"] is True
-    assert calls == [("idle", {"timeout": 17.0}), ("send", "/exit")]
+    assert calls == [("idle", {"timeout": 5.0}), ("send", "/exit")]
+
+
+def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = _args(tmp_path)
+    args.live_send_timeout_secs = 17
+    calls: list[tuple[str, object]] = []
+
+    class FakeProviderProcess:
+        pid = 101
+
+        class Process:
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        process = Process()
+
+        @staticmethod
+        def wait(_timeout: float) -> int:
+            return 0
+
+        @staticmethod
+        def kill_group(_signal: int) -> None:
+            raise AssertionError("recovery clean stop must not need a fallback signal")
+
+    def fake_idle(*_args: object, **kwargs: object) -> dict[str, str]:
+        calls.append(("idle", kwargs))
+        raise RuntimeError("provider remained active")
+
+    monkeypatch.setattr(provider_native_resume, "_wait_cursor_idle", fake_idle)
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_cursor_interrupt_to_idle",
+        lambda *_args, **_kwargs: calls.append(("interrupt", {})) or {"method": "cursor_ctrl_c_recovery"},
+    )
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_control_send",
+        lambda spec, args, state, process, text: calls.append(("send", text))
+        or {"returncode": 0},
+    )
+    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+
+    receipt = provider_native_resume._stop(
+        SPECS["cursor"],
+        args,
+        {"session_id": "session-1", "cursor_pid": 202},
+        FakeProviderProcess(),  # type: ignore[arg-type]
+        force=False,
+        environment={"LONGHOUSE_HOME": str(tmp_path / "home")},
+    )
+
+    assert receipt["clean"] is True
+    assert receipt["cursor_recovery"]["method"] == "cursor_ctrl_c_recovery"
+    assert calls == [("idle", {"timeout": 5.0}), ("interrupt", {}), ("send", "/exit")]
 
 
 def test_claude_initial_seed_uses_managed_channel_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
