@@ -923,6 +923,29 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _refresh_failure_result_manifest(root: Path) -> None:
+    """Hash failure evidence after final cleanup has been written.
+
+    The failure path writes ``result.json`` before the ``finally`` block tears
+    down provider processes and records ``cleanup-receipt.json``.  Refreshing
+    the manifest after that finalization keeps failure evidence exhaustive and
+    prevents a legitimate cleanup receipt from looking like a TOCTOU mutation.
+    ``result.json`` is intentionally excluded by ``_artifact_manifest``.
+    """
+
+    result_path = root / "result.json"
+    if not result_path.is_file() or result_path.is_symlink():
+        return
+    try:
+        result = _read_json(result_path)
+    except (OSError, ValueError, TypeError):
+        return
+    if result.get("status") != "fail":
+        return
+    result["artifact_manifest"] = _artifact_manifest(root)
+    _write_json(result_path, result)
+
+
 def _terminal_text(path: Path) -> str:
     try:
         raw = path.read_bytes()
@@ -3203,6 +3226,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         _close_recordings((concurrent, resumed, initial))
+        _refresh_failure_result_manifest(root)
         redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         observation = {
             "variant": args.variant,
