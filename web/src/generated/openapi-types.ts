@@ -6617,6 +6617,13 @@ export interface components {
              */
             permission_mode: string;
             /**
+             * Provider Config
+             * @description Provider-specific launch config stored on the thread and spread into Console turn dispatch
+             */
+            provider_config?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Launch Actor
              * @description Positive launch actor provenance when known
              */
@@ -6681,7 +6688,7 @@ export interface components {
          *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process" | "cursor_exec" | "cursor_acp" | "cursor_helm";
+        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process" | "cursor_exec" | "cursor_acp" | "cursor_helm" | "pi_print";
         /** ManagedTurnProviderSummaryResponse */
         ManagedTurnProviderSummaryResponse: {
             /** Completed Turns */
