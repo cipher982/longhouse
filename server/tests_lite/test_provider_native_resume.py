@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import signal
 import subprocess
@@ -30,6 +31,7 @@ from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
 from zerg.qa.provider_native_resume import _cursor_interrupt_to_idle
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
+from zerg.qa.provider_native_resume import _finalize_result_payload
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _launch_command
@@ -2291,6 +2293,203 @@ def test_failure_manifest_is_refreshed_after_final_cleanup(tmp_path: Path) -> No
     manifest = {entry["path"]: entry for entry in result["artifact_manifest"]}
     assert manifest["cleanup-receipt.json"]["size"] == (evidence / "cleanup-receipt.json").stat().st_size
     assert manifest["cleanup-receipt.json"]["sha256"].startswith("sha256:")
+
+
+def test_finalized_secret_scan_downgrades_pass_and_refreshes_manifest(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    receipt = evidence / "cleanup-receipt.json"
+    receipt.write_text('{"verified":true}\n')
+    result = {
+        "status": "pass",
+        "artifact_manifest": [],
+        "observation": {"artifact_secret_scan_passed": True},
+        "assertions": {"native_provider_resume_proven": True},
+    }
+    (evidence / "result.json").write_text(json.dumps(result))
+
+    finalized = _finalize_result_payload(
+        evidence,
+        result,
+        redacted_files=["cleanup-receipt.json"],
+        finalization_errors=[],
+    )
+
+    written = json.loads((evidence / "result.json").read_text())
+    manifest = {entry["path"]: entry for entry in written["artifact_manifest"]}
+    assert finalized == written
+    assert written["status"] == "fail"
+    assert written["failure_code"] == "finalized_artifact_secret_scan_failed"
+    assert written["observation"]["artifact_secret_scan_passed"] is False
+    assert written["assertions"]["native_provider_resume_proven"] is False
+    assert manifest["cleanup-receipt.json"]["sha256"] == (
+        "sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    ("redacted_files", "failed_write_calls"),
+    (([], (2,)), (["cleanup-receipt.json"], (1, 3))),
+)
+def test_final_result_write_failure_removes_stale_green_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    redacted_files: list[str],
+    failed_write_calls: tuple[int, ...],
+) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "cleanup-receipt.json").write_text('{"verified":true}\n')
+    (evidence / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "artifact_manifest": [],
+                "observation": {"artifact_secret_scan_passed": True},
+                "assertions": {"native_provider_resume_proven": True},
+            }
+        )
+    )
+    original_write_json = provider_native_resume._write_json
+    write_calls = 0
+
+    def fail_second_write(path: Path, payload: object) -> None:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls in failed_write_calls:
+            raise OSError("final result filesystem race")
+        original_write_json(path, payload)
+
+    monkeypatch.setattr(provider_native_resume, "_write_json", fail_second_write)
+
+    finalized = _finalize_result_payload(
+        evidence,
+        {
+            "status": "pass",
+            "artifact_manifest": [],
+            "observation": {"artifact_secret_scan_passed": True},
+            "assertions": {"native_provider_resume_proven": True},
+        },
+        redacted_files=redacted_files,
+        finalization_errors=[],
+    )
+
+    assert write_calls == max(failed_write_calls)
+    assert finalized is not None
+    assert finalized["status"] == "fail"
+    assert finalized["failure_code"] in {
+        "finalization_failed",
+        "finalized_artifact_secret_scan_failed",
+    }
+    assert not (evidence / "result.json").exists()
+
+
+@pytest.mark.parametrize("first_cleanup_raises", [False, True])
+def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    first_cleanup_raises: bool,
+) -> None:
+    """Exercise the real failure path, including the second finally cleanup."""
+
+    home = tmp_path / "provider-home"
+    home.mkdir()
+    provider_bin = tmp_path / "provider"
+    provider_bin.write_text("#!/bin/sh\nprintf 'test-provider\\n'\n", encoding="utf-8")
+    provider_bin.chmod(0o755)
+    args = _args(tmp_path)
+    args.evidence_root = tmp_path / "evidence"
+    args.provider_bin = provider_bin
+    args.variant = "clean_exit"
+    args.live_send_timeout_secs = 1
+
+    class FakeProcess:
+        process = SimpleNamespace(poll=lambda: None)
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def settle(self) -> None:
+            pass
+
+    class FakeShipper:
+        receipt = {"status": "pass", "events_shipped": 0}
+
+        def __init__(self) -> None:
+            self.stop_calls = 0
+
+        def flush(self, _label: str) -> dict[str, object]:
+            return self.receipt
+
+        def stop(self) -> dict[str, object]:
+            self.stop_calls += 1
+            return {"status": "pass", "process_dead": True, "stop_generation": self.stop_calls}
+
+    cleanup_calls = 0
+    shipper: FakeShipper | None = None
+
+    def fake_start_shipper(*_args: object, **_kwargs: object) -> FakeShipper:
+        nonlocal shipper
+        shipper = FakeShipper()
+        return shipper
+
+    def fake_cleanup(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if first_cleanup_raises and cleanup_calls == 1:
+            raise OSError("cleanup receipt raced with process exit")
+        return {"verified": cleanup_calls > 1, "cleanup_generation": cleanup_calls}
+
+    monkeypatch.setattr(provider_native_resume, "_isolated_provider_home", lambda: home)
+    monkeypatch.setattr(provider_native_resume, "_launch_command", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(provider_native_resume, "PtyProcess", FakeProcess)
+    monkeypatch.setattr(provider_native_resume, "_start_transcript_shipper", fake_start_shipper)
+    monkeypatch.setattr(provider_native_resume, "_wait_opencode_tui_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_wait_state",
+        lambda *_args, **_kwargs: {
+            "session_id": "session-1",
+            "run_id": "run-1",
+            "connection_id": "connection-1",
+            "provider_session_id": "provider-session-1",
+            "claude_pid": 101,
+        },
+    )
+    monkeypatch.setattr(provider_native_resume, "_provider_process_pid", lambda *_args: 101)
+    monkeypatch.setattr(provider_native_resume, "_wait_session_tail", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(provider_native_resume, "_assistant_event_digests", lambda *_args: set())
+    monkeypatch.setattr(provider_native_resume, "_control_send", lambda *_args, **_kwargs: {"returncode": 0})
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_wait_assistant_response_after_marker",
+        lambda *_args, **_kwargs: ({}, {"marker_observed_in_transcript": False, "new_assistant_events": 0}),
+    )
+    monkeypatch.setattr(provider_native_resume, "_cleanup_processes", fake_cleanup)
+    monkeypatch.setattr(provider_native_resume, "_close_recordings", lambda *_args: None)
+    monkeypatch.setattr(provider_native_resume, "_secret_scan", lambda *_args: [])
+
+    result = provider_native_resume.run_native_resume("opencode", args)
+
+    assert result["status"] == "fail"
+    assert result["error"].startswith("RuntimeError: provider transcript did not correlate initial opencode marker")
+    assert cleanup_calls == 2
+    assert shipper is not None
+    assert shipper.stop_calls == 2
+    written = json.loads((args.evidence_root / "result.json").read_text())
+    manifest = {entry["path"]: entry for entry in written["artifact_manifest"]}
+    receipt = args.evidence_root / "cleanup-receipt.json"
+    assert json.loads(receipt.read_text())["cleanup_generation"] == 2
+    assert manifest["cleanup-receipt.json"]["size"] == receipt.stat().st_size
+    assert manifest["cleanup-receipt.json"]["sha256"] == (
+        "sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest()
+    )
+    ship_receipt = args.evidence_root / "transcript-shipper-receipt.json"
+    assert json.loads(ship_receipt.read_text())["stop_generation"] == 2
+    assert manifest["transcript-shipper-receipt.json"]["sha256"] == (
+        "sha256:" + hashlib.sha256(ship_receipt.read_bytes()).hexdigest()
+    )
+    assert result == written
 
 
 def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -> None:

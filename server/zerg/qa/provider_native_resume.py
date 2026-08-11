@@ -923,8 +923,8 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _refresh_failure_result_manifest(root: Path) -> None:
-    """Hash failure evidence after final cleanup has been written.
+def _refresh_result_manifest(root: Path) -> dict[str, Any] | None:
+    """Hash result evidence after final cleanup has been written.
 
     The failure path writes ``result.json`` before the ``finally`` block tears
     down provider processes and records ``cleanup-receipt.json``.  Refreshing
@@ -935,15 +935,100 @@ def _refresh_failure_result_manifest(root: Path) -> None:
 
     result_path = root / "result.json"
     if not result_path.is_file() or result_path.is_symlink():
-        return
+        return None
     try:
         result = _read_json(result_path)
     except (OSError, ValueError, TypeError):
-        return
-    if result.get("status") != "fail":
-        return
-    result["artifact_manifest"] = _artifact_manifest(root)
-    _write_json(result_path, result)
+        return None
+    if result.get("status") not in {"fail", "pass"}:
+        return None
+    try:
+        result["artifact_manifest"] = _artifact_manifest(root)
+        _write_json(result_path, result)
+    except (OSError, TypeError, ValueError):
+        return None
+    return result
+
+
+def _refresh_failure_result_manifest(root: Path) -> dict[str, Any] | None:
+    """Backward-compatible name for callers that refresh failure evidence."""
+
+    return _refresh_result_manifest(root)
+
+
+def _finalize_result_payload(
+    root: Path,
+    payload: dict[str, Any] | None,
+    *,
+    redacted_files: list[str],
+    finalization_errors: list[str],
+) -> dict[str, Any] | None:
+    """Persist a post-teardown result without certifying incomplete evidence."""
+
+    if payload is None:
+        return None
+
+    def mark_finalization_failure(reason: str) -> None:
+        if payload.get("status") != "pass":
+            return
+        payload["status"] = "fail"
+        payload["failure_code"] = "finalization_failed"
+        payload["error"] = reason
+        observation = payload.get("observation")
+        if isinstance(observation, dict):
+            observation["artifact_secret_scan_passed"] = False
+        assertions = payload.get("assertions")
+        if isinstance(assertions, dict):
+            assertions["native_provider_resume_proven"] = False
+
+    if finalization_errors:
+        mark_finalization_failure("; ".join(finalization_errors))
+    if redacted_files:
+        prior_redacted = payload.get("redacted_secret_files", [])
+        payload["redacted_secret_files"] = sorted(set(prior_redacted) | set(redacted_files))
+        if payload.get("status") == "pass":
+            payload["status"] = "fail"
+            payload["failure_code"] = "finalized_artifact_secret_scan_failed"
+            payload["error"] = "finalized evidence contained a qualification secret"
+            observation = payload.get("observation")
+            if isinstance(observation, dict):
+                observation["artifact_secret_scan_passed"] = False
+            assertions = payload.get("assertions")
+            if isinstance(assertions, dict):
+                assertions["native_provider_resume_proven"] = False
+
+    manifest_error: str | None = None
+    if redacted_files or finalization_errors:
+        try:
+            _write_json(root / "result.json", payload)
+        except Exception as exc:  # noqa: BLE001 - fail closed for a would-be pass
+            manifest_error = f"result write: {type(exc).__name__}: {exc}"
+    try:
+        refreshed_result = _refresh_result_manifest(root)
+        if refreshed_result is None:
+            manifest_error = manifest_error or "result manifest refresh returned no result"
+    except Exception as exc:  # noqa: BLE001 - never mask the causal result
+        refreshed_result = None
+        manifest_error = f"result manifest refresh: {type(exc).__name__}: {exc}"
+    if manifest_error:
+        mark_finalization_failure(manifest_error)
+    if refreshed_result is not None:
+        payload["artifact_manifest"] = refreshed_result["artifact_manifest"]
+    if redacted_files:
+        prior_redacted = payload.get("redacted_secret_files", [])
+        payload["redacted_secret_files"] = sorted(set(prior_redacted) | set(redacted_files))
+    try:
+        _write_json(root / "result.json", payload)
+    except OSError as exc:
+        # Never leave any previously written result behind when the final
+        # atomic write fails. Missing result evidence is rejected; stale
+        # green or stale failure evidence must not be accepted either.
+        try:
+            (root / "result.json").unlink()
+        except OSError:
+            pass
+        mark_finalization_failure(f"final result write: {type(exc).__name__}: {exc}")
+    return payload
 
 
 def _terminal_text(path: Path) -> str:
@@ -2812,6 +2897,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     shipper: TranscriptShipper | None = None
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
+    result_payload: dict[str, Any] | None = None
     provider_cwd = args.repo_root
     try:
         home = _isolated_provider_home()
@@ -3233,7 +3319,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         _close_recordings((concurrent, resumed, initial))
-        _refresh_failure_result_manifest(root)
         redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         observation = {
             "variant": args.variant,
@@ -3288,6 +3373,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "post_resume_marker": post_marker,
             "artifact_manifest": _artifact_manifest(root),
         }
+        result_payload = result
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain the exact causal failure
@@ -3304,12 +3390,30 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 _write_json(root / "state-candidates.json", _state_candidate_diagnostics(spec, home))
         except (OSError, TypeError):
             pass
-        final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
-        _write_json(root / "cleanup-receipt.json", final_cleanup)
+        try:
+            final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the provider failure
+            final_cleanup = {
+                "verified": False,
+                "teardown_error": f"{type(cleanup_exc).__name__}: {cleanup_exc}",
+            }
+        try:
+            _write_json(root / "cleanup-receipt.json", final_cleanup)
+        except OSError:
+            pass
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-        _close_recordings((concurrent, resumed, initial))
-        redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
+            try:
+                _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception:  # noqa: BLE001 - preserve the provider failure
+                pass
+        try:
+            _close_recordings((concurrent, resumed, initial))
+        except Exception:  # noqa: BLE001 - preserve the provider failure
+            pass
+        try:
+            redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
+        except OSError:
+            redacted = []
         failure = {
             "schema_version": 1,
             "artifact_kind": "direct_native_resume_result",
@@ -3326,15 +3430,50 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "redacted_secret_files": redacted,
             "artifact_manifest": _artifact_manifest(root),
         }
+        result_payload = failure
         _write_json(root / "result.json", failure)
         return failure
     finally:
+        final_redacted: list[str] = []
+        finalization_errors: list[str] = []
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception as exc:  # noqa: BLE001 - preserve the causal result
+                finalization_errors.append(f"transcript shipper stop: {type(exc).__name__}: {exc}")
         if not final_cleanup.get("verified"):
-            final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
-            _write_json(root / "cleanup-receipt.json", final_cleanup)
-        _close_recordings((concurrent, resumed, initial))
+            try:
+                final_cleanup = _cleanup_processes(spec, (initial, resumed, concurrent), states)
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal result
+                final_cleanup = {
+                    "verified": False,
+                    "teardown_error": f"{type(cleanup_exc).__name__}: {cleanup_exc}",
+                }
+                finalization_errors.append(f"final cleanup: {type(cleanup_exc).__name__}: {cleanup_exc}")
+            try:
+                _write_json(root / "cleanup-receipt.json", final_cleanup)
+            except OSError as exc:
+                finalization_errors.append(f"cleanup receipt: {type(exc).__name__}: {exc}")
+        try:
+            _close_recordings((concurrent, resumed, initial))
+        except Exception as exc:  # noqa: BLE001 - preserve the causal result
+            finalization_errors.append(f"recording close: {type(exc).__name__}: {exc}")
+        try:
+            # Teardown can write receipts and flush terminal recordings. Scan
+            # those final bytes before pinning their manifest digests.
+            final_redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
+        except OSError as exc:
+            finalization_errors.append(f"final secret scan: {type(exc).__name__}: {exc}")
+        finally:
+            # The result is written before this final cleanup guard runs.
+            # Refresh after the guard so teardown cannot invalidate its
+            # manifest, while keeping the in-memory return value identical.
+            _finalize_result_payload(
+                root,
+                result_payload,
+                redacted_files=final_redacted,
+                finalization_errors=finalization_errors,
+            )
 
 
 def parser() -> argparse.ArgumentParser:
