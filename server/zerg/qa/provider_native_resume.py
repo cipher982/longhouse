@@ -454,6 +454,7 @@ def registration_for(provider: str) -> ProducerRegistration:
             "native_resume_terminal_recording",
             *(
                 (
+                    "initial_hook_correlation",
                     "resume_bootstrap_response_correlation",
                     "resume_bootstrap_transcript",
                     "resume_bootstrap_transcript_ship_receipt",
@@ -1874,6 +1875,56 @@ def _cursor_idle_then_flush(
     return receipt
 
 
+def _cursor_initial_send_then_flush(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    shipper: TranscriptShipper,
+    *,
+    marker: str,
+    expected_prompt: str,
+    minimum_hook_event_bytes: int,
+    timeout: float,
+    diagnostic_path: Path | None = None,
+    hook_correlation_path: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Settle Cursor's first managed turn before asking the engine to ship it.
+
+    The initial Cursor seed is sent through the Helm socket after the native
+    argv bootstrap.  A successful socket write only means the request was
+    accepted; it does not mean Cursor completed the foreground turn.  Require
+    the identity-matched native hook sequence and the subsequent idle phase
+    before flushing the transcript.  This keeps the initial proof on the same
+    causal boundary as Resume and prevents a one-shot flush from racing the
+    provider's store projection.
+    """
+
+    hook_sequence = _wait_cursor_hook_sequence(
+        state,
+        environment,
+        marker=marker,
+        expected_prompt=expected_prompt,
+        minimum_hook_event_bytes=minimum_hook_event_bytes,
+        label="initial-seed",
+        timeout=timeout,
+    )
+    # Persist the provider-owned causal observation before waiting on the
+    # separate idle/projection boundary. If settlement fails, the valid hook
+    # sequence must remain available in the failure bundle.
+    if hook_correlation_path is not None:
+        _write_json(hook_correlation_path, hook_sequence)
+    ship_receipt = _cursor_idle_then_flush(
+        state,
+        environment,
+        shipper,
+        label="initial",
+        minimum_hook_event_bytes=minimum_hook_event_bytes,
+        expected_generation_id=hook_sequence.get("generation_id"),
+        marker=marker,
+        diagnostic_path=diagnostic_path,
+    )
+    return hook_sequence, ship_receipt
+
+
 def _cursor_bootstrap_correlation(
     transcript_correlation: dict[str, Any],
     hook_sequence: dict[str, Any],
@@ -2894,13 +2945,39 @@ def _wait_cursor_hook_sequence(
     longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
     if not longhouse_home:
         raise RuntimeError("Cursor Helm qualification has no explicit Longhouse home")
-    path = Path(longhouse_home) / "managed-local" / "cursor-helm" / "hook-events" / f"{state['session_id']}.ndjson"
+    root = Path(longhouse_home) / "managed-local" / "cursor-helm"
+    path = root / "hook-events" / f"{state['session_id']}.ndjson"
+    claim_path = root / "binding-probes" / f"{state['session_id']}.json"
+    expected_launch_id: str | None = None
+    claim_status = ""
     deadline = time.monotonic() + timeout
     observed_events: list[str] = []
-    matching_befores: list[dict[str, Any]] = []
-    matching_afters: list[dict[str, Any]] = []
+    matching_befores: list[tuple[dict[str, Any], int]] = []
+    matching_afters: list[tuple[dict[str, Any], int]] = []
     seen_events: set[str] = set()
+    event_position = 0
     while time.monotonic() < deadline:
+        try:
+            claim = _read_json_bounded(claim_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            claim = {}
+        current_launch_id = str(claim.get("launch_id") or "").strip()
+        claim_status = str(claim.get("status") or "").strip()
+        if (
+            claim.get("schema_version") != 2
+            or claim.get("provider") != "cursor"
+            or claim_status not in {"pending", "observed"}
+            or claim.get("session_id") != state.get("session_id")
+            or claim.get("conversation_uuid") != state.get("provider_session_id")
+            or claim.get("run_id") != state.get("run_id")
+            or not current_launch_id
+            or (expected_launch_id is not None and current_launch_id != expected_launch_id)
+        ):
+            raise RuntimeError(
+                "Cursor hook sequence lacks the enrolled launch binding "
+                f"(claim_path={claim_path}, binding={json.dumps(_diagnostic_mapping(claim, ('schema_version', 'provider', 'status', 'session_id', 'conversation_uuid', 'launch_id', 'run_id')), sort_keys=True)})"
+            )
+        expected_launch_id = current_launch_id
         try:
             with path.open("rb") as stream:
                 stream.seek(minimum_hook_event_bytes)
@@ -2918,6 +2995,8 @@ def _wait_cursor_hook_sequence(
                 continue
             if event.get("conversation_id") != state.get("provider_session_id"):
                 continue
+            if event.get("launch_id") != expected_launch_id:
+                continue
             event_key = json.dumps(event, sort_keys=True, separators=(",", ":"))
             if event_key in seen_events:
                 continue
@@ -2925,6 +3004,7 @@ def _wait_cursor_hook_sequence(
             name = str(event.get("event") or "")
             if name:
                 observed_events.append(name)
+                event_position += 1
             payload = event.get("payload")
             if not isinstance(payload, dict):
                 continue
@@ -2936,20 +3016,34 @@ def _wait_cursor_hook_sequence(
             if not generation_id:
                 continue
             if name == "beforeSubmitPrompt" and payload.get("prompt") == expected_prompt:
-                matching_befores.append(event)
+                matching_befores.append((event, event_position))
             elif name == "afterAgentResponse" and str(payload.get("text") or "").strip() == marker:
-                matching_afters.append(event)
-        before_generations = {str((event.get("payload") or {}).get("generation_id")) for event in matching_befores}
+                matching_afters.append((event, event_position))
+        before_generations = {str((event.get("payload") or {}).get("generation_id")) for event, _ in matching_befores}
         if len(before_generations) > 1:
             raise RuntimeError(
                 f"Cursor bootstrap hook observed matching prompts from multiple generations ({sorted(before_generations)!r})"
             )
         generation_id = next(iter(before_generations), "")
-        matching_response = next(
-            (event for event in matching_afters if str((event.get("payload") or {}).get("generation_id")) == generation_id),
+        matching_before = next(
+            (
+                (event, position)
+                for event, position in matching_befores
+                if str((event.get("payload") or {}).get("generation_id")) == generation_id
+            ),
             None,
         )
-        if generation_id and matching_response is not None:
+        matching_response = next(
+            (
+                (event, position)
+                for event, position in matching_afters
+                if str((event.get("payload") or {}).get("generation_id")) == generation_id
+                and matching_before is not None
+                and position > matching_before[1]
+            ),
+            None,
+        )
+        if matching_before is not None and matching_response is not None and claim_status == "observed":
             try:
                 end_bytes = path.stat().st_size
             except OSError:
@@ -2958,8 +3052,11 @@ def _wait_cursor_hook_sequence(
                 "start_bytes": minimum_hook_event_bytes,
                 "end_bytes": end_bytes,
                 "events": observed_events,
-                "before_submit_prompt": matching_befores[0],
-                "after_agent_response": matching_response,
+                "before_submit_prompt": matching_before[0],
+                "after_agent_response": matching_response[0],
+                "before_submit_prompt_position": matching_before[1],
+                "after_agent_response_position": matching_response[1],
+                "launch_id": expected_launch_id,
                 "generation_id": generation_id,
                 "hook_response_correlated": True,
                 "timed_out": False,
@@ -3505,6 +3602,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 marker=seed_marker,
                 label="initial-seed-before-send",
             )
+            initial_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
             initial_send = _control_send(
                 spec,
                 args,
@@ -3522,13 +3620,33 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 initial=True,
             )
         _write_json(root / "initial-seed-send.json", initial_send)
-        _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
         if spec.provider == "cursor":
-            shipper.capture_cursor_projection_diagnostics(
-                initial_state,
-                marker=seed_marker,
-                label="initial-seed-after-flush",
-            )
+            try:
+                _, initial_ship_receipt = _cursor_initial_send_then_flush(
+                    initial_state,
+                    environment,
+                    shipper,
+                    marker=seed_marker,
+                    expected_prompt=_resume_marker_prompt(provider, seed_marker),
+                    minimum_hook_event_bytes=initial_hook_event_bytes,
+                    timeout=args.live_send_timeout_secs,
+                    diagnostic_path=root / "cursor-idle-timeout-initial-seed.json",
+                    hook_correlation_path=root / "initial-hook-correlation.json",
+                )
+            except RuntimeError as exc:
+                # Keep the lifecycle gate's failure evidence even when no
+                # transcript flush was safe to attempt. The artifact is
+                # mandatory on a pass and useful on a fail.
+                correlation_path = root / "initial-hook-correlation.json"
+                if not correlation_path.exists():
+                    _write_best_effort_json(
+                        correlation_path,
+                        {"available": False, "error": f"{type(exc).__name__}: {exc}"},
+                    )
+                raise
+        else:
+            initial_ship_receipt = shipper.flush("initial")
+        _write_json(root / "initial-transcript-ship-receipt.json", initial_ship_receipt)
         initial_tail, initial_response_correlation = _wait_assistant_response_after_marker(
             args.api_url,
             args.agents_token,

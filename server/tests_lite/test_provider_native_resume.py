@@ -33,6 +33,7 @@ from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _cursor_hook_event_observation
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
 from zerg.qa.provider_native_resume import _cursor_idle_timeout_observation
+from zerg.qa.provider_native_resume import _cursor_initial_send_then_flush
 from zerg.qa.provider_native_resume import _cursor_interrupt_to_idle
 from zerg.qa.provider_native_resume import _cursor_projection_diagnostics
 from zerg.qa.provider_native_resume import _cursor_tui_input_ready
@@ -73,6 +74,25 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     )
 
 
+def _write_cursor_binding(longhouse_home: Path, *, status: str = "observed") -> None:
+    binding = longhouse_home / "managed-local" / "cursor-helm" / "binding-probes" / "session-1.json"
+    binding.parent.mkdir(parents=True, exist_ok=True)
+    binding.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": status,
+                "session_id": "session-1",
+                "conversation_uuid": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "run_id": "run-1",
+            }
+        )
+        + "\n"
+    )
+
+
 def test_each_native_provider_registers_both_exact_resume_variants() -> None:
     for provider in ("claude", "cursor", "opencode"):
         registration = registration_for(provider)
@@ -93,6 +113,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
             "post_stop_transcript_ship_receipt",
         } <= set(registration.required_artifacts)
         cursor_only = {
+            "initial_hook_correlation",
             "resume_bootstrap_response_correlation",
             "resume_bootstrap_transcript",
         }
@@ -1421,11 +1442,12 @@ def test_post_resume_correlation_requires_strict_assistant_proof(provider: str, 
 
 
 def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Path) -> None:
-    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
     marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home)
     events.write_text(json.dumps({"event": "sessionStart", "session_id": "session-1", "conversation_id": "cursor-thread-1"}) + "\n")
     baseline = events.stat().st_size
     events.write_text(
@@ -1437,6 +1459,7 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
                         "event": "beforeSubmitPrompt",
                         "session_id": "session-1",
                         "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
                         "payload": {
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
@@ -1450,6 +1473,7 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
                         "event": "afterAgentResponse",
                         "session_id": "session-1",
                         "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
                         "payload": {
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
@@ -1477,15 +1501,70 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
     assert sequence["timed_out"] is False
 
 
-def test_cursor_hook_timeout_diagnostics_do_not_repeat_polling_events(tmp_path: Path) -> None:
-    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+def test_cursor_hook_sequence_rejects_response_before_prompt(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
+    marker = "LH_CURSOR_BOOTSTRAP_reversed"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home)
+    events.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "afterAgentResponse",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
+                        "payload": {
+                            "session_id": "cursor-thread-1",
+                            "conversation_id": "cursor-thread-1",
+                            "generation_id": "generation-1",
+                            "text": marker,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "beforeSubmitPrompt",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
+                        "payload": {
+                            "session_id": "cursor-thread-1",
+                            "conversation_id": "cursor-thread-1",
+                            "generation_id": "generation-1",
+                            "prompt": _cursor_bootstrap_prompt(marker),
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    with pytest.raises(RuntimeError, match="beforeSubmitPrompt/afterAgentResponse"):
+        _wait_cursor_bootstrap_hook_sequence(
+            state,
+            {"LONGHOUSE_HOME": str(longhouse_home)},
+            marker=marker,
+            minimum_hook_event_bytes=0,
+            timeout=0.01,
+        )
+
+
+def test_cursor_hook_timeout_diagnostics_do_not_repeat_polling_events(tmp_path: Path) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home)
     row = {
         "event": "beforeSubmitPrompt",
         "session_id": "session-1",
         "conversation_id": "cursor-thread-1",
+        "launch_id": "launch-1",
         "payload": {
             "session_id": "cursor-thread-1",
             "conversation_id": "cursor-thread-1",
@@ -1510,11 +1589,12 @@ def test_cursor_hook_timeout_diagnostics_do_not_repeat_polling_events(tmp_path: 
 
 
 def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: Path) -> None:
-    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
     marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home)
     events.write_text(json.dumps({"event": "sessionStart", "session_id": "session-1", "conversation_id": "cursor-thread-1"}) + "\n")
 
     with pytest.raises(RuntimeError, match="beforeSubmitPrompt/afterAgentResponse"):
@@ -1537,11 +1617,12 @@ def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: 
     ],
 )
 def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path, field: str, value: str) -> None:
-    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
     marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home)
     before_payload = {
         "session_id": "cursor-thread-1",
         "conversation_id": "cursor-thread-1",
@@ -1567,6 +1648,7 @@ def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path,
                         "event": "beforeSubmitPrompt",
                         "session_id": "session-1",
                         "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
                         "payload": before_payload,
                     }
                 ),
@@ -1575,6 +1657,7 @@ def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path,
                         "event": "afterAgentResponse",
                         "session_id": "session-1",
                         "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
                         "payload": after_payload,
                     }
                 ),
@@ -1594,11 +1677,12 @@ def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path,
 
 
 def test_cursor_bootstrap_hook_sequence_rejects_multiple_matching_generations(tmp_path: Path) -> None:
-    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1"}
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
     marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
     events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
     events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home)
     rows = []
     for generation in ("generation-1", "generation-2"):
         rows.append(
@@ -1606,6 +1690,7 @@ def test_cursor_bootstrap_hook_sequence_rejects_multiple_matching_generations(tm
                 "event": "beforeSubmitPrompt",
                 "session_id": "session-1",
                 "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
                 "payload": {
                     "session_id": "cursor-thread-1",
                     "conversation_id": "cursor-thread-1",
@@ -2165,6 +2250,134 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
     assert result["method"] == "provider_tty_bootstrap"
     assert result["returncode"] == 0
     assert process.sent == ["seed", "\x1b", "\r"]
+
+
+def test_cursor_initial_seed_flush_waits_for_ordered_hook_and_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    def fake_hook_sequence(*_args: object, **kwargs: object) -> dict[str, str]:
+        calls.append(("hook", kwargs))
+        return {"generation_id": "generation-1", "hook_response_correlated": True}
+
+    def fake_idle_then_flush(*_args: object, **kwargs: object) -> dict[str, str]:
+        calls.append(("flush", kwargs))
+        return {"status": "pass"}
+
+    monkeypatch.setattr(provider_native_resume, "_wait_cursor_hook_sequence", fake_hook_sequence)
+    monkeypatch.setattr(provider_native_resume, "_cursor_idle_then_flush", fake_idle_then_flush)
+
+    hook_sequence, ship_receipt = _cursor_initial_send_then_flush(
+        {"session_id": "session-1"},
+        {"LONGHOUSE_HOME": "/tmp/longhouse"},
+        object(),  # type: ignore[arg-type]
+        marker="LH_CURSOR_SEED_test",
+        expected_prompt="Reply with exactly LH_CURSOR_SEED_test and nothing else.",
+        minimum_hook_event_bytes=17,
+        timeout=12,
+        hook_correlation_path=tmp_path / "initial-hook-correlation.json",
+    )
+
+    assert hook_sequence["generation_id"] == "generation-1"
+    assert ship_receipt == {"status": "pass"}
+    assert [name for name, _ in calls] == ["hook", "flush"]
+    assert calls[1][1]["expected_generation_id"] == "generation-1"
+    assert calls[1][1]["minimum_hook_event_bytes"] == 17
+    assert json.loads((tmp_path / "initial-hook-correlation.json").read_text()) == hook_sequence
+
+
+def test_cursor_initial_seed_retains_hook_evidence_when_idle_settlement_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hook_sequence = {"generation_id": "generation-1", "hook_response_correlated": True}
+    monkeypatch.setattr(provider_native_resume, "_wait_cursor_hook_sequence", lambda *_args, **_kwargs: hook_sequence)
+
+    def fail_idle(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise RuntimeError("idle timeout")
+
+    monkeypatch.setattr(provider_native_resume, "_cursor_idle_then_flush", fail_idle)
+    path = tmp_path / "initial-hook-correlation.json"
+
+    with pytest.raises(RuntimeError, match="idle timeout"):
+        _cursor_initial_send_then_flush(
+            {"session_id": "session-1"},
+            {"LONGHOUSE_HOME": "/tmp/longhouse"},
+            object(),  # type: ignore[arg-type]
+            marker="LH_CURSOR_SEED_test",
+            expected_prompt="Reply with exactly LH_CURSOR_SEED_test",
+            minimum_hook_event_bytes=17,
+            timeout=12,
+            hook_correlation_path=path,
+        )
+
+    assert json.loads(path.read_text()) == hook_sequence
+
+
+def test_cursor_hook_sequence_waits_for_pending_claim_promotion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
+    marker = "LH_CURSOR_BOOTSTRAP_pending"
+    longhouse_home = tmp_path / "longhouse"
+    events = longhouse_home / "managed-local" / "cursor-helm" / "hook-events" / "session-1.ndjson"
+    events.parent.mkdir(parents=True)
+    _write_cursor_binding(longhouse_home, status="pending")
+    events.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "beforeSubmitPrompt",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
+                        "payload": {
+                            "session_id": "cursor-thread-1",
+                            "conversation_id": "cursor-thread-1",
+                            "generation_id": "generation-1",
+                            "prompt": _cursor_bootstrap_prompt(marker),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "afterAgentResponse",
+                        "session_id": "session-1",
+                        "conversation_id": "cursor-thread-1",
+                        "launch_id": "launch-1",
+                        "payload": {
+                            "session_id": "cursor-thread-1",
+                            "conversation_id": "cursor-thread-1",
+                            "generation_id": "generation-1",
+                            "text": marker,
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    claim = longhouse_home / "managed-local" / "cursor-helm" / "binding-probes" / "session-1.json"
+    promoted = False
+
+    def promote(_seconds: float) -> None:
+        nonlocal promoted
+        if not promoted:
+            payload = json.loads(claim.read_text())
+            payload["status"] = "observed"
+            claim.write_text(json.dumps(payload) + "\n")
+            promoted = True
+
+    monkeypatch.setattr(provider_native_resume.time, "sleep", promote)
+    sequence = _wait_cursor_bootstrap_hook_sequence(
+        state,
+        {"LONGHOUSE_HOME": str(longhouse_home)},
+        marker=marker,
+        minimum_hook_event_bytes=0,
+        timeout=1,
+    )
+
+    assert promoted is True
+    assert sequence["launch_id"] == "launch-1"
 
 
 def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, monkeypatch) -> None:
