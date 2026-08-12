@@ -139,6 +139,13 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks(id) {
             if (id.includes("node_modules")) {
+              // xterm is used ONLY by the lazily-loaded live hero demo. Letting
+              // it fall into `vendor` would ship ~283KB of terminal emulator to
+              // every visitor on every page for a demo almost nobody opens;
+              // returning undefined leaves it in its importer's lazy chunk.
+              if (id.includes("@xterm")) {
+                return undefined;
+              }
               return "vendor";
             }
           },

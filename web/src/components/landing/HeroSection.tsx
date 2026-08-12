@@ -6,10 +6,14 @@ import { trackAcquisitionEvent } from "../../lib/analytics";
 
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
+// Describes the recorded demo, which is the default mode. The live mode states
+// itself through the visible badge and note in HeroDemoShell.
 const DEMO_ARIA_LABEL =
   "Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds";
-const HeroDemo = lazy(() =>
-  import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({ default: Component })),
+const HeroDemoShell = lazy(() =>
+  import("./demo/HeroDemoShell").then(({ HeroDemoShell: Component }) => ({
+    default: Component,
+  })),
 );
 
 function AppleIcon() {
@@ -157,12 +161,8 @@ export function HeroSection() {
             />
           }
         >
-          <HeroDemo aria-label={DEMO_ARIA_LABEL} />
+          <HeroDemoShell aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
-        <p className="landing-hero-video-note">
-          Demo shows real provider CLIs replayed from recordings, with scripted model
-          responses.
-        </p>
       </div>
     </section>
   );

@@ -2633,3 +2633,147 @@
     }
   }
 }
+
+  /* ── Hero demo shell: recorded | live ─────────────────────────────── */
+
+  .hero-demo-shell {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    /* Reserve the taller of the two modes so switching never reflows the page
+       or pushes the run control below the fold. Capped by viewport height as
+       well as width, per the layout contract. */
+    min-height: min(520px, calc(100vh - 260px));
+  }
+
+  .hero-demo-modebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 28px;
+  }
+
+  .hero-demo-badge {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(201, 166, 107, 0.3);
+    color: rgba(232, 226, 216, 0.72);
+  }
+
+  .hero-demo-badge.is-live {
+    border-color: rgba(143, 197, 172, 0.55);
+    color: #8fc5ac;
+  }
+
+  .hero-demo-badge.is-unavailable {
+    border-color: rgba(201, 107, 107, 0.5);
+    color: #d59a9a;
+  }
+
+  .hero-demo-modeswitch {
+    background: none;
+    border: 1px solid rgba(201, 166, 107, 0.34);
+    border-radius: 8px;
+    color: rgba(232, 226, 216, 0.86);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 10px;
+  }
+
+  .hero-demo-modeswitch:hover {
+    border-color: rgba(201, 166, 107, 0.6);
+  }
+
+  /* ── Live free-type demo ──────────────────────────────────────────── */
+
+  .hero-live {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .hero-live-label {
+    font-size: 12px;
+    color: rgba(232, 226, 216, 0.62);
+  }
+
+  .hero-live-input {
+    box-sizing: border-box;
+    width: 100%;
+    resize: vertical;
+    background: rgba(11, 9, 8, 0.85);
+    color: #e8e2d8;
+    border: 1px solid rgba(201, 166, 107, 0.28);
+    border-radius: 10px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .hero-live-input:focus {
+    outline: none;
+    border-color: rgba(143, 197, 172, 0.55);
+  }
+
+  .hero-live-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .hero-live-run {
+    background: rgba(143, 197, 172, 0.16);
+    border: 1px solid rgba(143, 197, 172, 0.5);
+    border-radius: 9px;
+    color: #d6efe4;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+    padding: 7px 16px;
+  }
+
+  .hero-live-run:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .hero-live-status {
+    font-size: 12px;
+    color: rgba(232, 226, 216, 0.66);
+  }
+
+  .hero-live-terminal,
+  .hero-live-loading {
+    background: #0b0908;
+    border: 1px solid rgba(201, 166, 107, 0.24);
+    border-radius: 12px;
+    overflow: hidden;
+    padding: 8px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  .hero-live-loading {
+    color: rgba(232, 226, 216, 0.6);
+    font-size: 13px;
+    padding: 24px;
+  }
+
+  @media (max-width: 760px) {
+    .hero-demo-shell {
+      min-height: 0;
+    }
+
+    .hero-live-terminal {
+      overflow-x: auto;
+    }
+  }
