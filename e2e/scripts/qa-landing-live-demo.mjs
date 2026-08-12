@@ -76,6 +76,20 @@ try {
 
       const status = page.locator(".hero-live-status");
       await status.waitFor({ state: "visible", timeout: 15000 });
+      // Claude redraws its inline TUI once the composer is ready, so the
+      // launch line is not guaranteed to remain in scrollback. Observe the
+      // terminal throughout startup and remember that it was shown.
+      const showedCommand = page
+        .waitForFunction(
+          () =>
+            (document.querySelector(".xterm-rows")?.textContent ?? "")
+              .replace(/\s+/g, "")
+              .includes("claude--dangerously-skip-permissions"),
+          null,
+          { timeout: 90000 },
+        )
+        .then(() => true)
+        .catch(() => false);
       await page
         .waitForFunction(
           () => /ready|unavailable/i.test(document.querySelector(".hero-live-status")?.textContent ?? ""),
@@ -89,11 +103,9 @@ try {
       // The plumbing must never be on screen.
       const rows = (await page.locator(".xterm-rows").innerText().catch(() => "")) || "";
       check(`${vp.name}: no su/job-control noise`, !/su -p demo|job control/.test(rows));
-      // Strip ALL whitespace: the terminal wraps mid-word, so the command can
-      // arrive as "--dangerously-skip-perm" + "issions" across two rows.
       check(
         `${vp.name}: shows the short claude command`,
-        rows.replace(/\s+/g, "").includes("claude--dangerously-skip-permissions"),
+        await showedCommand,
       );
 
       // Terminal fills its frame rather than wrapping at someone else's width.
@@ -123,6 +135,29 @@ try {
         () => document.documentElement.scrollWidth <= window.innerWidth,
       );
       check(`${vp.name}: no horizontal overflow`, overflow);
+
+      const demoFit = await page.evaluate(() => {
+        const shell = document.querySelector(".hero-demo-shell");
+        const switcher = document.querySelector(".hero-demo-modeswitch");
+        const input = document.querySelector(".hero-live-input");
+        const note = document.querySelector(".landing-hero-video-note");
+        if (!shell || !switcher || !input || !note) return null;
+        const shellRect = shell.getBoundingClientRect();
+        const inside = (element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.left >= shellRect.left - 1 && rect.right <= shellRect.right + 1;
+        };
+        return {
+          fits: shell.scrollWidth <= shell.clientWidth && inside(switcher) && inside(input) && inside(note),
+          scroll: shell.scrollWidth,
+          client: shell.clientWidth,
+        };
+      });
+      check(
+        `${vp.name}: live controls stay inside the demo`,
+        Boolean(demoFit?.fits),
+        demoFit ? `${demoFit.scroll}px content in ${demoFit.client}px shell` : "missing live UI",
+      );
 
       if (doRun && vp.name === "desktop") {
         await page.locator(".hero-live-run").click();

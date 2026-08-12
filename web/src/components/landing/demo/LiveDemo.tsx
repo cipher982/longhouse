@@ -38,11 +38,11 @@ function signalOf(raw: string): string {
 }
 
 const STATUS: Record<Phase, string> = {
-  connecting: "Opening a disposable Linux sandbox…",
-  starting: "Starting Claude Code…",
-  ready: "Claude Code is ready. Edit the instruction, then run it.",
-  running: "Claude Code is working in /demo-repo",
-  done: "Finished.",
+  connecting: "Opening your sandbox",
+  starting: "Starting Claude Code",
+  ready: "Claude is ready",
+  running: "Claude is working in /demo-repo",
+  done: "Task complete",
   failed: "Live session unavailable.",
 };
 
@@ -73,7 +73,8 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
       convertEol: true,
       cursorBlink: true,
       fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-      fontSize: 12,
+      fontSize: mountRef.current.clientWidth < 520 ? 11 : 12,
+      lineHeight: 1.18,
       theme: { background: "#0b0908", foreground: "#e8e2d8" },
     });
     const fit = new FitAddon();
@@ -175,33 +176,54 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
 
   return (
     <div className="hero-live">
-      <label className="hero-live-label" htmlFor="hero-live-instruction">
-        Your instruction
-      </label>
-      <textarea
-        id="hero-live-instruction"
-        className="hero-live-input"
-        value={instruction}
-        rows={2}
-        disabled={phase === "running" || phase === "done"}
-        onChange={(event) => setInstruction(event.target.value)}
-      />
-      <div className="hero-live-controls">
-        <button
-          type="button"
-          className="hero-live-run"
-          onClick={run}
-          disabled={phase !== "ready"}
-        >
-          {phase === "running" ? "Running…" : "Run it"}
-        </button>
-        <span className="hero-live-status" role="status">
-          {phase === "done" && elapsed !== null
-            ? `Finished in ${elapsed.toFixed(1)}s`
-            : STATUS[phase]}
-        </span>
+      <div className="hero-live-composer">
+        <div className="hero-live-composer-heading">
+          <div>
+            <label className="hero-live-label" htmlFor="hero-live-instruction">
+              Give Claude a task
+            </label>
+            <span className="hero-live-context">Disposable repo · Python fixture</span>
+          </div>
+          <span className={`hero-live-status is-${phase}`} role="status">
+            <span className="hero-live-status-dot" aria-hidden="true" />
+            {phase === "done" && elapsed !== null
+              ? `Finished in ${elapsed.toFixed(1)}s`
+              : STATUS[phase]}
+          </span>
+        </div>
+        <textarea
+          id="hero-live-instruction"
+          className="hero-live-input"
+          value={instruction}
+          rows={2}
+          disabled={phase === "running" || phase === "done"}
+          onChange={(event) => setInstruction(event.target.value)}
+        />
+        <div className="hero-live-controls">
+          <span className="hero-live-hint">Edit the prompt, then send it to the live agent.</span>
+          <button
+            type="button"
+            className="hero-live-run"
+            onClick={run}
+            disabled={phase !== "ready"}
+          >
+            <span>{phase === "running" ? "Running…" : "Run task"}</span>
+            <span className="hero-live-run-arrow" aria-hidden="true">→</span>
+          </button>
+        </div>
       </div>
-      <div className="hero-live-terminal" ref={mountRef} />
+      <div className="hero-live-terminal-window">
+        <div className="hero-live-terminal-chrome">
+          <span className="hero-live-terminal-dots" aria-hidden="true">
+            <i /><i /><i />
+          </span>
+          <span className="hero-live-terminal-title">demo@cloudchamber · /demo-repo</span>
+          <span className="hero-live-terminal-meta">
+            <span aria-hidden="true" /> ephemeral
+          </span>
+        </div>
+        <div className="hero-live-terminal" ref={mountRef} />
+      </div>
     </div>
   );
 }

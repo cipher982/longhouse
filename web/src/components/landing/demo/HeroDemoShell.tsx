@@ -21,7 +21,7 @@ type Mode = "recorded" | "live" | "unavailable";
 const NOTES: Record<Mode, string> = {
   recorded:
     "Demo shows real provider CLIs replayed from recordings, with scripted model responses.",
-  live: "Real Claude Code running live in a disposable Linux sandbox. Network and runtime are limited; nothing persists.",
+  live: "Real Claude Code, isolated in a disposable Linux sandbox. Network and runtime are limited; nothing persists.",
   unavailable:
     "The live session could not start, so this is the recorded demo: real provider CLIs replayed from recordings, with scripted model responses.",
 };
@@ -56,14 +56,23 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
       onFocusCapture={onIntent}
     >
       <div className="hero-demo-modebar">
-        <span className={`hero-demo-badge is-${mode}`}>{BADGES[mode]}</span>
+        <div className="hero-demo-mode">
+          <span className={`hero-demo-badge is-${mode}`}>
+            <span className="hero-demo-badge-dot" aria-hidden="true" />
+            {BADGES[mode]}
+          </span>
+          <span className="hero-demo-modehint">
+            {mode === "live" ? "Your prompt. A real agent." : "A two-minute product tour."}
+          </span>
+        </div>
         {mode !== "live" && (
           <button
             type="button"
             className="hero-demo-modeswitch"
             onClick={() => setMode("live")}
           >
-            Type your own
+            <span>Try it live</span>
+            <span className="hero-demo-modeswitch-arrow" aria-hidden="true">↗</span>
           </button>
         )}
         {mode === "live" && (
@@ -72,7 +81,8 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
             className="hero-demo-modeswitch"
             onClick={() => setMode("recorded")}
           >
-            Back to the recorded demo
+            <span className="hero-demo-modeswitch-arrow is-back" aria-hidden="true">↙</span>
+            <span>Recorded demo</span>
           </button>
         )}
       </div>
@@ -85,7 +95,13 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
         <HeroDemo aria-label={ariaLabel} />
       )}
 
-      <p className="landing-hero-video-note">{NOTES[mode]}</p>
+      <p className="landing-hero-video-note">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 1.5 13 3.4v3.9c0 3.1-2 5.8-5 7.2-3-1.4-5-4.1-5-7.2V3.4L8 1.5Z" />
+          <path d="m5.8 8 1.4 1.4 3-3" />
+        </svg>
+        <span>{NOTES[mode]}</span>
+      </p>
     </div>
   );
 }
