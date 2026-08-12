@@ -3607,6 +3607,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 environment,
                 diagnostic_path=root / "cursor-idle-timeout-initial.json",
             )
+            # The bootstrap hook can publish idle while Cursor is still
+            # redrawing the input surface. Revalidate the provider-owned PTY
+            # prompt immediately before the initial seed injection.
+            _wait_cursor_tui_ready(initial, root / "initial.tty")
             _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
