@@ -3156,6 +3156,18 @@ def _control_send(
     }
 
 
+def _send_initial_seed(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    state: dict[str, Any],
+    process: PtyProcess,
+    text: str,
+) -> dict[str, Any]:
+    """Submit only the initial Cursor seed through its disposable PTY path."""
+
+    return _control_send(spec, args, state, process, text, initial=True)
+
+
 def _cursor_bootstrap_prompt(marker: str = "READY") -> str:
     """Return a side-effect-free first-turn prompt for Cursor's hook probe.
 
@@ -3608,22 +3620,20 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 label="initial-seed-before-send",
             )
             initial_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
-            initial_send = _control_send(
+            initial_send = _send_initial_seed(
                 spec,
                 args,
                 initial_state,
                 initial,
                 _resume_marker_prompt(provider, seed_marker),
-                initial=True,
             )
         else:
-            initial_send = _control_send(
+            initial_send = _send_initial_seed(
                 spec,
                 args,
                 initial_state,
                 initial,
                 _resume_marker_prompt(provider, seed_marker),
-                initial=True,
             )
         _write_json(root / "initial-seed-send.json", initial_send)
         if spec.provider == "cursor":

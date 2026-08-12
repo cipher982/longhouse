@@ -49,6 +49,7 @@ from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
+from zerg.qa.provider_native_resume import _send_initial_seed
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
@@ -2250,6 +2251,23 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
     assert result["method"] == "provider_tty_bootstrap"
     assert result["returncode"] == 0
     assert process.sent == ["seed", "\x1b", "\r"]
+
+
+def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[bool] = []
+
+    def fake_control_send(*_args: object, **kwargs: object) -> dict[str, object]:
+        calls.append(bool(kwargs["initial"]))
+        return {"method": "test", "returncode": 0}
+
+    monkeypatch.setattr(provider_native_resume, "_control_send", fake_control_send)
+    args = _args(tmp_path)
+    for spec in (SPECS["cursor"], SPECS["claude"]):
+        _send_initial_seed(spec, args, {"session_id": "session-1"}, object(), "seed")  # type: ignore[arg-type]
+
+    assert calls == [True, True]
 
 
 def test_cursor_initial_seed_flush_waits_for_ordered_hook_and_idle(
