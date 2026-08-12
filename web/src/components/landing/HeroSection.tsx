@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import config from "../../lib/config";
 import { trackAcquisitionEvent } from "../../lib/analytics";
+import { HeroDemoFallback } from "./demo/HeroDemoFallback";
 
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
@@ -147,16 +148,7 @@ export function HeroSection() {
 
       <div className="landing-hero-stage">
         <div className="landing-hero-glow" aria-hidden="true" />
-        <Suspense
-          fallback={
-            <img
-              className="landing-hero-video"
-              src="/images/landing/control-poster.png?v=20260809-1"
-              alt={DEMO_ARIA_LABEL}
-              aria-label={DEMO_ARIA_LABEL}
-            />
-          }
-        >
+        <Suspense fallback={<HeroDemoFallback />}>
           <HeroDemo aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
         <p className="landing-hero-video-note">

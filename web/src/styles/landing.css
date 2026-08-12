@@ -464,7 +464,30 @@
     width: 100%;
   }
 
-  /* beat 1: agents — staggered deck of real recordings */
+  .hero-demo-fallback-screen {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: clamp(5px, 0.8vw, 10px);
+    aspect-ratio: 64 / 30.1;
+    padding: clamp(8px, 1.2vw, 15px);
+    color: rgba(243, 234, 217, 0.52);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(0.52rem, 0.9vw, 0.76rem);
+    line-height: 1.3;
+  }
+
+  .hero-demo-fallback-screen span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hero-demo-fallback-screen .is-active {
+    color: rgba(243, 234, 217, 0.9);
+  }
+
+  /* beat 1: deck of real agent recordings */
 
   .hero-demo-agents {
     display: flex;
