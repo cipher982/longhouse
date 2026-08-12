@@ -3,22 +3,26 @@ import { sessionUrl, terminalUrl } from "./liveDemoConfig";
 /**
  * A warm sandbox that exists before anyone looks at it.
  *
- * The visitor should never watch the plumbing: not our `su ... exec claude`
- * line, not Claude's boot render. So this owns the session independently of
- * the UI — it starts on the first sign of a real human on the page, buffers
- * every PTY byte, and reports when Claude has reached its composer.
- *
- * When the terminal finally mounts it replays the whole buffer in one write.
- * xterm processes it as fast as it can parse, so the pane appears already
- * settled at an idle Claude prompt instead of animating through startup.
+ * The split matters: creating the sandbox is boring plumbing and happens
+ * invisibly on the first sign of a real human, but LAUNCHING Claude is the
+ * part worth watching, so it waits for the UI and then types itself out on
+ * screen. Hiding that behind a spinner turned the wait into dead time; showing
+ * it turns the wait into the demo.
  */
 
-const LAUNCH_CLAUDE =
-  "su -p demo -s /bin/bash -c 'exec /usr/local/bin/claude --effort low --bare " +
+/**
+ * What the visitor watches being typed. This is the real invocation, not a
+ * prettified stand-in: display copy that drifts from what actually ran is a
+ * mistake this repo has already paid for once. The leash that used to live in
+ * --append-system-prompt moved into the workspace's CLAUDE.md so the command
+ * stays something a person would plausibly type.
+ */
+export const CLAUDE_COMMAND =
+  "claude --bare --effort low " +
   '--append-system-prompt "tiny throwaway workspace, minimal change, run tests once, stop, <=3 sentence responses" ' +
-  "--dangerously-skip-permissions'\r";
+  "--dangerously-skip-permissions";
 
-export type SessionState = "starting" | "ready" | "failed";
+export type SessionState = "starting" | "shell" | "launching" | "ready" | "failed";
 
 function signalOf(raw: string): string {
   return (
@@ -81,7 +85,9 @@ export class LiveSession {
       if (!(event.data instanceof ArrayBuffer)) {
         try {
           const message = JSON.parse(event.data as string);
-          if (message.type === "ready") this.send(LAUNCH_CLAUDE);
+          if (message.type === "ready" && this.state === "starting") {
+            void this.openCleanShell();
+          }
           if (message.type === "error") this.fail(message.message ?? "pty error");
         } catch {
           /* terminal chunks can begin with a brace */
@@ -96,7 +102,7 @@ export class LiveSession {
       if (this.sink) this.sink(chunk);
       else this.buffer.push(chunk);
 
-      if (this.state === "starting" && signalOf(this.transcript).includes("bypasspermissionson")) {
+      if (this.state === "launching" && signalOf(this.transcript).includes("bypasspermissionson")) {
         this.state = "ready";
         this.notify();
       }
@@ -105,7 +111,7 @@ export class LiveSession {
     socket.onerror = () => this.fail("connection error");
     socket.onclose = () => {
       // 1006 before the composer appears is the known sandbox transient.
-      if (this.state === "starting") this.fail("connection closed");
+      if (this.state !== "ready") this.fail("connection closed");
     };
   }
 
@@ -121,6 +127,41 @@ export class LiveSession {
 
   detach(): void {
     this.sink = null;
+  }
+
+  /**
+   * Drop to the demo user and clear the screen, all before anyone is looking.
+   * `su` into a PTY without job control prints "cannot set terminal process
+   * group" noise, which is plumbing nobody should read — so it happens during
+   * warm-up and the buffer is discarded, leaving a clean demo@ prompt as the
+   * first thing the visitor ever sees.
+   */
+  private async openCleanShell(): Promise<void> {
+    this.send("su -p demo -s /bin/bash\r");
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    this.send("cd /demo-repo && clear\r");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    this.buffer = [];
+    this.transcript = "";
+    this.state = "shell";
+    this.notify();
+  }
+
+  /** Type a line the way a person does, so the visitor can read it. */
+  async type(text: string, msPerChar = 28): Promise<void> {
+    for (const char of text) {
+      this.send(char);
+      await new Promise((resolve) => setTimeout(resolve, msPerChar));
+    }
+    this.send("\r");
+  }
+
+  /** Start Claude on screen — this is the part worth watching. */
+  async launch(): Promise<void> {
+    if (this.state !== "shell") return;
+    this.state = "launching";
+    this.notify();
+    await this.type(CLAUDE_COMMAND);
   }
 
   send(text: string): void {
