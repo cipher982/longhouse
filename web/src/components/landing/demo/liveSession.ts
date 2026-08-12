@@ -11,16 +11,18 @@ import { sessionUrl, terminalUrl } from "./liveDemoConfig";
  */
 
 /**
- * What the visitor watches being typed. This is the real invocation, not a
- * prettified stand-in: display copy that drifts from what actually ran is a
- * mistake this repo has already paid for once. The leash that used to live in
- * --append-system-prompt moved into the workspace's CLAUDE.md so the command
- * stays something a person would plausibly type.
+ * The tuning flags live in a shell alias set up during warm-up, the same way a
+ * real user's dotfiles would carry them, so what the visitor types stays short
+ * and still runs exactly what is shown. Nothing here is a prettified
+ * stand-in — bash expands this into the full invocation, and a self-referential
+ * alias does not recurse.
  */
-export const CLAUDE_COMMAND =
-  "claude --bare --effort low " +
-  '--append-system-prompt "tiny throwaway workspace, minimal change, run tests once, stop, <=3 sentence responses" ' +
-  "--dangerously-skip-permissions";
+const CLAUDE_ALIAS =
+  `alias claude='claude --bare --effort low ` +
+  `--append-system-prompt "tiny throwaway workspace, minimal change, run tests once, stop, <=3 sentence responses"'`;
+
+/** What the visitor watches being typed. */
+export const CLAUDE_COMMAND = "claude --dangerously-skip-permissions";
 
 export type SessionState = "starting" | "shell" | "launching" | "ready" | "failed";
 
@@ -48,6 +50,8 @@ export class LiveSession {
   private sink: ((chunk: Uint8Array) => void) | null = null;
   private watchers = new Set<() => void>();
   private decoder = new TextDecoder();
+  private cols = 0;
+  private rows = 0;
 
   onChange(watcher: () => void): () => void {
     this.watchers.add(watcher);
@@ -139,8 +143,12 @@ export class LiveSession {
   private async openCleanShell(): Promise<void> {
     this.send("su -p demo -s /bin/bash\r");
     await new Promise((resolve) => setTimeout(resolve, 700));
+    this.send(`${CLAUDE_ALIAS}\r`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
     this.send("cd /demo-repo && clear\r");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Wait out the echo AND the clear before discarding, or a stray fragment
+    // of the word "clear" survives the wipe and shows up glued to the prompt.
+    await new Promise((resolve) => setTimeout(resolve, 900));
     this.buffer = [];
     this.transcript = "";
     this.state = "shell";
@@ -162,6 +170,27 @@ export class LiveSession {
     this.state = "launching";
     this.notify();
     await this.type(CLAUDE_COMMAND);
+  }
+
+  /**
+   * Resize the real PTY to match the rendered terminal. Without this the
+   * sandbox keeps its initial 64x20 and the output wraps at 64 columns
+   * regardless of how wide the frame is, which both looks wrong and pushes the
+   * launch command off the top of the viewport.
+   */
+  resize(cols: number, rows: number): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    if (cols === this.cols && rows === this.rows) return;
+    this.cols = cols;
+    this.rows = rows;
+    this.socket.send(JSON.stringify({ type: "resize", cols, rows }));
+
+    // A resize reflows text that was already emitted at the old width, which
+    // leaves overlapping glyphs ("issionsce, stop,"). Repaint rather than live
+    // with the artifact: an idle shell can just clear, and Claude redraws its
+    // whole UI on Ctrl+L.
+    if (this.state === "shell") this.send("clear\r");
+    else if (this.state === "ready") this.send("\x0c");
   }
 
   send(text: string): void {

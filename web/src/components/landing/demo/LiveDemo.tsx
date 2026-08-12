@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { LIVE_COLS, LIVE_ROWS } from "./liveDemoConfig";
 import { prewarmLiveSession, type LiveSession } from "./liveSession";
 
 /**
@@ -67,17 +66,18 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
 
   useEffect(() => {
     if (!mountRef.current || termRef.current) return;
-    // Geometry is fixed to the sandbox PTY: a mismatch corrupts alt-screen TUIs.
+    // Size follows the frame. This is a live PTY, not a fixed recording, so we
+    // resize the sandbox to match rather than wrapping output at someone
+    // else's column count.
     const term = new Terminal({
-      cols: LIVE_COLS,
-      rows: LIVE_ROWS,
       convertEol: true,
       cursorBlink: true,
       fontFamily: "'JetBrains Mono', ui-monospace, monospace",
       fontSize: 12,
       theme: { background: "#0b0908", foreground: "#e8e2d8" },
     });
-    term.loadAddon(new FitAddon());
+    const fit = new FitAddon();
+    term.loadAddon(fit);
     term.open(mountRef.current);
     termRef.current = term;
 
@@ -112,11 +112,24 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
       session.attach(sink);
     };
 
+    // Keep the PTY the same shape as the pane, now and on every reflow.
+    const applyFit = () => {
+      try {
+        fit.fit();
+      } catch {
+        return;
+      }
+      sessionRef.current?.resize(term.cols, term.rows);
+    };
+    const observer = new ResizeObserver(() => applyFit());
+    observer.observe(mountRef.current);
+
     const sync = () => {
       // Once the sandbox has a shell, start Claude where the visitor can see
       // it. launch() is idempotent on state, so repeated syncs are harmless.
       attachOnce();
       if (session.state === "shell") {
+        applyFit();
         setPhase("starting");
         void session.launch();
       }
@@ -137,6 +150,7 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
     const unsubscribe = session.onChange(sync);
 
     return () => {
+      observer.disconnect();
       unsubscribe();
       session.detach();
       term.dispose();

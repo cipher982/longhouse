@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useState } from "react";
 import { HeroDemo } from "./HeroDemo";
 import { prewarmLiveSession } from "./liveSession";
 
@@ -35,21 +35,13 @@ const BADGES: Record<Mode, string> = {
 export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": string }) {
   const [mode, setMode] = useState<Mode>("recorded");
 
-  // Warm a sandbox on the first evidence of a real human, so "Type your own"
-  // opens onto an idle Claude prompt instead of a boot sequence. Pointer, key
-  // and touch only — never bare page load, or every crawler costs a container.
-  useEffect(() => {
-    const events = ["pointerdown", "pointermove", "keydown", "touchstart"] as const;
-    const onIntent = () => {
-      prewarmLiveSession();
-      for (const name of events) window.removeEventListener(name, onIntent);
-    };
-    for (const name of events) {
-      window.addEventListener(name, onIntent, { once: false, passive: true });
-    }
-    return () => {
-      for (const name of events) window.removeEventListener(name, onIntent);
-    };
+  // Warm only when someone reaches the demo itself — pointer entering the
+  // card, or focus landing inside it. An earlier version listened page-wide,
+  // which meant every visitor who moved their mouse anywhere spun up a
+  // container they never used: wasteful, and it burned the per-visitor cap
+  // before anyone got to click.
+  const onIntent = useCallback(() => {
+    prewarmLiveSession();
   }, []);
 
   // Switch the honesty note BEFORE falling back, never after: the page must
@@ -58,7 +50,11 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
   const handleFailure = useCallback(() => setMode("unavailable"), []);
 
   return (
-    <div className="hero-demo-shell">
+    <div
+      className="hero-demo-shell"
+      onPointerEnter={onIntent}
+      onFocusCapture={onIntent}
+    >
       <div className="hero-demo-modebar">
         <span className={`hero-demo-badge is-${mode}`}>{BADGES[mode]}</span>
         {mode !== "live" && (

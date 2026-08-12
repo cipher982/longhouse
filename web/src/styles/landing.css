@@ -2752,6 +2752,17 @@
     color: rgba(232, 226, 216, 0.66);
   }
 
+  .hero-live-terminal {
+    /* FitAddon needs a definite box to derive rows from; it then resizes the
+       real PTY to match, so output wraps at the frame rather than at 64. */
+    height: clamp(280px, 44vh, 460px);
+  }
+
+  .hero-live-terminal .xterm,
+  .hero-live-terminal .xterm-viewport {
+    height: 100% !important;
+  }
+
   .hero-live-terminal,
   .hero-live-loading {
     background: #0b0908;
