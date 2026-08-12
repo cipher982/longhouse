@@ -1,5 +1,6 @@
-import { lazy, Suspense, useCallback, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { HeroDemo } from "./HeroDemo";
+import { prewarmLiveSession } from "./liveSession";
 
 /**
  * Owns which demo the hero is showing. Recorded and live are mutually
@@ -33,6 +34,23 @@ const BADGES: Record<Mode, string> = {
 
 export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": string }) {
   const [mode, setMode] = useState<Mode>("recorded");
+
+  // Warm a sandbox on the first evidence of a real human, so "Type your own"
+  // opens onto an idle Claude prompt instead of a boot sequence. Pointer, key
+  // and touch only — never bare page load, or every crawler costs a container.
+  useEffect(() => {
+    const events = ["pointerdown", "pointermove", "keydown", "touchstart"] as const;
+    const onIntent = () => {
+      prewarmLiveSession();
+      for (const name of events) window.removeEventListener(name, onIntent);
+    };
+    for (const name of events) {
+      window.addEventListener(name, onIntent, { once: false, passive: true });
+    }
+    return () => {
+      for (const name of events) window.removeEventListener(name, onIntent);
+    };
+  }, []);
 
   // Switch the honesty note BEFORE falling back, never after: the page must
   // not describe a recorded replay while a live run is still on screen, or

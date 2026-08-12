@@ -2777,3 +2777,37 @@
       overflow-x: auto;
     }
   }
+
+  .hero-live-screen {
+    position: relative;
+  }
+
+  .hero-live-cover {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border-radius: 12px;
+    background: #0b0908;
+    color: rgba(232, 226, 216, 0.6);
+    font-size: 13px;
+  }
+
+  .hero-live-spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(143, 197, 172, 0.28);
+    border-top-color: rgba(143, 197, 172, 0.9);
+    border-radius: 50%;
+    animation: hero-live-spin 0.8s linear infinite;
+  }
+
+  @keyframes hero-live-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero-live-spinner { animation: none; }
+  }
