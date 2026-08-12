@@ -108,6 +108,33 @@ for s in d['states'][::8]:
 EOF
 ```
 
+### Browser QA hygiene (paid for 2026-08-12)
+
+Drive a **disposable headless browser**, never a managed `agent-browser-profile`
+one. `background`/`watchable` are for interactive, identity-bearing browsing;
+borrowing one for repeated UI QA opens a window on David's screen, litters a
+SHARED profile with tabs he has to close by hand, and collides with other agents
+holding the same profile (`background` refuses to start while `watchable` runs,
+and the tempting fallback — driving `watchable` — is the visible one).
+
+The landing page is unauthenticated, so QA needs no identity at all:
+
+```bash
+make qa-landing-live                      # local dev server, no instruction run
+make qa-landing-live URL=https://longhouse.ai RUN=1   # spends money, uses quota
+```
+
+`e2e/scripts/qa-landing-live-demo.mjs` launches its own headless chromium with a
+throwaway profile, closes every context in `finally`, and asserts the layout
+contract (fold at 1440x900 / 1800x850 / 390x844, terminal fill, no horizontal
+overflow) by measurement rather than eyeball. Extend that script instead of
+hand-rolling CDP.
+
+Two matching traps when asserting on terminal text: strip ANSI before matching
+(the PTY interleaves escapes mid-word) AND strip all whitespace (the TUI wraps
+and emits cursor moves mid-phrase, so "all tests passed" arrives as
+"all testspassed" and a flag can split across rows).
+
 Verify loop (never skip; this is the vision-check rule):
 1. `cd web && bun run build`, then `bunx vite preview --port 4188` and
    Playwright-screenshot `http://localhost:4188/landing` at 1440x900 AND
