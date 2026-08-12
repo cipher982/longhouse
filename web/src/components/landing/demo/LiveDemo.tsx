@@ -2,27 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { PhoneFrame } from "./PhoneFrame";
+import { PhoneSessionScreen, type PhoneRuntimeTone } from "./PhoneSessionScreen";
 import { prewarmLiveSession, type LiveSession } from "./liveSession";
-
-/**
- * The LIVE half of the hero demo: real Claude Code executing a visitor's own
- * instruction in a disposable Cloudflare sandbox, streamed over a PTY
- * WebSocket into xterm.
- *
- * This is deliberately NOT a beat. `HeroDemo` gives every child a `tLocal`
- * from a looping rAF clock and crossfades them; a live session has no
- * timeline, no seek and no loop. It shares the hero's visual slot, not its
- * clock.
- *
- * The sandbox is warmed by `liveSession` before this ever mounts, so what the
- * visitor sees is a live bash prompt that then types its own way into Claude.
- * That startup is the demo, not an obstacle to it: watching `claude` launch is
- * the thing a Claude user recognises.
- */
 
 type Phase = "connecting" | "starting" | "ready" | "running" | "done" | "failed";
 
-const DEFAULT_INSTRUCTION =
+export const DEFAULT_INSTRUCTION =
   "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py";
 
 function signalOf(raw: string): string {
@@ -37,16 +23,31 @@ function signalOf(raw: string): string {
   );
 }
 
-const STATUS: Record<Phase, string> = {
-  connecting: "Opening your sandbox",
-  starting: "Starting Claude Code",
-  ready: "Claude is ready",
-  running: "Claude is working in /demo-repo",
-  done: "Task complete",
-  failed: "Live session unavailable.",
-};
+function terminalText(term: Terminal): string {
+  const buffer = term.buffer.active;
+  const start = Math.max(0, buffer.baseY);
+  const lines: string[] = [];
+  for (let index = start; index < buffer.length; index += 1) {
+    lines.push(buffer.getLine(index)?.translateToString(true) ?? "");
+  }
+  return lines.join("\n");
+}
 
-export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void }) {
+function phoneState(active: boolean, phase: Phase): {
+  label: string;
+  detail?: string;
+  tone: PhoneRuntimeTone;
+} {
+  if (!active) return { label: "Live demo", detail: "Tap to connect", tone: "waiting" };
+  if (phase === "connecting") return { label: "Connecting", detail: "Opening sandbox", tone: "starting" };
+  if (phase === "starting") return { label: "Starting", detail: "Claude Code", tone: "starting" };
+  if (phase === "ready") return { label: "Ready", detail: "Waiting for input", tone: "ready" };
+  if (phase === "running") return { label: "Working", detail: "On demo-repo", tone: "working" };
+  if (phase === "done") return { label: "Complete", detail: "Task finished", tone: "done" };
+  return { label: "Unavailable", detail: "Try again later", tone: "failed" };
+}
+
+export function LiveDemo({ active }: { active: boolean }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<LiveSession | null>(null);
@@ -54,21 +55,34 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
   const phaseRef = useRef<Phase>("connecting");
   const sentRef = useRef(false);
   const submittedRef = useRef(false);
+  const sawWorkingRef = useRef(false);
 
   const [phase, setPhaseState] = useState<Phase>("connecting");
   const [instruction, setInstruction] = useState(DEFAULT_INSTRUCTION);
+  const [sent, setSent] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
+
+  const instructionRef = useRef(instruction);
+  useEffect(() => {
+    instructionRef.current = instruction;
+  }, [instruction]);
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
     setPhaseState(next);
   }, []);
 
+  const markDone = useCallback(() => {
+    if (phaseRef.current !== "running") return;
+    setPhase("done");
+    if (startedAtRef.current) {
+      setElapsed((performance.now() - startedAtRef.current) / 1000);
+    }
+  }, [setPhase]);
+
   useEffect(() => {
-    if (!mountRef.current || termRef.current) return;
-    // Size follows the frame. This is a live PTY, not a fixed recording, so we
-    // resize the sandbox to match rather than wrapping output at someone
-    // else's column count.
+    if (!active || !mountRef.current || termRef.current) return;
+
     const term = new Terminal({
       convertEol: true,
       cursorBlink: true,
@@ -84,25 +98,25 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
 
     const session = prewarmLiveSession();
     sessionRef.current = session;
-
-    // Do not render anything until the session has a CLEAN shell. Opening the
-    // panel mid-warm would otherwise show the `su` and its job-control noise
-    // live, which is exactly the plumbing this flow exists to hide.
     let attached = false;
+
+    const inspectScreen = () => {
+      if (!submittedRef.current || phaseRef.current !== "running") return;
+      const screen = signalOf(terminalText(term));
+      if (screen.includes("esctointerrupt")) sawWorkingRef.current = true;
+      if (sawWorkingRef.current && screen.includes("foragents") && !screen.includes("esctointerrupt")) {
+        markDone();
+      }
+    };
+
     const sink = (chunk: Uint8Array) => {
-      term.write(chunk);
+      term.write(chunk, inspectScreen);
       const signal = signalOf(session.transcript);
       if (sentRef.current && !submittedRef.current) {
         const typed = signalOf(instructionRef.current);
         if (typed && signal.includes(typed)) {
           submittedRef.current = true;
           session.send("\r");
-        }
-      }
-      if (submittedRef.current && phaseRef.current === "running" && signal.includes("alltestspassed")) {
-        setPhase("done");
-        if (startedAtRef.current) {
-          setElapsed((performance.now() - startedAtRef.current) / 1000);
         }
       }
     };
@@ -113,7 +127,6 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
       session.attach(sink);
     };
 
-    // Keep the PTY the same shape as the pane, now and on every reflow.
     const applyFit = () => {
       try {
         fit.fit();
@@ -122,12 +135,10 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
       }
       sessionRef.current?.resize(term.cols, term.rows);
     };
-    const observer = new ResizeObserver(() => applyFit());
+    const observer = new ResizeObserver(applyFit);
     observer.observe(mountRef.current);
 
     const sync = () => {
-      // Once the sandbox has a shell, start Claude where the visitor can see
-      // it. launch() is idempotent on state, so repeated syncs are harmless.
       attachOnce();
       if (session.state === "shell") {
         applyFit();
@@ -137,15 +148,13 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
       if (session.state === "launching" && phaseRef.current === "connecting") {
         setPhase("starting");
       }
-      if (session.state === "ready" && phaseRef.current !== "ready") {
-        if (phaseRef.current === "connecting" || phaseRef.current === "starting") {
-          setPhase("ready");
-        }
+      if (
+        session.state === "ready" &&
+        (phaseRef.current === "connecting" || phaseRef.current === "starting")
+      ) {
+        setPhase("ready");
       }
-      if (session.state === "failed") {
-        setPhase("failed");
-        onFailure(session.failure ?? "unavailable");
-      }
+      if (session.state === "failed") setPhase("failed");
     };
     sync();
     const unsubscribe = session.onChange(sync);
@@ -157,62 +166,48 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
       term.dispose();
       termRef.current = null;
     };
-  }, [onFailure, setPhase]);
-
-  // The attach callback closes over the first render, so read the live value.
-  const instructionRef = useRef(instruction);
-  useEffect(() => {
-    instructionRef.current = instruction;
-  }, [instruction]);
+  }, [active, markDone, setPhase]);
 
   const run = useCallback(() => {
     const session = sessionRef.current;
     if (!session || phaseRef.current !== "ready" || sentRef.current) return;
     sentRef.current = true;
     startedAtRef.current = performance.now();
+    setSent(true);
     setPhase("running");
     session.send(instruction);
   }, [instruction, setPhase]);
 
+  const runtime = phoneState(active, phase);
+  const resultLine =
+    phase === "done" && elapsed !== null
+      ? `Claude finished the live task in ${elapsed.toFixed(1)} seconds.`
+      : undefined;
+
   return (
-    <div className="hero-live">
-      <div className="hero-live-composer">
-        <div className="hero-live-composer-heading">
-          <div>
-            <label className="hero-live-label" htmlFor="hero-live-instruction">
-              Give Claude a task
-            </label>
-            <span className="hero-live-context">Disposable repo · Python fixture</span>
-          </div>
-          <span className={`hero-live-status is-${phase}`} role="status">
-            <span className="hero-live-status-dot" aria-hidden="true" />
-            {phase === "done" && elapsed !== null
-              ? `Finished in ${elapsed.toFixed(1)}s`
-              : STATUS[phase]}
-          </span>
-        </div>
-        <textarea
-          id="hero-live-instruction"
-          className="hero-live-input"
-          value={instruction}
-          rows={2}
-          disabled={phase === "running" || phase === "done"}
-          onChange={(event) => setInstruction(event.target.value)}
+    <>
+      <PhoneFrame>
+        <PhoneSessionScreen
+          title="Live demo repo"
+          transcript={{
+            assistantLine: "A real Claude Code session is attached to this disposable repository.",
+            sentMessage: sent ? instruction : undefined,
+            resultLine,
+          }}
+          composerText={instruction}
+          composerDisabled={sent || phase === "failed"}
+          runtimeLabel={runtime.label}
+          runtimeDetail={runtime.detail}
+          runtimeTone={runtime.tone}
+          sendEnabled={active && phase === "ready"}
+          sent={sent}
+          working={phase === "running"}
+          onComposerChange={setInstruction}
+          onSend={run}
         />
-        <div className="hero-live-controls">
-          <span className="hero-live-hint">Edit the prompt, then send it to the live agent.</span>
-          <button
-            type="button"
-            className="hero-live-run"
-            onClick={run}
-            disabled={phase !== "ready"}
-          >
-            <span>{phase === "running" ? "Running…" : "Run task"}</span>
-            <span className="hero-live-run-arrow" aria-hidden="true">→</span>
-          </button>
-        </div>
-      </div>
-      <div className="hero-live-terminal-window">
+      </PhoneFrame>
+
+      <div className="hero-live-terminal-window steer-live-terminal">
         <div className="hero-live-terminal-chrome">
           <span className="hero-live-terminal-dots" aria-hidden="true">
             <i /><i /><i />
@@ -222,8 +217,20 @@ export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void })
             <span aria-hidden="true" /> ephemeral
           </span>
         </div>
-        <div className="hero-live-terminal" ref={mountRef} />
+        <div className="hero-live-screen">
+          <div className="hero-live-terminal" ref={mountRef} />
+          {(!active || phase === "connecting") && (
+            <div className="hero-live-cover">
+              {active && <span className="hero-live-spinner" aria-hidden="true" />}
+              <span>
+                {active
+                  ? "Opening a disposable Linux sandbox…"
+                  : "Tap the phone to start a live Claude Code session."}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }

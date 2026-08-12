@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { recordingPrompt } from "@longhouse/video/demo";
-import { STEER_OPTIONS, SteerPlayground } from "../SteerPlayground";
+import { DEFAULT_INSTRUCTION } from "../demo/LiveDemo";
+import { SteerPlayground } from "../SteerPlayground";
+
+vi.mock("@xterm/xterm", () => ({ Terminal: class MockTerminal {} }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class MockFitAddon {} }));
 
 class MockIntersectionObserver {
   observe = vi.fn();
@@ -25,28 +28,24 @@ describe("SteerPlayground", () => {
     vi.unstubAllGlobals();
   });
 
-  it("chip-label-equals-recordingPrompt", () => {
+  it("presents one editable live instruction instead of recorded prompt choices", () => {
     render(<SteerPlayground />);
 
-    for (const option of STEER_OPTIONS) {
-      expect(screen.getByRole("button", { name: recordingPrompt(option.grid) })).toBeInTheDocument();
-    }
+    const input = screen.getByRole("textbox", { name: "Message to live session" });
+    expect(input).toHaveValue(DEFAULT_INSTRUCTION);
+    expect(input).not.toHaveAttribute("readonly");
+    expect(screen.queryByRole("group", { name: "Choose an instruction" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "Explain inventory.py" } });
+    expect(input).toHaveValue("Explain inventory.py");
   });
 
-  it("arms Send with the selected recording prompt and marks it sent", () => {
+  it("keeps the live sandbox below the autoplay hero as its own section", () => {
     render(<SteerPlayground />);
 
-    const option = STEER_OPTIONS[1];
-    fireEvent.click(screen.getByRole("button", { name: recordingPrompt(option.grid) }));
-
-    const send = screen.getByRole("button", { name: "Send" });
-    expect(send).toBeEnabled();
-    expect(screen.getByRole("textbox", { name: "Message to live session" })).toHaveValue(
-      recordingPrompt(option.grid),
-    );
-
-    fireEvent.click(send);
-    expect(screen.getByRole("button", { name: "Message sent" })).toBeDisabled();
-    expect(screen.getAllByText(recordingPrompt(option.grid))).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Send the next move." })).toBeInTheDocument();
+    expect(screen.getByText("Real Claude Code")).toBeInTheDocument();
+    expect(screen.getByText("Tap to connect")).toBeInTheDocument();
   });
 });

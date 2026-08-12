@@ -1,27 +1,16 @@
 #!/usr/bin/env node
 /**
- * QA harness for the landing page's live "Type your own" demo.
+ * QA harness for the landing page's real below-fold steering demo.
  *
- * Why this exists rather than ad-hoc CDP against a managed browser profile:
- * the `background`/`watchable` profiles in agent-browser-profile are for
- * interactive, identity-bearing browsing. Borrowing one for repeated UI QA
- * opens a window on the operator's screen, litters a SHARED profile with tabs
- * nobody can safely close, and collides with other agents holding the same
- * profile. This target is an unauthenticated page, so it needs no identity at
- * all — just a disposable browser.
- *
- * Properties this guarantees:
- *   - headless: never renders on anyone's screen
- *   - a fresh throwaway profile per run, isolated from every managed profile
- *   - teardown in `finally`, so no tab or browser survives a failure
- *   - fold/fill assertions from the landing-hero layout contract, measured
- *     rather than eyeballed
+ * The hero must remain the autoplay product story. The live sandbox belongs
+ * in the separate SteerPlayground section, where a visitor edits the iPhone
+ * composer and watches the real Claude Code terminal respond.
  *
  * Usage:
  *   cd e2e && node scripts/qa-landing-live-demo.mjs [url] [--run] [--shots DIR]
  *
- * `--run` actually executes an instruction in a real sandbox, which spends
- * money and consumes the per-visitor rate limit. Off by default.
+ * `--run` executes one instruction in a real sandbox. It spends money and
+ * consumes the per-visitor rate limit, so it is off by default.
  */
 import { chromium } from "@playwright/test";
 import { mkdtemp } from "node:fs/promises";
@@ -29,7 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const args = process.argv.slice(2);
-const url = args.find((a) => a.startsWith("http")) ?? "http://localhost:5173/landing";
+const url = args.find((arg) => arg.startsWith("http")) ?? "http://localhost:5173/landing";
 const doRun = args.includes("--run");
 const shotsFlag = args.indexOf("--shots");
 const VIEWPORTS = [
@@ -44,45 +33,72 @@ let failures = 0;
 function check(name, ok, detail) {
   results.push({ name, ok, detail });
   if (!ok) failures += 1;
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` - ${detail}` : ""}`);
 }
 
 const shotsDir =
   shotsFlag >= 0 ? args[shotsFlag + 1] : await mkdtemp(path.join(tmpdir(), "landing-qa-"));
 
-const browser = await chromium.launch(); // headless by default
+const browser = await chromium.launch();
 try {
-  for (const vp of VIEWPORTS) {
+  for (const viewport of VIEWPORTS) {
     const context = await browser.newContext({
-      viewport: { width: vp.width, height: vp.height },
-      isMobile: Boolean(vp.isMobile),
-      hasTouch: Boolean(vp.isMobile),
+      viewport: { width: viewport.width, height: viewport.height },
+      isMobile: Boolean(viewport.isMobile),
+      hasTouch: Boolean(viewport.isMobile),
     });
     const page = await context.newPage();
     try {
       await page.goto(url, { waitUntil: "domcontentloaded" });
-      const shell = page.locator(".hero-demo-shell");
-      await shell.waitFor({ state: "visible", timeout: 20000 });
 
-      // Recorded is the default and must stay so.
-      // innerText is uppercased by CSS, so compare case-insensitively.
-      const badge = (await page.locator(".hero-demo-badge").innerText()).trim();
-      check(`${vp.name}: opens on the recorded demo`, /^recorded demo$/i.test(badge), badge);
+      const hero = page.locator(".landing-hero .hero-demo");
+      await hero.waitFor({ state: "visible", timeout: 20000 });
+      await page
+        .waitForFunction(
+          () =>
+            Array.from(document.querySelectorAll(".landing-hero .hero-demo-beat")).some((beat) => {
+              const rect = beat.getBoundingClientRect();
+              return getComputedStyle(beat).visibility === "visible" && rect.height >= 180;
+            }),
+          null,
+          { timeout: 10000 },
+        )
+        .catch(() => {});
+      const heroPaint = await page.evaluate(() => {
+        const demo = document.querySelector(".landing-hero .hero-demo");
+        const visibleBeat = Array.from(
+          document.querySelectorAll(".landing-hero .hero-demo-beat"),
+        ).find((beat) => getComputedStyle(beat).visibility === "visible");
+        if (!demo || !visibleBeat) return null;
+        const demoRect = demo.getBoundingClientRect();
+        const beatRect = visibleBeat.getBoundingClientRect();
+        return {
+          demoWidth: Math.round(demoRect.width),
+          beatHeight: Math.round(beatRect.height),
+        };
+      });
+      check(
+        `${viewport.name}: autoplay demo remains in the hero`,
+        Boolean(heroPaint && heroPaint.demoWidth >= 300 && heroPaint.beatHeight >= 180),
+        heroPaint ? `${heroPaint.demoWidth}px wide, ${heroPaint.beatHeight}px tall` : "not painted",
+      );
+      // The first beat deliberately staggers its terminal cards. Capture the
+      // visible animation, not its empty opening frame.
+      await page.waitForTimeout(900);
+      check(
+        `${viewport.name}: hero has no live-demo toggle`,
+        (await page.locator(".landing-hero .hero-demo-modeswitch").count()) === 0,
+      );
+      await page.screenshot({ path: path.join(shotsDir, `${viewport.name}-hero.png`) });
 
-      // Real hover on the card is what triggers pre-warm.
-      await shell.hover();
-      await page.waitForTimeout(4000);
-      await page.locator(".hero-demo-modeswitch").click();
+      const playground = page.locator(".steer-playground");
+      await playground.scrollIntoViewIfNeeded();
+      await playground.hover();
 
-      const status = page.locator(".hero-live-status");
-      await status.waitFor({ state: "visible", timeout: 15000 });
-      // Claude redraws its inline TUI once the composer is ready, so the
-      // launch line is not guaranteed to remain in scrollback. Observe the
-      // terminal throughout startup and remember that it was shown.
       const showedCommand = page
         .waitForFunction(
           () =>
-            (document.querySelector(".xterm-rows")?.textContent ?? "")
+            (document.querySelector(".steer-playground .xterm-rows")?.textContent ?? "")
               .replace(/\s+/g, "")
               .includes("claude--dangerously-skip-permissions"),
           null,
@@ -90,95 +106,86 @@ try {
         )
         .then(() => true)
         .catch(() => false);
+
+      const state = page.locator(".steer-playground .phone-session-state");
+      await state.waitFor({ state: "visible", timeout: 15000 });
       await page
         .waitForFunction(
-          () => /ready|unavailable/i.test(document.querySelector(".hero-live-status")?.textContent ?? ""),
+          () => /ready|unavailable/i.test(
+            document.querySelector(".steer-playground .phone-session-state")?.textContent ?? "",
+          ),
           null,
           { timeout: 90000 },
         )
         .catch(() => {});
-      const readyText = (await status.innerText()).trim();
-      check(`${vp.name}: session reaches ready`, /ready/i.test(readyText), readyText);
+      const stateText = (await state.innerText()).trim();
+      check(`${viewport.name}: sandbox reaches ready`, /ready/i.test(stateText), stateText);
 
-      // The plumbing must never be on screen.
-      const rows = (await page.locator(".xterm-rows").innerText().catch(() => "")) || "";
-      check(`${vp.name}: no su/job-control noise`, !/su -p demo|job control/.test(rows));
-      check(
-        `${vp.name}: shows the short claude command`,
-        await showedCommand,
-      );
+      const input = page.getByRole("textbox", { name: "Message to live session" });
+      check(`${viewport.name}: phone composer is editable`, await input.isEditable());
 
-      // Terminal fills its frame rather than wrapping at someone else's width.
+      const rows =
+        (await page.locator(".steer-playground .xterm-rows").innerText().catch(() => "")) || "";
+      check(`${viewport.name}: no su/job-control noise`, !/su -p demo|job control/.test(rows));
+      check(`${viewport.name}: shows the short claude command`, await showedCommand);
+
       const fill = await page.evaluate(() => {
-        const pane = document.querySelector(".hero-live-terminal");
-        const screen = document.querySelector(".xterm-screen");
+        const pane = document.querySelector(".steer-playground .hero-live-terminal");
+        const screen = document.querySelector(".steer-playground .xterm-screen");
         if (!pane || !screen) return 0;
-        return Math.round((100 * screen.getBoundingClientRect().width) / pane.getBoundingClientRect().width);
+        return Math.round(
+          (100 * screen.getBoundingClientRect().width) / pane.getBoundingClientRect().width,
+        );
       });
-      check(`${vp.name}: terminal fills the frame`, fill >= 90, `${fill}%`);
+      check(`${viewport.name}: terminal fills the frame`, fill >= 90, `${fill}%`);
 
-      // Layout contract: scroll the SECTION to the top, then assert controls fit.
-      await shell.evaluate((el) => el.scrollIntoView({ block: "start" }));
-      await page.waitForTimeout(400);
-      const fold = await page.evaluate(() => {
-        const run = document.querySelector(".hero-live-run");
-        if (!run) return null;
-        return { bottom: Math.round(run.getBoundingClientRect().bottom), vh: window.innerHeight };
+      const phone = page.locator(".steer-playground .phone-frame");
+      await phone.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
+      const sendFold = await page.evaluate(() => {
+        const send = document.querySelector(".steer-playground .phone-session-send");
+        if (!send) return null;
+        return { bottom: Math.round(send.getBoundingClientRect().bottom), vh: window.innerHeight };
       });
       check(
-        `${vp.name}: run control above the fold`,
-        Boolean(fold) && fold.bottom <= fold.vh,
-        fold ? `y=${fold.bottom} of ${fold.vh}` : "no control",
+        `${viewport.name}: phone send control above the fold`,
+        Boolean(sendFold) && sendFold.bottom <= sendFold.vh,
+        sendFold ? `y=${sendFold.bottom} of ${sendFold.vh}` : "no send control",
       );
 
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
       );
-      check(`${vp.name}: no horizontal overflow`, overflow);
+      check(`${viewport.name}: no horizontal overflow`, overflow);
 
-      const demoFit = await page.evaluate(() => {
-        const shell = document.querySelector(".hero-demo-shell");
-        const switcher = document.querySelector(".hero-demo-modeswitch");
-        const input = document.querySelector(".hero-live-input");
-        const note = document.querySelector(".landing-hero-video-note");
-        if (!shell || !switcher || !input || !note) return null;
-        const shellRect = shell.getBoundingClientRect();
-        const inside = (element) => {
-          const rect = element.getBoundingClientRect();
-          return rect.left >= shellRect.left - 1 && rect.right <= shellRect.right + 1;
-        };
-        return {
-          fits: shell.scrollWidth <= shell.clientWidth && inside(switcher) && inside(input) && inside(note),
-          scroll: shell.scrollWidth,
-          client: shell.clientWidth,
-        };
-      });
-      check(
-        `${vp.name}: live controls stay inside the demo`,
-        Boolean(demoFit?.fits),
-        demoFit ? `${demoFit.scroll}px content in ${demoFit.client}px shell` : "missing live UI",
-      );
-
-      if (doRun && vp.name === "desktop") {
-        await page.locator(".hero-live-run").click();
+      if (doRun && viewport.name === "desktop") {
+        const send = page.getByRole("button", { name: "Send" });
+        await send.click();
         await page
           .waitForFunction(
-            () => /finished|unavailable/i.test(document.querySelector(".hero-live-status")?.textContent ?? ""),
+            () => /complete|unavailable/i.test(
+              document.querySelector(".steer-playground .phone-session-state")?.textContent ?? "",
+            ),
             null,
             { timeout: 120000 },
           )
           .catch(() => {});
-        const finalText = (await status.innerText()).trim();
-        check(`${vp.name}: instruction completes`, /finished/i.test(finalText), finalText);
+        const finalText = (await state.innerText()).trim();
+        check(`${viewport.name}: instruction completes`, /complete/i.test(finalText), finalText);
       }
 
-      await page.screenshot({ path: path.join(shotsDir, `${vp.name}.png`) });
+      await playground.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(shotsDir, `${viewport.name}.png`) });
+      if (viewport.name === "mobile") {
+        await page.locator(".steer-live-terminal").scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(shotsDir, "mobile-terminal.png") });
+      }
     } finally {
-      await context.close(); // every tab dies with its context
+      await context.close();
     }
   }
 } finally {
-  await browser.close(); // and the whole throwaway profile with it
+  await browser.close();
 }
 
 console.log(`\nscreenshots: ${shotsDir}`);

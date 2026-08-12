@@ -3,16 +3,25 @@ import type { SessionEvent } from "./sessionEvents";
 interface PhoneSessionTranscript {
   assistantLine: string;
   sentMessage?: string;
+  resultLine?: string;
   /** Recording-derived events visible at the current replay time. */
   events?: SessionEvent[];
 }
+
+export type PhoneRuntimeTone = "waiting" | "starting" | "ready" | "working" | "done" | "failed";
 
 export interface PhoneSessionScreenProps {
   title: string;
   transcript: PhoneSessionTranscript;
   composerText: string;
+  composerDisabled?: boolean;
+  runtimeLabel?: string;
+  runtimeDetail?: string;
+  runtimeTone?: PhoneRuntimeTone;
+  sendEnabled?: boolean;
   sent: boolean;
   working: boolean;
+  onComposerChange?: (value: string) => void;
   onSend: () => void;
 }
 
@@ -71,11 +80,17 @@ export function PhoneSessionScreen({
   title,
   transcript,
   composerText,
+  composerDisabled = false,
   sent,
   working,
+  runtimeLabel = working ? "Working" : "Idle",
+  runtimeDetail = working ? undefined : "Waiting for input",
+  runtimeTone = working ? "working" : "waiting",
+  sendEnabled = true,
+  onComposerChange,
   onSend,
 }: PhoneSessionScreenProps) {
-  const canSend = composerText.trim().length > 0 && !sent;
+  const canSend = sendEnabled && composerText.trim().length > 0 && !sent;
 
   return (
     <div className="phone-session-screen">
@@ -90,6 +105,11 @@ export function PhoneSessionScreen({
             </div>
             <div className="phone-session-origin">Longhouse</div>
             {working ? <div className="submitted-status">Working…</div> : null}
+          </div>
+        ) : null}
+        {transcript.resultLine ? (
+          <div className="phone-session-message phone-session-message-assistant">
+            {transcript.resultLine}
           </div>
         ) : null}
         {transcript.events?.map((event) =>
@@ -135,13 +155,13 @@ export function PhoneSessionScreen({
 
       <section className="phone-session-bottom-card" aria-label="Session controls">
         <div className="phone-session-runtime">
-          <div className={`phone-session-state${working ? " is-working" : ""}`}>
+          <div className={`phone-session-state is-${runtimeTone}`}>
             <span className="phone-session-state-indicator" aria-hidden="true" />
-            <strong>{working ? "Working" : "Idle"}</strong>
-            {!working ? (
+            <strong>{runtimeLabel}</strong>
+            {runtimeDetail ? (
               <>
                 <span className="phone-session-state-separator">·</span>
-                <span className="phone-session-state-detail">Waiting for input</span>
+                <span className="phone-session-state-detail">{runtimeDetail}</span>
               </>
             ) : null}
           </div>
@@ -155,13 +175,14 @@ export function PhoneSessionScreen({
           <button type="button" className="phone-session-plus" aria-label="Add attachment">
             +
           </button>
-          <input
+          <textarea
             className="phone-session-input"
-            type="text"
             value={composerText}
             placeholder="Send a message to the live session…"
-            readOnly
+            disabled={composerDisabled}
+            onChange={(event) => onComposerChange?.(event.target.value)}
             aria-label="Message to live session"
+            rows={4}
           />
           <button
             type="button"
