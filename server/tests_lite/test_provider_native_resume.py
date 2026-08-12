@@ -2471,7 +2471,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
 
     assert receipt["clean"] is True
     assert calls == [("idle", {"timeout": 15.0}), ("send", "/exit")]
-    assert wait_timeouts == [30]
+    assert wait_timeouts == [90]
 
 
 def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
