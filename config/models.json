@@ -4,16 +4,16 @@
   "text": {
     "$comment": "Text/chat completion models (Zerg agent orchestration)",
     "tiers": {
-      "TIER_1": "deepseek/deepseek-v4-flash",
-      "TIER_2": "deepseek/deepseek-v4-flash",
-      "TIER_3": "deepseek/deepseek-v4-flash"
+      "TIER_1": "deepseek/deepseek-v4-flash-0731",
+      "TIER_2": "deepseek/deepseek-v4-flash-0731",
+      "TIER_3": "deepseek/deepseek-v4-flash-0731"
     },
     "models": {
-      "deepseek/deepseek-v4-flash": {
+      "deepseek/deepseek-v4-flash-0731": {
         "displayName": "DeepSeek v4 Flash (OpenRouter)",
         "provider": "openrouter",
         "tier": "TIER_1",
-        "description": "DeepSeek v4 Flash via OpenRouter - standard text and automation lane",
+        "description": "DeepSeek v4 Flash via OpenRouter - standard text and automation lane (dated 0731 slug; the bare deepseek-v4-flash alias resolves to the retired 20260423 build)",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -54,7 +54,7 @@
   "useCases": {
     "$comment": "Maps active text use cases to the two standard Longhouse lanes.",
     "text": {
-      "session_title": "deepseek/deepseek-v4-flash",
+      "session_title": "deepseek/deepseek-v4-flash-0731",
       "summarization": "TIER_2",
       "summary_update": "TIER_3"
     },
