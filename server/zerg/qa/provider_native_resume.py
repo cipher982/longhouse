@@ -3579,7 +3579,13 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "cursor":
             # The first Cursor turn was supplied through the provider's
             # native launch argv above. Wait for that turn's identity-matched
-            # hook receipt before exercising the managed Helm socket.
+            # hook receipt before submitting the qualification seed. The
+            # seed itself uses the disposable PTY bootstrap path: the Helm
+            # socket can acknowledge a send in the narrow interval after the
+            # idle hook and before Cursor has made its input surface writable,
+            # leaving a real request stuck in Working with only a
+            # beforeSubmitPrompt hook. Resume and post-resume sends still use
+            # the authoritative Helm socket below.
             _write_json(
                 root / "initial-bootstrap-send.json",
                 {"method": "provider_argv_bootstrap", "returncode": 0},
@@ -3608,6 +3614,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 initial_state,
                 initial,
                 _resume_marker_prompt(provider, seed_marker),
+                initial=True,
             )
         else:
             initial_send = _control_send(
