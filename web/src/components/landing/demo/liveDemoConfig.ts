@@ -1,37 +1,23 @@
 /**
- * Live free-type demo: gate + endpoint config.
+ * Live free-type demo endpoints.
  *
- * The gate is a capability token the operator supplies in the URL
- * (`?livedemo=<token>`). It is deliberately NOT baked into the bundle and NOT
- * derived from `config.demoMode`, which controls unrelated app behaviour.
- *
- * The token is both the client's visibility switch and the worker's
- * authorization: the worker independently validates it before creating a
- * sandbox, so shipping this chunk does not ship a money-spending endpoint.
- * A query parameter alone would be visibility, never access control.
+ * There is no token, flag, or env var here on purpose. Abuse and spend are
+ * bounded server-side in the worker (per-visitor hourly cap, global daily cap,
+ * per-session request cap, clamped max_tokens, pinned model), which is the
+ * right place for them: nobody should have to carry a credential to use the
+ * landing page, and a client-side gate was never protection anyway.
  */
 
 const WORKER_BASE =
   "https://freetype-phase1.drose-agents.workers.dev/__phase1_free_type_8f2c1a7e";
 
-export const LIVE_DEMO_QUERY_PARAM = "livedemo";
-
-export function liveDemoToken(search: string = window.location.search): string | null {
-  const token = new URLSearchParams(search).get(LIVE_DEMO_QUERY_PARAM);
-  return token && token.trim() ? token.trim() : null;
+export function sessionUrl(): string {
+  return `${WORKER_BASE}/api/session`;
 }
 
-export function isLiveDemoEnabled(search?: string): boolean {
-  return liveDemoToken(search) !== null;
-}
-
-export function sessionUrl(token: string): string {
-  return `${WORKER_BASE}/api/session?token=${encodeURIComponent(token)}`;
-}
-
-export function terminalUrl(sessionId: string, token: string): string {
+export function terminalUrl(sessionId: string): string {
   const wsBase = WORKER_BASE.replace(/^https:/, "wss:");
-  return `${wsBase}/ws?session=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`;
+  return `${wsBase}/ws?session=${encodeURIComponent(sessionId)}`;
 }
 
 /** Geometry is fixed to match the sandbox PTY; mismatched cols corrupt TUIs. */

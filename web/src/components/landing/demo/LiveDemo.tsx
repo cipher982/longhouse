@@ -2,12 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import {
-  LIVE_COLS,
-  LIVE_ROWS,
-  sessionUrl,
-  terminalUrl,
-} from "./liveDemoConfig";
+import { LIVE_COLS, LIVE_ROWS, sessionUrl, terminalUrl } from "./liveDemoConfig";
 
 /**
  * The LIVE half of the hero demo: real Claude Code executing a visitor's own
@@ -69,13 +64,7 @@ const STATUS: Record<Phase, string> = {
   failed: "Live session unavailable.",
 };
 
-export function LiveDemo({
-  token,
-  onFailure,
-}: {
-  token: string;
-  onFailure: (reason: string) => void;
-}) {
+export function LiveDemo({ onFailure }: { onFailure: (reason: string) => void }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -159,7 +148,8 @@ export function LiveDemo({
     setPhase("warming");
     let sessionId: string;
     try {
-      const response = await fetch(sessionUrl(token), { method: "POST" });
+      const response = await fetch(sessionUrl(), { method: "POST" });
+      if (response.status === 429) throw new Error("busy");
       if (!response.ok) throw new Error(`session ${response.status}`);
       sessionId = (await response.json()).sessionId;
     } catch (error) {
@@ -167,7 +157,7 @@ export function LiveDemo({
       return;
     }
 
-    const socket = new WebSocket(terminalUrl(sessionId, token));
+    const socket = new WebSocket(terminalUrl(sessionId));
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
 
@@ -220,7 +210,7 @@ export function LiveDemo({
         fail("connection closed");
       }
     };
-  }, [fail, instruction, maybeSendInstruction, send, setPhase, token]);
+  }, [fail, instruction, maybeSendInstruction, send, setPhase]);
 
   // Warm as soon as the live demo is opened. This component only mounts after
   // an explicit "Type your own" click, which is stronger intent than the

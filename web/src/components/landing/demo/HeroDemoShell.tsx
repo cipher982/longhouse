@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useState } from "react";
 import { HeroDemo } from "./HeroDemo";
-import { liveDemoToken } from "./liveDemoConfig";
 
 /**
  * Owns which demo the hero is showing. Recorded and live are mutually
@@ -33,7 +32,6 @@ const BADGES: Record<Mode, string> = {
 };
 
 export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": string }) {
-  const token = liveDemoToken();
   const [mode, setMode] = useState<Mode>("recorded");
 
   // Switch the honesty note BEFORE falling back, never after: the page must
@@ -45,7 +43,7 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
     <div className="hero-demo-shell">
       <div className="hero-demo-modebar">
         <span className={`hero-demo-badge is-${mode}`}>{BADGES[mode]}</span>
-        {token && mode !== "live" && (
+        {mode !== "live" && (
           <button
             type="button"
             className="hero-demo-modeswitch"
@@ -54,7 +52,7 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
             Type your own
           </button>
         )}
-        {token && mode === "live" && (
+        {mode === "live" && (
           <button
             type="button"
             className="hero-demo-modeswitch"
@@ -65,9 +63,9 @@ export function HeroDemoShell({ "aria-label": ariaLabel }: { "aria-label": strin
         )}
       </div>
 
-      {mode === "live" && token ? (
+      {mode === "live" ? (
         <Suspense fallback={<div className="hero-live-loading">Loading live runtime…</div>}>
-          <LiveDemo token={token} onFailure={handleFailure} />
+          <LiveDemo onFailure={handleFailure} />
         </Suspense>
       ) : (
         <HeroDemo aria-label={ariaLabel} />
