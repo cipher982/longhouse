@@ -11,9 +11,9 @@
 
 const textConfig = {
   tiers: {
-    TIER_1: 'deepseek/deepseek-v4-flash',
-    TIER_2: 'deepseek/deepseek-v4-flash',
-    TIER_3: 'deepseek/deepseek-v4-flash',
+    TIER_1: 'deepseek/deepseek-v4-flash-0731',
+    TIER_2: 'deepseek/deepseek-v4-flash-0731',
+    TIER_3: 'deepseek/deepseek-v4-flash-0731',
   },
 };
 
