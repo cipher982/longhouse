@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import { REMOTE_SCENE_DATA } from "./generated/sceneData";
 import { clampFrameIndex, decodeFrames } from "./sceneCodec";
-import { getSceneCamera, PHONE_LINES, TERMINAL_LINES } from "./sceneSpec";
+import { getPhoneSceneState, getSceneCamera, getTerminalSceneState } from "./sceneSpec";
 
 const CELL_COUNT = REMOTE_SCENE_DATA.width * REMOTE_SCENE_DATA.height;
 
@@ -126,15 +126,19 @@ export function RemoteScenePlayer() {
 
   const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
   const camera = getSceneCamera(safeFrameIndex / REMOTE_SCENE_DATA.fps);
+  const terminalState = getTerminalSceneState(safeFrameIndex);
+  const phoneState = getPhoneSceneState(safeFrameIndex);
+  const workProgress = Math.max(0, Math.min(1, (safeFrameIndex - 18) / (56 - 18)));
   const overlayStyle = {
     "--monitor-left": `${projectedPercent(56, "x", safeFrameIndex)}%`,
     "--monitor-top": `${projectedPercent(15, "y", safeFrameIndex)}%`,
-    "--monitor-width": `${21 * camera.scale}%`,
-    "--monitor-height": `${12 * camera.scale}%`,
-    "--phone-left": `${projectedPercent(80.5, "x", safeFrameIndex)}%`,
-    "--phone-top": `${projectedPercent(39.5, "y", safeFrameIndex)}%`,
-    "--phone-width": `${8.2 * camera.scale}%`,
-    "--phone-height": `${14.6 * camera.scale}%`,
+    "--monitor-width": `${24 * camera.scale}%`,
+    "--monitor-height": `${14.2 * camera.scale}%`,
+    "--phone-left": `${projectedPercent(73.4, "x", safeFrameIndex)}%`,
+    "--phone-top": `${projectedPercent(35, "y", safeFrameIndex)}%`,
+    "--phone-width": `${12.6 * camera.scale}%`,
+    "--phone-height": `${18.2 * camera.scale}%`,
+    "--work-progress": workProgress,
   } as CSSProperties;
 
   const setFrame = (nextFrame: number) => {
@@ -156,24 +160,39 @@ export function RemoteScenePlayer() {
 
   return (
     <section className="remote-scene-player" aria-label="Remote control scene player">
-      <div className="remote-scene-stage" style={overlayStyle}>
-        <canvas ref={canvasRef} aria-hidden="true" />
-        <div className="remote-scene-terminal-overlay" aria-label="Crisp workstation status overlay">
-          <div className="remote-scene-terminal-heading">
-            <span><i /> studio-mac</span>
-            <strong>AWAKE</strong>
+      <div className={`remote-scene-stage${safeFrameIndex >= 56 ? " remote-scene-stage--complete" : ""}`} style={overlayStyle}>
+        <div className="remote-scene-world">
+          <canvas ref={canvasRef} aria-hidden="true" />
+          <div className="remote-scene-terminal-overlay" aria-label="Crisp workstation status overlay">
+            <div className="remote-scene-terminal-heading">
+              <span><i /> studio-mac</span>
+              <strong>{terminalState.status}</strong>
+            </div>
+            <div className="remote-scene-terminal-rule" />
+            {terminalState.lines.map((line, index) => (
+              <span
+                className={`remote-scene-terminal-line${index === 0 ? " remote-scene-output-accent" : ""}`}
+                key={`${terminalState.key}-${line}`}
+              >
+                {line}
+              </span>
+            ))}
+            <div className="remote-scene-work-progress"><i /></div>
           </div>
-          <div className="remote-scene-terminal-rule" />
-          {TERMINAL_LINES.map((line) => <span key={line}>{line}</span>)}
-          <span className="remote-scene-terminal-caret">▌</span>
+          <div className={`remote-scene-phone-overlay remote-scene-phone-overlay--${phoneState.key}`} aria-label="Crisp phone status overlay">
+            <div className="remote-scene-phone-heading"><strong>Longhouse</strong><small>studio-mac</small></div>
+            <span className="remote-scene-phone-live">● {phoneState.status}</span>
+            <span className="remote-scene-phone-message">{phoneState.message}</span>
+            <span className="remote-scene-phone-detail">{phoneState.detail}</span>
+            <div className="remote-scene-work-progress"><i /></div>
+            <b>›</b>
+          </div>
+          <div className="remote-scene-ambient-label">
+            {safeFrameIndex < 38
+              ? "the machine stays awake"
+              : safeFrameIndex < 56 ? "work continues on studio-mac" : "task finished while you were away"}
+          </div>
         </div>
-        <div className="remote-scene-phone-overlay" aria-label="Crisp phone status overlay">
-          <strong>{PHONE_LINES[0]}</strong>
-          <span className="remote-scene-phone-live">● {PHONE_LINES[1]}</span>
-          <span>{PHONE_LINES[2]}</span>
-          <b>›</b>
-        </div>
-        <div className="remote-scene-ambient-label">the machine stays awake</div>
       </div>
 
       <div className="remote-scene-controls">

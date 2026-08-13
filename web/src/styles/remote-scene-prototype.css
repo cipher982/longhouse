@@ -102,7 +102,12 @@
     pointer-events: none;
   }
 
-  .remote-scene-stage canvas {
+  .remote-scene-world {
+    position: absolute;
+    inset: 0;
+  }
+
+  .remote-scene-world canvas {
     display: block;
     width: 100%;
     height: 100%;
@@ -115,7 +120,7 @@
     z-index: 2;
     overflow: hidden;
     color: #8fc5ac;
-    background: rgba(11, 17, 14, 0.84);
+    background: rgba(11, 17, 14, 0.92);
     border: 1px solid rgba(143, 197, 172, 0.4);
     font-family: var(--font-family-mono);
     pointer-events: none;
@@ -128,10 +133,10 @@
     height: var(--monitor-height);
     display: flex;
     flex-direction: column;
-    gap: 4%;
-    padding: 2% 3%;
-    font-size: clamp(0.38rem, 0.72vw, 0.72rem);
-    line-height: 1.16;
+    gap: 5%;
+    padding: clamp(4px, 0.55vw, 8px);
+    font-size: clamp(0.4rem, 0.76vw, 0.75rem);
+    line-height: 1.2;
     white-space: nowrap;
   }
 
@@ -164,18 +169,40 @@
     font-weight: var(--font-weight-semibold);
   }
 
+  .remote-scene-output-accent {
+    color: #f3ead9;
+  }
+
+  .remote-scene-work-progress {
+    width: 100%;
+    height: 2px;
+    margin-top: auto;
+    overflow: hidden;
+    background: rgba(143, 197, 172, 0.14);
+    border-radius: 99px;
+  }
+
+  .remote-scene-work-progress i {
+    display: block;
+    width: calc(var(--work-progress) * 100%);
+    height: 100%;
+    background: #8fc5ac;
+    box-shadow: 0 0 8px rgba(143, 197, 172, 0.7);
+  }
+
+  .remote-scene-stage--complete .remote-scene-terminal-overlay,
+  .remote-scene-stage--complete .remote-scene-phone-overlay {
+    box-shadow: 0 0 26px rgba(143, 197, 172, 0.16);
+  }
+
   .remote-scene-terminal-rule {
     height: 1px;
     background: rgba(143, 197, 172, 0.3);
   }
 
-  .remote-scene-terminal-overlay span:not(.remote-scene-terminal-caret) {
+  .remote-scene-terminal-line {
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .remote-scene-terminal-caret {
-    color: #c9a66b;
   }
 
   .remote-scene-phone-overlay {
@@ -185,14 +212,14 @@
     height: var(--phone-height);
     display: flex;
     flex-direction: column;
-    gap: 7%;
-    padding: 8% 7%;
+    gap: 6%;
+    padding: 7% 8%;
     color: #f3ead9;
     background: rgba(18, 11, 9, 0.9);
     border-color: rgba(201, 166, 107, 0.6);
     border-radius: 8%;
-    font-size: clamp(0.28rem, 0.58vw, 0.58rem);
-    line-height: 1.1;
+    font-size: clamp(0.32rem, 0.64vw, 0.62rem);
+    line-height: 1.15;
   }
 
   .remote-scene-phone-overlay strong {
@@ -200,16 +227,40 @@
     font-size: 1.05em;
   }
 
+  .remote-scene-phone-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 5%;
+  }
+
+  .remote-scene-phone-heading small {
+    overflow: hidden;
+    color: rgba(243, 234, 217, 0.54);
+    font-size: 0.76em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .remote-scene-phone-live {
     color: #8fc5ac;
     white-space: nowrap;
   }
 
-  .remote-scene-phone-overlay span:last-of-type {
+  .remote-scene-phone-message {
+    margin-top: 4%;
+    color: #f3ead9;
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .remote-scene-phone-detail {
     color: rgba(243, 234, 217, 0.68);
   }
 
   .remote-scene-phone-overlay b {
+    position: absolute;
+    right: 8%;
+    bottom: 7%;
     align-self: flex-end;
     display: grid;
     width: 1.5em;
@@ -225,7 +276,7 @@
     z-index: 2;
     left: 3%;
     bottom: 4%;
-    color: rgba(201, 166, 107, 0.72);
+    color: rgba(201, 166, 107, 0.88);
     font-family: var(--font-family-mono);
     font-size: clamp(0.48rem, 0.78vw, 0.75rem);
     letter-spacing: 0.08em;
@@ -380,15 +431,52 @@
     }
 
     .remote-scene-stage {
+      aspect-ratio: 100 / 56;
       border-radius: 11px;
     }
 
+    .remote-scene-world {
+      right: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .remote-scene-ambient-label {
+      left: 3%;
+    }
+
     .remote-scene-terminal-overlay {
+      left: calc(var(--monitor-left) - 1%);
+      width: calc(var(--monitor-width) + 2%);
       font-size: clamp(0.33rem, 1.55vw, 0.56rem);
     }
 
     .remote-scene-phone-overlay {
-      font-size: clamp(0.25rem, 1.2vw, 0.43rem);
+      left: calc(var(--phone-left) - 3%);
+      width: calc(var(--phone-width) + 4%);
+      font-size: clamp(0.3rem, 1.35vw, 0.48rem);
+    }
+
+    .remote-scene-phone-heading small {
+      display: none;
+    }
+
+    .remote-scene-phone-message,
+    .remote-scene-phone-detail {
+      white-space: nowrap;
+    }
+
+    .remote-scene-controls {
+      margin-top: 10px;
+      padding: 10px 12px 9px;
+      background: rgba(18, 11, 9, 0.46);
+    }
+
+    .remote-scene-play-button {
+      color: var(--color-text-secondary);
+      background: rgba(201, 166, 107, 0.12);
+      border-color: rgba(201, 166, 107, 0.28);
     }
 
     .remote-scene-notes {

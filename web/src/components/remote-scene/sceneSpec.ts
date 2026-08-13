@@ -10,6 +10,19 @@ export type SceneCamera = {
   horizon: number;
 };
 
+export type TerminalSceneState = {
+  key: string;
+  status: "WORKING" | "DONE";
+  lines: string[];
+};
+
+export type PhoneSceneState = {
+  key: string;
+  status: string;
+  message: string;
+  detail: string;
+};
+
 export const SCENE_SPEC = {
   width: 100,
   height: 56,
@@ -30,27 +43,73 @@ export const SCENE_SPEC = {
   ] satisfies ScenePaletteEntry[],
 } as const;
 
-export const TERMINAL_LINES = [
-  "session / auth-refresh",
-  "› keeping the control path attached",
-  "  tests  18 passed",
-  "  machine  studio-mac",
-];
+export function getTerminalSceneState(frameIndex: number): TerminalSceneState {
+  if (frameIndex < 18) {
+    return {
+      key: "edit",
+      status: "WORKING",
+      lines: ["› update retry loop", "+2  -1"],
+    };
+  }
+  if (frameIndex < 38) {
+    return {
+      key: "test",
+      status: "WORKING",
+      lines: ["$ bun test", "18 tests running…"],
+    };
+  }
+  if (frameIndex < 56) {
+    return {
+      key: "verify",
+      status: "WORKING",
+      lines: ["✓ 18 tests passed", "2 files changed"],
+    };
+  }
+  return {
+    key: "ready",
+    status: "DONE",
+    lines: ["✓ task complete", "waiting…"],
+  };
+}
 
-export const PHONE_LINES = [
-  "Longhouse",
-  "ACTIVE  ·  studio-mac",
-  "Send next instruction",
-];
+export function getPhoneSceneState(frameIndex: number): PhoneSceneState {
+  if (frameIndex < 38) {
+    return {
+      key: "live",
+      status: "LIVE",
+      message: "Working",
+      detail: "retry loop",
+    };
+  }
+  if (frameIndex < 56) {
+    return {
+      key: "tests",
+      status: "LIVE",
+      message: "Passed",
+      detail: "18/18",
+    };
+  }
+  return {
+    key: "complete",
+    status: "DONE",
+    message: "Task done",
+    detail: "ready",
+  };
+}
 
 export function getSceneCamera(timeSeconds: number): SceneCamera {
   const progress = Math.max(0, Math.min(1, timeSeconds / SCENE_SPEC.durationSeconds));
-  const eased = progress * progress * (3 - 2 * progress);
+  const resolve = smoothCamera(0.4, 1, progress);
   return {
-    // A modest zoom-out makes the shot feel like a camera retreat, not a scale
-    // animation. The lateral drift reveals the phone without losing the desk.
-    scale: 1.08 - eased * 0.14,
-    lateral: eased * 3.2,
+    // Hold the wide shot through the exit, then make one deliberate push toward
+    // the workstation and phone. The stable first act keeps the actor readable.
+    scale: 1 + resolve * 0.05,
+    lateral: resolve * -0.5,
     horizon: SCENE_SPEC.horizon,
   };
+}
+
+function smoothCamera(edge0: number, edge1: number, value: number): number {
+  const progress = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+  return progress * progress * (3 - 2 * progress);
 }

@@ -102,7 +102,7 @@ async function createContactSheet(
   captures: Capture[],
   columns: number,
 ): Promise<string> {
-  const cardWidth = groupName === "mobile" ? 330 : 500;
+  const cardWidth = groupName.startsWith("mobile") ? 330 : 500;
   const gap = 18;
   const pageWidth = columns * cardWidth + (columns + 1) * gap;
   const sheetPage = await browser.newPage({ viewport: { width: pageWidth, height: 900 } });
@@ -180,7 +180,9 @@ async function main(): Promise<void> {
     const desktopFrames = sampledFrames(frameCount, sampleEvery);
 
     const desktopCaptures = await captureFrames(page, "desktop", 1440, 1000, desktopFrames, "stage");
-    const mobileCaptures = await captureFrames(page, "mobile", 393, 852, desktopFrames, "viewport");
+    const mobileSceneCaptures = await captureFrames(page, "mobile-scene", 393, 852, desktopFrames, "stage");
+    const mobilePageFrames = [...new Set([0, Math.floor(lastFrame / 2), lastFrame])];
+    const mobilePageCaptures = await captureFrames(page, "mobile-page", 393, 852, mobilePageFrames, "viewport");
     const groups: CaptureGroup[] = [
       {
         name: "desktop",
@@ -191,12 +193,20 @@ async function main(): Promise<void> {
         contactSheet: await createContactSheet(browser, "desktop", desktopCaptures, 3),
       },
       {
-        name: "mobile",
+        name: "mobile-scene",
+        width: 393,
+        height: 852,
+        captureMode: "stage",
+        captures: mobileSceneCaptures,
+        contactSheet: await createContactSheet(browser, "mobile-scene", mobileSceneCaptures, 3),
+      },
+      {
+        name: "mobile-page",
         width: 393,
         height: 852,
         captureMode: "viewport",
-        captures: mobileCaptures,
-        contactSheet: await createContactSheet(browser, "mobile", mobileCaptures, 3),
+        captures: mobilePageCaptures,
+        contactSheet: await createContactSheet(browser, "mobile-page", mobilePageCaptures, 3),
       },
     ];
 

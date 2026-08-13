@@ -92,9 +92,13 @@ function worldEllipse(
 }
 
 function drawBackground(grid: Grid, timeSeconds: number): void {
+  const roomSettled = smoothstep(2.8, 3.8, timeSeconds) > 0.5;
   for (let row = 0; row < HEIGHT; row += 1) {
-    const tone = row < 25 ? (row % 4 === 0 ? 2 : 1) : row < 31 ? 2 : 3;
-    for (let column = 0; column < WIDTH; column += 1) grid[row * WIDTH + column] = tone;
+    for (let column = 0; column < WIDTH; column += 1) {
+      const wallMark = row < 31 && row % 3 === 0 && column % 4 === 0;
+      const floorMark = row >= 31 && (row + column) % (roomSettled ? 5 : 4) === 0;
+      grid[row * WIDTH + column] = wallMark ? 1 : floorMark ? 2 : 0;
+    }
   }
 
   // A quiet wall seam and floor perspective keep the space legible without
@@ -104,16 +108,42 @@ function drawBackground(grid: Grid, timeSeconds: number): void {
     worldLine(grid, 50, 30.5, endX, 56, 3, timeSeconds);
   }
   for (const floorY of [36, 42, 49]) worldLine(grid, 0, floorY, 100, floorY, 3, timeSeconds);
-  worldRect(grid, 3, 8, 23, 19, 2, timeSeconds);
-  worldRect(grid, 5, 10, 19, 15, 1, timeSeconds);
-  worldLine(grid, 14.5, 10, 14.5, 25, 2, timeSeconds);
-  worldLine(grid, 5, 17.5, 24, 17.5, 2, timeSeconds);
+  // An open doorway gives the walk a visible destination.
+  worldRect(grid, 3, 11, 14, 36, 0, timeSeconds, true);
+  worldLine(grid, 3, 47, 3, 11, 8, timeSeconds);
+  worldLine(grid, 3, 11, 17, 11, 8, timeSeconds);
+  worldLine(grid, 17, 11, 17, 47, 7, timeSeconds);
+  worldLine(grid, 4, 46, 16, 33, 3, timeSeconds);
+  worldLine(grid, 16, 46, 16, 33, 3, timeSeconds);
+  worldPoint(grid, 15.5, 29, 8, timeSeconds);
+
+  // A mullioned window and skyline make the wall read as a room.
+  worldRect(grid, 18, 9, 20, 15, 1, timeSeconds, true);
+  worldLine(grid, 18, 9, 38, 9, 6, timeSeconds);
+  worldLine(grid, 18, 24, 38, 24, 6, timeSeconds);
+  worldLine(grid, 18, 9, 18, 24, 6, timeSeconds);
+  worldLine(grid, 38, 9, 38, 24, 6, timeSeconds);
+  worldLine(grid, 28, 9, 28, 24, 3, timeSeconds);
+  worldLine(grid, 18, 16.5, 38, 16.5, 3, timeSeconds);
+  for (const [x, height] of [[20, 4], [23, 7], [27, 3], [30, 6], [34, 8]] as const) {
+    worldRect(grid, x, 24 - height, 2, height, 2, timeSeconds);
+  }
+}
+
+function drawChair(grid: Grid, timeSeconds: number): void {
+  worldRect(grid, 30, 27, 7, 9, 4, timeSeconds);
+  worldRect(grid, 29, 35, 9, 2, 5, timeSeconds);
+  worldLine(grid, 33.5, 37, 33.5, 45, 4, timeSeconds);
+  worldLine(grid, 33.5, 44, 28.5, 47, 4, timeSeconds);
+  worldLine(grid, 33.5, 44, 38.5, 47, 4, timeSeconds);
+  worldPoint(grid, 28, 47.5, 5, timeSeconds);
+  worldPoint(grid, 39, 47.5, 5, timeSeconds);
 }
 
 function drawDeskAndWorkstation(grid: Grid, frameIndex: number, timeSeconds: number): void {
   worldEllipse(grid, 65, 48, 29, 3.2, 2, timeSeconds);
-  worldRect(grid, 39, 30, 53, 2.4, 5, timeSeconds);
-  worldRect(grid, 40, 29.2, 51, 1.1, 6, timeSeconds);
+  worldRect(grid, 38, 30, 54, 2.4, 6, timeSeconds);
+  worldRect(grid, 39, 29.2, 52, 1.1, 7, timeSeconds);
   worldLine(grid, 44, 32, 42, 54, 4, timeSeconds);
   worldLine(grid, 85, 32, 88, 54, 4, timeSeconds);
   worldLine(grid, 55, 32, 54, 50, 3, timeSeconds);
@@ -126,13 +156,15 @@ function drawDeskAndWorkstation(grid: Grid, frameIndex: number, timeSeconds: num
   worldRect(grid, 64.5, 30, 2, 2.2, 4, timeSeconds);
 
   const pulse = 0.5 + 0.5 * Math.sin(frameIndex * 0.8);
+  const workPhase = frameIndex < 18 ? 0 : frameIndex < 38 ? 1 : frameIndex < 56 ? 2 : 3;
+  const workProgress = clamp((frameIndex - 18) / (56 - 18), 0, 1);
   for (let line = 0; line < 6; line += 1) {
-    const length = 3 + ((line * 7 + frameIndex) % 12) * 0.75;
+    const length = 4 + ((line * 5 + frameIndex + workPhase * 3) % 11) * 0.72;
     const tone = line === 1 || line === 4 ? 8 : pulse > 0.45 ? 7 : 6;
     worldRect(grid, 57.5, 16.4 + line * 1.55, length, 0.6, tone, timeSeconds);
   }
   worldPoint(grid, 57.5, 26.1, 8, timeSeconds);
-  worldRect(grid, 59, 25.7, 5 + (frameIndex % 4), 0.55, 8, timeSeconds);
+  worldRect(grid, 59, 25.7, Math.max(1, 14 * workProgress), 0.55, workProgress >= 1 ? 9 : 8, timeSeconds);
   worldRect(grid, 75.5, 15.2, 0.5, 11.5, 7, timeSeconds);
 
   // Small desk objects establish scale and make the workstation feel occupied.
@@ -143,54 +175,90 @@ function drawDeskAndWorkstation(grid: Grid, frameIndex: number, timeSeconds: num
 }
 
 function drawDepartingPerson(grid: Grid, timeSeconds: number): void {
-  const departure = smoothstep(0.65, 3.1, timeSeconds);
-  const presence = 1 - smoothstep(2.55, 3.5, timeSeconds);
-  if (presence <= 0) return;
+  // Hold long enough to establish the figure, then make translation dominate the
+  // walk cycle so the exit reads in a low-frame-rate contact sheet.
+  const departure = smoothstep(0.8, 2.45, timeSeconds);
+  const personX = 36 - departure * 28;
 
-  const personX = 38 - departure * 12;
-  const tone = presence > 0.65 ? 5 : 4;
+  const stride = Math.sin(timeSeconds * 8.5);
+  const tone = 9;
   worldEllipse(grid, personX, 23.5, 2.1, 2.1, tone, timeSeconds);
-  worldLine(grid, personX, 25.6, personX - 1.3, 34, tone, timeSeconds);
-  worldLine(grid, personX - 1.3, 28, personX - 5, 31.5, tone, timeSeconds);
-  worldLine(grid, personX - 1.3, 28, personX + 2.6, 30.5, tone, timeSeconds);
-  worldLine(grid, personX - 1.3, 34, personX - 4, 45, tone, timeSeconds);
-  worldLine(grid, personX - 1.3, 34, personX + 2.8, 44, tone, timeSeconds);
-  worldPoint(grid, personX - 4.8, 31.7, 6, timeSeconds);
+  worldLine(grid, personX, 25.6, personX - 0.8, 34, tone, timeSeconds);
+  worldLine(grid, personX - 0.4, 28, personX - 3.6 - stride * 0.7, 31.5, tone, timeSeconds);
+  worldLine(grid, personX - 0.4, 28, personX + 3 + stride * 0.6, 30.8, tone, timeSeconds);
+  worldLine(grid, personX - 0.8, 34, personX - 4.1 - stride, 45, tone, timeSeconds);
+  worldLine(grid, personX - 0.8, 34, personX + 3.5 + stride, 44, tone, timeSeconds);
+  worldPoint(grid, personX - 3.8 - stride * 0.7, 31.7, 8, timeSeconds);
+}
 
-  if (departure > 0.25 && departure < 0.9) {
-    worldLine(grid, personX + 5, 36, personX + 9, 36, 3, timeSeconds);
-    worldLine(grid, personX + 6, 38, personX + 11, 38, 3, timeSeconds);
+function drawDoorForeground(grid: Grid, timeSeconds: number): void {
+  // Repaint the jamb after the figure so the body visibly passes through it,
+  // then close the door behind them to make the exit unambiguous.
+  worldLine(grid, 3, 47, 3, 11, 8, timeSeconds);
+  worldLine(grid, 3, 11, 17, 11, 8, timeSeconds);
+  worldLine(grid, 17, 11, 17, 47, 7, timeSeconds);
+  const close = smoothstep(2.15, 2.85, timeSeconds);
+  if (close > 0) {
+    worldRect(grid, 3, 12, 13.5 * close, 34, 2, timeSeconds, true);
+    worldLine(grid, 3 + 13.5 * close, 12, 3 + 13.5 * close, 46, 7, timeSeconds);
+    if (close > 0.85) worldPoint(grid, 14.5, 29, 8, timeSeconds);
   }
 }
 
-function drawPhone(grid: Grid, timeSeconds: number): void {
+function drawPhone(grid: Grid, frameIndex: number, timeSeconds: number): void {
   const focus = smoothstep(2.1, 4.8, timeSeconds);
   const phoneTone = 5 + Math.round(focus * 3);
-  worldEllipse(grid, 84, 50, 12 + focus * 2, 3, 2 + Math.round(focus), timeSeconds);
-  worldRect(grid, 79, 37, 11, 18, 4, timeSeconds);
-  worldRect(grid, 80.3, 38.4, 8.4, 15.2, 1, timeSeconds, true);
-  worldRect(grid, 81, 40, 7, 12.3, phoneTone, timeSeconds, true);
-  worldRect(grid, 82, 41, 4 + focus * 2.2, 0.7, 8, timeSeconds);
-  worldRect(grid, 82, 43.2, 5.5, 0.5, focus > 0.4 ? 9 : 7, timeSeconds);
-  worldRect(grid, 82, 45, 4.4, 0.5, 8, timeSeconds);
-  worldLine(grid, 82, 49, 86, 49, 9, timeSeconds);
-  worldPoint(grid, 84, 53, 7, timeSeconds);
+  const completionPulse = frameIndex >= 56 && frameIndex % 8 < 4 ? 9 : 8;
+  const workProgress = clamp((frameIndex - 18) / (56 - 18), 0, 1);
+  worldEllipse(grid, 79.5, 51, 13 + focus * 2, 3, 2 + Math.round(focus), timeSeconds);
+  worldRect(grid, 71, 33, 16, 22, 5, timeSeconds);
+  worldRect(grid, 72.2, 34.2, 13.6, 19.6, 1, timeSeconds, true);
+  worldRect(grid, 73, 36, 12, 16.4, phoneTone, timeSeconds, true);
+  worldRect(grid, 74, 37.2, 6 + focus * 3, 0.7, 8, timeSeconds);
+  worldRect(grid, 74, 40.2, 9.5, 0.6, focus > 0.4 ? 9 : 7, timeSeconds);
+  worldRect(grid, 74, 43, 7.5, 0.6, 8, timeSeconds);
+  worldRect(grid, 74, 46, 9, 0.6, frameIndex >= 38 ? completionPulse : 7, timeSeconds);
+  worldLine(grid, 75, 49.5, 75 + Math.max(1, 8 * workProgress), 49.5, workProgress >= 1 ? 9 : 8, timeSeconds);
+  worldPoint(grid, 79, 53.3, 7, timeSeconds);
 
   if (focus > 0.25) {
-    worldLine(grid, 76, 43, 73, 41, 6, timeSeconds);
-    worldLine(grid, 92, 43, 95, 41, 6, timeSeconds);
-    worldLine(grid, 76, 48, 72, 49, 5, timeSeconds);
-    worldLine(grid, 92, 48, 96, 49, 5, timeSeconds);
-    worldPoint(grid, 84, 35, 7, timeSeconds);
+    worldLine(grid, 69, 40, 66, 38, 6, timeSeconds);
+    worldLine(grid, 89, 40, 92, 38, 6, timeSeconds);
+    worldLine(grid, 69, 47, 65, 48, 5, timeSeconds);
+    worldLine(grid, 89, 47, 93, 48, 5, timeSeconds);
+    worldPoint(grid, 79, 31, 7, timeSeconds);
   }
 }
 
 function drawAmbientLight(grid: Grid, timeSeconds: number): void {
   const glow = smoothstep(0, 2.5, timeSeconds);
-  worldLine(grid, 90, 5, 90, 17, 4, timeSeconds);
-  worldRect(grid, 84, 16, 12, 1.4, 5 + Math.round(glow), timeSeconds);
-  worldLine(grid, 85, 17, 86, 26, 4, timeSeconds);
-  worldLine(grid, 95, 17, 94, 25, 4, timeSeconds);
+  // A pendant light ends at the shade, avoiding the old ambiguous tower shape.
+  worldLine(grid, 89, 0, 89, 9, 4, timeSeconds);
+  worldLine(grid, 89, 9, 83, 15, 5 + Math.round(glow), timeSeconds);
+  worldLine(grid, 89, 9, 95, 15, 5 + Math.round(glow), timeSeconds);
+  worldLine(grid, 83, 15, 95, 15, 7, timeSeconds);
+  worldEllipse(grid, 89, 16, 1.4, 1, 7 + Math.round(glow), timeSeconds);
+  worldLine(grid, 85, 29, 89, 17, 3 + Math.round(glow), timeSeconds);
+  worldLine(grid, 93, 29, 89, 17, 3 + Math.round(glow), timeSeconds);
+}
+
+function drawCompletionBeat(grid: Grid, frameIndex: number, timeSeconds: number): void {
+  const completion = smoothstep(4.55, 5.15, timeSeconds);
+  if (completion <= 0) return;
+  const tone = frameIndex % 8 < 4 ? 9 : 8;
+  const radius = 8 + completion * 3;
+  for (let ray = 0; ray < 12; ray += 1) {
+    const angle = (ray / 12) * Math.PI * 2;
+    worldLine(
+      grid,
+      79 + Math.cos(angle) * radius,
+      44 + Math.sin(angle) * radius * 0.55,
+      79 + Math.cos(angle) * (radius + 2),
+      44 + Math.sin(angle) * (radius + 2) * 0.55,
+      tone,
+      timeSeconds,
+    );
+  }
 }
 
 export function renderSceneFrame(frameIndex: number): Uint8Array {
@@ -201,8 +269,11 @@ export function renderSceneFrame(frameIndex: number): Uint8Array {
 
   drawBackground(grid, timeSeconds);
   drawAmbientLight(grid, timeSeconds);
+  drawChair(grid, timeSeconds);
   drawDeskAndWorkstation(grid, safeFrame, timeSeconds);
   drawDepartingPerson(grid, timeSeconds);
-  drawPhone(grid, timeSeconds);
+  drawDoorForeground(grid, timeSeconds);
+  drawPhone(grid, safeFrame, timeSeconds);
+  drawCompletionBeat(grid, safeFrame, timeSeconds);
   return grid;
 }

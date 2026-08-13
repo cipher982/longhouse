@@ -6,10 +6,10 @@
   "durationSeconds": 6,
   "frameCount": 72,
   "paletteEntries": 10,
-  "encodedPayloadBytes": 99626,
-  "runtimeAssetRawBytes": 100641,
-  "runtimeAssetGzipBytes": 8662,
-  "runtimeAssetBrotliBytes": 5873,
-  "contactSheetBytes": 332973,
+  "encodedPayloadBytes": 354382,
+  "runtimeAssetRawBytes": 355397,
+  "runtimeAssetGzipBytes": 16016,
+  "runtimeAssetBrotliBytes": 9978,
+  "contactSheetBytes": 980543,
   "deterministic": true
 }
