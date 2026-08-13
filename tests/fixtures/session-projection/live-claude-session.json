@@ -1,0 +1,174 @@
+{
+  "name": "live-claude-session",
+  "description": "A single live Claude Code turn projected by the freetype demo worker: Read -> Edit -> Bash -> final answer. Exercises id-pairing and the exploration-run collapse the phone flattens for the landing demo.",
+  "projection": {
+    "root_session_id": "phase1-live",
+    "focus_session_id": "phase1-live",
+    "head_session_id": "phase1-live",
+    "path_session_ids": ["phase1-live"],
+    "total": 8,
+    "branch_mode": "head",
+    "items": [
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:00Z",
+        "event": {
+          "id": 1,
+          "role": "user",
+          "content_text": "Fix the off-by-one bug",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "tool_call_state": null,
+          "timestamp": "2026-08-12T20:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:01Z",
+        "event": {
+          "id": 2,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Read",
+          "tool_input_json": {"file_path": "/demo-repo/inventory.py"},
+          "tool_output_text": null,
+          "tool_call_id": "t1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-08-12T20:00:01Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:02Z",
+        "event": {
+          "id": 3,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Read",
+          "tool_input_json": null,
+          "tool_output_text": "def count_items...",
+          "tool_call_id": "t1",
+          "tool_call_state": null,
+          "timestamp": "2026-08-12T20:00:02Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:03Z",
+        "event": {
+          "id": 4,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Edit",
+          "tool_input_json": {"file_path": "/demo-repo/inventory.py", "old_string": "shelves[1:]", "new_string": "shelves"},
+          "tool_output_text": null,
+          "tool_call_id": "t2",
+          "tool_call_state": "completed",
+          "timestamp": "2026-08-12T20:00:03Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:04Z",
+        "event": {
+          "id": 5,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Edit",
+          "tool_input_json": null,
+          "tool_output_text": "Updated inventory.py",
+          "tool_call_id": "t2",
+          "tool_call_state": null,
+          "timestamp": "2026-08-12T20:00:04Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:05Z",
+        "event": {
+          "id": 6,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Bash",
+          "tool_input_json": {"command": "python3 test_inventory.py"},
+          "tool_output_text": null,
+          "tool_call_id": "t3",
+          "tool_call_state": "completed",
+          "timestamp": "2026-08-12T20:00:05Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:06Z",
+        "event": {
+          "id": 7,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Bash",
+          "tool_input_json": null,
+          "tool_output_text": "all tests passed\n",
+          "tool_call_id": "t3",
+          "tool_call_state": null,
+          "timestamp": "2026-08-12T20:00:06Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "phase1-live",
+        "timestamp": "2026-08-12T20:00:07Z",
+        "event": {
+          "id": 8,
+          "role": "assistant",
+          "content_text": "Fixed it. All tests pass.",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "tool_call_state": null,
+          "timestamp": "2026-08-12T20:00:07Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      }
+    ]
+  },
+  "expectations": {
+    "rows": [
+      {"kind": "message", "role": "user", "event_id": 1},
+      {
+        "kind": "activity_group",
+        "tool_names": ["Read", "Edit", "Bash"],
+        "call_event_ids": [2, 4, 6],
+        "result_event_ids": [3, 5, 7],
+        "pairings": ["id", "id", "id"]
+      },
+      {"kind": "message", "role": "assistant", "event_id": 8}
+    ],
+    "tool_count": 3,
+    "activity_group_count": 1,
+    "orphan_tool_ids": []
+  }
+}

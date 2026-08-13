@@ -1,11 +1,17 @@
 import { useEffect, useRef } from "react";
-import type { SessionEvent } from "./sessionEvents";
+import type { TimelineItem, ToolInteraction } from "../../../lib/sessionWorkspace";
+import { getInteractionDisplayInfo, getToolSummary } from "../../../lib/sessionWorkspace";
+import { toolResultLine } from "./liveProjection";
 
 interface PhoneSessionTranscript {
   assistantLine?: string;
   sentMessage?: string;
-  /** Recording-derived events visible at the current replay time. */
-  events?: SessionEvent[];
+  /**
+   * Canonical timeline items (messages + tool rows) derived from the shared
+   * sessionWorkspace projection. The phone is a compact view of the same
+   * model the web/iOS timeline renders.
+   */
+  items?: TimelineItem[];
 }
 
 export type PhoneRuntimeTone = "waiting" | "starting" | "ready" | "working" | "done" | "failed";
@@ -76,6 +82,22 @@ function BackGlyph() {
   );
 }
 
+function toolSubtitle(interaction: ToolInteraction): string {
+  return (getToolSummary(interaction) || "").split("\n")[0] ?? "";
+}
+
+function ToolRow({ interaction }: { interaction: ToolInteraction }) {
+  const info = getInteractionDisplayInfo(interaction);
+  const result = toolResultLine(interaction);
+  return (
+    <div className="phone-session-tool" key={interaction.key}>
+      <span className="phone-session-tool-title">{info.displayName}</span>
+      <span className="phone-session-tool-subtitle">{toolSubtitle(interaction)}</span>
+      {result ? <span className="phone-session-tool-meta">{result}</span> : null}
+    </div>
+  );
+}
+
 export function PhoneSessionScreen({
   title,
   transcript,
@@ -92,7 +114,13 @@ export function PhoneSessionScreen({
 }: PhoneSessionScreenProps) {
   const canSend = sendEnabled && composerText.trim().length > 0 && !sent;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const transcriptKey = `${sent}:${working}:${transcript.events?.map((event) => `${event.id ?? event.tSec}:${event.result ?? ""}`).join("|") ?? ""}`;
+  const transcriptKey = `${sent}:${working}:${transcript.items?.map((item) =>
+    item.kind === "tool"
+      ? `${item.interaction.key}:${toolResultLine(item.interaction) ?? ""}`
+      : item.kind === "message"
+        ? `${item.event.id}:${item.event.content_text ?? ""}`
+        : "",
+  ).join("|") ?? ""}`;
 
   useEffect(() => {
     const node = transcriptRef.current;
@@ -121,24 +149,24 @@ export function PhoneSessionScreen({
             {working ? <div className="submitted-status">Working…</div> : null}
           </div>
         ) : null}
-        {transcript.events?.map((event) =>
-          event.kind === "tool" ? (
-            <div className="phone-session-tool" key={event.id ?? `${event.tSec}-${event.title}`}>
-              <span className="phone-session-tool-title">{event.title}</span>
-              <span className="phone-session-tool-subtitle">{event.subtitle}</span>
-              {event.result ? (
-                <span className="phone-session-tool-meta">{event.result}</span>
-              ) : null}
-            </div>
-          ) : (
-            <div
-              className="phone-session-message phone-session-message-assistant"
-              key={event.id ?? `${event.tSec}-${event.title.slice(0, 16)}`}
-            >
-              {event.title}
-            </div>
-          ),
-        )}
+        {transcript.items?.map((item) => {
+          if (item.kind === "tool") {
+            return <ToolRow key={item.interaction.key} interaction={item.interaction} />;
+          }
+          // Only assistant prose is shown: the user's own message already
+          // renders above as the submitted bubble.
+          if (item.kind === "message" && item.event.role !== "user") {
+            return (
+              <div
+                className="phone-session-message phone-session-message-assistant"
+                key={item.event.id}
+              >
+                {item.event.content_text}
+              </div>
+            );
+          }
+          return null;
+        })}
       </div>
 
       <div className="phone-session-statusbar">

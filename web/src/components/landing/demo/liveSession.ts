@@ -1,5 +1,5 @@
 import { eventsUrl, sessionUrl, terminalUrl } from "./liveDemoConfig";
-import type { LiveSessionEvent } from "./liveSessionEvents";
+import type { AgentSessionProjectionResponse } from "../../../services/api/agents";
 
 /**
  * A warm sandbox that exists before anyone looks at it.
@@ -202,12 +202,21 @@ export class LiveSession {
     }
   }
 
-  async events(): Promise<LiveSessionEvent[]> {
-    if (!this.sessionId) return [];
+  async events(): Promise<AgentSessionProjectionResponse> {
+    if (!this.sessionId) {
+      return {
+        root_session_id: "",
+        focus_session_id: "",
+        head_session_id: "",
+        path_session_ids: [],
+        items: [],
+        total: 0,
+        branch_mode: "head",
+      };
+    }
     const response = await fetch(eventsUrl(this.sessionId), { cache: "no-store" });
     if (!response.ok) throw new Error(`events ${response.status}`);
-    const payload = await response.json() as { events?: LiveSessionEvent[] };
-    return payload.events ?? [];
+    return (await response.json()) as AgentSessionProjectionResponse;
   }
 
   close(): void {

@@ -115,6 +115,7 @@ describe("shared session projection fixtures", () => {
     "exploration-run-web-breaks.json",
     "parallel-tool-id-pairing.json",
     "codex-wrapper-presentation.json",
+    "live-claude-session.json",
   ])(
     "matches %s",
     (fixtureName) => {

@@ -5,8 +5,8 @@ import "@xterm/xterm/css/xterm.css";
 import { PhoneFrame } from "./PhoneFrame";
 import { PhoneSessionScreen, type PhoneRuntimeTone } from "./PhoneSessionScreen";
 import { prewarmLiveSession, type LiveSession } from "./liveSession";
-import { projectLiveSessionEvents } from "./liveSessionEvents";
-import type { SessionEvent } from "./sessionEvents";
+import { buildLiveTimelineModel, flattenLiveItems } from "./liveProjection";
+import type { TimelineItem } from "../../../lib/sessionWorkspace";
 
 type Phase = "connecting" | "starting" | "ready" | "running" | "done" | "failed";
 
@@ -63,7 +63,7 @@ export function LiveDemo({ active }: { active: boolean }) {
   const [draft, setDraft] = useState(DEFAULT_INSTRUCTION);
   const [submittedInstruction, setSubmittedInstruction] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [items, setItems] = useState<TimelineItem[]>([]);
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -173,7 +173,9 @@ export function LiveDemo({ active }: { active: boolean }) {
       polling = true;
       try {
         const next = await sessionRef.current?.events();
-        if (!cancelled && next) setEvents(projectLiveSessionEvents(next));
+        if (!cancelled && next) {
+          setItems(flattenLiveItems(buildLiveTimelineModel(next).items));
+        }
       } catch {
         // The terminal remains the source of completion truth. A transient
         // transcript read simply retries on the next poll.
@@ -221,7 +223,7 @@ export function LiveDemo({ active }: { active: boolean }) {
           title="Live demo repo"
           transcript={{
             sentMessage: submittedInstruction ?? undefined,
-            events,
+            items,
           }}
           composerText={draft}
           composerDisabled={sent || phase === "failed"}
