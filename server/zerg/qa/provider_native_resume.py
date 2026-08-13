@@ -2922,6 +2922,30 @@ def _wait_cursor_idle(
     )
 
 
+def _wait_cursor_initial_idle(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    args: argparse.Namespace,
+    *,
+    diagnostic_path: Path,
+) -> dict[str, Any]:
+    """Wait for the provider-argv bootstrap using the qualification budget.
+
+    Cursor can legitimately remain active while its first model turn is
+    producing tool or reasoning events. The default idle wait is intentionally
+    short for ordinary control-path checks; the initial qualification turn
+    must use the same bounded live-send budget as the rest of the assurance
+    transaction so provider latency is not mistaken for a lifecycle failure.
+    """
+
+    return _wait_cursor_idle(
+        state,
+        environment,
+        timeout=args.live_send_timeout_secs,
+        diagnostic_path=diagnostic_path,
+    )
+
+
 def _wait_cursor_hook_sequence(
     state: dict[str, Any],
     environment: dict[str, str],
@@ -3602,9 +3626,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 root / "initial-bootstrap-send.json",
                 {"method": "provider_argv_bootstrap", "returncode": 0},
             )
-            _wait_cursor_idle(
+            _wait_cursor_initial_idle(
                 initial_state,
                 environment,
+                args,
                 diagnostic_path=root / "cursor-idle-timeout-initial.json",
             )
             # The bootstrap hook can publish idle while Cursor is still
