@@ -126,9 +126,9 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
 
 
 def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
-    assert _cursor_bootstrap_prompt() == "Reply with exactly READY and nothing else. Do not use tools or inspect files."
+    assert _cursor_bootstrap_prompt() == "Reply with exactly READY"
     assert _cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == (
-        "Reply with exactly LH_CURSOR_BOOTSTRAP_abc123 and nothing else. Do not use tools or inspect files."
+        "Reply with exactly LH_CURSOR_BOOTSTRAP_abc123"
     )
 
 
