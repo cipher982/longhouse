@@ -57,6 +57,7 @@ from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_idle
+from zerg.qa.provider_native_resume import _wait_cursor_initial_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_session_tail
 from zerg.qa.provider_native_resume import _wait_state
@@ -2251,6 +2252,32 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
     assert result["method"] == "provider_tty_bootstrap"
     assert result["returncode"] == 0
     assert process.sent == ["seed", "\x1b", "\r"]
+
+
+def test_cursor_initial_idle_uses_qualification_live_send_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_wait_cursor_idle",
+        lambda state, environment, **kwargs: calls.append(kwargs) or {"phase": "idle"},
+    )
+    args = _args(tmp_path)
+    args.live_send_timeout_secs = 180
+
+    result = _wait_cursor_initial_idle(
+        {"session_id": "session-1"},
+        {"LONGHOUSE_HOME": str(tmp_path)},
+        args,
+        diagnostic_path=tmp_path / "cursor-idle-timeout-initial.json",
+    )
+
+    assert result == {"phase": "idle"}
+    assert calls == [
+        {
+            "timeout": 180,
+            "diagnostic_path": tmp_path / "cursor-idle-timeout-initial.json",
+        }
+    ]
 
 
 def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(
