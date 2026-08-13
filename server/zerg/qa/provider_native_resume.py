@@ -3201,7 +3201,12 @@ def _cursor_bootstrap_prompt(marker: str = "READY") -> str:
     the managed Helm socket after the hook reports idle.
     """
 
-    return f"Reply with exactly {marker} and nothing else. Do not use tools or inspect files."
+    # Cursor's native hook path has a provider-specific parsing quirk: the
+    # proven wording uses "with exactly".  The shorter "Reply exactly" form
+    # emits beforeSubmitPrompt but can leave the stock TUI in Working without
+    # publishing the provider-owned idle boundary.  Keep the bootstrap free of
+    # extra prohibitions while retaining the known-good instruction shape.
+    return f"Reply with exactly {marker}"
 
 
 def _resume_marker(provider: str, phase: str) -> str:
