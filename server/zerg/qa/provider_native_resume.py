@@ -3201,7 +3201,12 @@ def _cursor_bootstrap_prompt(marker: str = "READY") -> str:
     the managed Helm socket after the hook reports idle.
     """
 
-    return f"Reply with exactly {marker} and nothing else. Do not use tools or inspect files."
+    # Keep this identical to the short marker wording used for the proven
+    # managed-send path.  Cursor can emit beforeSubmitPrompt and remain in
+    # Working indefinitely when the bootstrap adds prohibitions or tool-use
+    # instructions, so the bootstrap must be the smallest possible foreground
+    # turn that still produces a provider-owned response/idle boundary.
+    return f"Reply exactly {marker}"
 
 
 def _resume_marker(provider: str, phase: str) -> str:
