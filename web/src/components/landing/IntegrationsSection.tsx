@@ -1,25 +1,49 @@
 /**
- * Provider truth. A capability matrix that says plainly which controls work
- * for each provider — sync is universal, control depth varies.
+ * Provider truth. Every claim derives from the generated provider contract;
+ * this component only turns those booleans into readable landing-page copy.
  */
 
 import { getLaunchProviderSupportList, type LaunchProviderSupport } from "../../lib/providers";
 import { ProviderGlyph } from "../ProviderGlyph";
 
-const CAPABILITY_COLUMNS: { key: keyof LaunchProviderSupport | "sync"; label: string }[] = [
-  { key: "sync", label: "Sync & search" },
-  { key: "launchAndSend", label: "Launch & send" },
-  { key: "interrupt", label: "Interrupt" },
-  { key: "steerMidTurn", label: "Steer mid-turn" },
-  { key: "resume", label: "Resume" },
+type Capability = {
+  key: "search" | "launch" | "interrupt" | "steer" | "resume";
+  label: string;
+  supported: (provider: LaunchProviderSupport) => boolean;
+};
+
+const CAPABILITIES: Capability[] = [
+  { key: "search", label: "Search", supported: () => true },
+  { key: "launch", label: "Launch", supported: (provider) => provider.launchAndSend },
+  { key: "interrupt", label: "Interrupt", supported: (provider) => provider.interrupt },
+  { key: "steer", label: "Mid-turn", supported: (provider) => provider.steerMidTurn },
+  { key: "resume", label: "Resume", supported: (provider) => provider.resume },
 ];
 
-function CapabilityCell({ supported }: { supported: boolean }) {
+function providerSummary(provider: LaunchProviderSupport): string {
+  if (provider.steerMidTurn) {
+    return "Full remote control, including steering during a turn.";
+  }
+  if (provider.launchAndSend && provider.resume) {
+    return "Launch, interrupt, and resume. Your next instruction lands when the current turn ends.";
+  }
+  if (provider.launchAndSend) {
+    return "Launch, send, and interrupt. Resuming a dead session is not wired up yet.";
+  }
+  return "Syncs in for watching and search. No Longhouse control path.";
+}
+
+function CapabilityChip({ capability, provider }: { capability: Capability; provider: LaunchProviderSupport }) {
+  const supported = capability.supported(provider);
   return (
-    <td className={`landing-providers-cell ${supported ? "yes" : "no"}`}>
-      <span aria-hidden="true">{supported ? "✓" : "No"}</span>
-      <span className="landing-visually-hidden">{supported ? "Supported" : "Not supported"}</span>
-    </td>
+    <span
+      className={`landing-provider-capability ${supported ? "is-supported" : "is-unsupported"}`}
+      data-capability={capability.key}
+      data-supported={supported ? "true" : "false"}
+      aria-label={`${capability.label}: ${supported ? "supported" : "not supported"}`}
+    >
+      {capability.label}
+    </span>
   );
 }
 
@@ -29,45 +53,47 @@ export function IntegrationsSection() {
   return (
     <section id="providers" className="landing-providers">
       <div className="landing-section-inner">
-        <h2 className="landing-providers-title">
-          Control support, provider by provider.
-        </h2>
+        <h2 className="landing-providers-title">Control support, provider by provider.</h2>
         <p className="landing-providers-lead">
-          Every provider below can sync sessions into the same searchable timeline.
-          Control depth varies because Longhouse uses each provider&rsquo;s native interfaces.
+          Every CLI below syncs into one searchable timeline. What changes is how far
+          control goes once you launch through Longhouse.
         </p>
 
-        <div className="landing-providers-tablewrap">
-          <table className="landing-providers-table">
-            <thead>
-              <tr>
-                <th scope="col" className="landing-providers-th-provider">Provider</th>
-                {CAPABILITY_COLUMNS.map((col) => (
-                  <th scope="col" key={col.key}>{col.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {providers.map((p) => (
-                <tr key={p.id}>
-                  <th scope="row" className="landing-providers-cell-provider">
-                    <span className="landing-providers-provider-label">
-                      <span className="landing-provider-row-glyph">
-                        <ProviderGlyph provider={p.id} size={16} variant="bare" />
-                      </span>
-                      <span className="landing-provider-row-name">{p.marketingName}</span>
-                    </span>
-                  </th>
-                  <CapabilityCell supported={p.archiveVisibility === "live"} />
-                  <CapabilityCell supported={p.launchAndSend} />
-                  <CapabilityCell supported={p.interrupt} />
-                  <CapabilityCell supported={p.steerMidTurn} />
-                  <CapabilityCell supported={p.resume} />
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="landing-providers-universal">
+          <p>
+            <strong>Sync, timeline, and full-text search</strong>
+            <span>Included for every provider.</span>
+          </p>
+          <div className="landing-providers-universal-list" aria-label="Providers with timeline and search support">
+            {providers.map((provider) => (
+              <span className="landing-providers-universal-item" key={provider.id}>
+                <ProviderGlyph provider={provider.id} size={16} variant="bare" />
+                {provider.marketingName}
+              </span>
+            ))}
+          </div>
         </div>
+
+        <ul className="landing-provider-rails">
+          {providers.map((provider) => (
+            <li className="landing-provider-rail" data-provider={provider.id} key={provider.id}>
+              <div className="landing-providers-provider-label">
+                <span className="landing-provider-row-glyph">
+                  <ProviderGlyph provider={provider.id} size={16} variant="bare" />
+                </span>
+                <strong className="landing-provider-row-name">{provider.marketingName}</strong>
+              </div>
+              <p className="landing-provider-summary">{providerSummary(provider)}</p>
+              <div className="landing-provider-capabilities" aria-label={`${provider.marketingName} capabilities`}>
+                {CAPABILITIES.map((capability) => (
+                  <CapabilityChip capability={capability} provider={provider} key={capability.key} />
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <p className="landing-providers-source">Generated from the provider contract, not hand-maintained.</p>
       </div>
     </section>
   );

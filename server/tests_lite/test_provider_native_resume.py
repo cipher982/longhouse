@@ -49,6 +49,7 @@ from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
+from zerg.qa.provider_native_resume import _send_initial_seed
 from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
@@ -56,6 +57,7 @@ from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_idle
+from zerg.qa.provider_native_resume import _wait_cursor_initial_idle
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
 from zerg.qa.provider_native_resume import _wait_session_tail
 from zerg.qa.provider_native_resume import _wait_state
@@ -124,9 +126,9 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
 
 
 def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
-    assert _cursor_bootstrap_prompt() == "Reply with exactly READY and nothing else. Do not use tools or inspect files."
+    assert _cursor_bootstrap_prompt() == "Reply with exactly READY"
     assert _cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == (
-        "Reply with exactly LH_CURSOR_BOOTSTRAP_abc123 and nothing else. Do not use tools or inspect files."
+        "Reply with exactly LH_CURSOR_BOOTSTRAP_abc123"
     )
 
 
@@ -2252,6 +2254,49 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
     assert process.sent == ["seed", "\x1b", "\r"]
 
 
+def test_cursor_initial_idle_uses_qualification_live_send_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        provider_native_resume,
+        "_wait_cursor_idle",
+        lambda state, environment, **kwargs: calls.append(kwargs) or {"phase": "idle"},
+    )
+    args = _args(tmp_path)
+    args.live_send_timeout_secs = 180
+
+    result = _wait_cursor_initial_idle(
+        {"session_id": "session-1"},
+        {"LONGHOUSE_HOME": str(tmp_path)},
+        args,
+        diagnostic_path=tmp_path / "cursor-idle-timeout-initial.json",
+    )
+
+    assert result == {"phase": "idle"}
+    assert calls == [
+        {
+            "timeout": 180,
+            "diagnostic_path": tmp_path / "cursor-idle-timeout-initial.json",
+        }
+    ]
+
+
+def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[bool] = []
+
+    def fake_control_send(*_args: object, **kwargs: object) -> dict[str, object]:
+        calls.append(bool(kwargs["initial"]))
+        return {"method": "test", "returncode": 0}
+
+    monkeypatch.setattr(provider_native_resume, "_control_send", fake_control_send)
+    args = _args(tmp_path)
+    for spec in (SPECS["cursor"], SPECS["claude"]):
+        _send_initial_seed(spec, args, {"session_id": "session-1"}, object(), "seed")  # type: ignore[arg-type]
+
+    assert calls == [True, True]
+
+
 def test_cursor_initial_seed_flush_waits_for_ordered_hook_and_idle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2471,7 +2516,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
 
     assert receipt["clean"] is True
     assert calls == [("idle", {"timeout": 15.0}), ("send", "/exit")]
-    assert wait_timeouts == [30]
+    assert wait_timeouts == [90]
 
 
 def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

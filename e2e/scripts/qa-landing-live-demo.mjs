@@ -49,7 +49,45 @@ try {
     });
     const page = await context.newPage();
     try {
+      // Exercise the real cold-load seam. Without a delay, a warm local cache
+      // can hide a broken Suspense fallback that visitors still see in prod.
+      await page.route(/\/HeroDemo(?:-[^/]+)?\.(?:js|tsx)(?:\?.*)?$/, async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        await route.continue();
+      });
       await page.goto(url, { waitUntil: "domcontentloaded" });
+
+      const firstPaint = page.locator(".landing-hero .hero-demo-fallback");
+      await firstPaint.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+      const firstPaintState = await page.evaluate(() => {
+        const fallback = document.querySelector(".landing-hero .hero-demo-fallback");
+        if (!fallback) return null;
+        const terminals = fallback.querySelectorAll(".hero-demo-terminal");
+        const titles = fallback.querySelectorAll(".hero-demo-terminal-title");
+        const rect = fallback.getBoundingClientRect();
+        return {
+          terminals: terminals.length,
+          titles: titles.length,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        };
+      });
+      check(
+        `${viewport.name}: cold load paints the terminal deck`,
+        Boolean(
+          firstPaintState &&
+          firstPaintState.terminals === 3 &&
+          firstPaintState.titles === 3 &&
+          firstPaintState.width >= 300 &&
+          firstPaintState.height >= 180
+        ),
+        firstPaintState
+          ? `${firstPaintState.terminals} terminals, ${firstPaintState.width}×${firstPaintState.height}`
+          : "fallback not painted",
+      );
+      await page.screenshot({
+        path: path.join(shotsDir, `${viewport.name}-hero-first-paint.png`),
+      });
 
       const hero = page.locator(".landing-hero .hero-demo");
       await hero.waitFor({ state: "visible", timeout: 20000 });
@@ -82,9 +120,6 @@ try {
         Boolean(heroPaint && heroPaint.demoWidth >= 300 && heroPaint.beatHeight >= 180),
         heroPaint ? `${heroPaint.demoWidth}px wide, ${heroPaint.beatHeight}px tall` : "not painted",
       );
-      // The first beat deliberately staggers its terminal cards. Capture the
-      // visible animation, not its empty opening frame.
-      await page.waitForTimeout(900);
       check(
         `${viewport.name}: hero has no live-demo toggle`,
         (await page.locator(".landing-hero .hero-demo-modeswitch").count()) === 0,
@@ -161,6 +196,11 @@ try {
       if (doRun && viewport.name === "desktop") {
         const send = page.getByRole("button", { name: "Send" });
         await send.click();
+        check(
+          `${viewport.name}: sent prompt clears from composer`,
+          (await input.inputValue()) === "",
+          JSON.stringify(await input.inputValue()),
+        );
         await page
           .waitForFunction(
             () => /complete|unavailable/i.test(
@@ -172,6 +212,38 @@ try {
           .catch(() => {});
         const finalText = (await state.innerText()).trim();
         check(`${viewport.name}: instruction completes`, /complete/i.test(finalText), finalText);
+        await page
+          .waitForFunction(
+            () =>
+              document.querySelectorAll(".steer-playground .phone-session-tool").length >= 2 &&
+              document.querySelectorAll(
+                ".steer-playground .phone-session-message-assistant",
+              ).length >= 1,
+            null,
+            { timeout: 10000 },
+          )
+          .catch(() => {});
+        const phoneTranscript = await page.evaluate(() => ({
+          tools: document.querySelectorAll(".steer-playground .phone-session-tool").length,
+          assistant: document.querySelectorAll(
+            ".steer-playground .phone-session-message-assistant",
+          ).length,
+          text: document.querySelector(".steer-playground .phone-session-transcript")?.textContent ?? "",
+        }));
+        check(
+          `${viewport.name}: Claude tool calls stream to phone`,
+          phoneTranscript.tools >= 2,
+          `${phoneTranscript.tools} tool rows`,
+        );
+        check(
+          `${viewport.name}: Claude response streams to phone`,
+          phoneTranscript.assistant >= 1,
+          `${phoneTranscript.assistant} assistant messages`,
+        );
+        check(
+          `${viewport.name}: phone contains no synthetic completion copy`,
+          !/Claude finished the live task/i.test(phoneTranscript.text),
+        );
       }
 
       await playground.scrollIntoViewIfNeeded();

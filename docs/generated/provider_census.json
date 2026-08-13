@@ -1972,7 +1972,7 @@
       ]
     },
     {
-      "path": "web/src/components/landing/ThesisModeCards.tsx",
+      "path": "web/src/components/landing/ThesisControlFlow.tsx",
       "providers": [
         "claude",
         "codex"

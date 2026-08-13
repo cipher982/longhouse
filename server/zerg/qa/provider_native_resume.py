@@ -2922,6 +2922,30 @@ def _wait_cursor_idle(
     )
 
 
+def _wait_cursor_initial_idle(
+    state: dict[str, Any],
+    environment: dict[str, str],
+    args: argparse.Namespace,
+    *,
+    diagnostic_path: Path,
+) -> dict[str, Any]:
+    """Wait for the provider-argv bootstrap using the qualification budget.
+
+    Cursor can legitimately remain active while its first model turn is
+    producing tool or reasoning events. The default idle wait is intentionally
+    short for ordinary control-path checks; the initial qualification turn
+    must use the same bounded live-send budget as the rest of the assurance
+    transaction so provider latency is not mistaken for a lifecycle failure.
+    """
+
+    return _wait_cursor_idle(
+        state,
+        environment,
+        timeout=args.live_send_timeout_secs,
+        diagnostic_path=diagnostic_path,
+    )
+
+
 def _wait_cursor_hook_sequence(
     state: dict[str, Any],
     environment: dict[str, str],
@@ -3156,6 +3180,18 @@ def _control_send(
     }
 
 
+def _send_initial_seed(
+    spec: ProviderSpec,
+    args: argparse.Namespace,
+    state: dict[str, Any],
+    process: PtyProcess,
+    text: str,
+) -> dict[str, Any]:
+    """Submit only the initial Cursor seed through its disposable PTY path."""
+
+    return _control_send(spec, args, state, process, text, initial=True)
+
+
 def _cursor_bootstrap_prompt(marker: str = "READY") -> str:
     """Return a side-effect-free first-turn prompt for Cursor's hook probe.
 
@@ -3165,7 +3201,12 @@ def _cursor_bootstrap_prompt(marker: str = "READY") -> str:
     the managed Helm socket after the hook reports idle.
     """
 
-    return f"Reply with exactly {marker} and nothing else. Do not use tools or inspect files."
+    # Cursor's native hook path has a provider-specific parsing quirk: the
+    # proven wording uses "with exactly".  The shorter "Reply exactly" form
+    # emits beforeSubmitPrompt but can leave the stock TUI in Working without
+    # publishing the provider-owned idle boundary.  Keep the bootstrap free of
+    # extra prohibitions while retaining the known-good instruction shape.
+    return f"Reply with exactly {marker}"
 
 
 def _resume_marker(provider: str, phase: str) -> str:
@@ -3278,12 +3319,11 @@ def _stop(
             process.send("\x04")
         method = "claude_terminal_eof"
     # Cursor's native `/exit` is acknowledged before the outer Helm process
-    # has necessarily finished its shutdown.  Ten seconds is short enough to
-    # turn a slow but graceful exit into a SIGTERM fallback, which is
-    # deliberately unacceptable evidence for the clean-exit assurance cell.
-    # Keep the wait bounded, but give Cursor the same generous window used by
-    # the other interactive wrapper with a known asynchronous teardown.
-    exit_wait_timeout = 30 if spec.provider == "opencode" or (spec.provider == "cursor" and not force) else 10
+    # has necessarily finished its shutdown. A slow but graceful provider
+    # teardown must not become a synthetic SIGTERM failure at the old 30s
+    # boundary. Keep this bounded, while allowing the provider enough time to
+    # reap its native child and close the managed PTY.
+    exit_wait_timeout = 90 if spec.provider == "cursor" and not force else (30 if spec.provider == "opencode" else 10)
     exit_code = process.wait(exit_wait_timeout)
     fallback_signal: str | None = None
     if exit_code is None:
@@ -3580,16 +3620,27 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         if spec.provider == "cursor":
             # The first Cursor turn was supplied through the provider's
             # native launch argv above. Wait for that turn's identity-matched
-            # hook receipt before exercising the managed Helm socket.
+            # hook receipt before submitting the qualification seed. The
+            # seed itself uses the disposable PTY bootstrap path: the Helm
+            # socket can acknowledge a send in the narrow interval after the
+            # idle hook and before Cursor has made its input surface writable,
+            # leaving a real request stuck in Working with only a
+            # beforeSubmitPrompt hook. Resume and post-resume sends still use
+            # the authoritative Helm socket below.
             _write_json(
                 root / "initial-bootstrap-send.json",
                 {"method": "provider_argv_bootstrap", "returncode": 0},
             )
-            _wait_cursor_idle(
+            _wait_cursor_initial_idle(
                 initial_state,
                 environment,
+                args,
                 diagnostic_path=root / "cursor-idle-timeout-initial.json",
             )
+            # The bootstrap hook can publish idle while Cursor is still
+            # redrawing the input surface. Revalidate the provider-owned PTY
+            # prompt immediately before the initial seed injection.
+            _wait_cursor_tui_ready(initial, root / "initial.tty")
             _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
@@ -3603,7 +3654,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 label="initial-seed-before-send",
             )
             initial_hook_event_bytes = _cursor_hook_event_bytes(initial_state, environment)
-            initial_send = _control_send(
+            initial_send = _send_initial_seed(
                 spec,
                 args,
                 initial_state,
@@ -3611,13 +3662,12 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 _resume_marker_prompt(provider, seed_marker),
             )
         else:
-            initial_send = _control_send(
+            initial_send = _send_initial_seed(
                 spec,
                 args,
                 initial_state,
                 initial,
                 _resume_marker_prompt(provider, seed_marker),
-                initial=True,
             )
         _write_json(root / "initial-seed-send.json", initial_send)
         if spec.provider == "cursor":

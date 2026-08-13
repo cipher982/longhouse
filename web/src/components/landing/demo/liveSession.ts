@@ -1,4 +1,5 @@
-import { sessionUrl, terminalUrl } from "./liveDemoConfig";
+import { eventsUrl, sessionUrl, terminalUrl } from "./liveDemoConfig";
+import type { AgentSessionProjectionResponse } from "../../../services/api/agents";
 
 /**
  * A warm sandbox that exists before anyone looks at it.
@@ -52,6 +53,7 @@ export class LiveSession {
   private decoder = new TextDecoder();
   private cols = 0;
   private rows = 0;
+  private sessionId: string | null = null;
 
   onChange(watcher: () => void): () => void {
     this.watchers.add(watcher);
@@ -76,6 +78,7 @@ export class LiveSession {
       if (response.status === 429) throw new Error("busy");
       if (!response.ok) throw new Error(`session ${response.status}`);
       sessionId = (await response.json()).sessionId;
+      this.sessionId = sessionId;
     } catch (error) {
       this.fail(error instanceof Error ? error.message : "session failed");
       return;
@@ -197,6 +200,23 @@ export class LiveSession {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(new TextEncoder().encode(text));
     }
+  }
+
+  async events(): Promise<AgentSessionProjectionResponse> {
+    if (!this.sessionId) {
+      return {
+        root_session_id: "",
+        focus_session_id: "",
+        head_session_id: "",
+        path_session_ids: [],
+        items: [],
+        total: 0,
+        branch_mode: "head",
+      };
+    }
+    const response = await fetch(eventsUrl(this.sessionId), { cache: "no-store" });
+    if (!response.ok) throw new Error(`events ${response.status}`);
+    return (await response.json()) as AgentSessionProjectionResponse;
   }
 
   close(): void {
