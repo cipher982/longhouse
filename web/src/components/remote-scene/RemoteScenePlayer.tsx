@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import { REMOTE_SCENE_DATA } from "./generated/sceneData";
-import { decodeFrames } from "./sceneCodec";
+import { clampFrameIndex, decodeFrames } from "./sceneCodec";
 import { getSceneCamera, PHONE_LINES, TERMINAL_LINES } from "./sceneSpec";
 
 const CELL_COUNT = REMOTE_SCENE_DATA.width * REMOTE_SCENE_DATA.height;
-const LAST_FRAME = Math.max(0, REMOTE_SCENE_DATA.fps * REMOTE_SCENE_DATA.durationSeconds - 1);
 
 function formatTime(frameIndex: number): string {
   return (frameIndex / REMOTE_SCENE_DATA.fps).toFixed(2).padStart(5, "0");
@@ -60,8 +59,9 @@ function drawFrame(canvas: HTMLCanvasElement, frame: Uint8Array): void {
 export function RemoteScenePlayer() {
   const frames = useMemo(
     () => decodeFrames(REMOTE_SCENE_DATA.encodedFrames, CELL_COUNT),
-    [],
+    [REMOTE_SCENE_DATA.encodedFrames],
   );
+  const lastFrame = Math.max(0, frames.length - 1);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameIndexRef = useRef(0);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -85,15 +85,21 @@ export function RemoteScenePlayer() {
   }, [prefersReducedMotion]);
 
   useEffect(() => {
-    frameIndexRef.current = frameIndex;
+    const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
+    frameIndexRef.current = safeFrameIndex;
+    if (safeFrameIndex !== frameIndex) setFrameIndex(safeFrameIndex);
     const canvas = canvasRef.current;
-    if (canvas) drawFrame(canvas, frames[frameIndex]);
+    if (canvas) drawFrame(canvas, frames[safeFrameIndex]);
   }, [frameIndex, frames]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const redraw = () => drawFrame(canvas, frames[frameIndexRef.current]);
+    const redraw = () => {
+      const safeFrameIndex = clampFrameIndex(frameIndexRef.current, frames.length);
+      frameIndexRef.current = safeFrameIndex;
+      drawFrame(canvas, frames[safeFrameIndex]);
+    };
     const observer = new ResizeObserver(redraw);
     observer.observe(canvas);
     redraw();
@@ -105,10 +111,10 @@ export function RemoteScenePlayer() {
     const startedAt = performance.now() - frameIndexRef.current * (1000 / REMOTE_SCENE_DATA.fps);
     let animationFrame = 0;
     const tick = (now: number) => {
-      const nextFrame = Math.min(LAST_FRAME, Math.floor((now - startedAt) / (1000 / REMOTE_SCENE_DATA.fps)));
+      const nextFrame = Math.min(lastFrame, Math.floor((now - startedAt) / (1000 / REMOTE_SCENE_DATA.fps)));
       frameIndexRef.current = nextFrame;
       setFrameIndex(nextFrame);
-      if (nextFrame >= LAST_FRAME) {
+      if (nextFrame >= lastFrame) {
         setIsPlaying(false);
       } else {
         animationFrame = requestAnimationFrame(tick);
@@ -116,23 +122,25 @@ export function RemoteScenePlayer() {
     };
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [isPlaying, staticPreview]);
+  }, [isPlaying, lastFrame, staticPreview]);
 
-  const camera = getSceneCamera(frameIndex / REMOTE_SCENE_DATA.fps);
+  const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
+  const camera = getSceneCamera(safeFrameIndex / REMOTE_SCENE_DATA.fps);
   const overlayStyle = {
-    "--monitor-left": `${projectedPercent(56, "x", frameIndex)}%`,
-    "--monitor-top": `${projectedPercent(15, "y", frameIndex)}%`,
+    "--monitor-left": `${projectedPercent(56, "x", safeFrameIndex)}%`,
+    "--monitor-top": `${projectedPercent(15, "y", safeFrameIndex)}%`,
     "--monitor-width": `${21 * camera.scale}%`,
     "--monitor-height": `${12 * camera.scale}%`,
-    "--phone-left": `${projectedPercent(80.5, "x", frameIndex)}%`,
-    "--phone-top": `${projectedPercent(39.5, "y", frameIndex)}%`,
+    "--phone-left": `${projectedPercent(80.5, "x", safeFrameIndex)}%`,
+    "--phone-top": `${projectedPercent(39.5, "y", safeFrameIndex)}%`,
     "--phone-width": `${8.2 * camera.scale}%`,
     "--phone-height": `${14.6 * camera.scale}%`,
   } as CSSProperties;
 
   const setFrame = (nextFrame: number) => {
-    frameIndexRef.current = nextFrame;
-    setFrameIndex(nextFrame);
+    const safeNextFrame = clampFrameIndex(nextFrame, frames.length);
+    frameIndexRef.current = safeNextFrame;
+    setFrameIndex(safeNextFrame);
   };
 
   const handleScrub = (event: ChangeEvent<HTMLInputElement>) => {
@@ -174,7 +182,7 @@ export function RemoteScenePlayer() {
             type="button"
             className="remote-scene-play-button"
             onClick={() => {
-              if (frameIndex >= LAST_FRAME) setFrame(0);
+              if (safeFrameIndex >= lastFrame) setFrame(0);
               setIsPlaying((playing) => !playing);
             }}
             aria-label={isPlaying ? "Pause scene" : "Play scene"}
@@ -182,7 +190,7 @@ export function RemoteScenePlayer() {
             {isPlaying ? "Pause" : "Play scene"}
           </button>
           <span className="remote-scene-time" aria-live="off">
-            {formatTime(frameIndex)} <span>/</span> {formatTime(LAST_FRAME)}
+            {formatTime(safeFrameIndex)} <span>/</span> {formatTime(lastFrame)}
           </span>
           <button
             type="button"
@@ -198,16 +206,16 @@ export function RemoteScenePlayer() {
           <input
             type="range"
             min="0"
-            max={LAST_FRAME}
+            max={lastFrame}
             step="1"
-            value={frameIndex}
+            value={safeFrameIndex}
             onChange={handleScrub}
             aria-label="Scrub remote control scene"
           />
         </label>
         <div className="remote-scene-control-note">
           <span>{prefersReducedMotion ? "Reduced motion preference detected" : "12 fps deterministic preview"}</span>
-          <span>Frame {String(frameIndex).padStart(2, "0")} / {LAST_FRAME}</span>
+          <span>Frame {String(safeFrameIndex).padStart(2, "0")} / {lastFrame}</span>
         </div>
       </div>
     </section>

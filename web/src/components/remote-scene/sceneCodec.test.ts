@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REMOTE_SCENE_DATA } from "./generated/sceneData";
-import { decodeFrame, decodeFrames, encodeFrame } from "./sceneCodec";
+import { clampFrameIndex, decodeFrame, decodeFrames, encodeFrame } from "./sceneCodec";
 
 describe("remote scene codec", () => {
   it("round-trips a palette frame through inspectable RLE", () => {
@@ -16,5 +16,12 @@ describe("remote scene codec", () => {
     expect(frames).toHaveLength(REMOTE_SCENE_DATA.fps * REMOTE_SCENE_DATA.durationSeconds);
     expect(frames[0]).toHaveLength(REMOTE_SCENE_DATA.width * REMOTE_SCENE_DATA.height);
     expect(frames.at(-1)).toHaveLength(REMOTE_SCENE_DATA.width * REMOTE_SCENE_DATA.height);
+  });
+
+  it("clamps stale player state to the available generated frames", () => {
+    expect(clampFrameIndex(71, 72)).toBe(71);
+    expect(clampFrameIndex(99, 72)).toBe(71);
+    expect(clampFrameIndex(-4, 72)).toBe(0);
+    expect(clampFrameIndex(Number.NaN, 72)).toBe(0);
   });
 });

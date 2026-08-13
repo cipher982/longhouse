@@ -43,3 +43,8 @@ export function decodeFrame(encoded: string, expectedLength: number): Uint8Array
 export function decodeFrames(encoded: string, expectedLength: number): Uint8Array[] {
   return encoded.split(FRAME_SEPARATOR).map((frame) => decodeFrame(frame, expectedLength));
 }
+
+export function clampFrameIndex(frameIndex: number, frameCount: number): number {
+  if (frameCount <= 1 || !Number.isFinite(frameIndex)) return 0;
+  return Math.max(0, Math.min(frameCount - 1, Math.trunc(frameIndex)));
+}
