@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { TerminalGrid } from "@longhouse/video/demo";
-import { REMOTE_SCENE_RECORDING } from "./recordedTimeline";
+import { TerminalGrid, type GridTimeline } from "@longhouse/video/demo";
 
 export type RecordedTerminalMode = "inset" | "cutin";
 
@@ -9,9 +8,11 @@ const CELL_RATIO = 2.15;
 export function RecordedSceneTerminal({
   mode,
   replaySecond,
+  timeline,
 }: {
   mode: RecordedTerminalMode;
   replaySecond: number;
+  timeline: GridTimeline;
 }) {
   const screenRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -30,7 +31,7 @@ export function RecordedSceneTerminal({
     return () => observer.disconnect();
   }, []);
 
-  const { cols, rows } = REMOTE_SCENE_RECORDING.meta;
+  const { cols, rows } = timeline.meta;
   const cellWidth = size.width > 0 && size.height > 0
     ? Math.min(size.width / cols, size.height / (rows * CELL_RATIO))
     : 0;
@@ -49,7 +50,7 @@ export function RecordedSceneTerminal({
       <div className="remote-scene-recorded-terminal-screen" ref={screenRef}>
         {cellWidth > 0 ? (
           <TerminalGrid
-            timeline={REMOTE_SCENE_RECORDING}
+            timeline={timeline}
             tSec={replaySecond}
             cellW={cellWidth}
             cellH={cellHeight}

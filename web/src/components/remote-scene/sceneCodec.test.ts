@@ -6,7 +6,13 @@ import { REMOTE_SCENE_DATA } from "./generated/sceneData";
 import { selectGlyphIndex } from "./glyphRenderer";
 import { projectPoint, type CameraFrame } from "./sceneMath";
 import { clampFrameIndex, decodeFrame, decodeFrames, encodeFrame } from "./sceneCodec";
-import { REMOTE_SCENE_REPLAY_WINDOW, replaySecondForSceneFrame } from "./recordedTimeline";
+import {
+  getRemoteSceneWorkState,
+  normalizeRemoteSceneFrame,
+  REMOTE_SCENE_LOOP_START_FRAME,
+  REMOTE_SCENE_PLAYBACK_FRAME_COUNT,
+  REMOTE_SCENE_PLAYBACK_LAST_FRAME,
+} from "./recordedTimeline";
 import { SCENE_GLYPHS, SCENE_SPEC } from "./sceneSpec";
 import { createSourceRaster, drawTriangle3D } from "./sourceRenderer";
 
@@ -66,12 +72,34 @@ describe("cinematic source projection", () => {
 });
 
 describe("recorded PTY synchronization", () => {
-  it("holds before the action and maps the scene onto recording-owned anchors", () => {
-    expect(replaySecondForSceneFrame(0)).toBe(REMOTE_SCENE_REPLAY_WINDOW.holdSec);
-    expect(replaySecondForSceneFrame(32)).toBe(REMOTE_SCENE_REPLAY_WINDOW.holdSec);
-    expect(replaySecondForSceneFrame(33)).toBeGreaterThan(REMOTE_SCENE_REPLAY_WINDOW.startSec);
-    expect(replaySecondForSceneFrame(128)).toBe(REMOTE_SCENE_REPLAY_WINDOW.endSec);
-    expect(replaySecondForSceneFrame(143)).toBe(REMOTE_SCENE_REPLAY_WINDOW.endSec);
+  it("keeps the opening take synchronized, then advances through real follow-up takes", () => {
+    const openingHold = getRemoteSceneWorkState(0);
+    const openingAction = getRemoteSceneWorkState(33);
+    const openingComplete = getRemoteSceneWorkState(143);
+    const followUpQueued = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME);
+    const followUpWorking = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME + 13);
+    const followUpComplete = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME + 126);
+    const nextTask = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME + 144);
+
+    expect(getRemoteSceneWorkState(32).replaySecond).toBe(openingHold.replaySecond);
+    expect(openingAction.replaySecond).toBeGreaterThan(openingHold.replaySecond);
+    expect(getRemoteSceneWorkState(128).replaySecond).toBe(openingComplete.replaySecond);
+    expect(followUpQueued.phase).toBe("queued");
+    expect(followUpQueued.timeline.meta.rows).toBe(14);
+    expect(followUpWorking.phase).toBe("working");
+    expect(followUpWorking.replaySecond).toBeGreaterThan(followUpQueued.replaySecond);
+    expect(followUpComplete.phase).toBe("complete");
+    expect(nextTask.id).not.toBe(followUpQueued.id);
+    expect(nextTask.prompt).not.toBe(followUpQueued.prompt);
+  });
+
+  it("loops work without replaying the departure scene", () => {
+    expect(REMOTE_SCENE_PLAYBACK_FRAME_COUNT).toBe(432);
+    expect(normalizeRemoteSceneFrame(REMOTE_SCENE_PLAYBACK_LAST_FRAME)).toBe(431);
+    expect(normalizeRemoteSceneFrame(REMOTE_SCENE_PLAYBACK_FRAME_COUNT)).toBe(REMOTE_SCENE_LOOP_START_FRAME);
+    expect(normalizeRemoteSceneFrame(REMOTE_SCENE_PLAYBACK_FRAME_COUNT + 287)).toBe(431);
+    expect(getRemoteSceneWorkState(REMOTE_SCENE_PLAYBACK_FRAME_COUNT).id)
+      .toBe(getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME).id);
   });
 });
 

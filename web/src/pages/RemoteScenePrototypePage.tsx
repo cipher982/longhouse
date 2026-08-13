@@ -19,7 +19,7 @@ export default function RemoteScenePrototypePage() {
 
       <main className="remote-scene-main">
         <section className="remote-scene-intro" aria-labelledby="remote-scene-title">
-          <p className="remote-scene-kicker">A six-second study in continuity</p>
+          <p className="remote-scene-kicker">A continuous remote-work study</p>
           <h1 id="remote-scene-title">Leave the room.<br /><em>Keep the session.</em></h1>
           <p className="remote-scene-lead">
             The workstation stays awake while you step away. The same coding session remains
@@ -42,13 +42,13 @@ export default function RemoteScenePrototypePage() {
           </div>
           <div>
             <span className="remote-scene-note-index">03</span>
-            <strong>Static is the fallback.</strong>
-            <p>Use Static frame or the system reduced-motion preference for a still composition.</p>
+            <strong>The work loop continues after departure.</strong>
+            <p>The room settles into a subtle camera breathe while recorded task turns continue.</p>
           </div>
         </section>
 
         <p className="remote-scene-footnote">
-          Deterministic scene with a recorded real Claude Code PTY. No live provider session,
+          Deterministic scene with recorded real Claude Code PTY takes. No live provider session,
           audio, or production landing integration is connected.
         </p>
       </main>

@@ -8,7 +8,14 @@ import {
   type SceneProfileKey,
 } from "./sceneSpec";
 import { RecordedSceneTerminal, type RecordedTerminalMode } from "./RecordedSceneTerminal";
-import { replaySecondForSceneFrame } from "./recordedTimeline";
+import {
+  getRemoteSceneWorkState,
+  normalizeRemoteSceneFrame,
+  REMOTE_SCENE_LOOP_START_FRAME,
+  REMOTE_SCENE_PLAYBACK_FRAME_COUNT,
+  REMOTE_SCENE_PLAYBACK_LAST_FRAME,
+  remoteSceneLoopProgress,
+} from "./recordedTimeline";
 
 function initialTerminalMode(): RecordedTerminalMode {
   if (typeof window === "undefined") return "cutin";
@@ -73,10 +80,13 @@ export function RemoteScenePlayer() {
     typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches ? "mobile" : "desktop",
   );
   const [frameIndex, setFrameIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
   const [staticPreview, setStaticPreview] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(() =>
+    typeof document === "undefined" || !document.hidden,
+  );
   const [terminalMode, setTerminalModeState] = useState<RecordedTerminalMode>(initialTerminalMode);
 
   const profile = REMOTE_SCENE_DATA.profiles[profileKey];
@@ -84,7 +94,8 @@ export function RemoteScenePlayer() {
     () => decodeFrames(profile.encodedFrames, profile.width * profile.height),
     [profile.encodedFrames, profile.height, profile.width],
   );
-  const lastFrame = Math.max(0, frames.length - 1);
+  const sceneLastFrame = Math.max(0, frames.length - 1);
+  const lastFrame = REMOTE_SCENE_PLAYBACK_LAST_FRAME;
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 720px)");
@@ -118,23 +129,18 @@ export function RemoteScenePlayer() {
   }, []);
 
   useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) setIsPlaying(false);
-    };
+    const handleVisibility = () => setIsDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
   useEffect(() => {
-    if (!isVisible) setIsPlaying(false);
-  }, [isVisible]);
-
-  useEffect(() => {
-    const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
+    const safeFrameIndex = clampFrameIndex(frameIndex, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
+    const sceneFrameIndex = clampFrameIndex(safeFrameIndex, frames.length);
     frameIndexRef.current = safeFrameIndex;
     if (safeFrameIndex !== frameIndex) setFrameIndex(safeFrameIndex);
     const canvas = canvasRef.current;
-    const frame = frames[safeFrameIndex];
+    const frame = frames[sceneFrameIndex];
     if (canvas && frame) drawFrame(canvas, frame, profile.width, profile.height);
   }, [frameIndex, frames, profile.height, profile.width]);
 
@@ -142,9 +148,10 @@ export function RemoteScenePlayer() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const redraw = () => {
-      const safeFrameIndex = clampFrameIndex(frameIndexRef.current, frames.length);
+      const safeFrameIndex = clampFrameIndex(frameIndexRef.current, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
+      const sceneFrameIndex = clampFrameIndex(safeFrameIndex, frames.length);
       frameIndexRef.current = safeFrameIndex;
-      const frame = frames[safeFrameIndex];
+      const frame = frames[sceneFrameIndex];
       if (frame) drawFrame(canvas, frame, profile.width, profile.height);
     };
     const observer = new ResizeObserver(redraw);
@@ -154,32 +161,44 @@ export function RemoteScenePlayer() {
   }, [frames, profile.height, profile.width]);
 
   useEffect(() => {
-    if (!isPlaying || staticPreview || !isVisible) return;
+    if (!isPlaying || staticPreview || !isVisible || !isDocumentVisible) return;
     const startedAt = performance.now() - frameIndexRef.current * (1000 / REMOTE_SCENE_DATA.fps);
     let animationFrame = 0;
     const tick = (now: number) => {
-      const nextFrame = Math.min(lastFrame, Math.floor((now - startedAt) / (1000 / REMOTE_SCENE_DATA.fps)));
+      const rawFrame = Math.floor((now - startedAt) / (1000 / REMOTE_SCENE_DATA.fps));
+      const nextFrame = normalizeRemoteSceneFrame(rawFrame);
       frameIndexRef.current = nextFrame;
       setFrameIndex(nextFrame);
-      if (nextFrame >= lastFrame) {
-        setIsPlaying(false);
-      } else {
-        animationFrame = requestAnimationFrame(tick);
-      }
+      animationFrame = requestAnimationFrame(tick);
     };
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [isPlaying, isVisible, lastFrame, staticPreview]);
+  }, [isDocumentVisible, isPlaying, isVisible, staticPreview]);
 
-  const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
-  const phoneState = getPhoneSceneState(safeFrameIndex);
-  const caption = getSceneCaption(safeFrameIndex);
-  const replaySecond = replaySecondForSceneFrame(safeFrameIndex);
-  const overlay = getSceneOverlayLayout(profileKey, safeFrameIndex / REMOTE_SCENE_DATA.fps);
-  const workProgress = Math.max(0, Math.min(1, (safeFrameIndex - 36) / (124 - 36)));
+  const safeFrameIndex = clampFrameIndex(frameIndex, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
+  const sceneFrameIndex = Math.min(safeFrameIndex, sceneLastFrame);
+  const workState = getRemoteSceneWorkState(safeFrameIndex);
+  const phoneState = safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME
+    ? getPhoneSceneState(sceneFrameIndex)
+    : workState.phase === "queued"
+      ? { key: "queued", status: "NEXT", message: "Instruction received", detail: "studio-mac" }
+      : workState.phase === "working"
+        ? { key: "live", status: "LIVE", message: "Working", detail: "studio-mac" }
+        : { key: "complete", status: "DONE", message: "Ready for input", detail: "studio-mac" };
+  const caption = safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME
+    ? getSceneCaption(sceneFrameIndex)
+    : workState.phase === "queued"
+      ? "another instruction arrives"
+      : workState.phase === "working"
+        ? "work continues on studio-mac"
+        : "ready for the next task";
+  const overlay = getSceneOverlayLayout(profileKey, sceneFrameIndex / REMOTE_SCENE_DATA.fps);
+  const loopProgress = remoteSceneLoopProgress(safeFrameIndex);
+  const loopAngle = loopProgress * Math.PI * 2;
+  const isSteadyScene = safeFrameIndex >= REMOTE_SCENE_LOOP_START_FRAME;
   const terminalReveal = terminalMode === "inset"
     ? 1
-    : Math.max(0, Math.min(1, (safeFrameIndex - 56) / 24));
+    : Math.max(0, Math.min(1, (sceneFrameIndex - 56) / 24));
   const terminalTarget = profileKey === "desktop"
     ? { left: 40, top: 24, width: 39, height: 31 }
     : { left: 4, top: 27, width: 72, height: 49 };
@@ -196,17 +215,20 @@ export function RemoteScenePlayer() {
     "--phone-top": `${overlay.phone.top}%`,
     "--phone-width": `${overlay.phone.width}%`,
     "--phone-height": `${overlay.phone.height}%`,
-    "--work-progress": workProgress,
+    "--work-progress": workState.progress,
     "--terminal-opacity": terminalReveal,
     "--terminal-left": `${terminalBounds.left}%`,
     "--terminal-top": `${terminalBounds.top}%`,
     "--terminal-width": `${terminalBounds.width}%`,
     "--terminal-height": `${terminalBounds.height}%`,
+    "--room-breathe-x": `${isSteadyScene ? Math.sin(loopAngle) * 0.16 : 0}%`,
+    "--room-breathe-y": `${isSteadyScene ? Math.cos(loopAngle) * 0.1 : 0}%`,
+    "--room-breathe-scale": isSteadyScene ? 1.004 + Math.sin(loopAngle) * 0.0015 : 1,
     aspectRatio: `${profile.width} / ${profile.height}`,
   } as CSSProperties;
 
   const setFrame = (nextFrame: number) => {
-    const safeNextFrame = clampFrameIndex(nextFrame, frames.length);
+    const safeNextFrame = clampFrameIndex(nextFrame, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
     frameIndexRef.current = safeNextFrame;
     setFrameIndex(safeNextFrame);
   };
@@ -234,10 +256,17 @@ export function RemoteScenePlayer() {
       <div
         className={`remote-scene-stage remote-scene-stage--${terminalMode}${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`}
         style={overlayStyle}
+        data-scene-frame={sceneFrameIndex}
+        data-work-task={workState.id}
+        data-work-phase={workState.phase}
       >
         <div className="remote-scene-world">
           <canvas ref={canvasRef} aria-hidden="true" />
-          <RecordedSceneTerminal mode={terminalMode} replaySecond={replaySecond} />
+          <RecordedSceneTerminal
+            mode={terminalMode}
+            replaySecond={workState.replaySecond}
+            timeline={workState.timeline}
+          />
           <div className={`remote-scene-phone-overlay remote-scene-phone-overlay--${phoneState.key}`} aria-label="Crisp phone status overlay">
             <div className="remote-scene-phone-heading"><strong>Longhouse</strong></div>
             <span className="remote-scene-phone-live">● {phoneState.status}</span>
@@ -256,7 +285,6 @@ export function RemoteScenePlayer() {
             type="button"
             className="remote-scene-play-button"
             onClick={() => {
-              if (safeFrameIndex >= lastFrame) setFrame(0);
               setIsPlaying((playing) => !playing);
             }}
             aria-label={isPlaying ? "Pause scene" : "Play scene"}
@@ -288,7 +316,7 @@ export function RemoteScenePlayer() {
           />
         </label>
         <div className="remote-scene-control-note">
-          <span>{prefersReducedMotion ? "Reduced motion preference detected" : `24 fps deterministic ${profileKey} render`}</span>
+          <span>{prefersReducedMotion ? "Reduced motion preference detected" : `One-shot scene · continuous ${profileKey} work loop`}</span>
           <span>Frame {String(safeFrameIndex).padStart(3, "0")} / {lastFrame}</span>
         </div>
         <div className="remote-scene-variant-row" role="group" aria-label="Recorded terminal composition">

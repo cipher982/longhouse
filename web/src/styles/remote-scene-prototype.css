@@ -105,6 +105,9 @@
   .remote-scene-world {
     position: absolute;
     inset: 0;
+    transform: translate(var(--room-breathe-x), var(--room-breathe-y)) scale(var(--room-breathe-scale));
+    transform-origin: 50% 50%;
+    will-change: transform;
   }
 
   .remote-scene-world canvas {

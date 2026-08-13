@@ -22,7 +22,7 @@ interface CaptureGroup {
 
 interface PlaybackCheck {
   advancingFrame: number;
-  finalFrame: number;
+  loopedFrame: number;
   elapsedMs: number;
 }
 
@@ -171,6 +171,7 @@ Start with the contact sheets, then inspect any individual frames that help. Jud
 
 async function verifyLivePlayback(page: Page, lastFrame: number): Promise<PlaybackCheck> {
   const slider = page.getByRole("slider", { name: "Scrub remote control scene" });
+  const stage = page.locator(".remote-scene-stage");
   await slider.fill("0");
   await settleFrame(page);
   const startedAt = Date.now();
@@ -181,14 +182,22 @@ async function verifyLivePlayback(page: Page, lastFrame: number): Promise<Playba
     { timeout: 2_000 },
   );
   const advancingFrame = Number(await slider.inputValue());
+
+  await slider.fill(String(lastFrame - 3));
+  await settleFrame(page);
+  await page.getByRole("button", { name: "Play scene" }).click();
+  const loopStartFrame = Number(await stage.getAttribute("data-scene-frame")) + 1;
   await page.waitForFunction(
-    (targetFrame) => Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0) >= targetFrame,
-    lastFrame,
-    { timeout: 8_000 },
+    ({ loopStart, previousFrame }) => {
+      const frame = Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0);
+      return frame >= loopStart && frame < previousFrame;
+    },
+    { loopStart: loopStartFrame, previousFrame: lastFrame - 3 },
+    { timeout: 2_000 },
   );
   return {
     advancingFrame,
-    finalFrame: Number(await slider.inputValue()),
+    loopedFrame: Number(await slider.inputValue()),
     elapsedMs: Date.now() - startedAt,
   };
 }
