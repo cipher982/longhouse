@@ -1,9 +1,9 @@
+import { useEffect, useRef } from "react";
 import type { SessionEvent } from "./sessionEvents";
 
 interface PhoneSessionTranscript {
-  assistantLine: string;
+  assistantLine?: string;
   sentMessage?: string;
-  resultLine?: string;
   /** Recording-derived events visible at the current replay time. */
   events?: SessionEvent[];
 }
@@ -91,13 +91,27 @@ export function PhoneSessionScreen({
   onSend,
 }: PhoneSessionScreenProps) {
   const canSend = sendEnabled && composerText.trim().length > 0 && !sent;
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptKey = `${sent}:${working}:${transcript.events?.map((event) => `${event.id ?? event.tSec}:${event.result ?? ""}`).join("|") ?? ""}`;
+
+  useEffect(() => {
+    const node = transcriptRef.current;
+    if (!node) return;
+    if (typeof node.scrollTo === "function") {
+      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    } else {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [transcriptKey]);
 
   return (
     <div className="phone-session-screen">
-      <div className="phone-session-transcript" aria-live="polite">
-        <div className="phone-session-message phone-session-message-assistant">
-          {transcript.assistantLine}
-        </div>
+      <div className="phone-session-transcript" aria-live="polite" ref={transcriptRef}>
+        {transcript.assistantLine ? (
+          <div className="phone-session-message phone-session-message-assistant">
+            {transcript.assistantLine}
+          </div>
+        ) : null}
         {sent && transcript.sentMessage ? (
           <div className={`phone-session-submitted${working ? " working" : ""}`}>
             <div className="phone-session-message phone-session-message-user">
@@ -107,14 +121,9 @@ export function PhoneSessionScreen({
             {working ? <div className="submitted-status">Working…</div> : null}
           </div>
         ) : null}
-        {transcript.resultLine ? (
-          <div className="phone-session-message phone-session-message-assistant">
-            {transcript.resultLine}
-          </div>
-        ) : null}
         {transcript.events?.map((event) =>
           event.kind === "tool" ? (
-            <div className="phone-session-tool" key={`${event.tSec}-${event.title}`}>
+            <div className="phone-session-tool" key={event.id ?? `${event.tSec}-${event.title}`}>
               <span className="phone-session-tool-title">{event.title}</span>
               <span className="phone-session-tool-subtitle">{event.subtitle}</span>
               {event.result ? (
@@ -124,7 +133,7 @@ export function PhoneSessionScreen({
           ) : (
             <div
               className="phone-session-message phone-session-message-assistant"
-              key={`${event.tSec}-${event.title.slice(0, 16)}`}
+              key={event.id ?? `${event.tSec}-${event.title.slice(0, 16)}`}
             >
               {event.title}
             </div>

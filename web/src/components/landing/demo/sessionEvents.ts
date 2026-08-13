@@ -9,6 +9,7 @@ import type { GridTimeline } from "@longhouse/video/demo";
  */
 
 export interface SessionEvent {
+  id?: string;
   tSec: number;
   kind: "tool" | "assistant";
   /** Tool name ("Read", "Bash") or the full prose text. */

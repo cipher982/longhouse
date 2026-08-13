@@ -20,6 +20,10 @@ export function terminalUrl(sessionId: string): string {
   return `${wsBase}/ws?session=${encodeURIComponent(sessionId)}`;
 }
 
+export function eventsUrl(sessionId: string): string {
+  return `${WORKER_BASE}/api/session/${encodeURIComponent(sessionId)}/events`;
+}
+
 /** Geometry is fixed to match the sandbox PTY; mismatched cols corrupt TUIs. */
 export const LIVE_COLS = 64;
 export const LIVE_ROWS = 20;

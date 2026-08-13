@@ -5,6 +5,8 @@ import "@xterm/xterm/css/xterm.css";
 import { PhoneFrame } from "./PhoneFrame";
 import { PhoneSessionScreen, type PhoneRuntimeTone } from "./PhoneSessionScreen";
 import { prewarmLiveSession, type LiveSession } from "./liveSession";
+import { projectLiveSessionEvents } from "./liveSessionEvents";
+import type { SessionEvent } from "./sessionEvents";
 
 type Phase = "connecting" | "starting" | "ready" | "running" | "done" | "failed";
 
@@ -51,21 +53,17 @@ export function LiveDemo({ active }: { active: boolean }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<LiveSession | null>(null);
-  const startedAtRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>("connecting");
   const sentRef = useRef(false);
   const submittedRef = useRef(false);
+  const submittedInstructionRef = useRef("");
   const sawWorkingRef = useRef(false);
 
   const [phase, setPhaseState] = useState<Phase>("connecting");
-  const [instruction, setInstruction] = useState(DEFAULT_INSTRUCTION);
+  const [draft, setDraft] = useState(DEFAULT_INSTRUCTION);
+  const [submittedInstruction, setSubmittedInstruction] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
-
-  const instructionRef = useRef(instruction);
-  useEffect(() => {
-    instructionRef.current = instruction;
-  }, [instruction]);
+  const [events, setEvents] = useState<SessionEvent[]>([]);
 
   const setPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -75,9 +73,6 @@ export function LiveDemo({ active }: { active: boolean }) {
   const markDone = useCallback(() => {
     if (phaseRef.current !== "running") return;
     setPhase("done");
-    if (startedAtRef.current) {
-      setElapsed((performance.now() - startedAtRef.current) / 1000);
-    }
   }, [setPhase]);
 
   useEffect(() => {
@@ -113,7 +108,7 @@ export function LiveDemo({ active }: { active: boolean }) {
       term.write(chunk, inspectScreen);
       const signal = signalOf(session.transcript);
       if (sentRef.current && !submittedRef.current) {
-        const typed = signalOf(instructionRef.current);
+        const typed = signalOf(submittedInstructionRef.current);
         if (typed && signal.includes(typed)) {
           submittedRef.current = true;
           session.send("\r");
@@ -168,21 +163,56 @@ export function LiveDemo({ active }: { active: boolean }) {
     };
   }, [active, markDone, setPhase]);
 
+  useEffect(() => {
+    if (!sent || phase === "failed") return;
+    let cancelled = false;
+    let polling = false;
+
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const next = await sessionRef.current?.events();
+        if (!cancelled && next) setEvents(projectLiveSessionEvents(next));
+      } catch {
+        // The terminal remains the source of completion truth. A transient
+        // transcript read simply retries on the next poll.
+      } finally {
+        polling = false;
+      }
+    };
+
+    void poll();
+    if (phase === "running") {
+      const interval = window.setInterval(() => void poll(), 350);
+      return () => {
+        cancelled = true;
+        window.clearInterval(interval);
+      };
+    }
+
+    const finalPoll = window.setTimeout(() => void poll(), 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(finalPoll);
+    };
+  }, [phase, sent]);
+
   const run = useCallback(() => {
     const session = sessionRef.current;
     if (!session || phaseRef.current !== "ready" || sentRef.current) return;
+    const instruction = draft.trim();
+    if (!instruction) return;
     sentRef.current = true;
-    startedAtRef.current = performance.now();
+    submittedInstructionRef.current = instruction;
+    setSubmittedInstruction(instruction);
+    setDraft("");
     setSent(true);
     setPhase("running");
     session.send(instruction);
-  }, [instruction, setPhase]);
+  }, [draft, setPhase]);
 
   const runtime = phoneState(active, phase);
-  const resultLine =
-    phase === "done" && elapsed !== null
-      ? `Claude finished the live task in ${elapsed.toFixed(1)} seconds.`
-      : undefined;
 
   return (
     <>
@@ -190,11 +220,10 @@ export function LiveDemo({ active }: { active: boolean }) {
         <PhoneSessionScreen
           title="Live demo repo"
           transcript={{
-            assistantLine: "A real Claude Code session is attached to this disposable repository.",
-            sentMessage: sent ? instruction : undefined,
-            resultLine,
+            sentMessage: submittedInstruction ?? undefined,
+            events,
           }}
-          composerText={instruction}
+          composerText={draft}
           composerDisabled={sent || phase === "failed"}
           runtimeLabel={runtime.label}
           runtimeDetail={runtime.detail}
@@ -202,7 +231,7 @@ export function LiveDemo({ active }: { active: boolean }) {
           sendEnabled={active && phase === "ready"}
           sent={sent}
           working={phase === "running"}
-          onComposerChange={setInstruction}
+          onComposerChange={setDraft}
           onSend={run}
         />
       </PhoneFrame>

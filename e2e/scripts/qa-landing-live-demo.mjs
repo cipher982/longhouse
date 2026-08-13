@@ -196,6 +196,11 @@ try {
       if (doRun && viewport.name === "desktop") {
         const send = page.getByRole("button", { name: "Send" });
         await send.click();
+        check(
+          `${viewport.name}: sent prompt clears from composer`,
+          (await input.inputValue()) === "",
+          JSON.stringify(await input.inputValue()),
+        );
         await page
           .waitForFunction(
             () => /complete|unavailable/i.test(
@@ -207,6 +212,38 @@ try {
           .catch(() => {});
         const finalText = (await state.innerText()).trim();
         check(`${viewport.name}: instruction completes`, /complete/i.test(finalText), finalText);
+        await page
+          .waitForFunction(
+            () =>
+              document.querySelectorAll(".steer-playground .phone-session-tool").length >= 2 &&
+              document.querySelectorAll(
+                ".steer-playground .phone-session-message-assistant",
+              ).length >= 1,
+            null,
+            { timeout: 10000 },
+          )
+          .catch(() => {});
+        const phoneTranscript = await page.evaluate(() => ({
+          tools: document.querySelectorAll(".steer-playground .phone-session-tool").length,
+          assistant: document.querySelectorAll(
+            ".steer-playground .phone-session-message-assistant",
+          ).length,
+          text: document.querySelector(".steer-playground .phone-session-transcript")?.textContent ?? "",
+        }));
+        check(
+          `${viewport.name}: Claude tool calls stream to phone`,
+          phoneTranscript.tools >= 2,
+          `${phoneTranscript.tools} tool rows`,
+        );
+        check(
+          `${viewport.name}: Claude response streams to phone`,
+          phoneTranscript.assistant >= 1,
+          `${phoneTranscript.assistant} assistant messages`,
+        );
+        check(
+          `${viewport.name}: phone contains no synthetic completion copy`,
+          !/Claude finished the live task/i.test(phoneTranscript.text),
+        );
       }
 
       await playground.scrollIntoViewIfNeeded();

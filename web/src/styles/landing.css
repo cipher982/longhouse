@@ -1114,10 +1114,13 @@
   }
 
   .phone-session-tool-meta {
+    overflow: hidden;
     flex: 0 0 auto;
+    max-width: 32%;
     color: rgba(235, 235, 245, 0.34);
     font-size: calc(11 * var(--pt));
     font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
