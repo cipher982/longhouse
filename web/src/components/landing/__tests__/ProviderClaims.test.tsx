@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
@@ -6,28 +6,18 @@ import { IntegrationsSection } from "../IntegrationsSection";
 import { TrustSection } from "../TrustSection";
 
 describe("landing provider claims", () => {
-  it("renders the capability matrix with plain supported/unsupported cells", () => {
+  it("renders readable provider rails from the capability contract", () => {
     render(
       <MemoryRouter>
         <IntegrationsSection />
       </MemoryRouter>,
     );
 
-    const table = screen.getByRole("table");
-    const headers = within(table)
-      .getAllByRole("columnheader")
-      .map((th) => th.textContent);
-    expect(headers).toEqual([
-      "Provider",
-      "Sync & search",
-      "Launch & send",
-      "Interrupt",
-      "Steer mid-turn",
-      "Resume",
-    ]);
+    expect(screen.getByText("Sync, timeline, and full-text search")).toBeInTheDocument();
 
-    const rowNames = Array.from(table.querySelectorAll("tbody th")).map(
-      (th) => th.textContent,
+    const rails = screen.getAllByRole("listitem");
+    const rowNames = rails.map((rail) =>
+      rail.querySelector(".landing-provider-row-name")?.textContent,
     );
     expect(rowNames).toEqual([
       "Claude Code",
@@ -38,19 +28,21 @@ describe("landing provider claims", () => {
       "Antigravity CLI",
     ]);
 
-    const cellsFor = (name: string) =>
-      within(within(table).getByText(name).closest("tr")!)
-        .getAllByRole("cell")
-        .map((td) => (td.className.includes("yes") ? "yes" : "no"));
+    const cellsFor = (name: string) => {
+      const rail = rails.find(
+        (item) => item.querySelector(".landing-provider-row-name")?.textContent === name,
+      );
+      return Array.from(rail!.querySelectorAll(".landing-provider-capability"))
+        .map((chip) => chip.getAttribute("data-supported"));
+    };
 
-    // sync, launch & send, interrupt, steer, resume
-    expect(cellsFor("Claude Code")).toEqual(["yes", "yes", "yes", "yes", "yes"]);
-    expect(cellsFor("Cursor Agent")).toEqual(["yes", "yes", "yes", "no", "yes"]);
-    expect(cellsFor("OpenCode")).toEqual(["yes", "yes", "yes", "no", "yes"]);
-    // Pi: launch/send/interrupt live, no mid-turn steer, no resume yet.
-    expect(cellsFor("Pi Agent")).toEqual(["yes", "yes", "yes", "no", "no"]);
-    // Shadow-only: Longhouse archives Antigravity but cannot launch or send.
-    expect(cellsFor("Antigravity CLI")).toEqual(["yes", "no", "no", "no", "no"]);
+    // search, launch, interrupt, mid-turn, resume
+    expect(cellsFor("Claude Code")).toEqual(["true", "true", "true", "true", "true"]);
+    expect(cellsFor("Cursor Agent")).toEqual(["true", "true", "true", "false", "true"]);
+    expect(cellsFor("OpenCode")).toEqual(["true", "true", "true", "false", "true"]);
+    expect(cellsFor("Pi Agent")).toEqual(["true", "true", "true", "false", "false"]);
+    expect(cellsFor("Antigravity CLI")).toEqual(["true", "false", "false", "false", "false"]);
+    expect(screen.getByText(/Resuming a dead session is not wired up yet/i)).toBeInTheDocument();
   });
 
   it("renders FAQ provider answer consistent with the capability matrix", async () => {
@@ -59,10 +51,11 @@ describe("landing provider claims", () => {
 
     await user.click(screen.getByRole("button", { name: /Which providers are strongest today\?/i }));
 
-    // Must match the matrix above it: full set only for Claude Code and Codex,
-    // no mid-turn steering on Cursor/OpenCode, Antigravity sync-only.
+    // Must match the provider rails: full set only for Claude Code and Codex,
+    // no mid-turn steering on Cursor/OpenCode, Pi without resume, Antigravity sync-only.
     const answer = screen.getByText(/Claude Code and Codex have the full set/i);
     expect(answer.textContent).toMatch(/Cursor Agent and OpenCode do everything except mid-turn steering/i);
+    expect(answer.textContent).toMatch(/Pi Agent can launch, send, and interrupt, but resume is not wired up yet/i);
     expect(answer.textContent).toMatch(/Antigravity sessions sync into the timeline for watching and search only/i);
     expect(answer.textContent).not.toMatch(/Antigravity can launch/i);
   });
