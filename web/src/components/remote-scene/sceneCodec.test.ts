@@ -18,6 +18,11 @@ import { SCENE_GLYPHS, SCENE_SPEC } from "./sceneSpec";
 import { createSourceRaster, drawTriangle3D } from "./sourceRenderer";
 
 describe("remote scene codec", () => {
+  const encodedStreams = readFileSync(
+    path.resolve(process.cwd(), "src/components/remote-scene/generated/sceneFrames.txt"),
+    "utf8",
+  ).trimEnd().split("\n");
+
   it("round-trips palette values through inspectable RLE", () => {
     const source = Uint8Array.from([0, 0, 3, 3, 3, 18, 0, 32]);
     expect(decodeFrame(encodeFrame(source), source.length)).toEqual(source);
@@ -25,7 +30,7 @@ describe("remote scene codec", () => {
 
   it("decodes every generated profile to its declared dimensions", () => {
     for (const profile of Object.values(REMOTE_SCENE_DATA.profiles)) {
-      const frames = decodeFrames(profile.encodedFrames, profile.width * profile.height);
+      const frames = decodeFrames(encodedStreams[profile.streamIndex], profile.width * profile.height);
       expect(frames).toHaveLength(REMOTE_SCENE_DATA.fps * REMOTE_SCENE_DATA.durationSeconds);
       expect(frames[0]).toHaveLength(profile.width * profile.height);
       expect(frames.at(-1)).toHaveLength(profile.width * profile.height);
@@ -35,8 +40,10 @@ describe("remote scene codec", () => {
 
   it("keeps the generated runtime module within its compressed delivery budget", () => {
     const moduleBytes = readFileSync(path.resolve(process.cwd(), "src/components/remote-scene/generated/sceneData.ts"));
-    expect(gzipSync(moduleBytes, { level: 9 }).byteLength).toBeLessThanOrEqual(80 * 1024);
-    expect(brotliCompressSync(moduleBytes).byteLength).toBeLessThanOrEqual(55 * 1024);
+    const frameBytes = readFileSync(path.resolve(process.cwd(), "src/components/remote-scene/generated/sceneFrames.txt"));
+    const runtimeBytes = Buffer.concat([moduleBytes, frameBytes]);
+    expect(gzipSync(runtimeBytes, { level: 9 }).byteLength).toBeLessThanOrEqual(80 * 1024);
+    expect(brotliCompressSync(runtimeBytes).byteLength).toBeLessThanOrEqual(55 * 1024);
   });
 
   it("clamps stale player state to the available generated frames", () => {

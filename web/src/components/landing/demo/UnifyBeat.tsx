@@ -19,7 +19,7 @@ function Beat({ tLocal, story }: { tLocal: number; story: DemoStory | null }) {
     >
       <div className="hero-demo-panel-header">
         <span className="hero-demo-panel-brand">Longhouse</span>
-        <span className="hero-demo-panel-sub">every agent · every machine</span>
+        <span className="hero-demo-panel-sub">supported agents · your machines</span>
         <span className="hero-demo-panel-count">4 sessions</span>
       </div>
       {PROVIDERS.map((provider, i) => {

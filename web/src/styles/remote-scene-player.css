@@ -62,7 +62,7 @@
     will-change: transform;
   }
 
-  .remote-scene-world canvas {
+.remote-scene-world canvas {
     display: block;
     width: 100%;
     height: 100%;
@@ -99,10 +99,6 @@
     pointer-events: none;
   }
 
-  .remote-scene-recorded-terminal--inset {
-    border-color: rgba(143, 197, 172, 0.28);
-  }
-
   .remote-scene-recorded-terminal--cutin {
     opacity: var(--terminal-opacity);
     border-color: rgba(143, 197, 172, 0.35);
@@ -122,10 +118,6 @@
     border-bottom: 1px solid rgba(201, 166, 107, 0.16);
     font-size: clamp(0.42rem, 0.66vw, 0.68rem);
     line-height: 1;
-  }
-
-  .remote-scene-recorded-terminal--inset .remote-scene-recorded-terminal-chrome {
-    display: none;
   }
 
   .remote-scene-recorded-terminal-chrome > span:last-child {
@@ -320,4 +312,14 @@
       white-space: nowrap;
     }
   }
+}
+
+.remote-scene-load-error {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 2;
+  margin: 0;
+  color: var(--landing-muted);
+  font: 500 0.8rem/1.4 var(--font-mono);
+  transform: translate(-50%, -50%);
 }

@@ -95,7 +95,7 @@ function Beat({ tLocal, story }: { tLocal: number; story: DemoStory | null }) {
         tSec={replayT}
         title={claude.name}
         accent={claude.color}
-        detail={`${claude.machine} — still at your desk`}
+        detail={`${claude.machine} · still at your desk`}
       />
     </div>
   );

@@ -360,11 +360,6 @@
     letter-spacing: -0.03em;
   }
 
-  .hero-demo-close-tagline {
-    color: rgba(243, 234, 217, 0.75);
-    font-size: 1rem;
-  }
-
   .hero-demo-close-providers {
     display: flex;
     flex-wrap: wrap;

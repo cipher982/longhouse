@@ -1,10 +1,6 @@
 import { ProductShowcase } from "./ProductShowcase";
 
-interface DemoSectionProps {
-  screenshotTheme: "warm" | "cool-pop";
-}
-
-export function DemoSection({ screenshotTheme }: DemoSectionProps) {
+export function DemoSection() {
   return (
     <section className="landing-demo" id="sessions">
       <div className="landing-section-inner">
@@ -18,7 +14,7 @@ export function DemoSection({ screenshotTheme }: DemoSectionProps) {
           </p>
         </div>
 
-        <ProductShowcase screenshotTheme={screenshotTheme} />
+        <ProductShowcase />
       </div>
     </section>
   );

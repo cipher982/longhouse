@@ -952,7 +952,7 @@ demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed r
 
 qa-remote-scene: ## Capture sampled remote-scene frames for independent visual review (FRONTEND_URL=... EVERY=6)
 	@$(MAKE) ensure-playwright-browser
-	@bun scripts/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(VARIANT),--variant=$(VARIANT),) $(if $(SEED),--seed=$(SEED),)
+	@bun scripts/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(SEED),--seed=$(SEED),)
 
 qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
 	@set -e; \

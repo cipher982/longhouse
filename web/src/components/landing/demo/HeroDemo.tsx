@@ -92,13 +92,12 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
         <p className="hero-demo-caption" key={windows[activeIndex].id}>
           {windows[activeIndex].caption}
         </p>
-        <div className="hero-demo-dots" role="tablist" aria-label="Demo parts">
+        <div className="hero-demo-dots" role="group" aria-label="Demo parts">
           {windows.map((w, i) => (
             <button
               key={w.id}
               type="button"
-              role="tab"
-              aria-selected={i === activeIndex}
+              aria-pressed={i === activeIndex}
               className={`hero-demo-dot${i === activeIndex ? " is-active" : ""}`}
               aria-label={`Part ${i + 1} of ${BEATS.length}: ${w.caption}`}
               onClick={() => seek(w.startSec + (i === 0 ? 0 : CROSSFADE_SEC))}

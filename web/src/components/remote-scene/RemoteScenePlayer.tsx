@@ -1,32 +1,23 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useDemoSeed } from "../../lib/demoSimulation";
 import { REMOTE_SCENE_DATA } from "./generated/sceneData";
-import { clampFrameIndex, decodeFrames } from "./sceneCodec";
+import { clampFrameIndex } from "./sceneCodec";
 import {
   getPhoneSceneState,
   getSceneCaption,
   getSceneOverlayLayout,
   type SceneProfileKey,
 } from "./sceneSpec";
-import { RecordedSceneTerminal, type RecordedTerminalMode } from "./RecordedSceneTerminal";
+import { RecordedSceneTerminal } from "./RecordedSceneTerminal";
+import { loadRemoteSceneFrames } from "./sceneFrameLoader";
 import {
   getRemoteSceneWorkState,
   getRemoteScenePlaybackPosition,
   REMOTE_SCENE_LOOP_START_FRAME,
   REMOTE_SCENE_PLAYBACK_FRAME_COUNT,
-  REMOTE_SCENE_PLAYBACK_LAST_FRAME,
   remoteSceneLoopProgress,
 } from "./recordedTimeline";
 import "../../styles/remote-scene-player.css";
-
-function initialTerminalMode(): RecordedTerminalMode {
-  if (typeof window === "undefined") return "cutin";
-  return new URLSearchParams(window.location.search).get("terminal") === "inset" ? "inset" : "cutin";
-}
-
-function formatTime(frameIndex: number): string {
-  return (frameIndex / REMOTE_SCENE_DATA.fps).toFixed(2).padStart(5, "0");
-}
 
 function drawFrame(
   canvas: HTMLCanvasElement,
@@ -74,7 +65,7 @@ function drawFrame(
   }
 }
 
-export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } = {}) {
+export function RemoteScenePlayer() {
   const playerRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameIndexRef = useRef(0);
@@ -84,6 +75,8 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
     typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches ? "mobile" : "desktop",
   );
   const [frameIndex, setFrameIndex] = useState(0);
+  const [frames, setFrames] = useState<Uint8Array[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [workCycle, setWorkCycle] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [staticPreview, setStaticPreview] = useState(false);
@@ -92,16 +85,25 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
   const [isDocumentVisible, setIsDocumentVisible] = useState(() =>
     typeof document === "undefined" || !document.hidden,
   );
-  const [terminalMode, setTerminalModeState] = useState<RecordedTerminalMode>(initialTerminalMode);
   const demoSeed = useDemoSeed();
 
   const profile = REMOTE_SCENE_DATA.profiles[profileKey];
-  const frames = useMemo(
-    () => decodeFrames(profile.encodedFrames, profile.width * profile.height),
-    [profile.encodedFrames, profile.height, profile.width],
-  );
   const sceneLastFrame = Math.max(0, frames.length - 1);
-  const lastFrame = REMOTE_SCENE_PLAYBACK_LAST_FRAME;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadFailed(false);
+    void loadRemoteSceneFrames()
+      .then((loaded) => {
+        if (!cancelled) setFrames(loaded[profileKey]);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileKey]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 720px)");
@@ -167,7 +169,7 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
   }, [frames, profile.height, profile.width]);
 
   useEffect(() => {
-    if (!isPlaying || staticPreview || !isVisible || !isDocumentVisible) return;
+    if (!isPlaying || staticPreview || !isVisible || !isDocumentVisible || frames.length === 0) return;
     const startedAt = performance.now() - absoluteFrameRef.current * (1000 / REMOTE_SCENE_DATA.fps);
     let animationFrame = 0;
     const tick = (now: number) => {
@@ -185,7 +187,7 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
     };
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [isDocumentVisible, isPlaying, isVisible, staticPreview]);
+  }, [frames.length, isDocumentVisible, isPlaying, isVisible, staticPreview]);
 
   const safeFrameIndex = clampFrameIndex(frameIndex, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
   const sceneFrameIndex = Math.min(safeFrameIndex, sceneLastFrame);
@@ -210,20 +212,16 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
   const loopProgress = remoteSceneLoopProgress(safeFrameIndex);
   const loopAngle = loopProgress * Math.PI * 2;
   const isSteadyScene = safeFrameIndex >= REMOTE_SCENE_LOOP_START_FRAME;
-  const terminalReveal = terminalMode === "inset"
-    ? 1
-    : Math.max(0, Math.min(1, (sceneFrameIndex - 56) / 24));
+  const terminalReveal = Math.max(0, Math.min(1, (sceneFrameIndex - 56) / 24));
   const terminalTarget = profileKey === "desktop"
     ? { left: 40, top: 24, width: 39, height: 31 }
     : { left: 4, top: 27, width: 72, height: 49 };
-  const terminalBounds = terminalMode === "inset"
-    ? overlay.monitor
-    : {
-        left: overlay.monitor.left + (terminalTarget.left - overlay.monitor.left) * terminalReveal,
-        top: overlay.monitor.top + (terminalTarget.top - overlay.monitor.top) * terminalReveal,
-        width: overlay.monitor.width + (terminalTarget.width - overlay.monitor.width) * terminalReveal,
-        height: overlay.monitor.height + (terminalTarget.height - overlay.monitor.height) * terminalReveal,
-      };
+  const terminalBounds = {
+    left: overlay.monitor.left + (terminalTarget.left - overlay.monitor.left) * terminalReveal,
+    top: overlay.monitor.top + (terminalTarget.top - overlay.monitor.top) * terminalReveal,
+    width: overlay.monitor.width + (terminalTarget.width - overlay.monitor.width) * terminalReveal,
+    height: overlay.monitor.height + (terminalTarget.height - overlay.monitor.height) * terminalReveal,
+  };
   const overlayStyle = {
     "--phone-left": `${overlay.phone.left}%`,
     "--phone-top": `${overlay.phone.top}%`,
@@ -241,51 +239,27 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
     aspectRatio: `${profile.width} / ${profile.height}`,
   } as CSSProperties;
 
-  const setFrame = (nextFrame: number) => {
-    const safeNextFrame = clampFrameIndex(nextFrame, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
-    absoluteFrameRef.current = safeNextFrame;
-    frameIndexRef.current = safeNextFrame;
-    workCycleRef.current = 0;
-    setWorkCycle(0);
-    setFrameIndex(safeNextFrame);
-  };
-
-  const handleScrub = (event: ChangeEvent<HTMLInputElement>) => {
-    setIsPlaying(false);
-    setFrame(Number(event.target.value));
-  };
-
-  const toggleStaticPreview = () => {
-    const nextStatic = !staticPreview;
-    setStaticPreview(nextStatic);
-    if (nextStatic) setIsPlaying(false);
-  };
-
-  const setTerminalMode = (nextMode: RecordedTerminalMode) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("terminal", nextMode);
-    window.history.replaceState(null, "", url);
-    setTerminalModeState(nextMode);
-  };
-
   return (
     <section
       ref={playerRef}
-      className={`remote-scene-player${embedded ? " remote-scene-player--embedded" : ""}`}
+      className="remote-scene-player remote-scene-player--embedded"
       aria-label="Remote control scene player"
     >
       <div
-        className={`remote-scene-stage remote-scene-stage--${terminalMode}${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`}
+        className={`remote-scene-stage remote-scene-stage--cutin${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`}
         style={overlayStyle}
         data-scene-frame={sceneFrameIndex}
+        data-playback-frame={safeFrameIndex}
+        data-scene-frame-count={frames.length}
+        data-scene-ready={frames.length > 0 ? "true" : loadFailed ? "error" : "false"}
         data-work-task={workState.id}
         data-work-phase={workState.phase}
         data-work-cycle={workCycle}
       >
         <div className="remote-scene-world">
           <canvas ref={canvasRef} aria-hidden="true" />
+          {loadFailed ? <p className="remote-scene-load-error">Scene unavailable</p> : null}
           <RecordedSceneTerminal
-            mode={terminalMode}
             replaySecond={workState.replaySecond}
             timeline={workState.timeline}
             sourceLabel={safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME ? "recorded PTY" : "simulated continuation"}
@@ -300,64 +274,15 @@ export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } =
           </div>
           <div className="remote-scene-ambient-label" key={caption}>{caption}</div>
         </div>
-        {embedded && (
-          <button
-            type="button"
-            className="remote-scene-embedded-toggle"
-            onClick={() => setIsPlaying((playing) => !playing)}
-            aria-label={isPlaying ? "Pause remote work scene" : "Play remote work scene"}
-          >
-            {isPlaying ? "Pause" : "Play"}
-          </button>
-        )}
+        <button
+          type="button"
+          className="remote-scene-embedded-toggle"
+          onClick={() => setIsPlaying((playing) => !playing)}
+          aria-label={isPlaying ? "Pause remote work scene" : "Play remote work scene"}
+        >
+          {isPlaying ? "Pause" : "Play"}
+        </button>
       </div>
-
-      {!embedded && <div className="remote-scene-controls">
-        <div className="remote-scene-control-row">
-          <button
-            type="button"
-            className="remote-scene-play-button"
-            onClick={() => {
-              setIsPlaying((playing) => !playing);
-            }}
-            aria-label={isPlaying ? "Pause scene" : "Play scene"}
-          >
-            {isPlaying ? "Pause" : "Play scene"}
-          </button>
-          <span className="remote-scene-time" aria-live="off">
-            {formatTime(safeFrameIndex)} <span>/</span> {formatTime(lastFrame)}
-          </span>
-          <button
-            type="button"
-            className="remote-scene-static-button"
-            onClick={toggleStaticPreview}
-            aria-pressed={staticPreview}
-          >
-            {staticPreview ? "Motion preview" : "Static frame"}
-          </button>
-        </div>
-        <label className="remote-scene-scrub-label">
-          <span className="visually-hidden">Scene position</span>
-          <input
-            type="range"
-            min="0"
-            max={lastFrame}
-            step="1"
-            value={safeFrameIndex}
-            onChange={handleScrub}
-            aria-label="Scrub remote control scene"
-          />
-        </label>
-        <div className="remote-scene-control-note">
-          <span>{prefersReducedMotion ? "Reduced motion preference detected" : `One-shot scene · continuous ${profileKey} work loop`}</span>
-          <span>Frame {String(safeFrameIndex).padStart(3, "0")} / {lastFrame}</span>
-        </div>
-        <div className="remote-scene-variant-row" role="group" aria-label="Terminal composition">
-          <span>Terminal composition</span>
-          <button type="button" aria-pressed={terminalMode === "inset"} onClick={() => setTerminalMode("inset")}>In monitor</button>
-          <button type="button" aria-pressed={terminalMode === "cutin"} onClick={() => setTerminalMode("cutin")}>Foreground cut-in</button>
-        </div>
-      </div>}
     </section>
   );
 }

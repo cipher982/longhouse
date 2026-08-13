@@ -1,17 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { TerminalGrid, type GridTimeline } from "@longhouse/video/demo";
 
-export type RecordedTerminalMode = "inset" | "cutin";
-
 const CELL_RATIO = 2.15;
 
 export function RecordedSceneTerminal({
-  mode,
   replaySecond,
   timeline,
   sourceLabel,
 }: {
-  mode: RecordedTerminalMode;
   replaySecond: number;
   timeline: GridTimeline;
   sourceLabel: "recorded PTY" | "simulated continuation";
@@ -41,7 +37,7 @@ export function RecordedSceneTerminal({
 
   return (
     <div
-      className={`remote-scene-recorded-terminal remote-scene-recorded-terminal--${mode}`}
+      className="remote-scene-recorded-terminal remote-scene-recorded-terminal--cutin"
       aria-label={`Claude Code terminal, ${sourceLabel}`}
     >
       <div className="remote-scene-recorded-terminal-chrome">

@@ -3,7 +3,7 @@ import "../../styles/remote-work-scene.css";
 
 export function RemoteWorkSceneSection() {
   return (
-    <section id="control" className="landing-remote-scene">
+    <section id="continuous-work" className="landing-remote-scene">
       <div className="landing-section-inner">
         <div className="landing-section-heading landing-section-heading--split">
           <div>
@@ -18,7 +18,7 @@ export function RemoteWorkSceneSection() {
         </div>
 
         <div className="landing-remote-scene-player">
-          <RemoteScenePlayer embedded />
+          <RemoteScenePlayer />
         </div>
         <p className="landing-remote-scene-note">
           The opening uses a real recorded Claude Code session. Continuing tasks are

@@ -28,7 +28,7 @@ function providerSummary(provider: LaunchProviderSupport): string {
     return "Launch, interrupt, and resume. Your next instruction lands when the current turn ends.";
   }
   if (provider.launchAndSend) {
-    return "Launch, send, and interrupt. Resuming a dead session is not wired up yet.";
+    return "Launch, send, and interrupt. Resume is not available yet.";
   }
   return "Syncs in for watching and search. No Longhouse control path.";
 }

@@ -212,7 +212,7 @@ const UnifyScene: React.FC = () => {
           >
             <span style={{ fontSize: 26, fontWeight: 700, color: CREAM }}>Longhouse</span>
             <span style={{ fontSize: 22, color: "rgba(243,234,217,0.5)" }}>
-              every agent · every machine
+              supported agents · your machines
             </span>
             <span
               style={{

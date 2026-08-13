@@ -42,30 +42,33 @@ if (!Number.isInteger(sampleEvery) || sampleEvery < 1) {
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const outputDir = path.resolve(argValue("output") ?? `artifacts/remote-scene-qa/${timestamp}`);
 const baseUrl = (process.env.FRONTEND_URL ?? "http://localhost:47200").replace(/\/$/, "");
-const variant = argValue("variant");
 const demoSeed = argValue("seed") ?? "remote-scene-qa";
-if (variant && variant !== "inset" && variant !== "cutin") {
-  throw new Error("--variant must be inset or cutin");
-}
-const sceneParams = new URLSearchParams({ demoSeed });
-if (variant) sceneParams.set("terminal", variant);
-const sceneUrl = `${baseUrl}/prototypes/remote-scene?${sceneParams}`;
+const sceneUrl = `${baseUrl}/landing?${new URLSearchParams({ demoSeed })}`;
+const sceneFps = 24;
 
 mkdirSync(outputDir, { recursive: true });
 
 const browserErrors: string[] = [];
 const failedRequests: string[] = [];
 
-function sampledFrames(frameCount: number, step: number): number[] {
-  const values = new Set<number>();
-  for (let frame = 0; frame < frameCount; frame += step) values.add(frame);
-  values.add(Math.max(0, frameCount - 1));
-  return [...values].sort((left, right) => left - right);
-}
-
 async function settleFrame(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   await page.waitForTimeout(40);
+}
+
+async function prepareScene(page: Page, width: number, height: number): Promise<void> {
+  await page.setViewportSize({ width, height });
+  await page.goto(sceneUrl, { waitUntil: "networkidle" });
+  await page.evaluate(() => document.fonts.ready);
+  const stage = page.locator(".remote-scene-stage");
+  await stage.scrollIntoViewIfNeeded();
+  await stage.waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => document.querySelector(".remote-scene-stage")?.getAttribute("data-scene-ready") === "true",
+    undefined,
+    { timeout: 10_000 },
+  );
+  await settleFrame(page);
 }
 
 async function captureFrames(
@@ -73,29 +76,20 @@ async function captureFrames(
   groupName: string,
   width: number,
   height: number,
-  frames: number[],
+  captureCount: number,
   captureMode: "stage" | "viewport",
+  intervalFrames: number,
 ): Promise<Capture[]> {
-  await page.setViewportSize({ width, height });
-  await page.goto(sceneUrl, { waitUntil: "networkidle" });
-  await page.evaluate(() => document.fonts.ready);
-
-  const slider = page.getByRole("slider", { name: "Scrub remote control scene" });
+  await prepareScene(page, width, height);
   const stage = page.locator(".remote-scene-stage");
-  await stage.waitFor({ state: "visible" });
-
   const captures: Capture[] = [];
-  for (const frame of frames) {
-    await slider.fill(String(frame));
-    await settleFrame(page);
-    const filename = `${groupName}-frame-${String(frame).padStart(3, "0")}.png`;
+
+  for (let index = 0; index < captureCount; index += 1) {
+    if (index > 0) await page.waitForTimeout((intervalFrames / sceneFps) * 1000);
+    const frame = Number(await stage.getAttribute("data-scene-frame"));
+    const filename = `${groupName}-${String(index).padStart(2, "0")}-frame-${String(frame).padStart(3, "0")}.png`;
     const absolutePath = path.join(outputDir, filename);
     if (captureMode === "viewport") {
-      await stage.evaluate((element) => {
-        const top = element.getBoundingClientRect().top + window.scrollY;
-        window.scrollTo({ top: Math.max(0, top - 18), behavior: "auto" });
-      });
-      await settleFrame(page);
       await page.screenshot({ path: absolutePath, animations: "disabled" });
     } else {
       await stage.screenshot({ path: absolutePath, animations: "disabled" });
@@ -151,7 +145,7 @@ Start with the contact sheets, then inspect any individual frames that help. Jud
   writeFileSync(path.join(outputDir, "review-prompt.md"), prompt);
 
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAt: new Date().toISOString(),
     sourceUrl: sceneUrl,
     gitCommit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
@@ -176,34 +170,23 @@ Start with the contact sheets, then inspect any individual frames that help. Jud
     </style></head><body><h1>Remote scene visual QA</h1>${sections}</body></html>\n`);
 }
 
-async function verifyLivePlayback(page: Page, lastFrame: number): Promise<PlaybackCheck> {
-  const slider = page.getByRole("slider", { name: "Scrub remote control scene" });
+async function verifyLivePlayback(page: Page): Promise<PlaybackCheck> {
+  await prepareScene(page, 1440, 1000);
   const stage = page.locator(".remote-scene-stage");
-  await slider.fill("0");
-  await settleFrame(page);
   const startedAt = Date.now();
-  await page.getByRole("button", { name: "Play scene" }).click();
+  const startingFrame = Number(await stage.getAttribute("data-playback-frame"));
   await page.waitForFunction(
-    () => Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0) >= 12,
-    undefined,
+    (start) => Number(document.querySelector(".remote-scene-stage")?.getAttribute("data-playback-frame")) >= start + 12,
+    startingFrame,
     { timeout: 2_000 },
   );
-  const advancingFrame = Number(await slider.inputValue());
-
-  await slider.fill(String(lastFrame - 3));
-  await settleFrame(page);
+  const advancingFrame = Number(await stage.getAttribute("data-playback-frame"));
   const initialTask = (await stage.getAttribute("data-work-task")) ?? "";
   const initialCycle = Number(await stage.getAttribute("data-work-cycle"));
-  await page.getByRole("button", { name: "Play scene" }).click();
-  const loopStartFrame = Number(await stage.getAttribute("data-scene-frame")) + 1;
   await page.waitForFunction(
-    ({ loopStart, previousFrame }) => {
-      const frame = Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0);
-      const cycle = Number(document.querySelector(".remote-scene-stage")?.getAttribute("data-work-cycle") ?? 0);
-      return cycle > 0 && frame >= loopStart && frame < previousFrame;
-    },
-    { loopStart: loopStartFrame, previousFrame: lastFrame - 3 },
-    { timeout: 2_000 },
+    (cycle) => Number(document.querySelector(".remote-scene-stage")?.getAttribute("data-work-cycle")) > cycle,
+    initialCycle,
+    { timeout: 22_000 },
   );
   const loopedTask = (await stage.getAttribute("data-work-task")) ?? "";
   const loopedCycle = Number(await stage.getAttribute("data-work-cycle"));
@@ -212,7 +195,7 @@ async function verifyLivePlayback(page: Page, lastFrame: number): Promise<Playba
   }
   return {
     advancingFrame,
-    loopedFrame: Number(await slider.inputValue()),
+    loopedFrame: Number(await stage.getAttribute("data-playback-frame")),
     initialTask,
     loopedTask,
     initialCycle,
@@ -236,17 +219,12 @@ async function main(): Promise<void> {
     });
     page.on("requestfailed", (request) => failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? "failed"}`));
 
-    await page.goto(sceneUrl, { waitUntil: "networkidle" });
-    const slider = page.getByRole("slider", { name: "Scrub remote control scene" });
-    const lastFrame = Number.parseInt((await slider.getAttribute("max")) ?? "0", 10);
-    const frameCount = lastFrame + 1;
-    const playbackCheck = await verifyLivePlayback(page, lastFrame);
-    const desktopFrames = sampledFrames(frameCount, sampleEvery);
-
-    const desktopCaptures = await captureFrames(page, "desktop", 1440, 1000, desktopFrames, "stage");
-    const mobileSceneCaptures = await captureFrames(page, "mobile-scene", 393, 852, desktopFrames, "stage");
-    const mobilePageFrames = [...new Set([0, Math.floor(lastFrame / 2), lastFrame])];
-    const mobilePageCaptures = await captureFrames(page, "mobile-page", 393, 852, mobilePageFrames, "viewport");
+    const playbackCheck = await verifyLivePlayback(page);
+    const frameCount = Number(await page.locator(".remote-scene-stage").getAttribute("data-scene-frame-count"));
+    const captureCount = Math.ceil(frameCount / sampleEvery) + 1;
+    const desktopCaptures = await captureFrames(page, "desktop", 1440, 1000, captureCount, "stage", sampleEvery);
+    const mobileSceneCaptures = await captureFrames(page, "mobile-scene", 393, 852, captureCount, "stage", sampleEvery);
+    const mobilePageCaptures = await captureFrames(page, "mobile-page", 393, 852, 3, "viewport", Math.floor(frameCount / 2));
     const groups: CaptureGroup[] = [
       {
         name: "desktop",
@@ -280,7 +258,7 @@ async function main(): Promise<void> {
     if (browserErrors.length || failedRequests.length) {
       throw new Error(`Capture completed with ${browserErrors.length} browser errors and ${failedRequests.length} failed requests. See manifest.json.`);
     }
-    console.log(JSON.stringify({ outputDir, frameCount, sampleEvery, groups }, null, 2));
+    console.log(JSON.stringify({ outputDir, frameCount, sampleEvery, playbackCheck, groups }, null, 2));
   } finally {
     await browser.close();
   }

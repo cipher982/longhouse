@@ -1,20 +1,20 @@
 /**
  * Machine-surface beat. Distinct shape: a real terminal on the left, copy on
- * the right (mirrors the thesis section's copy-left/visual-right to alternate
- * the page rhythm). No kicker chip, no serif punchline, no card grid.
+ * the right to alternate the page rhythm. No kicker chip, no serif punchline,
+ * no card grid.
  */
 
-// Every command here must exist in the real CLI (`longhouse sessions --help`).
+// Every command here must exist in the real CLI.
 // A visitor who copy-pastes from a marketing terminal and hits "command not
 // found" costs more trust than the section buys.
 const TERMINAL_LINES: { prompt?: boolean; text: string; tone?: "dim" | "gold" }[] = [
   { prompt: true, text: "longhouse claude" },
   { text: "control attached · opening Claude Code", tone: "gold" },
-  { prompt: true, text: "longhouse sessions get 3f2a" },
+  { prompt: true, text: "longhouse-server sessions get 3f2a" },
   { text: "macbook   repair OAuth refresh    Claude   live", tone: "gold" },
-  { prompt: true, text: "longhouse sessions events 3f2a" },
+  { prompt: true, text: "longhouse-server sessions events 3f2a" },
   { text: "running tests: 14 passed, 0 failed", tone: "dim" },
-  { prompt: true, text: 'longhouse sessions continue 3f2a "open the PR"' },
+  { prompt: true, text: 'longhouse-server sessions continue 3f2a "open the PR"' },
 ];
 
 export function MachineSurfaceSection() {

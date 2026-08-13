@@ -54,6 +54,7 @@ export class LiveSession {
   private cols = 0;
   private rows = 0;
   private sessionId: string | null = null;
+  private closedByClient = false;
 
   onChange(watcher: () => void): () => void {
     this.watchers.add(watcher);
@@ -87,6 +88,7 @@ export class LiveSession {
     const socket = new WebSocket(terminalUrl(sessionId));
     socket.binaryType = "arraybuffer";
     this.socket = socket;
+    this.closedByClient = false;
 
     socket.onmessage = (event) => {
       if (!(event.data instanceof ArrayBuffer)) {
@@ -117,8 +119,7 @@ export class LiveSession {
 
     socket.onerror = () => this.fail("connection error");
     socket.onclose = () => {
-      // 1006 before the composer appears is the known sandbox transient.
-      if (this.state !== "ready") this.fail("connection closed");
+      if (!this.closedByClient) this.fail("connection closed");
     };
   }
 
@@ -220,6 +221,7 @@ export class LiveSession {
   }
 
   close(): void {
+    this.closedByClient = true;
     this.socket?.close();
     this.socket = null;
   }

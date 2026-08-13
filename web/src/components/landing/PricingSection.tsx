@@ -50,7 +50,7 @@ export function PricingSection() {
       callout: "$5/month",
       description: "We run a private server for you.",
       features: [
-        "Nothing to install, patch, or expose to the internet",
+        "We run and patch the server; you install the agent where your work runs",
         "Your own address on longhouse.ai",
         "Your history and timeline stay reachable when your laptop is asleep",
         "Same Mac, Linux, and iPhone clients",

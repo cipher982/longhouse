@@ -25,16 +25,6 @@ function signalOf(raw: string): string {
   );
 }
 
-function terminalText(term: Terminal): string {
-  const buffer = term.buffer.active;
-  const start = Math.max(0, buffer.baseY);
-  const lines: string[] = [];
-  for (let index = start; index < buffer.length; index += 1) {
-    lines.push(buffer.getLine(index)?.translateToString(true) ?? "");
-  }
-  return lines.join("\n");
-}
-
 function phoneState(active: boolean, phase: Phase): {
   label: string;
   detail?: string;
@@ -57,7 +47,6 @@ export function LiveDemo({ active }: { active: boolean }) {
   const sentRef = useRef(false);
   const submittedRef = useRef(false);
   const submittedInstructionRef = useRef("");
-  const sawWorkingRef = useRef(false);
 
   const [phase, setPhaseState] = useState<Phase>("connecting");
   const [draft, setDraft] = useState(DEFAULT_INSTRUCTION);
@@ -95,17 +84,8 @@ export function LiveDemo({ active }: { active: boolean }) {
     sessionRef.current = session;
     let attached = false;
 
-    const inspectScreen = () => {
-      if (!submittedRef.current || phaseRef.current !== "running") return;
-      const screen = signalOf(terminalText(term));
-      if (screen.includes("esctointerrupt")) sawWorkingRef.current = true;
-      if (sawWorkingRef.current && screen.includes("foragents") && !screen.includes("esctointerrupt")) {
-        markDone();
-      }
-    };
-
     const sink = (chunk: Uint8Array) => {
-      term.write(chunk, inspectScreen);
+      term.write(chunk);
       const signal = signalOf(session.transcript);
       if (sentRef.current && !submittedRef.current) {
         const typed = signalOf(submittedInstructionRef.current);
@@ -174,11 +154,25 @@ export function LiveDemo({ active }: { active: boolean }) {
       try {
         const next = await sessionRef.current?.events();
         if (!cancelled && next) {
-          setItems(flattenLiveItems(buildLiveTimelineModel(next).items));
+          const nextItems = flattenLiveItems(buildLiveTimelineModel(next).items);
+          setItems(nextItems);
+          const hasCompletedTool = nextItems.some(
+            (item) => item.kind === "tool" && item.interaction.resultEvent,
+          );
+          const lastItem = nextItems.at(-1);
+          if (
+            phaseRef.current === "running" &&
+            hasCompletedTool &&
+            lastItem?.kind === "message" &&
+            lastItem.event.role === "assistant" &&
+            lastItem.event.content_text?.trim()
+          ) {
+            markDone();
+          }
         }
       } catch {
-        // The terminal remains the source of completion truth. A transient
-        // transcript read simply retries on the next poll.
+        // A transient event projection failure should not tear down the live
+        // session. The next poll can still observe canonical completion.
       } finally {
         polling = false;
       }
@@ -198,7 +192,7 @@ export function LiveDemo({ active }: { active: boolean }) {
       cancelled = true;
       window.clearTimeout(finalPoll);
     };
-  }, [phase, sent]);
+  }, [markDone, phase, sent]);
 
   const run = useCallback(() => {
     const session = sessionRef.current;
@@ -220,7 +214,7 @@ export function LiveDemo({ active }: { active: boolean }) {
     <>
       <PhoneFrame>
         <PhoneSessionScreen
-          title="Live demo repo"
+          title="Live sandbox"
           transcript={{
             sentMessage: submittedInstruction ?? undefined,
             items,
@@ -233,6 +227,7 @@ export function LiveDemo({ active }: { active: boolean }) {
           sendEnabled={active && phase === "ready"}
           sent={sent}
           working={phase === "running"}
+          machineName="sandbox"
           onComposerChange={setDraft}
           onSend={run}
         />

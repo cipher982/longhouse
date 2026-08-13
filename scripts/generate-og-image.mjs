@@ -53,8 +53,8 @@ const html = `<!doctype html><html><head><meta charset="utf-8"/>
   <div class="left">
     <div class="brand">${logoSvg}<span class="name">Longhouse</span></div>
     <div class="kicker">Self-hosted · cross-provider · yours</div>
-    <h1>Remote control for <span class="accent">every coding agent you run.</span></h1>
-    <div class="sub">Watch and steer your Claude Code, Codex, Cursor &amp; OpenCode sessions from anywhere. On machines you own.</div>
+    <h1>Remote control for <span class="accent">your coding agents.</span></h1>
+    <div class="sub">Watch every session from anywhere. Launch supported agents through Longhouse to steer them from the web or your iPhone.</div>
   </div>
   <div class="shot"><img src="${timelineDataUri}"/></div>
 </body></html>`;

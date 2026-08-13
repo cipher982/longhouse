@@ -32,7 +32,7 @@ const tabs: TabConfig[] = [
   {
     id: "search",
     label: "Search",
-    description: "Find the session by what you remember typing, then jump into it. Weeks of sessions across four CLIs, not folders of provider logs.",
+    description: "Find the session by what you remember typing, then jump into it. Weeks of sessions across supported CLIs, not folders of provider logs.",
     image: "/images/landing/search-preview.webp?v=20260810-1",
     alt: "Search results filtering sessions by keyword with highlighted matches",
   },
@@ -45,11 +45,7 @@ const tabs: TabConfig[] = [
   },
 ];
 
-interface ProductShowcaseProps {
-  screenshotTheme: "warm" | "cool-pop";
-}
-
-export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
+export function ProductShowcase() {
   const [activeTab, setActiveTab] = useState<Tab>("timeline");
   const activeConfig = tabs.find((t) => t.id === activeTab)!;
 
@@ -84,6 +80,8 @@ export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
               type="button"
               role="tab"
               aria-selected={activeTab === tab.id}
+              aria-controls="product-showcase-panel"
+              id={`product-showcase-tab-${tab.id}`}
               className={`product-showcase-tab ${activeTab === tab.id ? "active" : ""}`}
               onClick={() => setActiveTab(tab.id)}
             >
@@ -94,7 +92,12 @@ export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
         <p className="product-showcase-description">{activeConfig.description}</p>
       </div>
 
-      <div className="product-showcase-content">
+      <div
+        className="product-showcase-content"
+        id="product-showcase-panel"
+        role="tabpanel"
+        aria-labelledby={`product-showcase-tab-${activeConfig.id}`}
+      >
         <div className="product-showcase-frame">
           <AppScreenshotFrame
             src={activeConfig.image}
@@ -103,7 +106,7 @@ export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
             title={activeConfig.label}
             aspectRatio="16/9"
             showChrome={true}
-            theme={screenshotTheme}
+            theme="warm"
             loading="eager"
             fetchPriority="high"
           />

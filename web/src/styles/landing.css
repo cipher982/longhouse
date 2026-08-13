@@ -154,9 +154,9 @@
     align-items: center;
     gap: clamp(40px, 5vw, 80px);
     width: min(1320px, calc(100% - 48px));
-    min-height: 760px;
+    min-height: 720px;
     margin: 0 auto;
-    padding: 86px 0 100px;
+    padding: 54px 0 70px;
   }
 
   .landing-hero-content {
@@ -373,20 +373,6 @@
     font-weight: 700;
     font-display: swap;
     src: url('/fonts/jetbrains-mono-bold.woff2') format('woff2');
-  }
-
-  .landing-hero-video {
-    position: relative;
-    z-index: 2;
-    display: block;
-    width: 100%;
-    height: auto;
-    aspect-ratio: 16 / 9;
-    overflow: hidden;
-    background: #0b0908;
-    border: 1px solid rgba(201, 166, 107, 0.24);
-    border-radius: 14px;
-    box-shadow: 0 36px 90px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(255, 255, 255, 0.025) inset;
   }
 
   .landing-hero-video-note {
@@ -842,18 +828,6 @@
     margin: 14px 0 0;
   }
 
-  .landing-visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    border: 0;
-    white-space: nowrap;
-  }
-
   .landing-pricing {
     padding: 116px 0 128px;
     background: linear-gradient(
@@ -1101,64 +1075,6 @@
     margin: 0;
   }
 
-  .landing-screenshot-theme-toggle {
-    position: fixed;
-    z-index: 9998;
-    bottom: 12px;
-    left: 12px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px;
-    background: rgba(18, 13, 11, 0.9);
-    border: 1px solid rgba(201, 166, 107, 0.16);
-    border-radius: 999px;
-    backdrop-filter: blur(10px);
-  }
-
-  .landing-screenshot-theme-label {
-    padding: 0 7px;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-  }
-
-  .landing-screenshot-theme-button {
-    padding: 6px 10px;
-    color: var(--color-text-secondary);
-    background: transparent;
-    border: 1px solid rgba(201, 166, 107, 0.14);
-    border-radius: 999px;
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .landing-screenshot-theme-button.active {
-    color: #17110c;
-    background: var(--color-brand-primary);
-    border-color: var(--color-brand-primary);
-  }
-
-  .landing-perf-hud {
-    position: fixed;
-    z-index: 9999;
-    right: 12px;
-    bottom: 12px;
-    padding: 10px 12px;
-    color: rgba(255, 255, 255, 0.9);
-    background: rgba(18, 11, 9, 0.82);
-    border: 1px solid rgba(201, 166, 107, 0.16);
-    border-radius: 10px;
-    font-family: var(--font-family-mono);
-    font-size: 12px;
-    line-height: 1.3;
-    pointer-events: none;
-  }
-
-  .landing-perf-hud-fx {
-    margin-top: 6px;
-    opacity: 0.8;
-  }
-
   @media (width <= 1080px) {
     .landing-header-nav-link {
       padding-right: 9px;
@@ -1374,10 +1290,6 @@
       gap: 5px;
     }
 
-    .landing-hero-video {
-      border-radius: 9px;
-    }
-
     .landing-hero-video-note {
       justify-content: flex-start;
       margin-top: 9px;
@@ -1483,15 +1395,5 @@
       justify-content: flex-start;
     }
 
-    .landing-screenshot-theme-toggle {
-      right: 8px;
-      bottom: 8px;
-      left: 8px;
-      justify-content: center;
-    }
-
-    .landing-screenshot-theme-label {
-      display: none;
-    }
   }
 }

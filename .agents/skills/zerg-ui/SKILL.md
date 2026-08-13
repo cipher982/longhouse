@@ -14,7 +14,7 @@ mcp__browser-hub__browser(action="look")  # Screenshot + A11y tree
 
 ## Remote Scene Visual QA
 
-For the isolated ASCII scene prototype, capture a review bundle before making a visual-quality claim:
+For the ASCII scene on the landing page, capture a review bundle before making a visual-quality claim:
 
 ```bash
 make qa-remote-scene

@@ -85,15 +85,14 @@ export function HeroSection() {
         </p>
 
         <h1 className="landing-hero-headline">
-          Remote control for <span className="gradient-text">every coding agent you run.</span>
+          Remote control for <span className="gradient-text">your coding agents.</span>
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse plugs into the Claude Code, Codex, Cursor, and OpenCode installs
-          already on your machines and normalizes every session into one system.
-          Watch any agent work from anywhere; launch through Longhouse and steer it
-          too — send the next instruction, interrupt, resume — from the web or your
-          iPhone.
+          Longhouse connects to coding-agent CLIs already installed on your machines
+          and puts every session in one system. Watch from the web or your iPhone.
+          Launch supported agents through Longhouse to send instructions, interrupt,
+          and resume, with the controls each provider exposes.
         </p>
 
         <div className="hero-install">
@@ -155,8 +154,8 @@ export function HeroSection() {
           <HeroDemo aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
         <p className="landing-hero-video-note">
-          First loop: real recorded sessions. After that: a simulated session keeps
-          the story going. No live model runs.
+          First loop: real recorded sessions. Later loops simulate new tasks locally.
+          No live model runs in this hero demo.
         </p>
       </div>
     </section>

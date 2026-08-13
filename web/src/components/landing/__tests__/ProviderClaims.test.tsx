@@ -42,7 +42,7 @@ describe("landing provider claims", () => {
     expect(cellsFor("OpenCode")).toEqual(["true", "true", "true", "false", "true"]);
     expect(cellsFor("Pi Agent")).toEqual(["true", "true", "true", "false", "false"]);
     expect(cellsFor("Antigravity CLI")).toEqual(["true", "false", "false", "false", "false"]);
-    expect(screen.getByText(/Resuming a dead session is not wired up yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/Resume is not available yet/i)).toBeInTheDocument();
   });
 
   it("renders FAQ provider answer consistent with the capability matrix", async () => {

@@ -32,20 +32,20 @@ describe("HeroDemo", () => {
   it("starts on the agents beat with one dot per beat", () => {
     render(<HeroDemo aria-label="Longhouse demo" />);
 
-    const dots = screen.getAllByRole("tab");
+    const dots = screen.getAllByRole("button", { name: /^Part / });
     expect(dots).toHaveLength(BEATS.length);
-    expect(dots[0]).toHaveAttribute("aria-selected", "true");
+    expect(dots[0]).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(BEATS[0].caption)).toBeInTheDocument();
   });
 
   it("seeks to a beat when its dot is clicked", () => {
     render(<HeroDemo aria-label="Longhouse demo" />);
 
-    const dots = screen.getAllByRole("tab");
+    const dots = screen.getAllByRole("button", { name: /^Part / });
     fireEvent.click(dots[1]);
 
-    expect(dots[1]).toHaveAttribute("aria-selected", "true");
-    expect(dots[0]).toHaveAttribute("aria-selected", "false");
+    expect(dots[1]).toHaveAttribute("aria-pressed", "true");
+    expect(dots[0]).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByText(BEATS[1].caption)).toBeInTheDocument();
   });
 
@@ -56,8 +56,8 @@ describe("HeroDemo", () => {
 
     // POSTER_SEC sits inside the steer beat: the frozen frame shows the
     // instruction already sent and the terminal mid-reaction.
-    const dots = screen.getAllByRole("tab");
-    expect(dots[2]).toHaveAttribute("aria-selected", "true");
+    const dots = screen.getAllByRole("button", { name: /^Part / });
+    expect(dots[2]).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(BEATS[2].caption)).toBeInTheDocument();
   });
 });
