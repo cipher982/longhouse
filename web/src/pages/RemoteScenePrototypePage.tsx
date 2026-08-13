@@ -48,7 +48,8 @@ export default function RemoteScenePrototypePage() {
         </section>
 
         <p className="remote-scene-footnote">
-          Deterministic visual stub. No live PTY, provider session, audio, or production landing integration is connected.
+          Deterministic scene with a recorded real Claude Code PTY. No live provider session,
+          audio, or production landing integration is connected.
         </p>
       </main>
     </div>

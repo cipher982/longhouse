@@ -15,12 +15,6 @@ export type SceneProfile = {
   height: number;
 };
 
-export type TerminalSceneState = {
-  key: string;
-  status: "WORKING" | "DONE";
-  lines: string[];
-};
-
 export type PhoneSceneState = {
   key: string;
   status: string;
@@ -137,27 +131,14 @@ export function getSceneOverlayLayout(profileKey: SceneProfileKey, timeSeconds: 
   };
 }
 
-export function getTerminalSceneState(frameIndex: number): TerminalSceneState {
-  if (frameIndex < 36) {
-    return { key: "edit", status: "WORKING", lines: ["› update retry loop", "+2  -1"] };
-  }
-  if (frameIndex < 84) {
-    return { key: "test", status: "WORKING", lines: ["$ bun test", "18 tests running…"] };
-  }
-  if (frameIndex < 124) {
-    return { key: "verify", status: "WORKING", lines: ["✓ 18 tests passed", "2 files changed"] };
-  }
-  return { key: "done", status: "DONE", lines: ["✓ task complete", "ready for input"] };
-}
-
 export function getPhoneSceneState(frameIndex: number): PhoneSceneState {
   if (frameIndex < 84) {
-    return { key: "live", status: "LIVE", message: "Working", detail: "retry" };
+    return { key: "live", status: "LIVE", message: "Working", detail: "studio-mac" };
   }
   if (frameIndex < 124) {
-    return { key: "tests", status: "LIVE", message: "Passed", detail: "18/18" };
+    return { key: "tests", status: "LIVE", message: "Tests passed", detail: "studio-mac" };
   }
-  return { key: "complete", status: "DONE", message: "Done", detail: "ready" };
+  return { key: "complete", status: "DONE", message: "Ready for input", detail: "studio-mac" };
 }
 
 export function getSceneCaption(frameIndex: number): string {

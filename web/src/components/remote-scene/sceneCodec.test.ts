@@ -6,6 +6,7 @@ import { REMOTE_SCENE_DATA } from "./generated/sceneData";
 import { selectGlyphIndex } from "./glyphRenderer";
 import { projectPoint, type CameraFrame } from "./sceneMath";
 import { clampFrameIndex, decodeFrame, decodeFrames, encodeFrame } from "./sceneCodec";
+import { REMOTE_SCENE_REPLAY_WINDOW, replaySecondForSceneFrame } from "./recordedTimeline";
 import { SCENE_GLYPHS, SCENE_SPEC } from "./sceneSpec";
 import { createSourceRaster, drawTriangle3D } from "./sourceRenderer";
 
@@ -61,6 +62,16 @@ describe("cinematic source projection", () => {
     const center = 15 * raster.width + 20;
     expect(raster.material[center]).toBe(4);
     expect(raster.depth[center]).toBeLessThan(10);
+  });
+});
+
+describe("recorded PTY synchronization", () => {
+  it("holds before the action and maps the scene onto recording-owned anchors", () => {
+    expect(replaySecondForSceneFrame(0)).toBe(REMOTE_SCENE_REPLAY_WINDOW.holdSec);
+    expect(replaySecondForSceneFrame(32)).toBe(REMOTE_SCENE_REPLAY_WINDOW.holdSec);
+    expect(replaySecondForSceneFrame(33)).toBeGreaterThan(REMOTE_SCENE_REPLAY_WINDOW.startSec);
+    expect(replaySecondForSceneFrame(128)).toBe(REMOTE_SCENE_REPLAY_WINDOW.endSec);
+    expect(replaySecondForSceneFrame(143)).toBe(REMOTE_SCENE_REPLAY_WINDOW.endSec);
   });
 });
 

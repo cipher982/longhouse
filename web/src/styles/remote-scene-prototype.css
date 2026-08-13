@@ -114,7 +114,6 @@
     image-rendering: pixelated;
   }
 
-  .remote-scene-terminal-overlay,
   .remote-scene-phone-overlay {
     position: absolute;
     z-index: 2;
@@ -127,51 +126,84 @@
     pointer-events: none;
   }
 
-  .remote-scene-terminal-overlay {
-    top: var(--monitor-top);
-    left: var(--monitor-left);
-    width: var(--monitor-width);
-    height: var(--monitor-height);
+  .remote-scene-recorded-terminal {
+    position: absolute;
+    z-index: 2;
+    top: var(--terminal-top);
+    left: var(--terminal-left);
+    width: var(--terminal-width);
+    height: var(--terminal-height);
     display: flex;
     flex-direction: column;
-    gap: 5%;
-    padding: clamp(4px, 0.55vw, 8px);
-    font-size: clamp(0.4rem, 0.76vw, 0.75rem);
-    line-height: 1.2;
+    overflow: hidden;
+    color: #e8e0d2;
+    background: rgba(11, 9, 8, 0.985);
+    border: 1px solid rgba(201, 166, 107, 0.3);
+    box-sizing: border-box;
+    font-family: var(--font-family-mono);
+    pointer-events: none;
+  }
+
+  .remote-scene-recorded-terminal--inset {
+    border-color: rgba(143, 197, 172, 0.28);
+  }
+
+  .remote-scene-recorded-terminal--cutin {
+    opacity: var(--terminal-opacity);
+    border-color: rgba(143, 197, 172, 0.35);
+    border-radius: 10px;
+    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.62), 0 0 36px rgba(143, 197, 172, 0.08);
+  }
+
+  .remote-scene-recorded-terminal-chrome {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 25px;
+    padding: 5px 9px;
+    color: rgba(243, 234, 217, 0.76);
+    background: rgba(28, 21, 16, 0.96);
+    border-bottom: 1px solid rgba(201, 166, 107, 0.16);
+    font-size: clamp(0.42rem, 0.66vw, 0.68rem);
+    line-height: 1;
+  }
+
+  .remote-scene-recorded-terminal--inset .remote-scene-recorded-terminal-chrome {
+    display: none;
+  }
+
+  .remote-scene-recorded-terminal-chrome > span:last-child {
+    margin-left: auto;
+    overflow: hidden;
+    color: rgba(143, 197, 172, 0.72);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .remote-scene-terminal-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    color: #d9c9ad;
+  .remote-scene-recorded-terminal-dots {
+    display: inline-flex;
+    gap: 4px;
   }
 
-  .remote-scene-terminal-heading span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .remote-scene-terminal-heading i {
-    display: inline-block;
-    width: 0.5em;
-    height: 0.5em;
-    margin-right: 0.35em;
-    background: #8fc5ac;
+  .remote-scene-recorded-terminal-dots i {
+    width: 6px;
+    height: 6px;
+    background: #c9a66b;
     border-radius: 50%;
-    box-shadow: 0 0 8px rgba(143, 197, 172, 0.7);
   }
 
-  .remote-scene-terminal-heading strong {
-    color: #8fc5ac;
-    font-size: 0.82em;
-    font-weight: var(--font-weight-semibold);
-  }
+  .remote-scene-recorded-terminal-dots i:nth-child(1) { background: #ef7b70; }
+  .remote-scene-recorded-terminal-dots i:nth-child(2) { background: #f0d197; }
+  .remote-scene-recorded-terminal-dots i:nth-child(3) { background: #8fc5ac; }
 
-  .remote-scene-output-accent {
-    color: #f3ead9;
+  .remote-scene-recorded-terminal-screen {
+    flex: 1 1 auto;
+    display: grid;
+    min-height: 0;
+    overflow: hidden;
+    background: #0b0908;
+    place-items: center;
   }
 
   .remote-scene-work-progress {
@@ -191,19 +223,12 @@
     box-shadow: 0 0 8px rgba(143, 197, 172, 0.7);
   }
 
-  .remote-scene-stage--complete .remote-scene-terminal-overlay,
   .remote-scene-stage--complete .remote-scene-phone-overlay {
     box-shadow: 0 0 26px rgba(143, 197, 172, 0.16);
   }
 
-  .remote-scene-terminal-rule {
-    height: 1px;
-    background: rgba(143, 197, 172, 0.3);
-  }
-
-  .remote-scene-terminal-line {
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .remote-scene-stage--complete .remote-scene-recorded-terminal--cutin {
+    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.62), 0 0 34px rgba(143, 197, 172, 0.18);
   }
 
   .remote-scene-phone-overlay {
@@ -321,6 +346,33 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .remote-scene-variant-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 9px;
+    color: rgba(181, 164, 142, 0.58);
+    font-family: var(--font-family-mono);
+    font-size: 0.62rem;
+  }
+
+  .remote-scene-variant-row button {
+    padding: 4px 8px;
+    color: rgba(243, 234, 217, 0.62);
+    background: transparent;
+    border: 1px solid rgba(201, 166, 107, 0.18);
+    border-radius: 6px;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .remote-scene-variant-row button[aria-pressed="true"] {
+    color: #120b09;
+    background: #c9a66b;
+    border-color: #c9a66b;
   }
 
   .remote-scene-control-row {
@@ -470,8 +522,14 @@
       left: 3%;
     }
 
-    .remote-scene-terminal-overlay {
-      font-size: clamp(0.33rem, 1.55vw, 0.56rem);
+    .remote-scene-recorded-terminal--cutin {
+      border-radius: 7px;
+    }
+
+    .remote-scene-recorded-terminal-chrome {
+      min-height: 19px;
+      padding: 4px 6px;
+      font-size: 0.43rem;
     }
 
     .remote-scene-phone-overlay {

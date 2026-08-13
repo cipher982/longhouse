@@ -38,7 +38,11 @@ if (!Number.isInteger(sampleEvery) || sampleEvery < 1) {
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const outputDir = path.resolve(argValue("output") ?? `artifacts/remote-scene-qa/${timestamp}`);
 const baseUrl = (process.env.FRONTEND_URL ?? "http://localhost:47200").replace(/\/$/, "");
-const sceneUrl = `${baseUrl}/prototypes/remote-scene`;
+const variant = argValue("variant");
+if (variant && variant !== "inset" && variant !== "cutin") {
+  throw new Error("--variant must be inset or cutin");
+}
+const sceneUrl = `${baseUrl}/prototypes/remote-scene${variant ? `?terminal=${variant}` : ""}`;
 
 mkdirSync(outputDir, { recursive: true });
 

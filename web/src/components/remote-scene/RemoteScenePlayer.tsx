@@ -5,9 +5,15 @@ import {
   getPhoneSceneState,
   getSceneCaption,
   getSceneOverlayLayout,
-  getTerminalSceneState,
   type SceneProfileKey,
 } from "./sceneSpec";
+import { RecordedSceneTerminal, type RecordedTerminalMode } from "./RecordedSceneTerminal";
+import { replaySecondForSceneFrame } from "./recordedTimeline";
+
+function initialTerminalMode(): RecordedTerminalMode {
+  if (typeof window === "undefined") return "cutin";
+  return new URLSearchParams(window.location.search).get("terminal") === "inset" ? "inset" : "cutin";
+}
 
 function formatTime(frameIndex: number): string {
   return (frameIndex / REMOTE_SCENE_DATA.fps).toFixed(2).padStart(5, "0");
@@ -71,6 +77,7 @@ export function RemoteScenePlayer() {
   const [staticPreview, setStaticPreview] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
+  const [terminalMode, setTerminalModeState] = useState<RecordedTerminalMode>(initialTerminalMode);
 
   const profile = REMOTE_SCENE_DATA.profiles[profileKey];
   const frames = useMemo(
@@ -165,21 +172,36 @@ export function RemoteScenePlayer() {
   }, [isPlaying, isVisible, lastFrame, staticPreview]);
 
   const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
-  const terminalState = getTerminalSceneState(safeFrameIndex);
   const phoneState = getPhoneSceneState(safeFrameIndex);
   const caption = getSceneCaption(safeFrameIndex);
+  const replaySecond = replaySecondForSceneFrame(safeFrameIndex);
   const overlay = getSceneOverlayLayout(profileKey, safeFrameIndex / REMOTE_SCENE_DATA.fps);
   const workProgress = Math.max(0, Math.min(1, (safeFrameIndex - 36) / (124 - 36)));
+  const terminalReveal = terminalMode === "inset"
+    ? 1
+    : Math.max(0, Math.min(1, (safeFrameIndex - 56) / 24));
+  const terminalTarget = profileKey === "desktop"
+    ? { left: 40, top: 24, width: 39, height: 31 }
+    : { left: 4, top: 27, width: 72, height: 49 };
+  const terminalBounds = terminalMode === "inset"
+    ? overlay.monitor
+    : {
+        left: overlay.monitor.left + (terminalTarget.left - overlay.monitor.left) * terminalReveal,
+        top: overlay.monitor.top + (terminalTarget.top - overlay.monitor.top) * terminalReveal,
+        width: overlay.monitor.width + (terminalTarget.width - overlay.monitor.width) * terminalReveal,
+        height: overlay.monitor.height + (terminalTarget.height - overlay.monitor.height) * terminalReveal,
+      };
   const overlayStyle = {
-    "--monitor-left": `${overlay.monitor.left}%`,
-    "--monitor-top": `${overlay.monitor.top}%`,
-    "--monitor-width": `${overlay.monitor.width}%`,
-    "--monitor-height": `${overlay.monitor.height}%`,
     "--phone-left": `${overlay.phone.left}%`,
     "--phone-top": `${overlay.phone.top}%`,
     "--phone-width": `${overlay.phone.width}%`,
     "--phone-height": `${overlay.phone.height}%`,
     "--work-progress": workProgress,
+    "--terminal-opacity": terminalReveal,
+    "--terminal-left": `${terminalBounds.left}%`,
+    "--terminal-top": `${terminalBounds.top}%`,
+    "--terminal-width": `${terminalBounds.width}%`,
+    "--terminal-height": `${terminalBounds.height}%`,
     aspectRatio: `${profile.width} / ${profile.height}`,
   } as CSSProperties;
 
@@ -200,27 +222,22 @@ export function RemoteScenePlayer() {
     if (nextStatic) setIsPlaying(false);
   };
 
+  const setTerminalMode = (nextMode: RecordedTerminalMode) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("terminal", nextMode);
+    window.history.replaceState(null, "", url);
+    setTerminalModeState(nextMode);
+  };
+
   return (
     <section ref={playerRef} className="remote-scene-player" aria-label="Remote control scene player">
-      <div className={`remote-scene-stage${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`} style={overlayStyle}>
+      <div
+        className={`remote-scene-stage remote-scene-stage--${terminalMode}${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`}
+        style={overlayStyle}
+      >
         <div className="remote-scene-world">
           <canvas ref={canvasRef} aria-hidden="true" />
-          <div className="remote-scene-terminal-overlay" aria-label="Crisp workstation status overlay">
-            <div className="remote-scene-terminal-heading">
-              <span><i /> studio-mac</span>
-              <strong>{terminalState.status}</strong>
-            </div>
-            <div className="remote-scene-terminal-rule" />
-            {terminalState.lines.map((line, index) => (
-              <span
-                className={`remote-scene-terminal-line${index === 0 ? " remote-scene-output-accent" : ""}`}
-                key={`${terminalState.key}-${line}`}
-              >
-                {line}
-              </span>
-            ))}
-            <div className="remote-scene-work-progress"><i /></div>
-          </div>
+          <RecordedSceneTerminal mode={terminalMode} replaySecond={replaySecond} />
           <div className={`remote-scene-phone-overlay remote-scene-phone-overlay--${phoneState.key}`} aria-label="Crisp phone status overlay">
             <div className="remote-scene-phone-heading"><strong>Longhouse</strong></div>
             <span className="remote-scene-phone-live">● {phoneState.status}</span>
@@ -273,6 +290,11 @@ export function RemoteScenePlayer() {
         <div className="remote-scene-control-note">
           <span>{prefersReducedMotion ? "Reduced motion preference detected" : `24 fps deterministic ${profileKey} render`}</span>
           <span>Frame {String(safeFrameIndex).padStart(3, "0")} / {lastFrame}</span>
+        </div>
+        <div className="remote-scene-variant-row" role="group" aria-label="Recorded terminal composition">
+          <span>Real PTY composition</span>
+          <button type="button" aria-pressed={terminalMode === "inset"} onClick={() => setTerminalMode("inset")}>In monitor</button>
+          <button type="button" aria-pressed={terminalMode === "cutin"} onClick={() => setTerminalMode("cutin")}>Foreground cut-in</button>
         </div>
       </div>
     </section>
