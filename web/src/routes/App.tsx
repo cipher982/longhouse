@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
@@ -34,6 +35,8 @@ import {
   usePerformanceMonitoring,
 } from "../lib/usePerformance";
 import config from "../lib/config";
+
+const RemoteScenePrototypePage = lazy(() => import("../pages/RemoteScenePrototypePage"));
 
 type RoutingConfig = {
   demoMode: boolean;
@@ -106,6 +109,16 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
       element: (
         <ErrorBoundary>
           <ShareLandingPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/prototypes/remote-scene",
+      element: (
+        <ErrorBoundary>
+          <Suspense fallback={<div className="remote-scene-route-loading">Loading visual prototype...</div>}>
+            <RemoteScenePrototypePage />
+          </Suspense>
         </ErrorBoundary>
       ),
     },

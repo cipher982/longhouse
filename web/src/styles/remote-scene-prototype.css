@@ -1,0 +1,408 @@
+@layer pages {
+  .remote-scene-page {
+    min-height: 100vh;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    background:
+      radial-gradient(circle at 72% 12%, rgba(143, 197, 172, 0.08), transparent 31rem),
+      radial-gradient(circle at 22% 30%, rgba(201, 166, 107, 0.08), transparent 28rem),
+      #120b09;
+    font-family: var(--font-family-base);
+  }
+
+  .remote-scene-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: min(1240px, calc(100% - 64px));
+    min-height: 72px;
+    margin: 0 auto;
+    color: rgba(181, 164, 142, 0.62);
+    border-bottom: 1px solid rgba(201, 166, 107, 0.12);
+    font-family: var(--font-family-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .remote-scene-wordmark {
+    color: var(--color-text-primary);
+    font-family: var(--font-family-display);
+    font-size: 1.1rem;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.03em;
+    text-decoration: none;
+    text-transform: none;
+  }
+
+  .remote-scene-main {
+    width: min(1240px, calc(100% - 64px));
+    margin: 0 auto;
+    padding: 96px 0 72px;
+  }
+
+  .remote-scene-intro {
+    max-width: 720px;
+    margin-bottom: 54px;
+  }
+
+  .remote-scene-kicker {
+    margin: 0 0 18px;
+    color: var(--color-brand-primary);
+    font-family: var(--font-family-mono);
+    font-size: 0.72rem;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .remote-scene-intro h1 {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-family: var(--font-family-display);
+    font-size: clamp(3.8rem, 8vw, 7.8rem);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.065em;
+    line-height: 0.88;
+  }
+
+  .remote-scene-intro h1 em {
+    color: var(--color-brand-primary);
+    font-style: normal;
+  }
+
+  .remote-scene-lead {
+    max-width: 560px;
+    margin: 30px 0 0;
+    color: var(--color-text-secondary);
+    font-size: clamp(1rem, 1.5vw, 1.2rem);
+    line-height: 1.7;
+  }
+
+  .remote-scene-player {
+    width: 100%;
+  }
+
+  .remote-scene-stage {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    aspect-ratio: 100 / 56;
+    background: #120b09;
+    border: 1px solid rgba(201, 166, 107, 0.28);
+    border-radius: 18px;
+    box-shadow: 0 36px 110px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(255, 255, 255, 0.025) inset;
+  }
+
+  .remote-scene-stage::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255, 248, 239, 0.02), transparent 40%, rgba(0, 0, 0, 0.18));
+    content: "";
+    pointer-events: none;
+  }
+
+  .remote-scene-stage canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  .remote-scene-terminal-overlay,
+  .remote-scene-phone-overlay {
+    position: absolute;
+    z-index: 2;
+    overflow: hidden;
+    color: #8fc5ac;
+    background: rgba(11, 17, 14, 0.84);
+    border: 1px solid rgba(143, 197, 172, 0.4);
+    font-family: var(--font-family-mono);
+    pointer-events: none;
+  }
+
+  .remote-scene-terminal-overlay {
+    top: var(--monitor-top);
+    left: var(--monitor-left);
+    width: var(--monitor-width);
+    height: var(--monitor-height);
+    display: flex;
+    flex-direction: column;
+    gap: 4%;
+    padding: 2% 3%;
+    font-size: clamp(0.38rem, 0.72vw, 0.72rem);
+    line-height: 1.16;
+    white-space: nowrap;
+  }
+
+  .remote-scene-terminal-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: #d9c9ad;
+  }
+
+  .remote-scene-terminal-heading span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .remote-scene-terminal-heading i {
+    display: inline-block;
+    width: 0.5em;
+    height: 0.5em;
+    margin-right: 0.35em;
+    background: #8fc5ac;
+    border-radius: 50%;
+    box-shadow: 0 0 8px rgba(143, 197, 172, 0.7);
+  }
+
+  .remote-scene-terminal-heading strong {
+    color: #8fc5ac;
+    font-size: 0.82em;
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .remote-scene-terminal-rule {
+    height: 1px;
+    background: rgba(143, 197, 172, 0.3);
+  }
+
+  .remote-scene-terminal-overlay span:not(.remote-scene-terminal-caret) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .remote-scene-terminal-caret {
+    color: #c9a66b;
+  }
+
+  .remote-scene-phone-overlay {
+    top: var(--phone-top);
+    left: var(--phone-left);
+    width: var(--phone-width);
+    height: var(--phone-height);
+    display: flex;
+    flex-direction: column;
+    gap: 7%;
+    padding: 8% 7%;
+    color: #f3ead9;
+    background: rgba(18, 11, 9, 0.9);
+    border-color: rgba(201, 166, 107, 0.6);
+    border-radius: 8%;
+    font-size: clamp(0.28rem, 0.58vw, 0.58rem);
+    line-height: 1.1;
+  }
+
+  .remote-scene-phone-overlay strong {
+    color: #c9a66b;
+    font-size: 1.05em;
+  }
+
+  .remote-scene-phone-live {
+    color: #8fc5ac;
+    white-space: nowrap;
+  }
+
+  .remote-scene-phone-overlay span:last-of-type {
+    color: rgba(243, 234, 217, 0.68);
+  }
+
+  .remote-scene-phone-overlay b {
+    align-self: flex-end;
+    display: grid;
+    width: 1.5em;
+    height: 1.5em;
+    color: #120b09;
+    background: #c9a66b;
+    border-radius: 50%;
+    place-items: center;
+  }
+
+  .remote-scene-ambient-label {
+    position: absolute;
+    z-index: 2;
+    left: 3%;
+    bottom: 4%;
+    color: rgba(201, 166, 107, 0.72);
+    font-family: var(--font-family-mono);
+    font-size: clamp(0.48rem, 0.78vw, 0.75rem);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .remote-scene-controls {
+    margin-top: 18px;
+    padding: 15px 16px 13px;
+    background: rgba(26, 20, 16, 0.72);
+    border: 1px solid rgba(201, 166, 107, 0.14);
+    border-radius: 12px;
+  }
+
+  .remote-scene-control-row,
+  .remote-scene-control-note {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .remote-scene-control-row {
+    justify-content: space-between;
+  }
+
+  .remote-scene-play-button,
+  .remote-scene-static-button {
+    padding: 7px 11px;
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: 1px solid rgba(201, 166, 107, 0.23);
+    border-radius: 7px;
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+
+  .remote-scene-play-button {
+    color: #120b09;
+    background: var(--color-brand-primary);
+    border-color: var(--color-brand-primary);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .remote-scene-static-button:hover,
+  .remote-scene-static-button[aria-pressed="true"] {
+    color: var(--color-text-primary);
+    border-color: rgba(201, 166, 107, 0.54);
+  }
+
+  .remote-scene-time {
+    color: rgba(243, 234, 217, 0.72);
+    font-family: var(--font-family-mono);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .remote-scene-time span {
+    margin: 0 4px;
+    color: rgba(181, 164, 142, 0.46);
+  }
+
+  .remote-scene-scrub-label {
+    display: block;
+    margin-top: 12px;
+  }
+
+  .remote-scene-scrub-label input {
+    display: block;
+    width: 100%;
+    height: 18px;
+    accent-color: var(--color-brand-primary);
+    cursor: ew-resize;
+  }
+
+  .remote-scene-control-note {
+    justify-content: space-between;
+    color: rgba(181, 164, 142, 0.58);
+    font-family: var(--font-family-mono);
+    font-size: 0.62rem;
+  }
+
+  .remote-scene-notes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 28px;
+    margin-top: 76px;
+    padding-top: 24px;
+    border-top: 1px solid rgba(201, 166, 107, 0.17);
+  }
+
+  .remote-scene-notes > div {
+    display: grid;
+    align-content: start;
+    gap: 9px;
+  }
+
+  .remote-scene-note-index {
+    color: var(--color-brand-primary);
+    font-family: var(--font-family-mono);
+    font-size: 0.68rem;
+  }
+
+  .remote-scene-notes strong {
+    font-size: 0.9rem;
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .remote-scene-notes p,
+  .remote-scene-footnote {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.6;
+  }
+
+  .remote-scene-footnote {
+    margin-top: 60px;
+    color: rgba(181, 164, 142, 0.5);
+    font-family: var(--font-family-mono);
+    font-size: 0.68rem;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    border: 0;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 720px) {
+    .remote-scene-header,
+    .remote-scene-main {
+      width: min(100% - 32px, 1240px);
+    }
+
+    .remote-scene-main {
+      padding-top: 68px;
+    }
+
+    .remote-scene-intro {
+      margin-bottom: 36px;
+    }
+
+    .remote-scene-intro h1 {
+      font-size: clamp(3.2rem, 15vw, 5rem);
+    }
+
+    .remote-scene-stage {
+      border-radius: 11px;
+    }
+
+    .remote-scene-terminal-overlay {
+      font-size: clamp(0.33rem, 1.55vw, 0.56rem);
+    }
+
+    .remote-scene-phone-overlay {
+      font-size: clamp(0.25rem, 1.2vw, 0.43rem);
+    }
+
+    .remote-scene-notes {
+      grid-template-columns: 1fr;
+      gap: 22px;
+      margin-top: 54px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .remote-scene-play-button {
+      color: var(--color-text-primary);
+      background: rgba(201, 166, 107, 0.18);
+      border-color: rgba(201, 166, 107, 0.35);
+    }
+  }
+}

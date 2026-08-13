@@ -1,0 +1,15 @@
+{
+  "format": "RLE palette frame stream",
+  "width": 100,
+  "height": 56,
+  "fps": 12,
+  "durationSeconds": 6,
+  "frameCount": 72,
+  "paletteEntries": 10,
+  "encodedPayloadBytes": 99626,
+  "runtimeAssetRawBytes": 100641,
+  "runtimeAssetGzipBytes": 8662,
+  "runtimeAssetBrotliBytes": 5873,
+  "contactSheetBytes": 332973,
+  "deterministic": true
+}
