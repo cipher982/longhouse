@@ -1,5 +1,5 @@
 import { RemoteScenePlayer } from "../remote-scene/RemoteScenePlayer";
-import "../../styles/remote-scene-prototype.css";
+import "../../styles/remote-work-scene.css";
 
 export function RemoteWorkSceneSection() {
   return (

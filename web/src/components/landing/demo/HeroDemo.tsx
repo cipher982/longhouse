@@ -14,6 +14,7 @@ import { UnifyBeat } from "./UnifyBeat";
 import { SteerBeat } from "./SteerBeat";
 import { CloseBeat } from "./CloseBeat";
 import { clamp, clamp01 } from "./ease";
+import "../../../styles/hero-demo.css";
 
 /**
  * The landing hero demo, rendered natively as DOM — no video element, no

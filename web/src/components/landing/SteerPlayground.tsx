@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { LiveDemo } from "./demo/LiveDemo";
 import { prewarmLiveSession } from "./demo/liveSession";
+import "../../styles/steer-playground.css";
 
 export function SteerPlayground() {
   const [active, setActive] = useState(false);

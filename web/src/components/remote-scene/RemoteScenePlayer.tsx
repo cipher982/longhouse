@@ -17,6 +17,7 @@ import {
   REMOTE_SCENE_PLAYBACK_LAST_FRAME,
   remoteSceneLoopProgress,
 } from "./recordedTimeline";
+import "../../styles/remote-scene-player.css";
 
 function initialTerminalMode(): RecordedTerminalMode {
   if (typeof window === "undefined") return "cutin";
