@@ -77,7 +77,7 @@ describe("terminal story synchronization", () => {
     const openingHold = getRemoteSceneWorkState(0);
     const openingAction = getRemoteSceneWorkState(33);
     const openingComplete = getRemoteSceneWorkState(143);
-    const followUpQueued = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME);
+    const followUpStarted = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME);
     const followUpWorking = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME + 13);
     const followUpComplete = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME + 126);
     const nextTask = getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME + 144);
@@ -85,13 +85,13 @@ describe("terminal story synchronization", () => {
     expect(getRemoteSceneWorkState(32).replaySecond).toBe(openingHold.replaySecond);
     expect(openingAction.replaySecond).toBeGreaterThan(openingHold.replaySecond);
     expect(getRemoteSceneWorkState(128).replaySecond).toBe(openingComplete.replaySecond);
-    expect(followUpQueued.phase).toBe("queued");
-    expect(followUpQueued.timeline.meta.rows).toBe(14);
+    expect(followUpStarted.phase).toBe("working");
+    expect(followUpStarted.timeline.meta.rows).toBe(14);
     expect(followUpWorking.phase).toBe("working");
-    expect(followUpWorking.replaySecond).toBeGreaterThan(followUpQueued.replaySecond);
+    expect(followUpWorking.replaySecond).toBeGreaterThan(followUpStarted.replaySecond);
     expect(followUpComplete.phase).toBe("complete");
-    expect(nextTask.id).not.toBe(followUpQueued.id);
-    expect(nextTask.prompt).not.toBe(followUpQueued.prompt);
+    expect(nextTask.id).not.toBe(followUpStarted.id);
+    expect(nextTask.prompt).not.toBe(followUpStarted.prompt);
   });
 
   it("loops work without replaying the departure scene", () => {

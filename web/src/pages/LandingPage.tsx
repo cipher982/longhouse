@@ -18,7 +18,11 @@ const SteerPlayground = lazy(() =>
     ({ SteerPlayground: Component }) => ({ default: Component }),
   ),
 );
-import { KernelThesisSection } from "../components/landing/KernelThesisSection";
+const RemoteWorkSceneSection = lazy(() =>
+  import("../components/landing/RemoteWorkSceneSection").then(
+    ({ RemoteWorkSceneSection: Component }) => ({ default: Component }),
+  ),
+);
 import { MachineSurfaceSection } from "../components/landing/MachineSurfaceSection";
 import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
@@ -160,7 +164,9 @@ export default function LandingPage() {
         <Suspense fallback={<section className="steer-playground" aria-hidden="true" />}>
           <SteerPlayground />
         </Suspense>
-        <KernelThesisSection />
+        <Suspense fallback={<section className="landing-remote-scene landing-remote-scene-fallback" aria-hidden="true" />}>
+          <RemoteWorkSceneSection />
+        </Suspense>
         <DemoSection screenshotTheme={screenshotTheme} />
         <IntegrationsSection />
         <MachineSurfaceSection />

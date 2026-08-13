@@ -158,6 +158,28 @@ try {
         });
       }
 
+      const remoteScene = page.locator(".landing-remote-scene .remote-scene-stage");
+      await remoteScene.waitFor({ state: "visible", timeout: 20000 });
+      await remoteScene.scrollIntoViewIfNeeded();
+      await page.waitForFunction(
+        () => Number(document.querySelector(".landing-remote-scene [data-scene-frame]")?.getAttribute("data-scene-frame") ?? 0) > 4,
+        null,
+        { timeout: 10000 },
+      );
+      const remoteSceneSize = await remoteScene.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { width: Math.round(rect.width), height: Math.round(rect.height) };
+      });
+      check(
+        `${viewport.name}: ASCII remote-work scene replaces the old control diagram`,
+        (await page.locator(".thesis-control-flow").count()) === 0 &&
+          remoteSceneSize.width >= 300 && remoteSceneSize.height >= 200,
+        `${remoteSceneSize.width}×${remoteSceneSize.height}`,
+      );
+      await page.screenshot({
+        path: path.join(shotsDir, `${viewport.name}-remote-scene.png`),
+      });
+
       const playground = page.locator(".steer-playground");
       await playground.scrollIntoViewIfNeeded();
       await page.evaluate(() => {

@@ -1660,6 +1660,48 @@
     filter: blur(12px);
   }
 
+  .landing-remote-scene {
+    padding: 132px 0;
+    scroll-margin-top: 76px;
+  }
+
+  .landing-remote-scene-kicker {
+    margin: 0 0 16px;
+    color: var(--color-brand-primary);
+    font-family: var(--font-family-mono);
+    font-size: 0.68rem;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.12em;
+  }
+
+  .landing-remote-scene-player {
+    position: relative;
+  }
+
+  .landing-remote-scene-player::before {
+    position: absolute;
+    inset: 8% 4% -8%;
+    background: radial-gradient(circle, rgba(143, 197, 172, 0.1), transparent 68%);
+    content: "";
+    filter: blur(30px);
+  }
+
+  .landing-remote-scene-player .remote-scene-player {
+    position: relative;
+  }
+
+  .landing-remote-scene-note {
+    margin: 14px 2px 0;
+    color: rgba(212, 199, 181, 0.48);
+    font-family: var(--font-family-mono);
+    font-size: 0.68rem;
+    text-align: right;
+  }
+
+  .landing-remote-scene-fallback {
+    min-height: min(860px, 80vh);
+  }
+
   /* Helm and Shadow control-path diagram. */
   .thesis-control-flow {
     position: relative;
@@ -2836,6 +2878,7 @@
     .landing-demo,
     .steer-playground,
     .landing-thesis,
+    .landing-remote-scene,
     .landing-surface,
     .landing-providers,
     .landing-pricing,

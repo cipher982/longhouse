@@ -102,6 +102,38 @@
     pointer-events: none;
   }
 
+  .remote-scene-embedded-toggle {
+    position: absolute;
+    z-index: 4;
+    top: 14px;
+    right: 14px;
+    padding: 6px 9px;
+    color: rgba(243, 234, 217, 0.62);
+    background: rgba(18, 11, 9, 0.7);
+    border: 1px solid rgba(201, 166, 107, 0.2);
+    border-radius: 7px;
+    font-family: var(--font-family-mono);
+    font-size: 0.62rem;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity var(--motion-duration-fast), border-color var(--motion-duration-fast);
+  }
+
+  .remote-scene-player--embedded:hover .remote-scene-embedded-toggle,
+  .remote-scene-embedded-toggle:focus-visible {
+    opacity: 1;
+  }
+
+  .remote-scene-embedded-toggle:hover {
+    border-color: rgba(201, 166, 107, 0.5);
+  }
+
+  @media (hover: none) {
+    .remote-scene-player--embedded .remote-scene-embedded-toggle {
+      opacity: 0.62;
+    }
+  }
+
   .remote-scene-world {
     position: absolute;
     inset: 0;

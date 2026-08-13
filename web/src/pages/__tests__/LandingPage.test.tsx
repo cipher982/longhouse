@@ -35,8 +35,8 @@ vi.mock("../../components/landing/HeroSection", () => ({
   HeroSection: () => <div>Hero Section</div>,
 }));
 
-vi.mock("../../components/landing/KernelThesisSection", () => ({
-  KernelThesisSection: () => <div>Kernel Thesis</div>,
+vi.mock("../../components/landing/RemoteWorkSceneSection", () => ({
+  RemoteWorkSceneSection: () => <div>Remote Work Scene</div>,
 }));
 
 vi.mock("../../components/landing/HowItWorksSection", () => ({

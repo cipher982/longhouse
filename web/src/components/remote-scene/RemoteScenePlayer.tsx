@@ -73,7 +73,7 @@ function drawFrame(
   }
 }
 
-export function RemoteScenePlayer() {
+export function RemoteScenePlayer({ embedded = false }: { embedded?: boolean } = {}) {
   const playerRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameIndexRef = useRef(0);
@@ -268,7 +268,11 @@ export function RemoteScenePlayer() {
   };
 
   return (
-    <section ref={playerRef} className="remote-scene-player" aria-label="Remote control scene player">
+    <section
+      ref={playerRef}
+      className={`remote-scene-player${embedded ? " remote-scene-player--embedded" : ""}`}
+      aria-label="Remote control scene player"
+    >
       <div
         className={`remote-scene-stage remote-scene-stage--${terminalMode}${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`}
         style={overlayStyle}
@@ -295,9 +299,19 @@ export function RemoteScenePlayer() {
           </div>
           <div className="remote-scene-ambient-label" key={caption}>{caption}</div>
         </div>
+        {embedded && (
+          <button
+            type="button"
+            className="remote-scene-embedded-toggle"
+            onClick={() => setIsPlaying((playing) => !playing)}
+            aria-label={isPlaying ? "Pause remote work scene" : "Play remote work scene"}
+          >
+            {isPlaying ? "Pause" : "Play"}
+          </button>
+        )}
       </div>
 
-      <div className="remote-scene-controls">
+      {!embedded && <div className="remote-scene-controls">
         <div className="remote-scene-control-row">
           <button
             type="button"
@@ -342,7 +356,7 @@ export function RemoteScenePlayer() {
           <button type="button" aria-pressed={terminalMode === "inset"} onClick={() => setTerminalMode("inset")}>In monitor</button>
           <button type="button" aria-pressed={terminalMode === "cutin"} onClick={() => setTerminalMode("cutin")}>Foreground cut-in</button>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }
