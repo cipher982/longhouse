@@ -1,15 +1,24 @@
 {
-  "format": "RLE palette frame stream",
-  "width": 100,
-  "height": 56,
-  "fps": 12,
+  "format": "RLE palette cinematic frame streams",
+  "fps": 24,
   "durationSeconds": 6,
-  "frameCount": 72,
-  "paletteEntries": 10,
-  "encodedPayloadBytes": 354382,
-  "runtimeAssetRawBytes": 355397,
-  "runtimeAssetGzipBytes": 16016,
-  "runtimeAssetBrotliBytes": 9978,
-  "contactSheetBytes": 980543,
+  "frameCount": 144,
+  "paletteEntries": 33,
+  "profiles": {
+    "desktop": {
+      "width": 112,
+      "height": 64,
+      "encodedPayloadBytes": 414638
+    },
+    "mobile": {
+      "width": 72,
+      "height": 56,
+      "encodedPayloadBytes": 260616
+    }
+  },
+  "runtimeAssetRawBytes": 678945,
+  "runtimeAssetGzipBytes": 73512,
+  "runtimeAssetBrotliBytes": 54289,
+  "contactSheetBytes": 1012617,
   "deterministic": true
 }

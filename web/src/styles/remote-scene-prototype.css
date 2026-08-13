@@ -120,8 +120,9 @@
     z-index: 2;
     overflow: hidden;
     color: #8fc5ac;
-    background: rgba(11, 17, 14, 0.92);
+    background: rgba(11, 17, 14, 0.975);
     border: 1px solid rgba(143, 197, 172, 0.4);
+    box-sizing: border-box;
     font-family: var(--font-family-mono);
     pointer-events: none;
   }
@@ -213,13 +214,24 @@
     display: flex;
     flex-direction: column;
     gap: 6%;
-    padding: 7% 8%;
+    padding: clamp(5px, 0.65vw, 9px);
     color: #f3ead9;
-    background: rgba(18, 11, 9, 0.9);
+    background: rgba(18, 11, 9, 0.98);
     border-color: rgba(201, 166, 107, 0.6);
     border-radius: 8%;
     font-size: clamp(0.32rem, 0.64vw, 0.62rem);
     line-height: 1.15;
+  }
+
+  .remote-scene-phone-overlay::before {
+    position: absolute;
+    top: 3%;
+    left: 39%;
+    width: 22%;
+    height: 2px;
+    background: rgba(243, 234, 217, 0.24);
+    border-radius: 99px;
+    content: "";
   }
 
   .remote-scene-phone-overlay strong {
@@ -281,6 +293,19 @@
     font-size: clamp(0.48rem, 0.78vw, 0.75rem);
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    animation: remote-scene-caption-in 360ms ease-out both;
+  }
+
+  @keyframes remote-scene-caption-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .remote-scene-controls {
@@ -431,7 +456,6 @@
     }
 
     .remote-scene-stage {
-      aspect-ratio: 100 / 56;
       border-radius: 11px;
     }
 
@@ -447,14 +471,10 @@
     }
 
     .remote-scene-terminal-overlay {
-      left: calc(var(--monitor-left) - 1%);
-      width: calc(var(--monitor-width) + 2%);
       font-size: clamp(0.33rem, 1.55vw, 0.56rem);
     }
 
     .remote-scene-phone-overlay {
-      left: calc(var(--phone-left) - 3%);
-      width: calc(var(--phone-width) + 4%);
       font-size: clamp(0.3rem, 1.35vw, 0.48rem);
     }
 

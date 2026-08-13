@@ -27,7 +27,7 @@ export function decodeFrame(encoded: string, expectedLength: number): Uint8Array
   for (const run of encoded.split(RUN_SEPARATOR)) {
     const value = Number.parseInt(run.slice(-1), 36);
     const length = Number.parseInt(run.slice(0, -1), 36);
-    if (!Number.isInteger(length) || length < 1 || !Number.isInteger(value) || value > 15) {
+    if (!Number.isInteger(length) || length < 1 || !Number.isInteger(value) || value > 35) {
       throw new Error(`Invalid scene run: ${run}`);
     }
     frame.fill(value, cursor, cursor + length);

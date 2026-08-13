@@ -1,21 +1,24 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import { REMOTE_SCENE_DATA } from "./generated/sceneData";
 import { clampFrameIndex, decodeFrames } from "./sceneCodec";
-import { getPhoneSceneState, getSceneCamera, getTerminalSceneState } from "./sceneSpec";
-
-const CELL_COUNT = REMOTE_SCENE_DATA.width * REMOTE_SCENE_DATA.height;
+import {
+  getPhoneSceneState,
+  getSceneCaption,
+  getSceneOverlayLayout,
+  getTerminalSceneState,
+  type SceneProfileKey,
+} from "./sceneSpec";
 
 function formatTime(frameIndex: number): string {
   return (frameIndex / REMOTE_SCENE_DATA.fps).toFixed(2).padStart(5, "0");
 }
 
-function projectedPercent(value: number, axis: "x" | "y", frameIndex: number): number {
-  const camera = getSceneCamera(frameIndex / REMOTE_SCENE_DATA.fps);
-  if (axis === "x") return ((value - 50) * camera.scale + 50 + camera.lateral) / REMOTE_SCENE_DATA.width * 100;
-  return (camera.horizon + (value - camera.horizon) * camera.scale) / REMOTE_SCENE_DATA.height * 100;
-}
-
-function drawFrame(canvas: HTMLCanvasElement, frame: Uint8Array): void {
+function drawFrame(
+  canvas: HTMLCanvasElement,
+  frame: Uint8Array,
+  width: number,
+  height: number,
+): void {
   const bounds = canvas.getBoundingClientRect();
   const pixelRatio = window.devicePixelRatio || 1;
   const pixelWidth = Math.max(1, Math.round(bounds.width * pixelRatio));
@@ -32,24 +35,24 @@ function drawFrame(canvas: HTMLCanvasElement, frame: Uint8Array): void {
   context.fillStyle = REMOTE_SCENE_DATA.palette[0].color;
   context.fillRect(0, 0, bounds.width, bounds.height);
 
-  const cellWidth = bounds.width / REMOTE_SCENE_DATA.width;
-  const cellHeight = bounds.height / REMOTE_SCENE_DATA.height;
+  const cellWidth = bounds.width / width;
+  const cellHeight = bounds.height / height;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.font = `${Math.max(6, Math.min(cellWidth * 1.08, cellHeight * 1.2))}px "JetBrains Mono", monospace`;
+  context.font = `${Math.max(5, Math.min(cellWidth * 1.08, cellHeight * 1.18))}px "JetBrains Mono", monospace`;
 
-  let tone = -1;
+  let paletteIndex = -1;
   for (let index = 0; index < frame.length; index += 1) {
-    const nextTone = frame[index];
-    if (nextTone === 0) continue;
-    if (nextTone !== tone) {
-      context.fillStyle = REMOTE_SCENE_DATA.palette[nextTone].color;
-      tone = nextTone;
+    const nextPaletteIndex = frame[index];
+    if (nextPaletteIndex === 0) continue;
+    if (nextPaletteIndex !== paletteIndex) {
+      context.fillStyle = REMOTE_SCENE_DATA.palette[nextPaletteIndex].color;
+      paletteIndex = nextPaletteIndex;
     }
-    const column = index % REMOTE_SCENE_DATA.width;
-    const row = Math.floor(index / REMOTE_SCENE_DATA.width);
+    const column = index % width;
+    const row = Math.floor(index / width);
     context.fillText(
-      REMOTE_SCENE_DATA.palette[nextTone].glyph,
+      REMOTE_SCENE_DATA.palette[nextPaletteIndex].glyph,
       column * cellWidth + cellWidth / 2,
       row * cellHeight + cellHeight / 2,
     );
@@ -57,17 +60,32 @@ function drawFrame(canvas: HTMLCanvasElement, frame: Uint8Array): void {
 }
 
 export function RemoteScenePlayer() {
-  const frames = useMemo(
-    () => decodeFrames(REMOTE_SCENE_DATA.encodedFrames, CELL_COUNT),
-    [REMOTE_SCENE_DATA.encodedFrames],
-  );
-  const lastFrame = Math.max(0, frames.length - 1);
+  const playerRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameIndexRef = useRef(0);
+  const [profileKey, setProfileKey] = useState<SceneProfileKey>(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches ? "mobile" : "desktop",
+  );
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [staticPreview, setStaticPreview] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
+
+  const profile = REMOTE_SCENE_DATA.profiles[profileKey];
+  const frames = useMemo(
+    () => decodeFrames(profile.encodedFrames, profile.width * profile.height),
+    [profile.encodedFrames, profile.height, profile.width],
+  );
+  const lastFrame = Math.max(0, frames.length - 1);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 720px)");
+    const updateProfile = () => setProfileKey(mediaQuery.matches ? "mobile" : "desktop");
+    updateProfile();
+    mediaQuery.addEventListener("change", updateProfile);
+    return () => mediaQuery.removeEventListener("change", updateProfile);
+  }, []);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -85,12 +103,33 @@ export function RemoteScenePlayer() {
   }, [prefersReducedMotion]);
 
   useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const observer = new IntersectionObserver(([entry]) => setIsVisible(entry.isIntersecting), { threshold: 0.08 });
+    observer.observe(player);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) setIsPlaying(false);
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible) setIsPlaying(false);
+  }, [isVisible]);
+
+  useEffect(() => {
     const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
     frameIndexRef.current = safeFrameIndex;
     if (safeFrameIndex !== frameIndex) setFrameIndex(safeFrameIndex);
     const canvas = canvasRef.current;
-    if (canvas) drawFrame(canvas, frames[safeFrameIndex]);
-  }, [frameIndex, frames]);
+    const frame = frames[safeFrameIndex];
+    if (canvas && frame) drawFrame(canvas, frame, profile.width, profile.height);
+  }, [frameIndex, frames, profile.height, profile.width]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -98,16 +137,17 @@ export function RemoteScenePlayer() {
     const redraw = () => {
       const safeFrameIndex = clampFrameIndex(frameIndexRef.current, frames.length);
       frameIndexRef.current = safeFrameIndex;
-      drawFrame(canvas, frames[safeFrameIndex]);
+      const frame = frames[safeFrameIndex];
+      if (frame) drawFrame(canvas, frame, profile.width, profile.height);
     };
     const observer = new ResizeObserver(redraw);
     observer.observe(canvas);
     redraw();
     return () => observer.disconnect();
-  }, [frames]);
+  }, [frames, profile.height, profile.width]);
 
   useEffect(() => {
-    if (!isPlaying || staticPreview) return;
+    if (!isPlaying || staticPreview || !isVisible) return;
     const startedAt = performance.now() - frameIndexRef.current * (1000 / REMOTE_SCENE_DATA.fps);
     let animationFrame = 0;
     const tick = (now: number) => {
@@ -122,23 +162,25 @@ export function RemoteScenePlayer() {
     };
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [isPlaying, lastFrame, staticPreview]);
+  }, [isPlaying, isVisible, lastFrame, staticPreview]);
 
   const safeFrameIndex = clampFrameIndex(frameIndex, frames.length);
-  const camera = getSceneCamera(safeFrameIndex / REMOTE_SCENE_DATA.fps);
   const terminalState = getTerminalSceneState(safeFrameIndex);
   const phoneState = getPhoneSceneState(safeFrameIndex);
-  const workProgress = Math.max(0, Math.min(1, (safeFrameIndex - 18) / (56 - 18)));
+  const caption = getSceneCaption(safeFrameIndex);
+  const overlay = getSceneOverlayLayout(profileKey, safeFrameIndex / REMOTE_SCENE_DATA.fps);
+  const workProgress = Math.max(0, Math.min(1, (safeFrameIndex - 36) / (124 - 36)));
   const overlayStyle = {
-    "--monitor-left": `${projectedPercent(56, "x", safeFrameIndex)}%`,
-    "--monitor-top": `${projectedPercent(15, "y", safeFrameIndex)}%`,
-    "--monitor-width": `${24 * camera.scale}%`,
-    "--monitor-height": `${14.2 * camera.scale}%`,
-    "--phone-left": `${projectedPercent(73.4, "x", safeFrameIndex)}%`,
-    "--phone-top": `${projectedPercent(35, "y", safeFrameIndex)}%`,
-    "--phone-width": `${12.6 * camera.scale}%`,
-    "--phone-height": `${18.2 * camera.scale}%`,
+    "--monitor-left": `${overlay.monitor.left}%`,
+    "--monitor-top": `${overlay.monitor.top}%`,
+    "--monitor-width": `${overlay.monitor.width}%`,
+    "--monitor-height": `${overlay.monitor.height}%`,
+    "--phone-left": `${overlay.phone.left}%`,
+    "--phone-top": `${overlay.phone.top}%`,
+    "--phone-width": `${overlay.phone.width}%`,
+    "--phone-height": `${overlay.phone.height}%`,
     "--work-progress": workProgress,
+    aspectRatio: `${profile.width} / ${profile.height}`,
   } as CSSProperties;
 
   const setFrame = (nextFrame: number) => {
@@ -159,8 +201,8 @@ export function RemoteScenePlayer() {
   };
 
   return (
-    <section className="remote-scene-player" aria-label="Remote control scene player">
-      <div className={`remote-scene-stage${safeFrameIndex >= 56 ? " remote-scene-stage--complete" : ""}`} style={overlayStyle}>
+    <section ref={playerRef} className="remote-scene-player" aria-label="Remote control scene player">
+      <div className={`remote-scene-stage${safeFrameIndex >= 124 ? " remote-scene-stage--complete" : ""}`} style={overlayStyle}>
         <div className="remote-scene-world">
           <canvas ref={canvasRef} aria-hidden="true" />
           <div className="remote-scene-terminal-overlay" aria-label="Crisp workstation status overlay">
@@ -180,18 +222,14 @@ export function RemoteScenePlayer() {
             <div className="remote-scene-work-progress"><i /></div>
           </div>
           <div className={`remote-scene-phone-overlay remote-scene-phone-overlay--${phoneState.key}`} aria-label="Crisp phone status overlay">
-            <div className="remote-scene-phone-heading"><strong>Longhouse</strong><small>studio-mac</small></div>
+            <div className="remote-scene-phone-heading"><strong>Longhouse</strong></div>
             <span className="remote-scene-phone-live">● {phoneState.status}</span>
             <span className="remote-scene-phone-message">{phoneState.message}</span>
             <span className="remote-scene-phone-detail">{phoneState.detail}</span>
             <div className="remote-scene-work-progress"><i /></div>
-            <b>›</b>
+            <b>{phoneState.status === "DONE" ? "✓" : "›"}</b>
           </div>
-          <div className="remote-scene-ambient-label">
-            {safeFrameIndex < 38
-              ? "the machine stays awake"
-              : safeFrameIndex < 56 ? "work continues on studio-mac" : "task finished while you were away"}
-          </div>
+          <div className="remote-scene-ambient-label" key={caption}>{caption}</div>
         </div>
       </div>
 
@@ -233,8 +271,8 @@ export function RemoteScenePlayer() {
           />
         </label>
         <div className="remote-scene-control-note">
-          <span>{prefersReducedMotion ? "Reduced motion preference detected" : "12 fps deterministic preview"}</span>
-          <span>Frame {String(safeFrameIndex).padStart(2, "0")} / {lastFrame}</span>
+          <span>{prefersReducedMotion ? "Reduced motion preference detected" : `24 fps deterministic ${profileKey} render`}</span>
+          <span>Frame {String(safeFrameIndex).padStart(3, "0")} / {lastFrame}</span>
         </div>
       </div>
     </section>
