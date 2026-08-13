@@ -20,6 +20,12 @@ interface CaptureGroup {
   contactSheet: string;
 }
 
+interface PlaybackCheck {
+  advancingFrame: number;
+  finalFrame: number;
+  elapsedMs: number;
+}
+
 const args = process.argv.slice(2);
 const argValue = (name: string): string | undefined =>
   args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -126,7 +132,7 @@ async function createContactSheet(
   return filename;
 }
 
-function writeReviewFiles(groups: CaptureGroup[], frameCount: number): void {
+function writeReviewFiles(groups: CaptureGroup[], frameCount: number, playbackCheck: PlaybackCheck): void {
   const prompt = `Review the visual sequence in this directory as a neutral critic.
 
 Start with the contact sheets, then inspect any individual frames that help. Judge the work using your own standards. Describe what you think is depicted and how the sequence reads before discussing what feels effective, weak, confusing, unfinished, or worth changing. Be candid and specific. Do not inspect the source code or assume an intended story beyond what the images themselves communicate. Do not use a numeric score unless it genuinely helps your judgment.
@@ -143,6 +149,7 @@ Start with the contact sheets, then inspect any individual frames that help. Jud
     groups,
     browserErrors,
     failedRequests,
+    playbackCheck,
     reviewPrompt: "review-prompt.md",
   };
   writeFileSync(path.join(outputDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -156,6 +163,30 @@ Start with the contact sheets, then inspect any individual frames that help. Jud
       body { max-width: 1400px; margin: 0 auto; padding: 32px; color: #eee4d6; background: #0d0908; font-family: system-ui, sans-serif; }
       h1, h2 { font-weight: 600; } section { margin: 40px 0; } img { display: block; width: 100%; border: 1px solid #3d3428; }
     </style></head><body><h1>Remote scene visual QA</h1>${sections}</body></html>\n`);
+}
+
+async function verifyLivePlayback(page: Page, lastFrame: number): Promise<PlaybackCheck> {
+  const slider = page.getByRole("slider", { name: "Scrub remote control scene" });
+  await slider.fill("0");
+  await settleFrame(page);
+  const startedAt = Date.now();
+  await page.getByRole("button", { name: "Play scene" }).click();
+  await page.waitForFunction(
+    () => Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0) >= 12,
+    undefined,
+    { timeout: 2_000 },
+  );
+  const advancingFrame = Number(await slider.inputValue());
+  await page.waitForFunction(
+    (targetFrame) => Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0) >= targetFrame,
+    lastFrame,
+    { timeout: 8_000 },
+  );
+  return {
+    advancingFrame,
+    finalFrame: Number(await slider.inputValue()),
+    elapsedMs: Date.now() - startedAt,
+  };
 }
 
 async function main(): Promise<void> {
@@ -177,6 +208,7 @@ async function main(): Promise<void> {
     const slider = page.getByRole("slider", { name: "Scrub remote control scene" });
     const lastFrame = Number.parseInt((await slider.getAttribute("max")) ?? "0", 10);
     const frameCount = lastFrame + 1;
+    const playbackCheck = await verifyLivePlayback(page, lastFrame);
     const desktopFrames = sampledFrames(frameCount, sampleEvery);
 
     const desktopCaptures = await captureFrames(page, "desktop", 1440, 1000, desktopFrames, "stage");
@@ -210,7 +242,7 @@ async function main(): Promise<void> {
       },
     ];
 
-    writeReviewFiles(groups, frameCount);
+    writeReviewFiles(groups, frameCount, playbackCheck);
     await page.close();
 
     if (browserErrors.length || failedRequests.length) {
