@@ -350,7 +350,7 @@ test-e2e: ## Launch-surface E2E (core + a11y)
 	$(MAKE) test-e2e-a11y
 
 qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execute an instruction)
-	cd e2e && node scripts/qa-landing-live-demo.mjs $(or $(URL),http://localhost:5173/landing) $(if $(RUN),--run,)
+	cd e2e && node scripts/qa-landing-live-demo.mjs $(or $(URL),http://localhost:5173/landing) $(if $(RUN),--run,) $(if $(SHOTS),--shots $(SHOTS),) $(if $(SEED),--seed=$(SEED),) $(ARGS)
 
 test-e2e-core: ## @internal Core E2E — no retries
 	@$(MAKE) ensure-playwright-browser
@@ -952,7 +952,7 @@ demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed r
 
 qa-remote-scene: ## Capture sampled remote-scene frames for independent visual review (FRONTEND_URL=... EVERY=6)
 	@$(MAKE) ensure-playwright-browser
-	@bun scripts/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(VARIANT),--variant=$(VARIANT),)
+	@bun scripts/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(VARIANT),--variant=$(VARIANT),) $(if $(SEED),--seed=$(SEED),)
 
 qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
 	@set -e; \

@@ -8,7 +8,7 @@ import { HeroDemoFallback } from "./demo/HeroDemoFallback";
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
 const DEMO_ARIA_LABEL =
-  "Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds";
+  "Longhouse demo: real recorded coding-agent sessions unify into one system, then later loops simulate varied remote work without running a live model";
 const HeroDemo = lazy(() =>
   import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({ default: Component })),
 );
@@ -118,7 +118,10 @@ export function HeroSection() {
               aria-label={`Copy install command: ${INSTALL_COMMAND}`}
             >
               <span className="hero-install-prompt" aria-hidden="true">$</span>
-              <code className="hero-install-text">{INSTALL_COMMAND}</code>
+              <code className="hero-install-text">
+                <span>curl -fsSL</span>{" "}
+                <span>https://get.longhouse.ai/install.sh | bash</span>
+              </code>
               <span className={`hero-install-copy ${copied ? "copied" : ""}`}>
                 <CopyIcon copied={copied} />
               </span>
@@ -152,8 +155,8 @@ export function HeroSection() {
           <HeroDemo aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
         <p className="landing-hero-video-note">
-          Demo shows real provider CLIs replayed from recordings, with scripted model
-          responses.
+          First loop: real recorded sessions. After that: a simulated session keeps
+          the story going. No live model runs.
         </p>
       </div>
     </section>

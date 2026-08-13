@@ -23,6 +23,10 @@ interface CaptureGroup {
 interface PlaybackCheck {
   advancingFrame: number;
   loopedFrame: number;
+  initialTask: string;
+  loopedTask: string;
+  initialCycle: number;
+  loopedCycle: number;
   elapsedMs: number;
 }
 
@@ -39,10 +43,13 @@ const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const outputDir = path.resolve(argValue("output") ?? `artifacts/remote-scene-qa/${timestamp}`);
 const baseUrl = (process.env.FRONTEND_URL ?? "http://localhost:47200").replace(/\/$/, "");
 const variant = argValue("variant");
+const demoSeed = argValue("seed") ?? "remote-scene-qa";
 if (variant && variant !== "inset" && variant !== "cutin") {
   throw new Error("--variant must be inset or cutin");
 }
-const sceneUrl = `${baseUrl}/prototypes/remote-scene${variant ? `?terminal=${variant}` : ""}`;
+const sceneParams = new URLSearchParams({ demoSeed });
+if (variant) sceneParams.set("terminal", variant);
+const sceneUrl = `${baseUrl}/prototypes/remote-scene?${sceneParams}`;
 
 mkdirSync(outputDir, { recursive: true });
 
@@ -185,19 +192,31 @@ async function verifyLivePlayback(page: Page, lastFrame: number): Promise<Playba
 
   await slider.fill(String(lastFrame - 3));
   await settleFrame(page);
+  const initialTask = (await stage.getAttribute("data-work-task")) ?? "";
+  const initialCycle = Number(await stage.getAttribute("data-work-cycle"));
   await page.getByRole("button", { name: "Play scene" }).click();
   const loopStartFrame = Number(await stage.getAttribute("data-scene-frame")) + 1;
   await page.waitForFunction(
     ({ loopStart, previousFrame }) => {
       const frame = Number((document.querySelector('input[aria-label="Scrub remote control scene"]') as HTMLInputElement)?.value ?? 0);
-      return frame >= loopStart && frame < previousFrame;
+      const cycle = Number(document.querySelector(".remote-scene-stage")?.getAttribute("data-work-cycle") ?? 0);
+      return cycle > 0 && frame >= loopStart && frame < previousFrame;
     },
     { loopStart: loopStartFrame, previousFrame: lastFrame - 3 },
     { timeout: 2_000 },
   );
+  const loopedTask = (await stage.getAttribute("data-work-task")) ?? "";
+  const loopedCycle = Number(await stage.getAttribute("data-work-cycle"));
+  if (!initialTask || !loopedTask || initialTask === loopedTask || loopedCycle <= initialCycle) {
+    throw new Error(`work loop did not advance story: ${initialTask}@${initialCycle} -> ${loopedTask}@${loopedCycle}`);
+  }
   return {
     advancingFrame,
     loopedFrame: Number(await slider.inputValue()),
+    initialTask,
+    loopedTask,
+    initialCycle,
+    loopedCycle,
     elapsedMs: Date.now() - startedAt,
   };
 }

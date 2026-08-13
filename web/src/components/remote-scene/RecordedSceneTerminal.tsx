@@ -9,10 +9,12 @@ export function RecordedSceneTerminal({
   mode,
   replaySecond,
   timeline,
+  sourceLabel,
 }: {
   mode: RecordedTerminalMode;
   replaySecond: number;
   timeline: GridTimeline;
+  sourceLabel: "recorded PTY" | "simulated continuation";
 }) {
   const screenRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -40,12 +42,12 @@ export function RecordedSceneTerminal({
   return (
     <div
       className={`remote-scene-recorded-terminal remote-scene-recorded-terminal--${mode}`}
-      aria-label="Real recorded Claude Code terminal"
+      aria-label={`Claude Code terminal, ${sourceLabel}`}
     >
       <div className="remote-scene-recorded-terminal-chrome">
         <span className="remote-scene-recorded-terminal-dots" aria-hidden="true"><i /><i /><i /></span>
         <strong>Claude Code</strong>
-        <span>studio-mac · recorded PTY</span>
+        <span>studio-mac · {sourceLabel}</span>
       </div>
       <div className="remote-scene-recorded-terminal-screen" ref={screenRef}>
         {cellWidth > 0 ? (

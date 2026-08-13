@@ -7,7 +7,7 @@
  * composer and watches the real Claude Code terminal respond.
  *
  * Usage:
- *   cd e2e && node scripts/qa-landing-live-demo.mjs [url] [--run] [--shots DIR]
+ *   cd e2e && node scripts/qa-landing-live-demo.mjs [url] [--run] [--shots DIR] [--seed=NAME]
  *
  * `--run` executes one instruction in a real sandbox. It spends money and
  * consumes the per-visitor rate limit, so it is off by default.
@@ -19,13 +19,21 @@ import path from "node:path";
 
 const args = process.argv.slice(2);
 const url = args.find((arg) => arg.startsWith("http")) ?? "http://localhost:5173/landing";
+const qaUrl = new URL(url);
+const seed = args.find((arg) => arg.startsWith("--seed="))?.slice("--seed=".length);
+qaUrl.searchParams.set("demoSeed", seed || "landing-hero-qa");
 const doRun = args.includes("--run");
 const shotsFlag = args.indexOf("--shots");
+const viewportFilter = args.find((arg) => arg.startsWith("--viewport="))?.split("=")[1];
 const VIEWPORTS = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "wide-short", width: 1800, height: 850 },
   { name: "mobile", width: 390, height: 844, isMobile: true },
 ];
+const selectedViewports = viewportFilter
+  ? VIEWPORTS.filter((viewport) => viewport.name === viewportFilter)
+  : VIEWPORTS;
+if (selectedViewports.length === 0) throw new Error(`Unknown viewport: ${viewportFilter}`);
 
 const results = [];
 let failures = 0;
@@ -41,7 +49,7 @@ const shotsDir =
 
 const browser = await chromium.launch();
 try {
-  for (const viewport of VIEWPORTS) {
+  for (const viewport of selectedViewports) {
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
       isMobile: Boolean(viewport.isMobile),
@@ -55,7 +63,7 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 700));
         await route.continue();
       });
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.goto(qaUrl.toString(), { waitUntil: "domcontentloaded" });
 
       const firstPaint = page.locator(".landing-hero .hero-demo-fallback");
       await firstPaint.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
@@ -126,21 +134,57 @@ try {
       );
       await page.screenshot({ path: path.join(shotsDir, `${viewport.name}-hero.png`) });
 
+      if (viewport.name !== "wide-short") {
+        await page.waitForFunction(
+          () => Number(document.querySelector(".landing-hero .hero-demo")?.getAttribute("data-demo-cycle") ?? 0) >= 1,
+          null,
+          { timeout: 25000 },
+        );
+        const heroTabs = page.locator(".landing-hero .hero-demo-dot");
+        await heroTabs.nth(2).click();
+        // Capture after the phone has sent and the generated terminal has
+        // reached tool activity, not during the intentional idle-composer hold.
+        await page.waitForTimeout(4000);
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.waitForTimeout(100);
+        const simulatedStory = await hero.getAttribute("data-demo-story");
+        check(
+          `${viewport.name}: later hero loop selects a procedural story`,
+          Boolean(simulatedStory && simulatedStory !== "recorded"),
+          simulatedStory ?? "missing story",
+        );
+        await page.screenshot({
+          path: path.join(shotsDir, `${viewport.name}-hero-simulated.png`),
+        });
+      }
+
       const playground = page.locator(".steer-playground");
       await playground.scrollIntoViewIfNeeded();
-      await playground.hover();
-
+      await page.evaluate(() => {
+        window.__landingQaSawShortCommand = false;
+        const inspect = () => {
+          const text = (document.querySelector(".steer-playground .xterm-rows")?.textContent ?? "")
+            .replace(/\s+/g, "");
+          if (text.includes("claude--dangerously-skip-permissions")) {
+            window.__landingQaSawShortCommand = true;
+          }
+        };
+        const observer = new MutationObserver(inspect);
+        observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+        window.__landingQaCommandObserver = observer;
+        inspect();
+      });
       const showedCommand = page
         .waitForFunction(
-          () =>
-            (document.querySelector(".steer-playground .xterm-rows")?.textContent ?? "")
-              .replace(/\s+/g, "")
-              .includes("claude--dangerously-skip-permissions"),
+          () => window.__landingQaSawShortCommand === true,
           null,
           { timeout: 90000 },
         )
         .then(() => true)
         .catch(() => false);
+      // Subscribe before pointer intent starts the terminal. On a warm mobile
+      // sandbox the launch line can be visible for less than one poll cycle.
+      await playground.hover();
 
       const state = page.locator(".steer-playground .phone-session-state");
       await state.waitFor({ state: "visible", timeout: 15000 });
@@ -159,10 +203,15 @@ try {
       const input = page.getByRole("textbox", { name: "Message to live session" });
       check(`${viewport.name}: phone composer is editable`, await input.isEditable());
 
+      // xterm intentionally pauses its renderer while it is offscreen. Bring
+      // the terminal into view before asserting its DOM-rendered rows.
+      await page.locator(".steer-live-terminal").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
       const rows =
         (await page.locator(".steer-playground .xterm-rows").innerText().catch(() => "")) || "";
       check(`${viewport.name}: no su/job-control noise`, !/su -p demo|job control/.test(rows));
       check(`${viewport.name}: shows the short claude command`, await showedCommand);
+      await page.evaluate(() => window.__landingQaCommandObserver?.disconnect());
 
       const fill = await page.evaluate(() => {
         const pane = document.querySelector(".steer-playground .hero-live-terminal");

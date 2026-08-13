@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { useDemoSeed } from "../../lib/demoSimulation";
 import { REMOTE_SCENE_DATA } from "./generated/sceneData";
 import { clampFrameIndex, decodeFrames } from "./sceneCodec";
 import {
@@ -10,7 +11,7 @@ import {
 import { RecordedSceneTerminal, type RecordedTerminalMode } from "./RecordedSceneTerminal";
 import {
   getRemoteSceneWorkState,
-  normalizeRemoteSceneFrame,
+  getRemoteScenePlaybackPosition,
   REMOTE_SCENE_LOOP_START_FRAME,
   REMOTE_SCENE_PLAYBACK_FRAME_COUNT,
   REMOTE_SCENE_PLAYBACK_LAST_FRAME,
@@ -76,10 +77,13 @@ export function RemoteScenePlayer() {
   const playerRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameIndexRef = useRef(0);
+  const absoluteFrameRef = useRef(0);
+  const workCycleRef = useRef(0);
   const [profileKey, setProfileKey] = useState<SceneProfileKey>(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches ? "mobile" : "desktop",
   );
   const [frameIndex, setFrameIndex] = useState(0);
+  const [workCycle, setWorkCycle] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [staticPreview, setStaticPreview] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -88,6 +92,7 @@ export function RemoteScenePlayer() {
     typeof document === "undefined" || !document.hidden,
   );
   const [terminalMode, setTerminalModeState] = useState<RecordedTerminalMode>(initialTerminalMode);
+  const demoSeed = useDemoSeed();
 
   const profile = REMOTE_SCENE_DATA.profiles[profileKey];
   const frames = useMemo(
@@ -162,12 +167,18 @@ export function RemoteScenePlayer() {
 
   useEffect(() => {
     if (!isPlaying || staticPreview || !isVisible || !isDocumentVisible) return;
-    const startedAt = performance.now() - frameIndexRef.current * (1000 / REMOTE_SCENE_DATA.fps);
+    const startedAt = performance.now() - absoluteFrameRef.current * (1000 / REMOTE_SCENE_DATA.fps);
     let animationFrame = 0;
     const tick = (now: number) => {
       const rawFrame = Math.floor((now - startedAt) / (1000 / REMOTE_SCENE_DATA.fps));
-      const nextFrame = normalizeRemoteSceneFrame(rawFrame);
+      const position = getRemoteScenePlaybackPosition(rawFrame);
+      const nextFrame = position.frameIndex;
+      absoluteFrameRef.current = rawFrame;
       frameIndexRef.current = nextFrame;
+      if (position.workCycle !== workCycleRef.current) {
+        workCycleRef.current = position.workCycle;
+        setWorkCycle(position.workCycle);
+      }
       setFrameIndex(nextFrame);
       animationFrame = requestAnimationFrame(tick);
     };
@@ -177,16 +188,18 @@ export function RemoteScenePlayer() {
 
   const safeFrameIndex = clampFrameIndex(frameIndex, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
   const sceneFrameIndex = Math.min(safeFrameIndex, sceneLastFrame);
-  const workState = getRemoteSceneWorkState(safeFrameIndex);
+  const workState = getRemoteSceneWorkState(safeFrameIndex, demoSeed, workCycle);
   const phoneState = safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME
     ? getPhoneSceneState(sceneFrameIndex)
     : workState.phase === "queued"
-      ? { key: "queued", status: "NEXT", message: "Instruction received", detail: "studio-mac" }
+      ? { key: "queued", status: "NEXT", message: workState.message, detail: workState.detail }
       : workState.phase === "working"
-        ? { key: "live", status: "LIVE", message: "Working", detail: "studio-mac" }
-        : { key: "complete", status: "DONE", message: "Ready for input", detail: "studio-mac" };
+        ? { key: "live", status: "LIVE", message: workState.message, detail: workState.detail }
+        : { key: "complete", status: "DONE", message: workState.message, detail: workState.detail };
   const caption = safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME
     ? getSceneCaption(sceneFrameIndex)
+    : workCycle === 0 && safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME + 18
+      ? "simulated continuation"
     : workState.phase === "queued"
       ? "another instruction arrives"
       : workState.phase === "working"
@@ -229,7 +242,10 @@ export function RemoteScenePlayer() {
 
   const setFrame = (nextFrame: number) => {
     const safeNextFrame = clampFrameIndex(nextFrame, REMOTE_SCENE_PLAYBACK_FRAME_COUNT);
+    absoluteFrameRef.current = safeNextFrame;
     frameIndexRef.current = safeNextFrame;
+    workCycleRef.current = 0;
+    setWorkCycle(0);
     setFrameIndex(safeNextFrame);
   };
 
@@ -259,6 +275,7 @@ export function RemoteScenePlayer() {
         data-scene-frame={sceneFrameIndex}
         data-work-task={workState.id}
         data-work-phase={workState.phase}
+        data-work-cycle={workCycle}
       >
         <div className="remote-scene-world">
           <canvas ref={canvasRef} aria-hidden="true" />
@@ -266,6 +283,7 @@ export function RemoteScenePlayer() {
             mode={terminalMode}
             replaySecond={workState.replaySecond}
             timeline={workState.timeline}
+            sourceLabel={safeFrameIndex < REMOTE_SCENE_LOOP_START_FRAME ? "recorded PTY" : "simulated continuation"}
           />
           <div className={`remote-scene-phone-overlay remote-scene-phone-overlay--${phoneState.key}`} aria-label="Crisp phone status overlay">
             <div className="remote-scene-phone-heading"><strong>Longhouse</strong></div>
@@ -319,8 +337,8 @@ export function RemoteScenePlayer() {
           <span>{prefersReducedMotion ? "Reduced motion preference detected" : `One-shot scene · continuous ${profileKey} work loop`}</span>
           <span>Frame {String(safeFrameIndex).padStart(3, "0")} / {lastFrame}</span>
         </div>
-        <div className="remote-scene-variant-row" role="group" aria-label="Recorded terminal composition">
-          <span>Real PTY composition</span>
+        <div className="remote-scene-variant-row" role="group" aria-label="Terminal composition">
+          <span>Terminal composition</span>
           <button type="button" aria-pressed={terminalMode === "inset"} onClick={() => setTerminalMode("inset")}>In monitor</button>
           <button type="button" aria-pressed={terminalMode === "cutin"} onClick={() => setTerminalMode("cutin")}>Foreground cut-in</button>
         </div>

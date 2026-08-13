@@ -309,6 +309,10 @@
     white-space: nowrap;
   }
 
+  .hero-install-text span {
+    white-space: nowrap;
+  }
+
   .hero-install-copy {
     display: grid;
     flex: 0 0 auto;
@@ -2782,9 +2786,9 @@
 
     .hero-install-text {
       overflow: visible;
+      font-size: 0.65rem;
       text-overflow: clip;
       white-space: normal;
-      overflow-wrap: anywhere;
     }
 
     .hero-install-extras {

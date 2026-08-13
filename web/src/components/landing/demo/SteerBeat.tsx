@@ -9,6 +9,7 @@ import {
   steerSentAtSec,
   steerWindow,
 } from "@longhouse/video/demo";
+import type { DemoStory } from "../../../lib/demoSimulation";
 import { ResponsiveTerminal } from "./ResponsiveTerminal";
 import { ramp } from "./ease";
 
@@ -20,33 +21,38 @@ import { ramp } from "./ease";
  * card always shows exactly what the session received.
  */
 
-const MESSAGE = recordingPrompt(claudeTile);
-const WINDOW = steerWindow(claudeTile);
-const SENT_AT = steerSentAtSec(MESSAGE);
+const REAL_MESSAGE = recordingPrompt(claudeTile);
+const REAL_WINDOW = steerWindow(claudeTile);
 
-function Beat({ tLocal }: { tLocal: number }) {
+function Beat({ tLocal, story }: { tLocal: number; story: DemoStory | null }) {
   const claude = PROVIDERS[0];
+  const message = story?.prompt ?? REAL_MESSAGE;
+  const timeline = story?.timeline ?? claudeTile;
+  const window = story
+    ? steerWindow(story.timeline, story.durationSec)
+    : REAL_WINDOW;
+  const sentAt = steerSentAtSec(message);
   const cardIn = ramp(tLocal, 0.05, 0.45);
 
   const shown = Math.max(
     0,
     Math.min(
-      MESSAGE.length,
+      message.length,
       Math.floor((tLocal - STEER_TYPE_START_SEC) * STEER_CHARS_PER_SEC),
     ),
   );
-  const typed = MESSAGE.slice(0, shown);
-  const sent = shown >= MESSAGE.length;
+  const typed = message.slice(0, shown);
+  const sent = shown >= message.length;
   const caretOn = Math.floor(tLocal * 3.75) % 2 === 0;
 
   // Pre-send: hold on the idle composer. Post-send: roll from AFTER the
   // take's typing segment — a remote send arrives as one paste.
   const replayT = sent
     ? Math.min(
-        WINDOW.startSec + Math.max(0, tLocal - (SENT_AT + STEER_REACT_DELAY_SEC)),
-        WINDOW.endSec,
+        window.startSec + Math.max(0, tLocal - (sentAt + STEER_REACT_DELAY_SEC)),
+        window.endSec,
       )
-    : WINDOW.holdSec;
+    : window.holdSec;
 
   return (
     <div className="hero-demo-steer">
@@ -58,7 +64,7 @@ function Beat({ tLocal }: { tLocal: number }) {
         }}
       >
         <div className="hero-demo-steer-meta">
-          <span className="hero-demo-steer-task">{claude.task}</span>
+          <span className="hero-demo-steer-task">{story?.shortLabel ?? claude.task}</span>
           <span className="hero-demo-steer-session">
             <span style={{ color: claude.color }}>{claude.name}</span>
             {" · "}
@@ -85,7 +91,7 @@ function Beat({ tLocal }: { tLocal: number }) {
       />
 
       <ResponsiveTerminal
-        timeline={claudeTile}
+        timeline={timeline}
         tSec={replayT}
         title={claude.name}
         accent={claude.color}

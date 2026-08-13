@@ -7,6 +7,7 @@ import {
   beatWindows,
   type BeatId,
 } from "@longhouse/video/demo";
+import { generateDemoStory, useDemoSeed, type DemoStory } from "../../../lib/demoSimulation";
 import { useDemoClock } from "./useDemoClock";
 import { AgentsBeat } from "./AgentsBeat";
 import { UnifyBeat } from "./UnifyBeat";
@@ -24,7 +25,12 @@ import { clamp, clamp01 } from "./ease";
  * video/src/demo/script.ts, shared with the mp4 export composition.
  */
 
-const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<{ tLocal: number }>> = {
+interface BeatProps {
+  tLocal: number;
+  story: DemoStory | null;
+}
+
+const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<BeatProps>> = {
   agents: AgentsBeat,
   unify: UnifyBeat,
   steer: SteerBeat,
@@ -32,7 +38,12 @@ const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<{ tLocal: number }>> =
 };
 
 export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) {
-  const { tSec, seek, containerRef } = useDemoClock(DEMO_DURATION_SEC, POSTER_SEC);
+  const { tSec, cycle, seek, containerRef } = useDemoClock(DEMO_DURATION_SEC, POSTER_SEC);
+  const seed = useDemoSeed();
+  const story = useMemo(
+    () => cycle === 0 ? null : generateDemoStory(seed, cycle - 1),
+    [cycle, seed],
+  );
   const windows = useMemo(() => beatWindows(), []);
 
   const activeIndex = windows.reduce(
@@ -41,7 +52,14 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
   );
 
   return (
-    <div ref={containerRef} className="hero-demo" role="group" aria-label={ariaLabel}>
+    <div
+      ref={containerRef}
+      className="hero-demo"
+      role="group"
+      aria-label={ariaLabel}
+      data-demo-cycle={cycle}
+      data-demo-story={story?.id ?? "recorded"}
+    >
       <div className="hero-demo-stage">
         {windows.map((w, i) => {
           const local = tSec - w.startSec;
@@ -64,7 +82,7 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
               }}
               aria-hidden={i !== activeIndex}
             >
-              <BeatComponent tLocal={clamp(local, 0, w.durSec)} />
+              <BeatComponent tLocal={clamp(local, 0, w.durSec)} story={story} />
             </div>
           );
         })}

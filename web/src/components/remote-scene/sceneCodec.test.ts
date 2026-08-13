@@ -8,6 +8,7 @@ import { projectPoint, type CameraFrame } from "./sceneMath";
 import { clampFrameIndex, decodeFrame, decodeFrames, encodeFrame } from "./sceneCodec";
 import {
   getRemoteSceneWorkState,
+  getRemoteScenePlaybackPosition,
   normalizeRemoteSceneFrame,
   REMOTE_SCENE_LOOP_START_FRAME,
   REMOTE_SCENE_PLAYBACK_FRAME_COUNT,
@@ -71,8 +72,8 @@ describe("cinematic source projection", () => {
   });
 });
 
-describe("recorded PTY synchronization", () => {
-  it("keeps the opening take synchronized, then advances through real follow-up takes", () => {
+describe("terminal story synchronization", () => {
+  it("keeps the recorded opening synchronized, then advances through simulated follow-up tasks", () => {
     const openingHold = getRemoteSceneWorkState(0);
     const openingAction = getRemoteSceneWorkState(33);
     const openingComplete = getRemoteSceneWorkState(143);
@@ -98,8 +99,12 @@ describe("recorded PTY synchronization", () => {
     expect(normalizeRemoteSceneFrame(REMOTE_SCENE_PLAYBACK_LAST_FRAME)).toBe(431);
     expect(normalizeRemoteSceneFrame(REMOTE_SCENE_PLAYBACK_FRAME_COUNT)).toBe(REMOTE_SCENE_LOOP_START_FRAME);
     expect(normalizeRemoteSceneFrame(REMOTE_SCENE_PLAYBACK_FRAME_COUNT + 287)).toBe(431);
-    expect(getRemoteSceneWorkState(REMOTE_SCENE_PLAYBACK_FRAME_COUNT).id)
-      .toBe(getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME).id);
+    expect(getRemoteScenePlaybackPosition(REMOTE_SCENE_PLAYBACK_FRAME_COUNT)).toEqual({
+      frameIndex: REMOTE_SCENE_LOOP_START_FRAME,
+      workCycle: 1,
+    });
+    expect(getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME, "qa", 1).id)
+      .not.toBe(getRemoteSceneWorkState(REMOTE_SCENE_LOOP_START_FRAME, "qa", 0).id);
   });
 });
 
