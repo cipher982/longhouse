@@ -53,6 +53,10 @@ def _atomic_json(path: Path, payload: Any) -> None:
     identity.atomic_json(path, payload)
 
 
+def _atomic_canonical_json(path: Path, payload: Any) -> None:
+    identity.atomic_json(path, payload, canonical=True)
+
+
 def _load_request_for_profile(path: Path, profile: str) -> dict[str, Any]:
     return identity.load_request(path, provider="codex", profile=profile)
 

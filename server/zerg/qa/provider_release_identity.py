@@ -104,12 +104,15 @@ def sha256_file(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def atomic_json(path: Path, payload: Any) -> None:
+def atomic_json(path: Path, payload: Any, *, canonical: bool = False) -> None:
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
+            if canonical:
+                json.dump(payload, handle, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True)
+            else:
+                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(name, path)

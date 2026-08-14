@@ -370,7 +370,7 @@ def emit_proof_bundle(
                 "qualification_request_metadata": qualification_request.metadata_payload(request),
             }
         )
-    identity_bridge._atomic_json(output_root / "proof-bundle.json", bundle)  # noqa: SLF001
+    identity_bridge._atomic_canonical_json(output_root / "proof-bundle.json", bundle)  # noqa: SLF001
     return {
         "valid": True,
         "output_root": str(output_root),
