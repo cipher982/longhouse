@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
@@ -92,6 +93,11 @@ from zerg.services.session_title import structured_fallback_title
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
+
+# Log a stage breakdown when one write crosses this. Matched to the hosted hot
+# API p95 budget (speed-of-light-database.md) so the log names writes that can
+# push a caller past it, rather than narrating ordinary work.
+_STAGE_TIMER_SLOW_MS = float(os.getenv("CATALOGD_STAGE_SLOW_MS", "250"))
 
 DEVICE_TOKEN_LIMIT_PER_OWNER = 1_000
 SESSION_READ_LIMIT = 100
@@ -1726,7 +1732,14 @@ class CatalogStore:
         managed_leases_present: bool,
         owner_id: int | None,
     ) -> dict[str, Any]:
-        """Atomically persist and reconcile one hosted Machine Agent heartbeat."""
+        """Atomically persist and reconcile one hosted Machine Agent heartbeat.
+
+        Stage-timed because knowing this call is slow was not enough to act on.
+        catalogd's writer instrumentation showed it holding the single writer for
+        ~900ms with zero queue wait -- the cost is inside here, not in waiting to
+        get here -- but "inside here" spans a replay lookup, a retention delete,
+        two shadow projections and a commit. The breakdown is what says which.
+        """
 
         from zerg.services.live_session_state import mark_missing_live_sessions
         from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
@@ -1743,6 +1756,7 @@ class CatalogStore:
             owner_id=owner_id,
         )
         stamp = LiveHeartbeatStamp.__table__
+        timer = _StageTimer("apply_machine_heartbeat")
         with _write_transaction(self.engine) as connection:
             replay = (
                 connection.execute(
@@ -1754,6 +1768,7 @@ class CatalogStore:
                 .mappings()
                 .first()
             )
+            timer.mark("replay_lookup")
             if replay is not None:
                 if replay["request_sha256"] != request_sha256:
                     return {
@@ -1776,11 +1791,14 @@ class CatalogStore:
                 ).scalar_one_or_none()
                 previous_sessions_digest = str(previous or "").strip() or None
 
+            timer.mark("previous_digest")
             cutoff = received_at - timedelta(days=30)
             connection.execute(stamp.delete().where(stamp.c.device_id == device_id, stamp.c.received_at < cutoff))
+            timer.mark("retention_delete")
             stamp_id = connection.execute(
                 insert(stamp).values(**heartbeat, request_sha256=request_sha256).returning(stamp.c.id)
             ).scalar_one()
+            timer.mark("stamp_insert")
 
             lease_objects = [SimpleNamespace(**lease) for lease in managed_leases]
             touched: set[UUID] = set()
@@ -1827,14 +1845,17 @@ class CatalogStore:
                 raise
             finally:
                 orm.close()
+            timer.mark("lease_reconcile")
 
             commit_seq = _advance_commit_seq(connection, received_at)
+            timer.mark("advance_commit_seq")
             shadow_reducer = _apply_shadow_reducer(
                 connection,
                 heartbeat=heartbeat,
                 received_at=received_at,
                 commit_seq=commit_seq,
             )
+            timer.mark("shadow_reducer")
             shadow_parity, next_shadow_parity_delta_count = _apply_shadow_parity(
                 connection,
                 heartbeat=heartbeat,
@@ -1843,6 +1864,7 @@ class CatalogStore:
                 commit_seq=commit_seq,
                 known_delta_count=self._shadow_parity_delta_count,
             )
+            timer.mark("shadow_parity")
             result = {
                 "previous_sessions_digest": previous_sessions_digest,
                 "commit_seq": str(commit_seq),
@@ -1856,6 +1878,9 @@ class CatalogStore:
                 .where(stamp.c.id == stamp_id)
                 .values(catalog_result_json=json.dumps(result, sort_keys=True, separators=(",", ":")))
             )
+            timer.mark("result_update")
+        # The gap between the marks and the total is the transaction commit.
+        timer.log_if_slow()
         self._shadow_parity_delta_count = next_shadow_parity_delta_count
         return result
 
@@ -11444,6 +11469,53 @@ def _normalized_parity_axis(axis: str, value: object) -> str | None:
     if not normalized:
         return None
     return normalized.lower() if axis == "state" else normalized
+
+
+class _StageTimer:
+    """Attribute a slow write to a stage rather than to the whole function.
+
+    Deliberately dumb: a dict of elapsed milliseconds and one log line. It exists
+    because the alternative was reasoning about which of six plausible stages
+    costs a second, and reasoning is what produced two wrong hypotheses before
+    this one.
+    """
+
+    __slots__ = ("_label", "_stages", "_started", "_last")
+
+    def __init__(self, label: str) -> None:
+        self._label = label
+        self._stages: dict[str, float] = {}
+        self._started = time.perf_counter()
+        self._last = self._started
+
+    def mark(self, name: str) -> None:
+        """Close the stage that ends here.
+
+        A mark rather than a wrapping block: the stages are long multi-line
+        statements, and re-indenting them to instrument them would make the diff
+        about formatting instead of about measurement.
+        """
+
+        now = time.perf_counter()
+        self._stages[name] = self._stages.get(name, 0.0) + (now - self._last) * 1000.0
+        self._last = now
+
+    def log_if_slow(self) -> None:
+        total_ms = (time.perf_counter() - self._started) * 1000.0
+        if total_ms < _STAGE_TIMER_SLOW_MS:
+            return
+        # Unmeasured time is the transaction's own commit plus anything not
+        # wrapped. That is a real answer, so name it rather than let it hide in
+        # the gap between the stages and the total.
+        measured = sum(self._stages.values())
+        breakdown = " ".join(f"{name}={value:.0f}ms" for name, value in sorted(self._stages.items(), key=lambda item: -item[1]))
+        logging.getLogger(__name__).warning(
+            "%s took %.0fms: %s unmeasured=%.0fms",
+            self._label,
+            total_ms,
+            breakdown,
+            max(0.0, total_ms - measured),
+        )
 
 
 @contextmanager
