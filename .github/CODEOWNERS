@@ -1,0 +1,6 @@
+# Provider capability truth and its live qualification oracles.
+/server/zerg/qa/*resume*.py @cipher982
+/server/zerg/qa/*canary*.py @cipher982
+/server/zerg/qa/provider_resume_oracles.py @cipher982
+/server/zerg/qa/resume_assurance.py @cipher982
+/schemas/managed_providers.yml @cipher982
