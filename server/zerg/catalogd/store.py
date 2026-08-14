@@ -9351,6 +9351,25 @@ class CatalogStore:
             "checkpointed_frames": int(checkpointed_frames),
         }
 
+    def checkpoint_truncate(self) -> dict[str, int]:
+        """Reclaim the WAL file itself.
+
+        PASSIVE checkpoints reuse WAL space but never shrink the file, so the
+        on-disk WAL only ever records its own high-water mark -- 692 MB on the
+        dogfood tenant, long after the burst that caused it. TRUNCATE is the only
+        mode that gives the space back. It blocks, so callers must run it when
+        the writer is idle and treat `busy` as "try again later", never as an
+        error.
+        """
+
+        with self.engine.connect() as connection:
+            busy, log_frames, checkpointed_frames = connection.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)").one()
+        return {
+            "busy": int(busy),
+            "log_frames": int(log_frames),
+            "checkpointed_frames": int(checkpointed_frames),
+        }
+
 
 def _storage_catalog_compat_row(row) -> dict[str, Any]:
     ai_title = str(row["anchor_title"] or "").strip()

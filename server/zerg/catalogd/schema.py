@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -430,6 +431,18 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
 
     engine = create_engine(database_url, **kwargs)
 
+    # Sized for the machine, not the database. `cache_size` is per connection and
+    # this engine is pooled, so the number that matters is the aggregate across
+    # live connections on a host with a few GB free -- not what would "cover" a
+    # multi-GB catalog, which is unreachable anyway and duplicates the kernel
+    # page cache. `mmap_size` is an address-space ceiling, demand-paged rather
+    # than reserved, and it maps the main database only: the WAL still goes
+    # through the pager, so this helps reads and does nothing for write
+    # queueing. Both are overridable because the right values depend on the
+    # deployment's RAM, which this module cannot see.
+    cache_size_kib = os.getenv("CATALOGD_CACHE_SIZE_KIB", "65536")
+    mmap_size_bytes = os.getenv("CATALOGD_MMAP_SIZE_BYTES", str(1024 * 1024 * 1024))
+
     @event.listens_for(engine, "connect")
     def _configure_connection(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
@@ -439,6 +452,10 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             cursor.execute("PRAGMA wal_autocheckpoint=0")
+            # Negative cache_size is KiB rather than pages.
+            cursor.execute(f"PRAGMA cache_size=-{int(cache_size_kib)}")
+            cursor.execute(f"PRAGMA mmap_size={int(mmap_size_bytes)}")
+            cursor.execute("PRAGMA temp_store=MEMORY")
         finally:
             cursor.close()
 

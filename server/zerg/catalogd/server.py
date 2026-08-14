@@ -9,9 +9,11 @@ import logging
 import os
 import re
 import stat
+import threading
 import time
 import unicodedata
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import UTC
@@ -40,6 +42,93 @@ logger = logging.getLogger(__name__)
 # past the RPC deadline. Eight remains bounded to the normal hosted core count
 # while preserving one admission wave for active interactive traffic.
 CATALOG_INTERACTIVE_READ_WORKERS = 8
+
+# Log any single write that holds the shared writer longer than this. Set near
+# the hosted hot-API p95 budget (250 ms, speed-of-light-database.md) so the log
+# names operations that can push a caller past it, rather than narrating normal
+# work.
+CATALOG_WRITER_SLOW_MS_DEFAULT = 250.0
+
+# Rolling window per label. Bounded so a long-lived daemon cannot grow memory,
+# large enough that a percentile over it means something.
+_WRITER_HISTOGRAM_WINDOW = 256
+
+
+class CatalogWriterStats:
+    """Queue wait and execution time for the single catalogd writer.
+
+    catalogd previously recorded nothing at all, so a write that waited a second
+    behind bulk ingest was indistinguishable from an unreachable host -- which
+    is exactly how one was misdiagnosed as the other. Percentiles are exact over
+    a bounded deque rather than estimated, because the interesting signal here is
+    the tail and there are few enough samples for sorting to be free.
+    """
+
+    def __init__(self) -> None:
+        self._queue_wait: dict[str, deque[float]] = {}
+        self._exec: dict[str, deque[float]] = {}
+        self._counts: dict[str, int] = {}
+        self._depth = 0
+        self._peak_depth = 0
+        self._active_label: str | None = None
+        self._active_since: float | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def depth(self) -> int:
+        return self._depth
+
+    def record_enqueue(self) -> None:
+        with self._lock:
+            self._depth += 1
+            self._peak_depth = max(self._peak_depth, self._depth)
+
+    def record_dequeue(self) -> None:
+        with self._lock:
+            self._depth = max(0, self._depth - 1)
+
+    def mark_active(self, label: str, _queue_wait_ms: float) -> None:
+        with self._lock:
+            self._active_label = label
+            self._active_since = time.perf_counter()
+
+    def record(self, label: str, queue_wait_ms: float, exec_ms: float) -> None:
+        with self._lock:
+            self._queue_wait.setdefault(label, deque(maxlen=_WRITER_HISTOGRAM_WINDOW)).append(queue_wait_ms)
+            self._exec.setdefault(label, deque(maxlen=_WRITER_HISTOGRAM_WINDOW)).append(exec_ms)
+            self._counts[label] = self._counts.get(label, 0) + 1
+            self._active_label = None
+            self._active_since = None
+
+    @staticmethod
+    def _percentiles(samples) -> dict[str, float]:
+        if not samples:
+            return {"p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0}
+        ordered = sorted(samples)
+
+        def at(q: int) -> float:
+            return round(ordered[min(len(ordered) - 1, int(len(ordered) * q / 100))], 2)
+
+        return {"p50": at(50), "p95": at(95), "p99": at(99), "max": round(ordered[-1], 2)}
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            labels = {
+                label: {
+                    "n": self._counts.get(label, 0),
+                    "queue_wait_ms": self._percentiles(self._queue_wait.get(label)),
+                    "exec_ms": self._percentiles(self._exec.get(label)),
+                }
+                for label in sorted(self._counts)
+            }
+            active_age_ms = round((time.perf_counter() - self._active_since) * 1000.0, 2) if self._active_since else 0.0
+            return {
+                "depth": self._depth,
+                "peak_depth": self._peak_depth,
+                "active_label": self._active_label,
+                "active_age_ms": active_age_ms,
+                "labels": labels,
+            }
 
 
 class CatalogDaemonError(RuntimeError):
@@ -72,6 +161,10 @@ class CatalogDaemon:
         self._projector_read_executor: ThreadPoolExecutor | None = None
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
+        self._maintenance_executor: ThreadPoolExecutor | None = None
+        self._writer_stats = CatalogWriterStats()
+        self._writer_slow_ms = float(os.getenv("CATALOGD_WRITER_SLOW_MS", str(CATALOG_WRITER_SLOW_MS_DEFAULT)))
+        self._wal_reclaim_bytes = int(os.getenv("CATALOGD_WAL_RECLAIM_BYTES", str(256 * 1024 * 1024)))
 
     async def start(self) -> CatalogMeta:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +186,12 @@ class CatalogDaemon:
                 thread_name_prefix="catalogd-read",
             )
             self._projector_read_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="catalogd-projector-read")
+            # A PASSIVE checkpoint yields instead of blocking, so it does not
+            # need the writer's exclusivity -- it only ever needed a thread.
+            # Running it on the writer meant a periodic maintenance burst
+            # head-of-line blocked every interactive write. One worker keeps
+            # checkpoints from overlapping each other.
+            self._maintenance_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-maintenance")
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
             self._store.ensure_known_projector_states()
@@ -161,6 +260,9 @@ class CatalogDaemon:
         if self._projector_read_executor is not None:
             self._projector_read_executor.shutdown(wait=True, cancel_futures=True)
             self._projector_read_executor = None
+        if self._maintenance_executor is not None:
+            self._maintenance_executor.shutdown(wait=True, cancel_futures=True)
+            self._maintenance_executor = None
         if self._engine is not None:
             self._engine.dispose()
             self._engine = None
@@ -3050,7 +3152,38 @@ class CatalogDaemon:
         if self._executor is None:
             raise CatalogDaemonError("catalog executor is not ready")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, lambda: operation(*args, **kwargs))
+        # Everything serialized here shares one thread, so a caller's latency is
+        # mostly other callers' execution. Recording only total time would keep
+        # the interesting half invisible: queue wait is what turns a healthy
+        # host into a reported outage, and without a label nobody can say which
+        # operation held the writer. This is the cheapest form that answers
+        # "who blocked me, and for how long".
+        label = getattr(operation, "__name__", "unknown")
+        enqueued_at = time.perf_counter()
+        self._writer_stats.record_enqueue()
+        try:
+            result = await loop.run_in_executor(self._executor, lambda: self._run_store_timed(label, enqueued_at, operation, args, kwargs))
+        finally:
+            self._writer_stats.record_dequeue()
+        return result
+
+    def _run_store_timed(self, label, enqueued_at, operation, args, kwargs):
+        started_at = time.perf_counter()
+        queue_wait_ms = (started_at - enqueued_at) * 1000.0
+        self._writer_stats.mark_active(label, queue_wait_ms)
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            exec_ms = (time.perf_counter() - started_at) * 1000.0
+            self._writer_stats.record(label, queue_wait_ms, exec_ms)
+            if exec_ms >= self._writer_slow_ms:
+                logger.warning(
+                    "catalogd writer held for %.0fms by %s (queue wait %.0fms, depth %d)",
+                    exec_ms,
+                    label,
+                    queue_wait_ms,
+                    self._writer_stats.depth,
+                )
 
     async def _runner_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"operation", "params"}:
@@ -3117,12 +3250,83 @@ class CatalogDaemon:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._projector_read_executor, lambda: operation(*args, **kwargs))
 
+    async def _reclaim_wal_when_idle(self) -> None:
+        """Give the WAL file's disk space back once it has outgrown its use.
+
+        Only when the writer is idle: TRUNCATE blocks, so doing this under load
+        would recreate the stall this whole change removes. A `busy` result is
+        an ordinary "not now", not a failure.
+        """
+
+        if self._writer_stats.depth > 0:
+            return
+        wal_path = self.database_path.with_name(self.database_path.name + "-wal")
+        try:
+            wal_bytes = wal_path.stat().st_size
+        except OSError:
+            return
+        if wal_bytes < self._wal_reclaim_bytes:
+            return
+        try:
+            result = await self._run_maintenance(self._store.checkpoint_truncate)
+        except Exception:
+            logger.exception("catalogd WAL reclaim failed")
+            return
+        if not result.get("busy"):
+            logger.info("catalogd reclaimed WAL file from %d bytes", wal_bytes)
+
+    async def _run_maintenance(self, operation, *args, **kwargs):
+        if self._maintenance_executor is None:
+            raise CatalogDaemonError("catalog maintenance executor is not ready")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._maintenance_executor, lambda: operation(*args, **kwargs))
+
     async def _checkpoint_loop(self) -> None:
         assert self._store is not None
         while True:
             await asyncio.sleep(self._checkpoint_interval_seconds)
             try:
-                await self._run_store(self._store.checkpoint_passive)
+                # Only the checkpoint leaves the writer. `expire_due_interactions`
+                # and `reap_stale_control_operations` take BEGIN IMMEDIATE, so
+                # moving them would trade a queue we control for SQLite's write
+                # lock and a busy_timeout we do not.
+                started_at = time.perf_counter()
+                checkpoint = await self._run_maintenance(self._store.checkpoint_passive)
+                elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+                # The result used to be discarded, which made checkpoint
+                # starvation and cost unobservable: a PASSIVE checkpoint yields
+                # to readers, so `busy=1` with zero frames reclaimed is the
+                # signature of a WAL that will grow without bound.
+                if checkpoint.get("busy") or elapsed_ms >= self._writer_slow_ms:
+                    logger.warning(
+                        "catalogd checkpoint busy=%s log_frames=%s checkpointed=%s elapsed=%.0fms",
+                        checkpoint.get("busy"),
+                        checkpoint.get("log_frames"),
+                        checkpoint.get("checkpointed_frames"),
+                        elapsed_ms,
+                    )
+                else:
+                    logger.debug(
+                        "catalogd checkpoint log_frames=%s checkpointed=%s elapsed=%.0fms",
+                        checkpoint.get("log_frames"),
+                        checkpoint.get("checkpointed_frames"),
+                        elapsed_ms,
+                    )
+                await self._reclaim_wal_when_idle()
+                # Attribution, not narration: one line naming who has been
+                # holding the writer and how long callers waited for it. Without
+                # this the tail is only ever a number nobody can act on.
+                stats = self._writer_stats.snapshot()
+                if stats["labels"]:
+                    worst = max(stats["labels"].items(), key=lambda item: item[1]["exec_ms"]["p99"])
+                    logger.info(
+                        "catalogd writer depth=%d peak=%d slowest=%s exec_p99=%.0fms queue_wait_p99=%.0fms",
+                        stats["depth"],
+                        stats["peak_depth"],
+                        worst[0],
+                        worst[1]["exec_ms"]["p99"],
+                        worst[1]["queue_wait_ms"]["p99"],
+                    )
                 # Deadline cleanup is catalog maintenance, not a side effect
                 # of interactive reads. This yields one canonical terminal
                 # fact without turning each timeline poll into a global write.
