@@ -322,6 +322,8 @@ class CatalogDaemon:
             return await self._resume_local_launch(request)
         if request.method == "session.launch.local.finish.v2":
             return await self._finish_local_launch(request)
+        if request.method == "catalogd.session.reclassify_origin.v2":
+            return await self._reclassify_session_origin(request)
         if request.method == "interaction.register.v2":
             return await self._register_interaction(request)
         if request.method == "interaction.list.v2":
@@ -934,6 +936,22 @@ class CatalogDaemon:
         result = await self._run_store(self._store.upsert_notification_presence, **params)
         if result.get("idempotency_conflict") is True:
             return self._error(request, "conflict", "presence identity was reused with different content")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _reclassify_session_origin(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "origin_kind", "observed_at"}:
+            return self._error(request, "invalid_request", "catalogd.session.reclassify_origin.v2 has invalid parameters")
+        params = dict(request.params)
+        if not isinstance(params["session_id"], str) or not params["session_id"]:
+            return self._error(request, "invalid_request", "session_id must be a non-empty string")
+        if params["origin_kind"] not in ("hatch_automation", "test_or_canary"):
+            return self._error(request, "invalid_request", "origin_kind must be hatch_automation or test_or_canary")
+        try:
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.reclassify_session_origin, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_visible_notification_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

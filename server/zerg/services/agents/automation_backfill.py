@@ -228,3 +228,57 @@ def classify_reviewed_hatch_automation_sessions(
         already_marked_session_ids=already_marked,
         heuristic_candidates=find_hatch_automation_candidates(db, limit=candidate_limit),
     )
+
+
+def reclassify_catalogd_origins(
+    session_ids: list[str],
+    origin_kind: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Reclassify reviewed sessions on the catalogd/storage side (worklog line).
+
+    The agents-ORM write fixes the legacy timeline; the worklog projection reads
+    the durable StorageSession via searchd, so the same reviewed IDs must also be
+    reclassified through catalogd's single-writer transaction. Fail-loud per
+    session: a catalogd error is reported, never swallowed.
+    """
+
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.client import call_catalogd_sync
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    try:
+        _, socket_path = catalogd_paths()
+    except (RuntimeError, OSError) as exc:
+        return {
+            "applied_catalogd_session_ids": [],
+            "failed_catalogd_session_ids": [{"session_id": "", "error": f"catalogd unavailable: {exc}"}],
+            "catalogd_unavailable": True,
+        }
+    applied: list[str] = []
+    failed: list[dict[str, str]] = []
+    for session_id in session_ids:
+        try:
+            result = call_catalogd_sync(
+                socket_path,
+                "catalogd.session.reclassify_origin.v2",
+                params={
+                    "session_id": session_id,
+                    "origin_kind": origin_kind,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                },
+                timeout_seconds=timeout_seconds,
+            )
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            failed.append({"session_id": session_id, "error": str(exc)})
+            continue
+        if result.get("reclassified") is True:
+            applied.append(session_id)
+        else:
+            failed.append({"session_id": session_id, "error": "not found or not reclassified"})
+    return {"applied_catalogd_session_ids": applied, "failed_catalogd_session_ids": failed}

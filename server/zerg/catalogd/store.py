@@ -4912,6 +4912,51 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
+    def reclassify_session_origin(
+        self,
+        *,
+        session_id: str,
+        origin_kind: str,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Reclassify a session's hidden origin across the hot and durable stores.
+
+        Operational backfill for already-archived automation rows: flips
+        ``origin_kind`` + ``hidden_from_default_timeline`` on the live catalog,
+        timeline card, thread rows, and the durable storage session in one write
+        transaction. Not content-derived and not a user-hide.
+        """
+
+        normalized = str(origin_kind or "").strip().lower().replace("-", "_")
+        if normalized not in ("hatch_automation", "test_or_canary"):
+            return {"invalid_origin_kind": True}
+        session_key = str(session_id)
+        with _write_transaction(self.engine) as connection:
+            changed_rows = 0
+            for table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__, StorageSession.__table__):
+                result = connection.execute(
+                    update(table)
+                    .where(table.c.session_id == session_key)
+                    .values(
+                        origin_kind=normalized,
+                        hidden_from_default_timeline=1,
+                        updated_at=observed_at,
+                    )
+                )
+                changed_rows += int(result.rowcount or 0)
+            thread_result = connection.execute(
+                update(LiveSessionThread.__table__)
+                .where(LiveSessionThread.__table__.c.session_id == session_key)
+                .values(
+                    origin_kind=normalized,
+                    hidden_from_default_timeline=1,
+                    updated_at=observed_at,
+                )
+            )
+            changed_rows += int(thread_result.rowcount or 0)
+            commit_seq = _advance_commit_seq(connection, observed_at)
+        return {"reclassified": changed_rows > 0, "rows_changed": changed_rows, "commit_seq": str(commit_seq)}
+
     def update_session_preferences(
         self,
         *,

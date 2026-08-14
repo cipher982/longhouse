@@ -481,6 +481,7 @@ def db_classify_automation(
     from zerg.services.agents.automation_backfill import classify_reviewed_hatch_automation_sessions
     from zerg.services.agents.automation_backfill import find_benchmark_candidates
     from zerg.services.agents.automation_backfill import find_test_or_canary_candidates
+    from zerg.services.agents.automation_backfill import reclassify_catalogd_origins
 
     if apply_changes and not session_ids:
         typer.echo("--apply requires at least one reviewed --session-id.", err=True)
@@ -493,6 +494,7 @@ def db_classify_automation(
     engine, resolved_database_url = _resolve_db_engine(database_url)
     SessionLocal = make_sessionmaker(engine)
     db = SessionLocal()
+    catalogd_result = None
     try:
         result = classify_reviewed_hatch_automation_sessions(
             db,
@@ -503,6 +505,8 @@ def db_classify_automation(
         )
         qa_candidates = find_test_or_canary_candidates(db, limit=candidate_limit)
         benchmark_candidates = find_benchmark_candidates(db, limit=candidate_limit)
+        if apply_changes and result.applied_session_ids:
+            catalogd_result = reclassify_catalogd_origins(result.applied_session_ids, normalized_origin_kind)
     finally:
         db.close()
 
@@ -515,6 +519,8 @@ def db_classify_automation(
         **result.to_dict(),
         "qa_probe_candidate_count": len(qa_candidates),
         "benchmark_candidate_count": len(benchmark_candidates),
+        "catalogd_applied": (catalogd_result or {}).get("applied_catalogd_session_ids", []),
+        "catalogd_failed": (catalogd_result or {}).get("failed_catalogd_session_ids", []),
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -528,6 +534,11 @@ def db_classify_automation(
         typer.echo(f"Missing session ids: {', '.join(result.missing_session_ids)}")
     if result.already_marked_session_ids:
         typer.echo(f"Already marked: {', '.join(result.already_marked_session_ids)}")
+    if catalogd_result is not None:
+        typer.echo(
+            f"Catalogd/storage reclassified: {len(catalogd_result['applied_catalogd_session_ids'])}; "
+            f"failed: {len(catalogd_result['failed_catalogd_session_ids'])}"
+        )
     typer.echo(f"Heuristic candidates (report-only): {len(result.heuristic_candidates)}")
     for candidate in result.heuristic_candidates[:10]:
         typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
