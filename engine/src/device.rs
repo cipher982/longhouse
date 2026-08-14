@@ -871,10 +871,16 @@ fn collect_managed_launch_recovery(
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
-            let payload = match std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            {
+            let raw = match std::fs::read_to_string(&path) {
+                Ok(raw) => Some(raw),
+                // A receipt retired between this scan's readdir and its read is
+                // ordinary: settling and pruning both rewrite this directory
+                // while health walks it. Only a receipt that is present and
+                // unreadable is evidence that something is wrong.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => None,
+            };
+            let payload = match raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) {
                 Some(Value::Object(payload)) => payload,
                 _ => {
                     scan_error = true;

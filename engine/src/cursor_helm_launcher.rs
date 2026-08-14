@@ -979,9 +979,7 @@ fn register(
         },
         &payload,
         Some(session_id),
-        // A healthy host answers well inside this window. A slow or missing one
-        // must not stop a new Cursor Helm session from starting.
-        std::time::Duration::from_millis(2000),
+        crate::managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
     );
     match registration {
         Ok(response) => {
@@ -994,7 +992,11 @@ fn register(
         Err(error) if resume_provider_thread_id.is_some() => Err(error),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Cursor without Longhouse control because registration failed ({error:#})"
+                "Longhouse warning: starting Cursor unregistered ({}); registration continues in the background",
+                crate::managed_launch_lifecycle::registration_failure_summary(
+                    &error,
+                    crate::managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
+                )
             );
             Ok((None, payload))
         }

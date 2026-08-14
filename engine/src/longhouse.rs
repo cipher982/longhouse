@@ -1154,15 +1154,17 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         },
         &payload,
         expected_session_id,
-        // A healthy host normally answers within this window. A slower or
-        // unavailable host must not hold either a new or resumed provider TUI.
-        Duration::from_millis(2000),
+        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
     );
     let mut response: Option<ManagedLaunchResponse> = match registration {
         Ok(response) => Some(response),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Claude without Longhouse control because registration failed ({error:#})"
+                "Longhouse warning: starting Claude unregistered ({}); registration continues in the background",
+                managed_launch_lifecycle::registration_failure_summary(
+                    &error,
+                    managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
+                )
             );
             None
         }
@@ -1441,7 +1443,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         },
         &payload,
         expected_session_id.as_deref(),
-        Duration::from_millis(2000),
+        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
     );
     let response = match registration {
         Ok(response) => Some(response),
@@ -1449,7 +1451,11 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         Err(error) if resume_target.is_some() => return Err(error),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting OpenCode without Longhouse control because registration failed ({error:#})"
+                "Longhouse warning: starting OpenCode unregistered ({}); registration continues in the background",
+                managed_launch_lifecycle::registration_failure_summary(
+                    &error,
+                    managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
+                )
             );
             None
         }
@@ -2060,7 +2066,7 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         "Pi",
         &payload,
         expected_session_id.as_deref(),
-        Duration::from_millis(2000),
+        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
     ) {
         Ok(response) => Some(response),
         Err(error) => {
@@ -2181,14 +2187,16 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         "Codex",
         &payload,
         expected_session_id.as_deref(),
-        // A healthy host answers well inside this window. A slow or missing one
-        // must not hold the provider TUI.
-        Duration::from_millis(2000),
+        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
     ) {
         Ok(response) => Some(response),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Codex without Longhouse control because registration failed ({error:#})"
+                "Longhouse warning: starting Codex unregistered ({}); registration continues in the background",
+                managed_launch_lifecycle::registration_failure_summary(
+                    &error,
+                    managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
+                )
             );
             None
         }

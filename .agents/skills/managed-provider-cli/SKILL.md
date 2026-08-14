@@ -29,7 +29,12 @@ sessions.
 - Helm creation is terminal-originated through `longhouse claude`; the Machine
   Agent has no remote Helm-originating launch command.
 - Longhouse's channel is a private MCP server, not an Anthropic allowlisted
-  channel plugin.
+  channel plugin. Because it arrives via `--mcp-config`, Claude's startup banner
+  always prints `server:longhouse-channel · no MCP server configured with that
+  name` — its channel validator only enumerates the persisted config scopes.
+  The warning is cosmetic; delivery works. Prove liveness with
+  `longhouse-engine claude-channel inspect --session-id <id>` and a real
+  `claude-channel send`, never with the banner.
 - Claude hook tokens must be passed through process env, never embedded in
   shell commands or PTY launch logs.
 - No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.

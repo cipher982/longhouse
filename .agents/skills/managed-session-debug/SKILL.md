@@ -41,6 +41,38 @@ For "is transcript shipping live/slow?" questions, check `~/.longhouse/agent/eng
 - Hosted `sessions.ended_at` with `session_runtime_state.terminal_state = null` is a state-model mismatch. Treat runtime state as the lifecycle source of truth.
 - WriteSerializer waits and high ingest/runtime request counts explain hosted UI/ingest lag, not local provider thinking time, unless a synchronous local hook is slow.
 
+## Session Ran Unregistered
+
+A session that never appears hosted, or has no coordination authority, may have
+lost its launch registration rather than its shipping. The evidence is durable:
+
+```bash
+ls ~/.longhouse/agent/managed-local/registration-retries/
+```
+
+`recovery_exhausted: false` is recovery still running; `true` means it gave up
+and that session has no control path for the rest of its life. Read the launch
+warnings before blaming the host — they now distinguish *unreachable* (connect
+or DNS failed) from *did not answer within Ns* (the host accepted the request
+and kept working). Only the first is an outage.
+
+The second means queueing, and queueing here is a defect, not weather. `POST
+/api/sessions/managed-local/this-device` goes through catalogd's single writer,
+whose product budget is **250ms p95 / 1s alert**
+(`control-plane/docs/specs/speed-of-light-database.md`); catalogd allows this
+call 10s only to cover cold schema costs after a restart. A registration taking
+seconds in steady state is a write-path regression to investigate — do not
+"fix" it by widening a client deadline.
+
+Note the trap when measuring: `Heartbeat POST was slow` only logs above 1000ms,
+so those lines are the tail, never the distribution. Counting them tells you
+how many were slow, not what fraction. And an abandoned request does not stop
+the host — a client that walks away leaves the write occupying the single
+writer, so aggressive client timeouts *add* queueing rather than shed it.
+
+Successful `Shipped storage-v2 source envelope` lines in the same window are
+proof the host was up.
+
 ## Hook Check
 
 Claude hooks should be local-only and fast. The installed hook should write local presence/binding state and exit 0. If you suspect hook blocking, measure it with a synthetic event before blaming hosted telemetry.
