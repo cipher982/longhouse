@@ -354,6 +354,7 @@ async def search_storage_v2_rows(
             "window_end_us": None,
             "limit": min(200, max(1, limit)),
             "include_snippets": include_snippets,
+            "include_origin_hidden": False,
         }
         if timeout_seconds is None:
             result = await search.call("search.query.v2", params)

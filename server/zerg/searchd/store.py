@@ -67,6 +67,7 @@ _ARCHIVE_SEARCH_SQL = """
      AND m.desired_revision = s.indexed_through
      AND m.object_id = e.source_object_id
     WHERE events_fts MATCH ? AND s.owner_id = ?
+      AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
       AND (? IS NULL OR s.project = ?)
       AND (? IS NULL OR s.provider = ?)
       AND (? IS NULL OR s.environment = ?)
@@ -102,6 +103,7 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = """
          AND m.desired_revision = s.indexed_through
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
+          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
           AND (? IS NULL OR s.project = ?)
           AND (? IS NULL OR s.provider = ?)
           AND (? IS NULL OR s.environment = ?)
@@ -144,6 +146,7 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
          AND m.desired_revision = s.indexed_through
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
+          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
           AND (? IS NULL OR s.project = ?)
           AND (? IS NULL OR s.provider = ?)
           AND (? IS NULL OR s.environment = ?)
@@ -197,6 +200,7 @@ _SEARCHABLE_SEARCH_SQL = """
         FROM searchable_fts
         JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
         WHERE searchable_fts MATCH ? AND e.owner_id = ?
+          AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0)
           AND (? IS NULL OR e.project = ?)
           AND (? IS NULL OR e.provider = ?)
           AND (? IS NULL OR e.environment = ?)
@@ -417,9 +421,11 @@ def _add_missing_visibility_columns(connection: sqlite3.Connection) -> None:
     as "not hidden". ``origin_kind`` is carried for diagnostics only.
     """
 
+    for table in ("session_index", "searchable_events"):
+        columns = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "hidden_from_default_timeline" not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN hidden_from_default_timeline INTEGER")
     columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(session_index)").fetchall()}
-    if "hidden_from_default_timeline" not in columns:
-        connection.execute("ALTER TABLE session_index ADD COLUMN hidden_from_default_timeline INTEGER")
     if "origin_kind" not in columns:
         connection.execute("ALTER TABLE session_index ADD COLUMN origin_kind TEXT")
 
@@ -539,7 +545,8 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             interaction_kind TEXT NOT NULL DEFAULT 'provider_system',
             title_eligible INTEGER NOT NULL DEFAULT 0,
             indexed_through INTEGER NOT NULL,
-            event_count INTEGER NOT NULL
+            event_count INTEGER NOT NULL,
+            hidden_from_default_timeline INTEGER
         );
         CREATE TABLE IF NOT EXISTS searchable_text (
             source_event_id INTEGER PRIMARY KEY,
@@ -1455,6 +1462,7 @@ class SearchStore:
                 provider=provider,
                 environment=environment,
                 event_count=event_count,
+                hidden_from_default_timeline=hidden_from_default_timeline,
             )
             self.connection.execute("COMMIT")
         except BaseException:
@@ -1479,6 +1487,7 @@ class SearchStore:
         provider: str,
         environment: str,
         event_count: int,
+        hidden_from_default_timeline: bool = False,
     ) -> None:
         """Atomically replace one session's published, recent discovery corpus."""
 
@@ -1490,13 +1499,13 @@ class SearchStore:
                 order_time_us, session_id, generation_id, source_object_id,
                 record_ordinal, event_id, role, tool_name,
                 interaction_kind, title_eligible,
-                indexed_through, event_count
+                indexed_through, event_count, hidden_from_default_timeline
             )
             SELECT e.id, ?, ?, ?, ?,
                    e.order_time_us, e.session_id, e.generation_id, e.source_object_id,
                    e.record_ordinal, e.event_id, e.role, e.tool_name,
                    e.interaction_kind, e.title_eligible,
-                   ?, ?
+                   ?, ?, ?
             FROM events e
             JOIN projection_membership m ON m.object_id = e.source_object_id
             WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
@@ -1510,6 +1519,7 @@ class SearchStore:
                 environment,
                 desired_revision,
                 event_count,
+                1 if hidden_from_default_timeline else 0,
                 session_id,
                 generation_id,
                 desired_revision,
@@ -1544,14 +1554,17 @@ class SearchStore:
         window_end_us: int | None,
         limit: int,
         include_snippets: bool = True,
+        include_origin_hidden: bool = False,
     ) -> dict[str, object]:
         fts_query, query_token_count, compiled_token_count = self._compile_fts_query(query)
         if not fts_query:
             return {"results": [], "query_token_count": query_token_count, "compiled_token_count": compiled_token_count}
         use_searchable_corpus = window_start_us is not None and window_start_us >= _fast_scope_cutoff_us()
+        include_hidden_flag = 1 if include_origin_hidden else 0
         filter_params = (
             fts_query,
             owner_id,
+            include_hidden_flag,
             project,
             project,
             provider,
@@ -1932,6 +1945,45 @@ class SearchStore:
             self.connection.execute("ROLLBACK")
             raise
         return {"deleted": True, "changed": changed}
+
+    def reclassify_session_origin(
+        self,
+        *,
+        session_id: str,
+        origin_kind: str,
+        observed_at: str | None = None,
+    ) -> dict[str, object]:
+        """Reclassify a session's hidden origin in the derived worklog/search index.
+
+        Mirrors the catalogd-side reclassify so the worklog line and default
+        search drop the session without waiting for a re-publish. ``session_index``
+        and ``searchable_events`` both carry the hidden flag; old rows keep NULL
+        until re-published, so the same bounded flip is written to both.
+        """
+
+        normalized = str(origin_kind or "").strip().lower().replace("-", "_")
+        if normalized not in ("hatch_automation", "test_or_canary"):
+            return {"reclassified": False, "rows_changed": 0, "invalid_origin_kind": True}
+        now = observed_at or datetime.now(UTC).isoformat()
+        changed_rows = 0
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for table in ("session_index", "searchable_events"):
+                cursor = self.connection.execute(
+                    f"""
+                    UPDATE {table}
+                    SET hidden_from_default_timeline = 1, origin_kind = ?
+                    WHERE session_id = ?
+                      AND COALESCE(hidden_from_default_timeline, 0) = 0
+                    """,
+                    (normalized, str(session_id)),
+                )
+                changed_rows += int(cursor.rowcount or 0)
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        return {"reclassified": True, "rows_changed": changed_rows, "observed_at": now}
 
 
 def canonical_json(value: object) -> str:

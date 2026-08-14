@@ -190,6 +190,7 @@ def _search_params(query: str) -> dict[str, object]:
         "window_end_us": None,
         "limit": 10,
         "include_snippets": True,
+        "include_origin_hidden": False,
     }
 
 

@@ -377,6 +377,7 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
                 "window_end_us",
                 "limit",
                 "include_snippets",
+                "include_origin_hidden",
             }
             assert params["include_snippets"] is True
             return {

@@ -400,6 +400,22 @@ class SearchDaemon:
                         deadline_mono_ns=int(request.deadline_mono_ns),
                     ),
                 )
+            if request.method == "search.session.reclassify_origin.v2":
+                _exact_keys(request.params, {"session_id", "origin_kind", "observed_at"})
+                params = dict(request.params)
+                if params["origin_kind"] not in ("hatch_automation", "test_or_canary"):
+                    raise ValueError("origin_kind must be hatch_automation or test_or_canary")
+                if params["observed_at"] is not None and not isinstance(params["observed_at"], str):
+                    raise ValueError("observed_at must be a string or null")
+                return self._result(
+                    request,
+                    await self._run(
+                        self._store.reclassify_session_origin,
+                        session_id=_uuid(params["session_id"], "session_id"),
+                        origin_kind=params["origin_kind"],
+                        observed_at=params["observed_at"],
+                    ),
+                )
             if request.method == "search.session.delete.v2":
                 _exact_keys(request.params, {"session_id"})
                 return self._result(
@@ -1094,12 +1110,15 @@ def _search_params(value: dict) -> dict:
             "window_end_us",
             "limit",
             "include_snippets",
+            "include_origin_hidden",
         },
     )
     if type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("limit is invalid")
     if type(value["include_snippets"]) is not bool:
         raise ValueError("include_snippets is invalid")
+    if type(value["include_origin_hidden"]) is not bool:
+        raise ValueError("include_origin_hidden is invalid")
     for field in ("window_start_us", "window_end_us"):
         item = value[field]
         if item is not None and (type(item) is not int or not -(1 << 63) <= item < 1 << 63):
@@ -1120,6 +1139,7 @@ def _search_params(value: dict) -> dict:
         "window_end_us": value["window_end_us"],
         "limit": value["limit"],
         "include_snippets": value["include_snippets"],
+        "include_origin_hidden": value["include_origin_hidden"],
     }
 
 

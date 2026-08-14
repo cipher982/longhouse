@@ -521,6 +521,7 @@ def db_classify_automation(
         "benchmark_candidate_count": len(benchmark_candidates),
         "catalogd_applied": (catalogd_result or {}).get("applied_catalogd_session_ids", []),
         "catalogd_failed": (catalogd_result or {}).get("failed_catalogd_session_ids", []),
+        "searchd_failed": (catalogd_result or {}).get("searchd_failed_session_ids", []),
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -535,10 +536,14 @@ def db_classify_automation(
     if result.already_marked_session_ids:
         typer.echo(f"Already marked: {', '.join(result.already_marked_session_ids)}")
     if catalogd_result is not None:
+        searchd_failed = catalogd_result.get("searchd_failed_session_ids", [])
         typer.echo(
             f"Catalogd/storage reclassified: {len(catalogd_result['applied_catalogd_session_ids'])}; "
-            f"failed: {len(catalogd_result['failed_catalogd_session_ids'])}"
+            f"catalogd failed: {len(catalogd_result['failed_catalogd_session_ids'])}; "
+            f"searchd failed: {len(searchd_failed)}"
         )
+        if searchd_failed:
+            typer.echo(f"  searchd reclassify failures: {', '.join(session.get('session_id', '?') for session in searchd_failed)}")
     typer.echo(f"Heuristic candidates (report-only): {len(result.heuristic_candidates)}")
     for candidate in result.heuristic_candidates[:10]:
         typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")

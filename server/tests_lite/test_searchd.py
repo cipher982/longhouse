@@ -79,6 +79,7 @@ def _search_params(query: str) -> dict:
         "window_end_us": None,
         "limit": 10,
         "include_snippets": True,
+        "include_origin_hidden": False,
     }
 
 
@@ -660,7 +661,7 @@ def test_archive_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCH_SQL}",
-            ("search db", "42", None, None, None, None, None, None, None, None, None, None, 10),
+            ("search db", "42", 0, None, None, None, None, None, None, None, None, None, None, 10),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("events_fts" in detail and "VIRTUAL TABLE INDEX 32:" in detail for detail in details)
@@ -682,7 +683,7 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
-            ("search db", "42", None, None, None, None, None, None, None, None, None, None, 50_000, 10, "search db"),
+            ("search db", "42", 0, None, None, None, None, None, None, None, None, None, None, 50_000, 10, "search db"),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)

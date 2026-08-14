@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -236,12 +237,13 @@ def reclassify_catalogd_origins(
     *,
     timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
-    """Reclassify reviewed sessions on the catalogd/storage side (worklog line).
+    """Reclassify reviewed sessions on the catalogd/storage and searchd sides.
 
     The agents-ORM write fixes the legacy timeline; the worklog projection reads
     the durable StorageSession via searchd, so the same reviewed IDs must also be
-    reclassified through catalogd's single-writer transaction. Fail-loud per
-    session: a catalogd error is reported, never swallowed.
+    reclassified through catalogd's single-writer transaction and through
+    searchd's ``session_index`` so the digest line flips without a re-publish.
+    Fail-loud per session: an error is reported, never swallowed.
     """
 
     from datetime import UTC
@@ -251,21 +253,29 @@ def reclassify_catalogd_origins(
     from zerg.catalogd.client import CatalogUnavailable
     from zerg.catalogd.client import call_catalogd_sync
     from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.services.searchd_supervisor import searchd_paths
 
     try:
-        _, socket_path = catalogd_paths()
+        _, catalogd_socket = catalogd_paths()
     except (RuntimeError, OSError) as exc:
         return {
             "applied_catalogd_session_ids": [],
             "failed_catalogd_session_ids": [{"session_id": "", "error": f"catalogd unavailable: {exc}"}],
             "catalogd_unavailable": True,
         }
+    searchd_socket: Path | None = None
+    try:
+        if len(session_ids) > 0:
+            _, searchd_socket = searchd_paths()
+    except (RuntimeError, OSError):
+        pass
     applied: list[str] = []
     failed: list[dict[str, str]] = []
+    searchd_failed: list[dict[str, str]] = []
     for session_id in session_ids:
         try:
             result = call_catalogd_sync(
-                socket_path,
+                catalogd_socket,
                 "catalogd.session.reclassify_origin.v2",
                 params={
                     "session_id": session_id,
@@ -281,4 +291,24 @@ def reclassify_catalogd_origins(
             applied.append(session_id)
         else:
             failed.append({"session_id": session_id, "error": "not found or not reclassified"})
-    return {"applied_catalogd_session_ids": applied, "failed_catalogd_session_ids": failed}
+        if searchd_socket is not None:
+            try:
+                searchd_result = call_catalogd_sync(
+                    searchd_socket,
+                    "search.session.reclassify_origin.v2",
+                    params={
+                        "session_id": session_id,
+                        "origin_kind": origin_kind,
+                        "observed_at": datetime.now(UTC).isoformat(),
+                    },
+                    timeout_seconds=timeout_seconds,
+                )
+                if not searchd_result.get("reclassified"):
+                    searchd_failed.append({"session_id": session_id, "error": "searchd not reclassified"})
+            except (CatalogUnavailable, CatalogRemoteError) as exc:
+                searchd_failed.append({"session_id": session_id, "error": str(exc)})
+    return {
+        "applied_catalogd_session_ids": applied,
+        "failed_catalogd_session_ids": failed,
+        "searchd_failed_session_ids": searchd_failed,
+    }
