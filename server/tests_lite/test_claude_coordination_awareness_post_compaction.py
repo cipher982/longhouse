@@ -98,14 +98,31 @@ def _install_session_fakes(
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1"))
-    monkeypatch.setattr(m, "send_and_await_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
+    monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     invocations = iter([pre_invocation, post_invocation])
     monkeypatch.setattr(m, "find_tool_invocation", lambda *_a, **_k: next(invocations))
+    monkeypatch.setattr(
+        m,
+        "find_compaction_boundary",
+        lambda *_a, **_k: {
+            "transcript_path": "/tmp/transcript.jsonl",
+            "line": 7,
+            "type": "system",
+            "subtype": "compact_boundary",
+        },
+    )
     monkeypatch.setattr(m, "transcript_line_counts", lambda *_a, **_k: {})
     monkeypatch.setattr(m, "wait_for_terminal_quiescence", lambda *_a, **_k: None)
     monkeypatch.setattr(m, "mcp_bootstrap_config_paths", lambda *_a, **_k: bootstrap_config_paths)
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
+
+    def stable_manifest(_root: Path) -> list[dict[str, Any]]:
+        assert fake_shipper.stopped is True
+        return []
+
+    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
     return fake_shipper, fake_session
 
 
@@ -113,13 +130,13 @@ def _tool_ok(line: int) -> dict[str, Any]:
     return {"tool_name": "mcp__longhouse-coordination__peers", "tool_use_line": line, "tool_result_line": line + 1, "is_error": False}
 
 
-def test_run_passes_the_visibility_cell_when_compaction_preserves_tool_access(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_passes_the_visibility_cell_when_compaction_preserves_tool_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_VISIBLE, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     bootstrap_path = tmp_path / "run" / "claude-mcp" / "session-1-abc.json"
-    _install_session_fakes(monkeypatch, pre_invocation=_tool_ok(4), post_invocation=_tool_ok(9), bootstrap_config_paths=[bootstrap_path])
+    _shipper, fake_session = _install_session_fakes(
+        monkeypatch, pre_invocation=_tool_ok(4), post_invocation=_tool_ok(9), bootstrap_config_paths=[bootstrap_path]
+    )
 
     result = m.run_awareness_post_compaction_scenario(args)
 
@@ -129,6 +146,11 @@ def test_run_passes_the_visibility_cell_when_compaction_preserves_tool_access(
     assert result["assertions"][m._ASSERTION_VISIBLE] is True
     assert result["assertions"][m._ASSERTION_NO_DUP_BOOTSTRAP] is True
     assert result["observation"]["visible_bootstrap_count"] == 1
+    assert result["observation"]["compaction_signal_observed"] is True
+    assert len(fake_session.submitted) == 3
+    assert "Call your peers tool now" in fake_session.submitted[0]
+    assert fake_session.submitted[1] == "/compact"
+    assert "Call your peers tool now" in fake_session.submitted[2]
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
@@ -137,9 +159,7 @@ def test_run_passes_the_visibility_cell_when_compaction_preserves_tool_access(
 def test_run_passes_the_no_duplicate_bootstrap_cell_on_the_same_underlying_observation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    variant = execution_variant_key(
-        provider="claude", assertion_id=m._ASSERTION_NO_DUP_BOOTSTRAP, scenario_id=m._SCENARIO_ID, variant=None
-    )
+    variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_NO_DUP_BOOTSTRAP, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     bootstrap_path = tmp_path / "run" / "claude-mcp" / "session-1-abc.json"
     _install_session_fakes(monkeypatch, pre_invocation=_tool_ok(4), post_invocation=_tool_ok(9), bootstrap_config_paths=[bootstrap_path])
@@ -152,9 +172,7 @@ def test_run_passes_the_no_duplicate_bootstrap_cell_on_the_same_underlying_obser
     assert result["assertions"][m._ASSERTION_NO_DUP_BOOTSTRAP] is True
 
 
-def test_run_fails_the_visibility_cell_when_the_post_compaction_call_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_fails_the_visibility_cell_when_the_post_compaction_call_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_VISIBLE, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     bootstrap_path = tmp_path / "run" / "claude-mcp" / "session-1-abc.json"
@@ -169,12 +187,8 @@ def test_run_fails_the_visibility_cell_when_the_post_compaction_call_errors(
     assert result["assertions"][m._ASSERTION_VISIBLE] is False
 
 
-def test_run_fails_the_no_duplicate_bootstrap_cell_when_a_second_config_appears(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    variant = execution_variant_key(
-        provider="claude", assertion_id=m._ASSERTION_NO_DUP_BOOTSTRAP, scenario_id=m._SCENARIO_ID, variant=None
-    )
+def test_run_fails_the_no_duplicate_bootstrap_cell_when_a_second_config_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_NO_DUP_BOOTSTRAP, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     two_bootstrap_paths = [
         tmp_path / "run" / "claude-mcp" / "session-1-abc.json",
@@ -189,13 +203,12 @@ def test_run_fails_the_no_duplicate_bootstrap_cell_when_a_second_config_appears(
     assert result["observation"]["visible_bootstrap_count"] == 2
 
 
-def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_VISIBLE, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("longhouse claude exited before channel readiness")

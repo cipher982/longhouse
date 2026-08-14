@@ -32,12 +32,15 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import RuntimeHostHTTPError
+from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import api_json
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
+from zerg.qa.claude_live_session_support import local_managed_control_fact
+from zerg.qa.claude_live_session_support import local_managed_control_snapshot
 from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import read_coordination_token
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
@@ -46,6 +49,7 @@ from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
+from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -92,6 +96,7 @@ REGISTRATION = ProducerRegistration(
         "transcript_shipper_receipt",
         "sender_session_launch_receipt",
         "receiver_session_launch_receipt",
+        "receiver_live_control_receipt",
         "directed_input_create_receipt",
         "directed_input_inbox_receipt",
     ),
@@ -120,11 +125,35 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
-        launch_env = claude_launch_environment(environment, claude_bin=args.claude_bin, engine=args.engine, model=args.model)
+
+        # Claude persists first-run onboarding (theme/API-key/trust) outside
+        # the Longhouse channel state. Launching the managed facade against
+        # this fresh disposable profile without completing it first leaves
+        # the session stuck at the wizard forever -- see
+        # claude_coordination_awareness_create.py's identical fix for the
+        # full rationale. Sender and receiver share this isolation_root's one
+        # CLAUDE_CONFIG_DIR, so priming it once covers both launches below.
+        onboarding_home, _longhouse_home_for_onboarding = isolation_paths(isolation_root)
+        onboarding = _prepare_claude_profile(
+            binary=args.claude_bin,
+            home=onboarding_home,
+            workspace=isolation_root,
+            environment=environment,
+            recording=root / "claude-onboarding.tty",
+        )
+        write_json(root / "claude-onboarding-receipt.json", onboarding)
+
+        launch_env = claude_launch_environment(
+            environment,
+            claude_bin=args.claude_bin,
+            engine=args.engine,
+            model=args.model,
+            longhouse_home=longhouse_home,
+        )
 
         sender_workspace = isolation_root / "workspace-sender"
         sender_workspace.mkdir(parents=True, exist_ok=True)
-        sender, sender_session_id = launch_claude_session(
+        sender, sender_session_id, _sender_provider_session_id = launch_claude_session(
             workspace=sender_workspace,
             project=args.project,
             name="Longhouse directed-input qualification (sender)",
@@ -136,7 +165,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
 
         receiver_workspace = isolation_root / "workspace-receiver"
         receiver_workspace.mkdir(parents=True, exist_ok=True)
-        receiver, receiver_session_id = launch_claude_session(
+        receiver, receiver_session_id, _receiver_provider_session_id = launch_claude_session(
             workspace=receiver_workspace,
             project=args.project,
             name="Longhouse directed-input qualification (receiver)",
@@ -157,14 +186,47 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             description="receiver coordination token bootstrap",
         )
 
-        created = api_json(
-            args.api_url,
-            sender_token,
-            "directed-inputs",
-            method="POST",
-            json_body={"target_session_id": receiver_session_id, "text": marker},
-            extra_headers={_SESSION_HEADER: sender_session_id},
+        receiver_control = wait_until(
+            lambda: local_managed_control_fact(longhouse_home, receiver_session_id),
+            timeout=args.receipt_timeout_secs,
+            description="receiver attached local live-control fact",
         )
+        write_json(root / "receiver-live-control-receipt.json", receiver_control)
+
+        # A local control fact is written just before the corresponding
+        # heartbeat POST. Retry the idempotent create with one stable request
+        # id until the Runtime Host has consumed that heartbeat and links the
+        # provider input receipt. Reusing the id is essential: a fresh id on
+        # each attempt would deliver duplicate peer messages.
+        client_request_id = str(uuid.uuid4())
+        create_attempts: list[dict[str, Any]] = []
+
+        def create_with_receipt() -> dict[str, Any] | None:
+            response = api_json(
+                args.api_url,
+                sender_token,
+                "directed-inputs",
+                method="POST",
+                json_body={
+                    "target_session_id": receiver_session_id,
+                    "text": marker,
+                    "client_request_id": client_request_id,
+                },
+                extra_headers={_SESSION_HEADER: sender_session_id},
+            )
+            create_attempts.append(response)
+            return response if response.get("input_receipt") is not None else None
+
+        try:
+            created = wait_until(
+                create_with_receipt,
+                timeout=args.receipt_timeout_secs,
+                description="directed input receipt link",
+            )
+        except ScenarioError:
+            if not create_attempts:
+                create_with_receipt()
+            created = create_attempts[-1]
         write_json(root / "directed-input-create-receipt.json", created)
 
         directed_input_id = created.get("id")
@@ -198,11 +260,16 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
                     return item
             return None
 
-        receipt_record = None
-        try:
-            receipt_record = wait_until(receipt_linked, timeout=args.receipt_timeout_secs, description="directed input receipt link")
-        except Exception:
-            receipt_record = None
+        receipt_record = created if created.get("input_receipt") is not None else None
+        if receipt_record is None:
+            try:
+                receipt_record = wait_until(
+                    receipt_linked,
+                    timeout=args.receipt_timeout_secs,
+                    description="directed input receipt link",
+                )
+            except Exception:
+                receipt_record = None
         write_json(root / "directed-input-receipt-check.json", receipt_record or {"linked": False})
 
         inbox_record = None
@@ -219,6 +286,9 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         receiver_close = close_session(receiver)
         receiver = None
         write_json(root / "session-close-receipts.json", {"sender": sender_close, "receiver": receiver_close})
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
 
         observation = {
             "sender_session_id": sender_session_id,
@@ -253,12 +323,19 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        if "receiver_session_id" in locals():
+            diagnostic = local_managed_control_snapshot(longhouse_home, receiver_session_id)
+            if diagnostic is not None:
+                write_json(root / "receiver-live-control-diagnostic.json", diagnostic)
         for session in (sender, receiver):
             if session is not None:
                 try:
                     close_session(session)
                 except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
                     pass
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
         error_detail = f"{type(exc).__name__}: {exc}"
         if isinstance(exc, RuntimeHostHTTPError):
             error_detail = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"

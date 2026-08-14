@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import json
 import subprocess
+from types import SimpleNamespace
 
 import httpx
 
+from zerg.qa.cursor_helm_product_e2e import _accept_workspace_trust_if_prompted
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
+from zerg.qa.cursor_helm_product_e2e import _can_send_canonical
 from zerg.qa.cursor_helm_product_e2e import _can_send_live
+from zerg.qa.cursor_helm_product_e2e import _canonical_state_from_diagnostics
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _pending_pause
 from zerg.qa.cursor_helm_product_e2e import _response_observed_at
 from zerg.qa.cursor_helm_product_e2e import _session_locked
 from zerg.qa.cursor_helm_product_e2e import _state_ids
+from zerg.qa.cursor_helm_product_e2e import build_arg_parser
 
 
 def test_machine_agent_restart_uses_reconnected_status_after_kickstart_timeout(tmp_path, monkeypatch) -> None:
@@ -33,6 +38,44 @@ def test_machine_agent_restart_uses_reconnected_status_after_kickstart_timeout(t
         "control_status": "connected",
         "kickstart_timed_out": True,
     }
+
+
+def test_workspace_trust_prompt_is_explicitly_accepted(tmp_path) -> None:
+    terminal_path = tmp_path / "terminal.raw"
+    terminal_path.write_text(
+        "Workspace Trust Required\nDo you trust the contents of this directory?\n[a] Trust this workspace",
+        encoding="utf-8",
+    )
+    sent: list[str] = []
+    session = SimpleNamespace(
+        terminal_path=terminal_path,
+        process=SimpleNamespace(poll=lambda: None),
+        send=sent.append,
+    )
+
+    assert _accept_workspace_trust_if_prompted(session, timeout=0.1) is True
+    assert sent == ["a"]
+
+
+def test_turn_boundary_only_is_explicit_and_disabled_for_the_release_canary() -> None:
+    parser = build_arg_parser()
+
+    assert parser.parse_args([]).turn_boundary_only is False
+    assert parser.parse_args(["--turn-boundary-only"]).turn_boundary_only is True
+
+
+def test_canonical_state_requires_a_matched_diagnostic_snapshot() -> None:
+    shadow = {"activity": {"state": "quiescent"}, "run": {"lifecycle": "running", "id": "run-1"}}
+    payload = {
+        "served_path": "canonical_session_detail",
+        "comparison": {"status": "matched"},
+        "shadow": shadow,
+    }
+
+    assert _canonical_state_from_diagnostics(payload) == shadow
+    # The comparison is against the legacy projection. A difference is why
+    # this canary must consume the canonical `shadow` axes, not reject them.
+    assert _canonical_state_from_diagnostics({**payload, "comparison": {"status": "different"}}) == shadow
 
 
 def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_path) -> None:
@@ -91,6 +134,8 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
     assert _can_send_live({"capabilities": {"can_send_input": True}}) is True
     assert _can_send_live({"capabilities": {"can_send_input": False}}) is False
     assert _can_send_live({}) is False
+    assert _can_send_canonical({"control": {"actions": {"send_input": {"state": "available"}}}}) is True
+    assert _can_send_canonical({"control": {"actions": {"send_input": {"state": "unavailable"}}}}) is False
     assert (
         _session_locked(
             httpx.Response(

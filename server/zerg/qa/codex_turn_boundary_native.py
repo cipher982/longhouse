@@ -195,7 +195,10 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     session_id = ""
     final_cleanup: dict[str, Any] = {"verified": False}
     try:
-        isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-turnbound-", dir="/tmp"))
+        # codex-bridge places a UUID-named Unix socket below this root. Keep
+        # the prefix short enough that the complete path stays below Linux's
+        # SUN_LEN limit inside the qualification sandbox.
+        isolation_root = Path(tempfile.mkdtemp(prefix="lct-", dir="/tmp"))
         summary, _start_result, isolation_root = bridge_canary._start_bridge(
             args,
             evidence_root=root,

@@ -20,6 +20,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from typing import Mapping
 
 SESSION_ID_RE = re.compile(r"Session ID:\s*([0-9a-fA-F-]{36})")
 PROVIDER_SESSION_START_RE = re.compile(
@@ -113,8 +114,17 @@ def terminal_has_provider_auth_prompt(text: str) -> bool:
     return "401 Invalid authentication credentials" in text or "Please run /login" in text
 
 
-def wait_for_channel_ready(session_id: str, *, timeout_secs: float) -> bool:
-    state_path = Path.home() / ".claude" / "channels" / "longhouse" / "sessions" / f"{session_id}.json"
+def wait_for_channel_ready(session_id: str, *, timeout_secs: float, home: Path | None = None) -> bool:
+    # run_managed_claude_live_session (below) never overrides HOME for the
+    # Claude process it spawns, so Path.home() here always agrees with it.
+    # Callers that launch Claude against an isolated, non-ambient HOME (see
+    # claude_live_session_support.start_machine_and_shipper's disposable
+    # per-run home) must pass that same path explicitly, or this polls a
+    # directory the spawned session never wrote to and times out forever --
+    # found registering the 12 non-Resume producers' real end-to-end
+    # verification.
+    home = home if home is not None else Path.home()
+    state_path = home / ".claude" / "channels" / "longhouse" / "sessions" / f"{session_id}.json"
     deadline = time.monotonic() + timeout_secs
     while time.monotonic() < deadline:
         try:
@@ -127,10 +137,36 @@ def wait_for_channel_ready(session_id: str, *, timeout_secs: float) -> bool:
     return False
 
 
-def find_channel_session_id(cwd: Path, *, provider_session_id: str | None = None) -> str | None:
+def read_provider_session_id(session_id: str, *, home: Path | None = None) -> str | None:
+    """Read Claude's own native session id off the channel state the lifecycle hook wrote.
+
+    Claude Code names its own ``.claude/projects/**/<id>.jsonl`` transcript
+    files by its native session id, not the Longhouse session id
+    ``find_channel_session_id`` resolves -- the two are unrelated UUIDs. The
+    lifecycle hook attaches the native id to this same state file
+    (``engine/src/claude_lifecycle_hook.rs::attach_provider_session_id``) once
+    it fires, which can lag slightly behind the state file first becoming
+    ``ready``. Transcript lookups that key on the Longhouse session id instead
+    of this one silently poll a file that is never written and time out
+    regardless of whether the model actually replied (found registering the
+    12 non-Resume producers' real end-to-end verification).
+    """
+
+    home = home if home is not None else Path.home()
+    state_path = home / ".claude" / "channels" / "longhouse" / "sessions" / f"{session_id}.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    value = state.get("provider_session_id") if isinstance(state, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def find_channel_session_id(cwd: Path, *, provider_session_id: str | None = None, home: Path | None = None) -> str | None:
     """Resolve the Longhouse session id from the current Claude channel state."""
+    home = home if home is not None else Path.home()
     expected_cwd = str(cwd.resolve())
-    sessions_dir = Path.home() / ".claude" / "channels" / "longhouse" / "sessions"
+    sessions_dir = home / ".claude" / "channels" / "longhouse" / "sessions"
     for state_path in sorted(sessions_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True):
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -146,8 +182,9 @@ def find_channel_session_id(cwd: Path, *, provider_session_id: str | None = None
     return None
 
 
-def transcript_paths(session_id: str) -> list[Path]:
-    return sorted((Path.home() / ".claude" / "projects").glob(f"**/{session_id}.jsonl"))
+def transcript_paths(session_id: str, *, home: Path | None = None) -> list[Path]:
+    home = home if home is not None else Path.home()
+    return sorted((home / ".claude" / "projects").glob(f"**/{session_id}.jsonl"))
 
 
 def transcript_lookup_id(longhouse_session_id: str, provider_session_id: str | None = None) -> str:
@@ -172,9 +209,9 @@ def text_fragments(value: Any) -> list[str]:
     return []
 
 
-def transcript_line_counts(session_id: str) -> dict[str, int]:
+def transcript_line_counts(session_id: str, *, home: Path | None = None) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for path in transcript_paths(session_id):
+    for path in transcript_paths(session_id, home=home):
         try:
             counts[str(path)] = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
         except OSError:
@@ -187,8 +224,9 @@ def assistant_transcript_contains(
     expected: str,
     *,
     after_line_counts: dict[str, int] | None = None,
+    home: Path | None = None,
 ) -> tuple[bool, str | None, int | None, str | None]:
-    for path in transcript_paths(session_id):
+    for path in transcript_paths(session_id, home=home):
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
@@ -266,10 +304,18 @@ def channel_send(
     *,
     meta: dict[str, str] | None = None,
     repo_root: Path | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # The spawned `longhouse-engine claude-channel send` reads channel state
+    # relative to its own HOME, inherited from the ambient environment by
+    # default. Callers whose Claude session runs under an isolated,
+    # non-ambient HOME (see claude_live_session_support.start_machine_and_shipper)
+    # must pass that same environment here, or the engine looks in the
+    # sandbox's own HOME and reports the session as never attached.
     return subprocess.run(
         build_channel_send_command(session_id, text, meta=meta),
         cwd=str(repo_root or default_repo_root()),
+        env=dict(env) if env is not None else None,
         text=True,
         capture_output=True,
         check=False,
@@ -652,6 +698,7 @@ __all__ = [
     "find_channel_session_id",
     "monotonic_ms",
     "read_json_file",
+    "read_provider_session_id",
     "run_id_now",
     "run_managed_claude_live_session",
     "run_probe",

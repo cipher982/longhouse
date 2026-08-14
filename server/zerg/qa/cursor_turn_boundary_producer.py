@@ -126,7 +126,16 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
     home = _isolated_provider_home()
     shipper: TranscriptShipper | None = None
     report: dict[str, Any] | None = None
+    previous_cursor_bin = os.environ.get("LONGHOUSE_CURSOR_BIN")
+    previous_longhouse_home = os.environ.get("LONGHOUSE_HOME")
     try:
+        # The Machine Agent computes its advertised control capabilities once
+        # when its WebSocket channel starts. Bind the exact staged Cursor
+        # binary before starting it; setting this only before `longhouse
+        # cursor` lets Helm launch, but leaves cursor.send/interrupt/terminate
+        # absent from the already-connected control channel.
+        os.environ["LONGHOUSE_CURSOR_BIN"] = str(args.provider_bin)
+
         # Passing os.environ itself (not a copy) so the machine-identity
         # LONGHOUSE_HOME binding _start_transcript_shipper writes lands on
         # this process's real environment -- run_product_e2e's own
@@ -142,13 +151,6 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         )
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 
-        # run_product_e2e's own launch argv carries no --cursor-bin selector;
-        # it resolves the provider binary ambiently (LONGHOUSE_CURSOR_BIN or
-        # PATH), matching schemas/managed_providers.yml's
-        # provider_cli_env: LONGHOUSE_CURSOR_BIN for cursor. Pin it to the
-        # exact discovered/staged binary this execution was given.
-        os.environ["LONGHOUSE_CURSOR_BIN"] = str(args.provider_bin)
-
         e2e_args = argparse.Namespace(
             workspace=home / "canaries" / "provider-live" / "cursor" / "turn-boundary" / "workspace",
             artifact_root=root / "product-e2e",
@@ -157,6 +159,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             model=(args.model or os.environ.get("CURSOR_MODEL", "").strip() or _DEFAULT_CURSOR_MODEL),
             longhouse_bin=str(args.longhouse_cli),
             engine_bin=str(args.engine),
+            turn_boundary_only=True,
             # The Machine Agent restart leg is launchctl/macOS-only
             # (_restart_machine_agent raises outright on Linux). The
             # qualification sandbox is Linux; this assertion is about
@@ -203,6 +206,9 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
                 "session_id": report.get("session_id"),
             },
         )
+        if shipper is not None:
+            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
         redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
         result: dict[str, Any] = {
             "schema_version": 1,
@@ -262,6 +268,14 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
                 _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             except Exception:  # noqa: BLE001 - best-effort final shipper stop
                 pass
+        for name, previous in (
+            ("LONGHOUSE_CURSOR_BIN", previous_cursor_bin),
+            ("LONGHOUSE_HOME", previous_longhouse_home),
+        ):
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
 
 
 def _parser() -> argparse.ArgumentParser:

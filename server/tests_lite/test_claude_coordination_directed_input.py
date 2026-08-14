@@ -88,17 +88,34 @@ def _install_session_and_api_fakes(
     fake_shipper = _FakeShipper()
     sessions = iter([("sender-session", _FakeSession()), ("receiver-session", _FakeSession())])
 
-    def fake_launch(**_k: object) -> tuple[_FakeSession, str]:
+    def fake_launch(**_k: object) -> tuple[_FakeSession, str, str]:
         session_id, session = next(sessions)
-        return session, session_id
+        return session, session_id, f"provider-{session_id}"
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **k: fake_launch(**k))
+    monkeypatch.setattr(
+        m,
+        "local_managed_control_fact",
+        lambda _home, session_id: {
+            "session_id": session_id,
+            "state": "attached",
+            "granted_operations": ["send_input"],
+        },
+    )
+    monkeypatch.setattr(m, "local_managed_control_snapshot", lambda _home, _session_id: None)
     monkeypatch.setattr(m, "read_coordination_token", lambda _home, session_id: f"coord-token-{session_id}")
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
+    create_calls = 0
+
     def fake_api_json(_api_url: str, token: str, path: str, *, method: str = "GET", **_k: object) -> dict[str, Any]:
+        nonlocal create_calls
         if method == "POST" and path == "directed-inputs":
+            create_calls += 1
+            if create_calls > 1 and receipt_record is not None:
+                return receipt_record
             return created
         if "direction=outbound" in path:
             return {"directed_inputs": [receipt_record] if receipt_record else []}
@@ -107,6 +124,12 @@ def _install_session_and_api_fakes(
         raise AssertionError(f"unexpected call: {method} {path} token={token}")
 
     monkeypatch.setattr(m, "api_json", fake_api_json)
+
+    def stable_manifest(_root: Path) -> list[dict[str, Any]]:
+        assert fake_shipper.stopped is True
+        return []
+
+    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
     return fake_shipper
 
 
@@ -173,13 +196,12 @@ def test_run_fails_the_receive_cell_when_the_receiver_never_sees_it(tmp_path: Pa
     assert result["observation"]["input_visible"] is False
 
 
-def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_SEND, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("longhouse claude exited before channel readiness")

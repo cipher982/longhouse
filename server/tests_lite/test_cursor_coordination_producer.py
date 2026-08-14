@@ -196,10 +196,13 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
     monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
 
-    def fake_create_directed_input(api_url, coordination_token, source_session_id, target_session_id, text):  # noqa: ANN001
+    def fake_create_directed_input(  # noqa: ANN001
+        api_url, coordination_token, source_session_id, target_session_id, text, client_request_id
+    ):
         assert coordination_token == "source-coordination-token"
         assert source_session_id == "source-session"
         assert target_session_id == "target-session"
+        assert client_request_id
         return {"id": 7, "source_session_id": "source-session", "input_receipt": {"status": "delivered", "id": 1}}
 
     monkeypatch.setattr(m, "_create_directed_input", fake_create_directed_input)
@@ -318,10 +321,14 @@ def test_parser_accepts_the_real_execute_retained_plan_argv_shape(tmp_path: Path
     assert parsed.provider_bin == provider_bin
 
 
-@pytest.mark.parametrize("assertion_id", ["coordination_instructions_model_visible", "provider_input_receipt_linked", "attributed_input_visible"])
+@pytest.mark.parametrize(
+    "assertion_id", ["coordination_instructions_model_visible", "provider_input_receipt_linked", "attributed_input_visible"]
+)
 def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: Path, monkeypatch, assertion_id: str) -> None:
     scenario_id = (
-        "cursor_coordination_awareness_create" if assertion_id == "coordination_instructions_model_visible" else "cursor_coordination_directed_input"
+        "cursor_coordination_awareness_create"
+        if assertion_id == "coordination_instructions_model_visible"
+        else "cursor_coordination_directed_input"
     )
     args = _base_args(tmp_path, evidence_root=tmp_path / f"evidence-{assertion_id}")
     args.variant = execution_variant_key(provider="cursor", assertion_id=assertion_id, scenario_id=scenario_id, variant=None)

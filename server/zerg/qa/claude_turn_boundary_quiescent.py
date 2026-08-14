@@ -2,10 +2,9 @@
 """Continuous producer for claude/session.activity.turn_boundary.
 
 Proves ``activity_returns_to_quiescent_at_turn_boundary``: after a real
-managed Claude turn finishes, the Runtime Host's *served* activity fact for
-that session (``GET /api/agents/sessions/{id}`` -> ``session_state.activity.state``)
-settles to ``quiescent`` -- not merely that the assistant's reply text
-eventually shows up in the transcript.
+managed Claude turn finishes, the Runtime Host's canonical per-session
+activity fact settles to ``quiescent`` -- not merely that the assistant's
+reply text eventually shows up in the transcript.
 
 ``cursor_helm_product_e2e.py``'s ``settled()`` helper documents the exact bug
 class this guards against: transcript arrival and the served activity axis
@@ -30,16 +29,18 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import artifact_manifest
+from zerg.qa.claude_live_session_support import await_assistant_marker
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
+from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import now_iso
-from zerg.qa.claude_live_session_support import send_and_await_marker
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_for_served_quiescent
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
+from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -123,8 +124,30 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 
-        launch_env = claude_launch_environment(environment, claude_bin=args.claude_bin, engine=args.engine, model=args.model)
-        session, session_id = launch_claude_session(
+        # Claude persists first-run onboarding (theme/API-key/trust) outside
+        # the Longhouse channel state. Launching the managed facade against
+        # this fresh disposable profile without completing it first leaves
+        # the session stuck at the wizard forever -- see
+        # claude_coordination_awareness_create.py's identical fix for the
+        # full rationale.
+        home, longhouse_home = isolation_paths(isolation_root)
+        onboarding = _prepare_claude_profile(
+            binary=args.claude_bin,
+            home=home,
+            workspace=workspace,
+            environment=environment,
+            recording=root / "claude-onboarding.tty",
+        )
+        write_json(root / "claude-onboarding-receipt.json", onboarding)
+
+        launch_env = claude_launch_environment(
+            environment,
+            claude_bin=args.claude_bin,
+            engine=args.engine,
+            model=args.model,
+            longhouse_home=longhouse_home,
+        )
+        session, session_id, provider_session_id = launch_claude_session(
             workspace=workspace,
             project=args.project,
             name="Longhouse turn-boundary quiescence qualification",
@@ -134,12 +157,16 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
         )
         write_json(root / "session-launch-receipt.json", {"session_id": session_id, "workspace": str(workspace)})
 
-        transcript_path, transcript_line, transcript_timestamp = send_and_await_marker(
+        # Coordination-channel messages are attributed, untrusted peer input.
+        # This is a turn-boundary probe, so submit a real Helm user turn rather
+        # than asking Claude to obey a channel-delivered command.
+        session.submit_line(prompt)
+        transcript_path, transcript_line, transcript_timestamp = await_assistant_marker(
             session_id=session_id,
-            prompt=prompt,
             marker=marker,
-            repo_root=args.repo_root,
             timeout=args.response_timeout_secs,
+            home=Path(environment["HOME"]),
+            provider_session_id=provider_session_id,
         )
         turn_completed_at = now_iso()
 
@@ -161,6 +188,9 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
         close_receipt = close_session(session)
         session = None
         write_json(root / "session-close-receipt.json", close_receipt)
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
 
         observation = {
             "session_id": session_id,
@@ -198,6 +228,9 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 close_session(session)
             except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
                 pass
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,

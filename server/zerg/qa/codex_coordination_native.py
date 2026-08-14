@@ -13,10 +13,8 @@ managed Codex Helm bridge and the real Runtime Host coordination surface
 
 Every managed Codex app-server launch (``codex_app_server_args`` in
 ``engine/src/codex_bridge.rs``) unconditionally wires the ``longhouse`` MCP
-server -- including its ``instructions=COORDINATION_INSTRUCTIONS`` payload --
-so the awareness scenarios exercise a real live turn and check the model's
-own transcript reply for evidence it actually saw those instructions, rather
-than only checking that the MCP server was configured.
+server. The create scenario requires a real ``peers`` MCP invocation in the
+native rollout, not a model claim that it remembers particular tool names.
 
 Uncertainty flagged for human review (see the accompanying report): the
 post-compaction "model still sees coordination instructions" assertion needs
@@ -302,6 +300,56 @@ def _answer_demonstrates_visibility(text: str, marker: str) -> bool:
     return marker in text and "inbox" in lowered and "reply" in lowered
 
 
+def _codex_tool_call_evidence(thread_path: Path) -> list[dict[str, Any]]:
+    """Return credential-free native rollout evidence for Codex tool calls."""
+
+    def nested_string(node: object, keys: set[str]) -> str | None:
+        if not isinstance(node, dict):
+            return None
+        for key, value in node.items():
+            if key in keys and isinstance(value, str) and value.strip():
+                return value
+        for key, value in node.items():
+            if key in {"arguments", "content", "message", "output", "result", "text"}:
+                continue
+            found = nested_string(value, keys)
+            if found is not None:
+                return found
+        return None
+
+    try:
+        lines = thread_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    evidence: list[dict[str, Any]] = []
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = row.get("payload") if isinstance(row, dict) else None
+        nodes = [payload]
+        if isinstance(payload, dict):
+            nodes.append(payload.get("item"))
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            kind = str(node.get("type") or "")
+            if "call" not in kind.replace("_", "").lower():
+                continue
+            observed = nested_string(node, {"tool", "tool_name", "name"})
+            evidence.append(
+                {
+                    "line": line_number,
+                    "type": kind,
+                    "server": nested_string(node, {"server", "server_name"}),
+                    "tool": observed,
+                    "status": node.get("status"),
+                }
+            )
+    return evidence
+
+
 def _live_send_and_wait(
     args: argparse.Namespace,
     isolation_root: Path,
@@ -338,7 +386,7 @@ def _live_send_and_wait(
 
 
 def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], dict[str, bool]]:
-    isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-coord-create-", dir="/tmp"))
+    isolation_root = Path(tempfile.mkdtemp(prefix="lcc-", dir="/tmp"))
     session_id = ""
     try:
         summary, _start_result, isolation_root = bridge_canary._start_bridge(
@@ -354,21 +402,33 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
         if not session_id or not state_file.is_file():
             raise RuntimeError("awareness-create bridge did not start a resumable provider thread")
         marker = f"LONGHOUSE_COORD_CREATE_{uuid.uuid4().hex}"
+        probe_repo = f"longhouse-coordination-awareness-probe-{uuid.uuid4().hex[:12]}"
+        prompt = (
+            f'Call the Longhouse peers MCP tool with repo="{probe_repo}" and active_only=false. '
+            f"After the tool returns, reply with exactly {marker} and nothing else."
+        )
+        _write_json(root / "awareness-probe.json", {"marker": marker, "probe_repo": probe_repo, "prompt": prompt})
         state = _live_send_and_wait(
             args,
             isolation_root,
             session_id,
             state_file,
-            _coordination_awareness_question(marker),
+            prompt,
             timeout=args.live_send_timeout_secs,
         )
         _write_json(root / "post-question-bridge-state.json", _redact_state_for_evidence(state))
         thread_path = Path(str(state.get("thread_path") or ""))
         assistant_text = _last_assistant_message(thread_path) if thread_path.is_file() else ""
         (root / "assistant-response.txt").write_text(assistant_text, encoding="utf-8")
-        visible = _answer_demonstrates_visibility(assistant_text, marker)
+        tool_calls = _codex_tool_call_evidence(thread_path) if thread_path.is_file() else []
+        _write_json(root / "native-tool-call-evidence.json", tool_calls)
+        peers_invoked = any(
+            isinstance(item.get("tool"), str) and item["tool"].rsplit("__", 1)[-1].rsplit(".", 1)[-1] == "peers" for item in tool_calls
+        )
+        visible = peers_invoked and marker in assistant_text
         observation = {
             "coordination_instructions_model_visible": visible,
+            "coordination_mcp_tool_invoked": peers_invoked,
             "turn_completed": state.get("last_turn_status") == "completed",
             "marker_present_in_reply": marker in assistant_text,
         }
@@ -383,7 +443,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
     bootstrap_observation = observe_codex_post_compaction_bootstrap()
     _write_json(root / "bootstrap-noise-observation.json", bootstrap_observation)
 
-    isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-coord-compact-", dir="/tmp"))
+    isolation_root = Path(tempfile.mkdtemp(prefix="lcp-", dir="/tmp"))
     session_id = ""
     compaction_signal_observed = False
     answered_after_compact_attempt = False
@@ -456,8 +516,8 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
     target_root = root / "target"
     source_root.mkdir()
     target_root.mkdir()
-    source_isolation = Path(tempfile.mkdtemp(prefix="lhx-codex-coord-src-", dir="/tmp"))
-    target_isolation = Path(tempfile.mkdtemp(prefix="lhx-codex-coord-dst-", dir="/tmp"))
+    source_isolation = Path(tempfile.mkdtemp(prefix="lcs-", dir="/tmp"))
+    target_isolation = Path(tempfile.mkdtemp(prefix="lcd-", dir="/tmp"))
     source_session_id = ""
     target_session_id = ""
     minted_secrets: list[str] = []

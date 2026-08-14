@@ -29,12 +29,13 @@ class _FakeSession:
     def __init__(self) -> None:
         self.process = _FakeProcess()
         self._alive = True
+        self.submitted: list[str] = []
 
     def alive(self) -> bool:
         return self._alive
 
-    def submit_line(self, _text: str) -> None:
-        return None
+    def submit_line(self, text: str) -> None:
+        self.submitted.append(text)
 
     def close(self) -> None:
         self._alive = False
@@ -82,22 +83,27 @@ def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureF
     assert payload["assertion_cells"] == [{"assertion_id": m._ASSERTION_ID, "variant": None}]
 
 
-def _install_session_fakes(monkeypatch: pytest.MonkeyPatch, *, tool_invocation: dict[str, Any] | None) -> _FakeShipper:
+def _install_session_fakes(monkeypatch: pytest.MonkeyPatch, *, tool_invocation: dict[str, Any] | None) -> tuple[_FakeShipper, _FakeSession]:
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1"))
-    monkeypatch.setattr(m, "send_and_await_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
+    monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     monkeypatch.setattr(m, "find_tool_invocation", lambda *_a, **_k: tool_invocation)
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
-    return fake_shipper
+
+    def stable_manifest(_root: Path) -> list[dict[str, Any]]:
+        assert fake_shipper.stopped is True
+        return []
+
+    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
+    return fake_shipper, fake_session
 
 
-def test_run_awareness_create_passes_when_the_model_actually_calls_peers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_awareness_create_passes_when_the_model_actually_calls_peers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
-    _install_session_fakes(
+    _shipper, fake_session = _install_session_fakes(
         monkeypatch,
         tool_invocation={
             "tool_name": "mcp__longhouse-coordination__peers",
@@ -119,14 +125,14 @@ def test_run_awareness_create_passes_when_the_model_actually_calls_peers(
     assert result["evidence_class"] == "live_token"
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
     assert result["observation"]["coordination_instructions_model_visible"] is True
+    assert len(fake_session.submitted) == 1
+    assert "Call your peers tool now" in fake_session.submitted[0]
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
 
 
-def test_run_awareness_create_fails_when_no_tool_call_is_observed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_awareness_create_fails_when_no_tool_call_is_observed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     _install_session_fakes(monkeypatch, tool_invocation=None)
 
@@ -155,9 +161,7 @@ def test_run_awareness_create_fails_when_the_tool_call_errors(tmp_path: Path, mo
     assert result["assertions"] == {m._ASSERTION_ID: False}
 
 
-def test_main_serializes_result_and_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     engine = tmp_path / "longhouse-engine"
     provider = tmp_path / "claude"
     for executable in (engine, provider):

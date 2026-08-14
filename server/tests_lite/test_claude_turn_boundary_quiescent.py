@@ -88,18 +88,17 @@ def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureF
     assert payload["assertion_cells"] == [{"assertion_id": m._ASSERTION_ID, "variant": None}]
 
 
-def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": str(tmp_path)}))
-    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1"))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
     monkeypatch.setattr(
         m,
-        "send_and_await_marker",
+        "await_assistant_marker",
         lambda **_k: ("/tmp/transcript.jsonl", 3, "2026-01-01T00:00:00Z"),
     )
     monkeypatch.setattr(
@@ -108,6 +107,12 @@ def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(
         lambda **_k: (True, 1.25, ["thinking", "quiescent"]),
     )
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
+
+    def stable_manifest(_root: Path) -> list[dict[str, Any]]:
+        assert fake_shipper.stopped is True
+        return []
+
+    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
 
     result = m.run_turn_boundary_scenario(args)
 
@@ -122,27 +127,34 @@ def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(
     assert result["scenario_revision"] == m.REGISTRATION.scenario_revision
     assert result["evidence_class"] == "live_token"
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
-    assert isinstance(result["artifact_manifest"], list) and result["artifact_manifest"]
+    assert result["artifact_manifest"] == []
     observation = result["observation"]
     assert observation["returned_to_quiescent"] is True
     assert observation["session_closed_cleanly"] is True
+    assert len(fake_session.submitted) == 1
+    assert fake_session.submitted[0].startswith("Reply with exactly LONGHOUSE_CLAUDE_TURN_BOUNDARY_")
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
 
 
-def test_run_turn_boundary_fails_closed_when_activity_never_settles(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_turn_boundary_fails_closed_when_activity_never_settles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": str(tmp_path)}))
-    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1"))
-    monkeypatch.setattr(m, "send_and_await_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
+    monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     monkeypatch.setattr(m, "wait_for_served_quiescent", lambda **_k: (False, 90.0, ["thinking", "thinking"]))
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
+
+    def stable_manifest(_root: Path) -> list[dict[str, Any]]:
+        assert fake_shipper.stopped is True
+        return []
+
+    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
 
     result = m.run_turn_boundary_scenario(args)
 
@@ -152,13 +164,12 @@ def test_run_turn_boundary_fails_closed_when_activity_never_settles(
     assert fake_shipper.stopped is True
 
 
-def test_run_turn_boundary_records_a_typed_failure_on_launch_exception(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_turn_boundary_records_a_typed_failure_on_launch_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     fake_shipper = _FakeShipper()
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": str(tmp_path)}))
+    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("Claude Helm process exited before its TUI became ready")
@@ -173,9 +184,7 @@ def test_run_turn_boundary_records_a_typed_failure_on_launch_exception(
     assert fake_shipper.stopped is True
 
 
-def test_main_serializes_result_and_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     engine = tmp_path / "longhouse-engine"
     provider = tmp_path / "claude"
     for executable in (engine, provider):

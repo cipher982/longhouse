@@ -81,15 +81,29 @@ def test_run_awareness_create_pass_path(tmp_path: Path, monkeypatch: pytest.Monk
             return _fake_run_version(argv_str)
         if "send" in argv_str:
             prompt = argv_str[argv_str.index("--text") + 1]
-            marker = re.search(r"starting with exactly (\S+):", prompt).group(1)
+            marker = re.search(r"reply with exactly (\S+) and", prompt, re.IGNORECASE).group(1)
             state_file = holder["state_file"]
             thread_path = holder["thread_path"]
             state = json.loads(state_file.read_text(encoding="utf-8"))
             state["last_turn_status"] = "completed"
             state_file.write_text(json.dumps(state), encoding="utf-8")
-            reply = f"{marker} use inbox for durable recovery and reply to respond to attributed input."
+            reply = marker
             thread_path.write_text(
-                json.dumps({"payload": {"type": "agent_message", "message": reply}}) + "\n",
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "payload": {
+                                    "type": "mcp_tool_call_end",
+                                    "invocation": {"server_name": "longhouse", "tool_name": "peers"},
+                                    "arguments": {"repo": "probe", "active_only": False},
+                                }
+                            }
+                        ),
+                        json.dumps({"payload": {"type": "agent_message", "message": reply}}),
+                    ]
+                )
+                + "\n",
                 encoding="utf-8",
             )
             return subprocess.CompletedProcess(argv_str, 0, "{}", "")
@@ -105,6 +119,7 @@ def test_run_awareness_create_pass_path(tmp_path: Path, monkeypatch: pytest.Monk
 
     assert assertions == {"coordination_instructions_model_visible": True}
     assert observation["coordination_instructions_model_visible"] is True
+    assert observation["coordination_mcp_tool_invoked"] is True
     assert (root / "cleanup-receipt.json").is_file()
 
 
@@ -223,9 +238,7 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
     assert observation["visible_bootstrap_count"] == 1
 
 
-def test_run_awareness_post_compaction_fails_closed_without_a_compaction_signal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_awareness_post_compaction_fails_closed_without_a_compaction_signal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """If the TUI never shows evidence /compact did anything, do not claim post-compaction visibility."""
 
     args = _args(tmp_path)

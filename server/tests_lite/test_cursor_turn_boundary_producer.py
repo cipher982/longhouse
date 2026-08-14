@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -61,18 +62,22 @@ def test_registration_cli_flag_prints_registration(capsys) -> None:
 def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path, monkeypatch) -> None:
     args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
     fake_shipper = _FakeShipper()
+    monkeypatch.delenv("LONGHOUSE_CURSOR_BIN", raising=False)
+    monkeypatch.delenv("LONGHOUSE_HOME", raising=False)
 
     monkeypatch.setattr(cursor_turn_boundary_producer, "_isolated_provider_home", lambda: tmp_path / "home")
     (tmp_path / "home").mkdir()
-    monkeypatch.setattr(
-        cursor_turn_boundary_producer,
-        "_start_transcript_shipper",
-        lambda *a, **k: fake_shipper,
-    )
+
+    def fake_start_transcript_shipper(*_args, **_kwargs):
+        assert os.environ["LONGHOUSE_CURSOR_BIN"] == str(args.provider_bin)
+        return fake_shipper
+
+    monkeypatch.setattr(cursor_turn_boundary_producer, "_start_transcript_shipper", fake_start_transcript_shipper)
     monkeypatch.setattr(cursor_turn_boundary_producer, "_sha256", lambda _path: "sha256:fake")
 
     def fake_run_product_e2e(e2e_args: argparse.Namespace) -> dict[str, Any]:
         assert e2e_args.skip_machine_agent_restart is True
+        assert e2e_args.turn_boundary_only is True
         assert e2e_args.longhouse_bin == str(args.longhouse_cli)
         assert e2e_args.engine_bin == str(args.engine)
         return {
@@ -103,6 +108,8 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
     assert result["scenario_revision"] == REGISTRATION.scenario_revision
     assert result["evidence_class"] == "live_token"
     assert result["assertions"] == {"activity_returns_to_quiescent_at_turn_boundary": True}
+    assert "LONGHOUSE_CURSOR_BIN" not in os.environ
+    assert "LONGHOUSE_HOME" not in os.environ
     assert result["producer"]["producer_id"] == REGISTRATION.producer_id
     assert result["session_id"] == "session-123"
     assert fake_shipper.stop_calls >= 1

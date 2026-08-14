@@ -129,6 +129,9 @@ class _PtyProcess:
         reader.start()
         return cls(process, master_fd, terminal_path, stop, reader)
 
+    def send(self, text: str) -> None:
+        os.write(self.master_fd, text.encode())
+
     def close(self) -> None:
         self.stop.set()
         if self.process.poll() is None:
@@ -146,6 +149,27 @@ class _PtyProcess:
         except OSError:
             pass
         self.reader.join(timeout=2)
+
+
+def _accept_workspace_trust_if_prompted(session: _PtyProcess, *, timeout: float) -> bool:
+    """Approve Cursor's explicit trust prompt for the disposable canary workspace."""
+
+    deadline = time.monotonic() + min(timeout, 10.0)
+    while time.monotonic() < deadline:
+        try:
+            terminal = session.terminal_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            terminal = ""
+        if "Workspace Trust Required" in terminal and "Trust this workspace" in terminal:
+            # Cursor renders this as a single-key chooser ("press the key
+            # shown"), not a line-oriented prompt. Sending Enter leaves some
+            # releases parked on the chooser.
+            session.send("a")
+            return True
+        if session.process.poll() is not None:
+            raise RuntimeError(f"Cursor exited before workspace trust was resolved (exit={session.process.returncode})")
+        time.sleep(0.1)
+    return False
 
 
 def _engine_command(engine: str, session_id: str, kind: str, text: str | None = None) -> None:
@@ -208,6 +232,13 @@ def _can_send_live(payload: dict[str, Any]) -> bool:
     return isinstance(capabilities, dict) and capabilities.get("can_send_input") is True
 
 
+def _can_send_canonical(state: dict[str, Any] | None) -> bool:
+    control = (state or {}).get("control")
+    actions = control.get("actions") if isinstance(control, dict) else None
+    send_input = actions.get("send_input") if isinstance(actions, dict) else None
+    return isinstance(send_input, dict) and send_input.get("state") == "available"
+
+
 def _activity_state(state: dict[str, Any] | None) -> str | None:
     activity = (state or {}).get("activity")
     return activity.get("state") if isinstance(activity, dict) else None
@@ -221,6 +252,15 @@ def _run_lifecycle(state: dict[str, Any] | None) -> str | None:
 def _run_id(state: dict[str, Any] | None) -> str | None:
     run = (state or {}).get("run")
     return run.get("id") if isinstance(run, dict) else None
+
+
+def _canonical_state_from_diagnostics(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Extract exact per-session reducer axes from the QA diagnostics surface."""
+
+    if not isinstance(payload, dict) or payload.get("served_path") != "canonical_session_detail":
+        return None
+    shadow = payload.get("shadow")
+    return shadow if isinstance(shadow, dict) else None
 
 
 def _session_locked(response: httpx.Response) -> bool:
@@ -275,6 +315,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             cwd=workspace,
             terminal_path=terminal_path,
         )
+        report["workspace_trust_accepted"] = _accept_workspace_trust_if_prompted(session, timeout=args.timeout)
 
         def new_state() -> dict[str, Any] | None:
             for candidate in _state_ids(root) - before_ids:
@@ -362,9 +403,8 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         def session_state() -> dict[str, Any] | None:
-            payload = api_get(f"/api/agents/sessions/{session_id}")
-            state = payload.get("session_state") if payload else None
-            return state if isinstance(state, dict) else None
+            payload = api_get(f"/api/agents/sessions/{session_id}/state-diagnostics")
+            return _canonical_state_from_diagnostics(payload)
 
         def settled(deadline: float) -> dict[str, Any]:
             """Served activity must return to quiescent once a turn is done.
@@ -392,7 +432,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         first_settled = settled(args.timeout)
         bound_run_id = _run_id(first_settled)
         _wait_until(
-            lambda: (payload if _can_send_live(payload) else None) if (payload := api_get(f"/api/agents/sessions/{session_id}")) else None,
+            lambda: (state if _can_send_canonical(state) else None) if (state := session_state()) else None,
             timeout=args.timeout,
             description="Cursor live-control lease on Runtime Host",
         )
@@ -405,6 +445,48 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
         settled(args.timeout)
 
+        # Assertion-scoped factory qualification only needs two independent
+        # turn boundaries plus clean teardown. Keep the release canary's
+        # permission/deny/interrupt/recovery sequence intact by default; it is
+        # a separate product contract and must not make the narrower activity
+        # assertion depend on unrelated remote-approval behavior.
+        if getattr(args, "turn_boundary_only", False):
+            archive_lags = [first_archive_lag, second_archive_lag]
+            if max(archive_lags) > args.max_archive_lag:
+                raise RuntimeError(
+                    f"Cursor archive lag exceeded {args.max_archive_lag:.1f}s: " + ", ".join(f"{value:.2f}s" for value in archive_lags)
+                )
+            _engine_command(engine, session_id, "stop")
+            ended = _wait_until(
+                lambda: (current if _run_lifecycle(current) == "ended" else None) if (current := session_state()) else None,
+                timeout=args.timeout,
+                description="Cursor run reaching ended after session teardown",
+            )
+            if bound_run_id is not None and _run_id(ended) != bound_run_id:
+                raise RuntimeError(f"Cursor session changed runs across its life: started on {bound_run_id}, ended on {_run_id(ended)}")
+            if _activity_state(ended) == "thinking":
+                raise RuntimeError("Cursor session still reports thinking after teardown")
+            report.update(
+                {
+                    "status": "passed",
+                    "run_lifecycle_after_teardown": "ended",
+                    "activity_after_teardown": _activity_state(ended),
+                    "run_id_stable_across_session": True,
+                    "finished_at": _now(),
+                    "session_id": session_id,
+                    "provider_conversation_id": claim["conversation_uuid"],
+                    "cursor_pid": state["cursor_pid"],
+                    "first_event_count": first["total"],
+                    "second_event_count": second["total"],
+                    "archive_lag_seconds": {
+                        "first": round(first_archive_lag, 3),
+                        "second": round(second_archive_lag, 3),
+                    },
+                    "qualification_scope": "turn_boundary_only",
+                }
+            )
+            return report
+
         machine_agent_restart = None
         restart_archive_lag = None
         if not args.skip_machine_agent_restart:
@@ -413,9 +495,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             if session.process.poll() is not None:
                 raise RuntimeError("Cursor TUI exited during Machine Agent restart")
             _wait_until(
-                lambda: (payload if _can_send_live(payload) else None)
-                if (payload := api_get(f"/api/agents/sessions/{session_id}"))
-                else None,
+                lambda: (state if _can_send_canonical(state) else None) if (state := session_state()) else None,
                 timeout=args.timeout,
                 description="Cursor live-control lease after Machine Agent restart",
             )
@@ -609,6 +689,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--longhouse-bin", default="longhouse")
     parser.add_argument("--engine-bin", default="longhouse-engine")
     parser.add_argument("--skip-machine-agent-restart", action="store_true")
+    parser.add_argument("--turn-boundary-only", action="store_true")
     return parser
 
 

@@ -41,6 +41,7 @@ from typing import Callable
 from zerg.qa.managed_claude_live import assistant_transcript_contains
 from zerg.qa.managed_claude_live import channel_send
 from zerg.qa.managed_claude_live import find_channel_session_id
+from zerg.qa.managed_claude_live import read_provider_session_id
 from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.managed_claude_live import transcript_paths
@@ -179,6 +180,84 @@ def api_json_tolerant(api_url: str, token: str, path: str, *, method: str = "GET
         return None
 
 
+_SAFE_LOCAL_CONTROL_FIELDS = (
+    "authority_class",
+    "provider",
+    "session_id",
+    "provider_session_id",
+    "run_id",
+    "connection_id",
+    "lease_generation",
+    "state",
+    "terminal_attached",
+    "bridge_status",
+    "granted_operations",
+    "source",
+    "observed_at",
+)
+
+
+def local_managed_control_snapshot(longhouse_home: Path, session_id: str) -> dict[str, Any] | None:
+    """Return a credential-free local control snapshot for one managed session."""
+
+    status_path = longhouse_home / "agent" / "engine-status.json"
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    machine_evidence = payload.get("machine_evidence")
+    control = machine_evidence.get("control") if isinstance(machine_evidence, dict) else None
+    controls = [
+        {field: item.get(field) for field in _SAFE_LOCAL_CONTROL_FIELDS if field in item}
+        for item in (control if isinstance(control, list) else [])
+        if isinstance(item, dict) and item.get("session_id") == session_id
+    ]
+    leases = [
+        {field: item.get(field) for field in ("session_id", "provider", "state", "bridge_status", "observed_at") if field in item}
+        for item in (payload.get("managed_sessions") if isinstance(payload.get("managed_sessions"), list) else [])
+        if isinstance(item, dict) and item.get("session_id") == session_id
+    ]
+    sessions = [
+        {
+            "session_id": item.get("session_id"),
+            "provider": item.get("provider"),
+            "state": item.get("state"),
+            "control_path": item.get("control_path"),
+            "reason_codes": item.get("reason_codes"),
+        }
+        for item in (payload.get("sessions") if isinstance(payload.get("sessions"), list) else [])
+        if isinstance(item, dict) and item.get("session_id") == session_id
+    ]
+    return {
+        "status_path": str(status_path),
+        "controls": controls,
+        "managed_sessions": leases,
+        "sessions": sessions,
+    }
+
+
+def local_managed_control_fact(longhouse_home: Path, session_id: str) -> dict[str, Any] | None:
+    """Return the safe, attached control fact emitted by the disposable Machine Agent.
+
+    ``engine-status.json`` is the local projection immediately upstream of the
+    Runtime Host heartbeat.  Polling it avoids using the timeline wall as a
+    control-readiness API: the wall is a bounded, eventually-consistent list
+    and a newly registered qualification session may legitimately not be in
+    its first 200 cards yet.  Select fields instead of copying the raw status
+    document because adjacent provider state may contain credentials.
+    """
+
+    snapshot = local_managed_control_snapshot(longhouse_home, session_id)
+    if snapshot is None:
+        return None
+    for item in snapshot["controls"]:
+        operations = item.get("granted_operations")
+        if item.get("state") != "attached" or not isinstance(operations, list) or "send_input" not in operations:
+            continue
+        return item
+    return None
+
+
 def activity_state(session_payload: dict[str, Any] | None) -> str | None:
     session_state = (session_payload or {}).get("session_state")
     activity = session_state.get("activity") if isinstance(session_state, dict) else None
@@ -215,9 +294,38 @@ def start_machine_and_shipper(args: Any, *, isolation_root: Path, evidence_root:
     return shipper, environment
 
 
-def claude_launch_environment(base_environment: dict[str, str], *, claude_bin: Path, engine: Path, model: str | None) -> dict[str, str]:
+def scanner_visible_claude_binary(claude_bin: Path, *, longhouse_home: Path) -> Path:
+    """Expose a staged Claude executable under the production ``claude`` basename.
+
+    Factory release artifacts are intentionally normalized to a generic file
+    named ``provider``.  The Machine Agent's process-identity scanner is
+    intentionally stricter: a PID is Claude authority only when its command
+    contains a ``claude`` basename.  Launch through an isolation-local symlink
+    so qualification preserves that invariant instead of weakening it.
+    """
+
+    if claude_bin.name == "claude":
+        return claude_bin
+    alias = longhouse_home / "qa-provider-bin" / "claude"
+    alias.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        alias.symlink_to(claude_bin)
+    except FileExistsError:
+        if alias.resolve(strict=False) != claude_bin.resolve(strict=False):
+            raise
+    return alias
+
+
+def claude_launch_environment(
+    base_environment: dict[str, str],
+    *,
+    claude_bin: Path,
+    engine: Path,
+    model: str | None,
+    longhouse_home: Path,
+) -> dict[str, str]:
     environment = dict(base_environment)
-    environment["LONGHOUSE_CLAUDE_BIN"] = str(claude_bin)
+    environment["LONGHOUSE_CLAUDE_BIN"] = str(scanner_visible_claude_binary(claude_bin, longhouse_home=longhouse_home))
     environment["LONGHOUSE_ENGINE_BIN"] = str(engine)
     if model:
         environment["ANTHROPIC_MODEL"] = model
@@ -232,13 +340,17 @@ def launch_claude_session(
     env: dict[str, str],
     terminal_path: Path,
     launch_timeout_secs: float,
-) -> tuple[ProviderPtySession, str]:
-    """Launch ``longhouse claude``, clear its first-run prompts, return (session, session_id).
+) -> tuple[ProviderPtySession, str, str | None]:
+    """Launch ``longhouse claude``, clear its first-run prompts, return (session, session_id, provider_session_id).
 
     Prompt text/handling mirrors the already-live ``claude_conversation_reset``
     and ``managed_claude_live`` canaries: a fresh disposable profile always
     renders the workspace-trust and local-development-channel selectors before
-    it registers its channel state.
+    it registers its channel state. ``provider_session_id`` is Claude's own
+    native session id (see ``read_provider_session_id``) -- callers that will
+    later look up transcript content for this session (``send_and_await_marker``,
+    ``find_tool_invocation``) must pass it through; the Longhouse ``session_id``
+    alone does not name a real transcript file.
     """
 
     session = ProviderPtySession.start(
@@ -247,23 +359,52 @@ def launch_claude_session(
         env=env,
         terminal_path=terminal_path,
     )
+    # managed_claude_live.wait_for_channel_ready/find_channel_session_id
+    # default to Path.home(), which is only correct when the spawned Claude
+    # process shares the caller's ambient HOME. start_machine_and_shipper
+    # gives this session its own disposable, isolated HOME (recorded in
+    # `env`), so the readiness poll below must look there too -- not at
+    # whatever HOME this producer's own top-level sandbox process happens to
+    # have (QualificationSandbox's own fixed sandbox-home, a different path
+    # entirely). Without this, polling silently checks the wrong directory
+    # forever and every launch times out regardless of real readiness.
+    session_home = Path(env["HOME"]) if env.get("HOME") else None
     confirmed_trust = False
     confirmed_channel = False
+    confirmed_permission_bypass = False
+    resolved_provider_session_id: str | None = None
 
     def channel_ready() -> str | None:
-        nonlocal confirmed_trust, confirmed_channel
+        nonlocal confirmed_trust, confirmed_channel, confirmed_permission_bypass, resolved_provider_session_id
         if not session.alive():
             raise ScenarioError(f"longhouse claude exited before channel readiness (exit={session.process.returncode})")
         compact = re.sub(r"\s+", "", terminal_text(terminal_path))
+        # Recent Claude builds render a native bypass-permissions
+        # acknowledgement ("1. No, exit" / "2. Yes, I accept") before
+        # publishing channel state, on every fresh launch in this sandboxed
+        # mode -- not just first-run onboarding. provider_native_resume.py's
+        # _accept_claude_permission_prompt already handles this for Resume;
+        # this helper never learned to, so every producer built on top of it
+        # hung at this exact prompt indefinitely (found registering the 12
+        # non-Resume producers' real end-to-end verification).
+        if not confirmed_permission_bypass and "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
+            session.write(b"2\r")
+            confirmed_permission_bypass = True
         if not confirmed_trust and "Yes,Itrustthisfolder" in compact:
             session.write(b"\r")
             confirmed_trust = True
         if not confirmed_channel and "Iamusingthisforlocaldevelopment" in compact:
             session.write(b"\r")
             confirmed_channel = True
-        candidate = find_channel_session_id(workspace)
-        if candidate and wait_for_channel_ready(candidate, timeout_secs=0.2):
-            return candidate
+        candidate = find_channel_session_id(workspace, home=session_home)
+        if candidate and wait_for_channel_ready(candidate, timeout_secs=0.2, home=session_home):
+            # The lifecycle hook that attaches Claude's own native session id
+            # to this same state file can lag slightly behind `ready` --
+            # require it too before declaring the session usable, or a later
+            # transcript lookup has no real id to search for.
+            resolved_provider_session_id = read_provider_session_id(candidate, home=session_home)
+            if resolved_provider_session_id:
+                return candidate
         return None
 
     try:
@@ -271,7 +412,7 @@ def launch_claude_session(
     except Exception:
         session.close()
         raise
-    return session, session_id
+    return session, session_id, resolved_provider_session_id
 
 
 def send_and_await_marker(
@@ -281,15 +422,50 @@ def send_and_await_marker(
     marker: str,
     repo_root: Path,
     timeout: float,
+    env: dict[str, str] | None = None,
+    provider_session_id: str | None = None,
 ) -> tuple[str, int, str | None]:
-    """Send ``prompt`` over the Claude channel and wait for ``marker`` in the assistant transcript."""
+    """Send ``prompt`` over the Claude channel and wait for ``marker`` in the assistant transcript.
 
-    send = channel_send(session_id, prompt, repo_root=repo_root)
+    ``provider_session_id`` is Claude's own native session id (from
+    ``launch_claude_session``'s return value) -- the transcript file is named
+    by that id, not the Longhouse ``session_id``, which is unrelated.
+    """
+
+    send = channel_send(session_id, prompt, repo_root=repo_root, env=env)
     if send.returncode != 0:
         raise ScenarioError(f"claude-channel send failed with status {send.returncode}: {send.stderr[-1000:]}")
 
+    home = Path(env["HOME"]) if env and env.get("HOME") else None
+    return await_assistant_marker(
+        session_id=session_id,
+        marker=marker,
+        timeout=timeout,
+        home=home,
+        provider_session_id=provider_session_id,
+    )
+
+
+def await_assistant_marker(
+    *,
+    session_id: str,
+    marker: str,
+    timeout: float,
+    home: Path | None = None,
+    provider_session_id: str | None = None,
+) -> tuple[str, int, str | None]:
+    """Wait for one assistant marker after the caller has submitted a real user turn.
+
+    Coordination-channel input is attributed, untrusted peer input. Producers
+    that need the model to follow an instruction must submit that instruction
+    through their owned Helm PTY, then use this observer instead of disguising
+    the channel message as a trusted user command.
+    """
+
+    lookup_id = transcript_lookup_id(session_id, provider_session_id)
+
     def observed() -> tuple[bool, str | None, int | None, str | None] | None:
-        result = assistant_transcript_contains(transcript_lookup_id(session_id), marker)
+        result = assistant_transcript_contains(lookup_id, marker, home=home)
         return result if result[0] else None
 
     _observed, transcript_path, transcript_line, transcript_timestamp = wait_until(
@@ -305,25 +481,27 @@ def wait_for_served_quiescent(
     session_id: str,
     timeout: float,
 ) -> tuple[bool, float, list[str]]:
-    """Poll the Runtime Host's served activity fact for this session until quiescent.
+    """Poll the canonical session reducer until this session is quiescent.
 
-    Cursor's product E2E canary (``cursor_helm_product_e2e.settled``) documents
-    the real failure mode this exists to catch: transcript arrival and the
-    served activity axis are independent, so a finished turn can keep reading
-    as "thinking" (or decay to "unknown" once its freshness TTL expires)
-    without ever having been observed as quiescent. Poll the served fact
-    itself instead of inferring settlement from transcript arrival.
+    ``GET /api/agents/sessions/{id}`` intentionally returns the narrow archive
+    shape and does not expose ``session_state``. The QA diagnostics surface
+    exposes the exact ``canonical_session_detail`` reducer under ``shadow``;
+    use that per-session authority rather than a bounded wall listing.
     """
 
     samples: list[str] = []
     started = time.monotonic()
 
     def settled() -> dict[str, Any] | None:
-        payload = api_json_tolerant(api_url, token, f"sessions/{session_id}")
-        state = activity_state(payload)
-        if state is not None:
+        payload = api_json_tolerant(api_url, token, f"sessions/{session_id}/state-diagnostics")
+        shadow = payload.get("shadow") if isinstance(payload, dict) else None
+        activity = shadow.get("activity") if isinstance(shadow, dict) else None
+        state = activity.get("state") if isinstance(activity, dict) else None
+        if isinstance(state, str):
             samples.append(state)
-        return payload if state == "quiescent" else None
+        if payload and payload.get("served_path") == "canonical_session_detail" and state == "quiescent":
+            return payload
+        return None
 
     try:
         wait_until(settled, timeout=timeout, description="served Claude activity settling to quiescent at the turn boundary")
@@ -337,6 +515,7 @@ def find_tool_invocation(
     tool_name_contains: str,
     *,
     after_line_counts: dict[str, int] | None = None,
+    home: Path | None = None,
 ) -> dict[str, Any] | None:
     """Find a real ``tool_use``/``tool_result`` pair in Claude's own transcript.
 
@@ -351,7 +530,7 @@ def find_tool_invocation(
     just absence).
     """
 
-    for path in transcript_paths(session_id):
+    for path in transcript_paths(session_id, home=home):
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
@@ -403,6 +582,41 @@ def find_tool_invocation(
                 "is_error": None,
                 "result": None,
             }
+    return None
+
+
+def find_compaction_boundary(
+    session_id: str,
+    *,
+    after_line_counts: dict[str, int],
+    home: Path | None = None,
+) -> dict[str, Any] | None:
+    """Find a real Claude compaction row written after the supplied transcript cursor."""
+
+    for path in transcript_paths(session_id, home=home):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        first_candidate_line = int(after_line_counts.get(str(path), 0) or 0) + 1
+        for index, line in enumerate(lines, start=1):
+            if index < first_candidate_line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            row_type = row.get("type")
+            subtype = row.get("subtype")
+            if row_type == "summary" or (row_type == "system" and subtype in {"compact_boundary", "microcompact_boundary"}):
+                return {
+                    "transcript_path": str(path),
+                    "line": index,
+                    "type": row_type,
+                    "subtype": subtype,
+                }
     return None
 
 

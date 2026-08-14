@@ -35,21 +35,23 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import artifact_manifest
+from zerg.qa.claude_live_session_support import await_assistant_marker
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
+from zerg.qa.claude_live_session_support import find_compaction_boundary
 from zerg.qa.claude_live_session_support import find_tool_invocation
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import mcp_bootstrap_config_paths
 from zerg.qa.claude_live_session_support import now_iso
-from zerg.qa.claude_live_session_support import send_and_await_marker
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
+from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.managed_claude_live import transcript_line_counts
-from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
+from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
@@ -99,6 +101,7 @@ REGISTRATION = ProducerRegistration(
         "transcript_shipper_receipt",
         "session_launch_receipt",
         "pre_compaction_tool_invocation_evidence",
+        "compaction_boundary_receipt",
         "post_compaction_tool_invocation_evidence",
         "mcp_bootstrap_config_manifest",
     ),
@@ -136,8 +139,30 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 
-        launch_env = claude_launch_environment(environment, claude_bin=args.claude_bin, engine=args.engine, model=args.model)
-        session, session_id = launch_claude_session(
+        # Claude persists first-run onboarding (theme/API-key/trust) outside
+        # the Longhouse channel state. Launching the managed facade against
+        # this fresh disposable profile without completing it first leaves
+        # the session stuck at the wizard forever -- see
+        # claude_coordination_awareness_create.py's identical fix for the
+        # full rationale.
+        onboarding_home, _longhouse_home_for_onboarding = isolation_paths(isolation_root)
+        onboarding = _prepare_claude_profile(
+            binary=args.claude_bin,
+            home=onboarding_home,
+            workspace=workspace,
+            environment=environment,
+            recording=root / "claude-onboarding.tty",
+        )
+        write_json(root / "claude-onboarding-receipt.json", onboarding)
+
+        launch_env = claude_launch_environment(
+            environment,
+            claude_bin=args.claude_bin,
+            engine=args.engine,
+            model=args.model,
+            longhouse_home=longhouse_home,
+        )
+        session, session_id, provider_session_id = launch_claude_session(
             workspace=workspace,
             project=args.project,
             name="Longhouse coordination-awareness-post-compaction qualification",
@@ -146,31 +171,49 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             launch_timeout_secs=args.launch_timeout_secs,
         )
         write_json(root / "session-launch-receipt.json", {"session_id": session_id, "workspace": str(workspace)})
+        transcript_id = provider_session_id or session_id
 
-        send_and_await_marker(
+        # These are real Helm-user turns. The coordination channel is
+        # deliberately untrusted peer input and must not be used to command
+        # the model to call a tool.
+        session.submit_line(peers_prompt(marker_pre))
+        await_assistant_marker(
             session_id=session_id,
-            prompt=peers_prompt(marker_pre),
             marker=marker_pre,
-            repo_root=args.repo_root,
             timeout=args.response_timeout_secs,
+            home=Path(environment["HOME"]),
+            provider_session_id=provider_session_id,
         )
-        pre_invocation = find_tool_invocation(session_id, "peers")
+        pre_invocation = find_tool_invocation(transcript_id, "peers", home=Path(environment["HOME"]))
         write_json(root / "pre-compaction-tool-invocation.json", pre_invocation or {"found": False})
 
         bootstrap_configs_before = mcp_bootstrap_config_paths(longhouse_home, session_id)
 
-        pre_compaction_line_counts = transcript_line_counts(transcript_lookup_id(session_id))
+        pre_compaction_line_counts = transcript_line_counts(transcript_id, home=Path(environment["HOME"]))
         session.submit_line("/compact")
         wait_for_terminal_quiescence(session, timeout=args.compaction_timeout_secs, minimum_bytes=1, stable_seconds=2.0)
-
-        send_and_await_marker(
-            session_id=session_id,
-            prompt=peers_prompt(marker_post),
-            marker=marker_post,
-            repo_root=args.repo_root,
-            timeout=args.response_timeout_secs,
+        compaction_boundary = wait_until(
+            lambda: find_compaction_boundary(
+                transcript_id,
+                after_line_counts=pre_compaction_line_counts,
+                home=Path(environment["HOME"]),
+            ),
+            timeout=args.compaction_timeout_secs,
+            description="Claude transcript compaction boundary",
         )
-        post_invocation = find_tool_invocation(session_id, "peers", after_line_counts=pre_compaction_line_counts)
+        write_json(root / "compaction-boundary-receipt.json", compaction_boundary)
+
+        session.submit_line(peers_prompt(marker_post))
+        await_assistant_marker(
+            session_id=session_id,
+            marker=marker_post,
+            timeout=args.response_timeout_secs,
+            home=Path(environment["HOME"]),
+            provider_session_id=provider_session_id,
+        )
+        post_invocation = find_tool_invocation(
+            transcript_id, "peers", after_line_counts=pre_compaction_line_counts, home=Path(environment["HOME"])
+        )
         write_json(root / "post-compaction-tool-invocation.json", post_invocation or {"found": False})
 
         bootstrap_configs_after = mcp_bootstrap_config_paths(longhouse_home, session_id)
@@ -185,6 +228,9 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         close_receipt = close_session(session)
         session = None
         write_json(root / "session-close-receipt.json", close_receipt)
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
 
         pre_ok = (
             pre_invocation is not None and pre_invocation.get("tool_result_line") is not None and pre_invocation.get("is_error") is not True
@@ -208,7 +254,8 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             "pre_compaction_marker": marker_pre,
             "post_compaction_marker": marker_post,
             "pre_compaction_tool_call_ok": pre_ok,
-            "coordination_instructions_model_visible_after_compaction": post_ok,
+            "compaction_signal_observed": compaction_boundary is not None,
+            "coordination_instructions_model_visible_after_compaction": post_ok and compaction_boundary is not None,
             "pre_compaction_tool_invocation": pre_invocation,
             "post_compaction_tool_invocation": post_invocation,
             "mcp_bootstrap_configs_before_compact": [str(path) for path in bootstrap_configs_before],
@@ -247,6 +294,9 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
                 close_session(session)
             except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
                 pass
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,

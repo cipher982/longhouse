@@ -26,17 +26,19 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import artifact_manifest
+from zerg.qa.claude_live_session_support import await_assistant_marker
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
 from zerg.qa.claude_live_session_support import find_tool_invocation
+from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import now_iso
-from zerg.qa.claude_live_session_support import send_and_await_marker
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
+from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -105,8 +107,32 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 
-        launch_env = claude_launch_environment(environment, claude_bin=args.claude_bin, engine=args.engine, model=args.model)
-        session, session_id = launch_claude_session(
+        # Claude persists first-run onboarding (theme/API-key/trust) outside
+        # the Longhouse channel state. Launching the managed facade against
+        # this fresh disposable profile without completing it first leaves
+        # the session stuck at the wizard forever -- no channel readiness,
+        # no MCP tool surface, indistinguishable from a hang. Every proven
+        # Resume producer gets this for free through provider_native_resume's
+        # shared launch path; this producer launches Claude directly, so it
+        # needs the same priming call explicitly.
+        home, longhouse_home = isolation_paths(isolation_root)
+        onboarding = _prepare_claude_profile(
+            binary=args.claude_bin,
+            home=home,
+            workspace=workspace,
+            environment=environment,
+            recording=root / "claude-onboarding.tty",
+        )
+        write_json(root / "claude-onboarding-receipt.json", onboarding)
+
+        launch_env = claude_launch_environment(
+            environment,
+            claude_bin=args.claude_bin,
+            engine=args.engine,
+            model=args.model,
+            longhouse_home=longhouse_home,
+        )
+        session, session_id, provider_session_id = launch_claude_session(
             workspace=workspace,
             project=args.project,
             name="Longhouse coordination-awareness-create qualification",
@@ -116,20 +142,27 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
         )
         write_json(root / "session-launch-receipt.json", {"session_id": session_id, "workspace": str(workspace)})
 
-        send_and_await_marker(
+        # Coordination-channel messages are attributed, untrusted peer input;
+        # asking Claude to obey one as a command correctly triggers its safety
+        # posture. Enter this behavioral probe as the Helm user instead.
+        session.submit_line(prompt)
+        await_assistant_marker(
             session_id=session_id,
-            prompt=prompt,
             marker=marker,
-            repo_root=args.repo_root,
             timeout=args.response_timeout_secs,
+            home=Path(environment["HOME"]),
+            provider_session_id=provider_session_id,
         )
 
-        invocation = find_tool_invocation(session_id, "peers")
+        invocation = find_tool_invocation(provider_session_id or session_id, "peers", home=Path(environment["HOME"]))
         write_json(root / "tool-invocation-evidence.json", invocation or {"found": False})
 
         close_receipt = close_session(session)
         session = None
         write_json(root / "session-close-receipt.json", close_receipt)
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
 
         tool_called_successfully = (
             invocation is not None and invocation.get("tool_result_line") is not None and invocation.get("is_error") is not True
@@ -165,6 +198,9 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 close_session(session)
             except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
                 pass
+        if shipper is not None:
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            shipper = None
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
