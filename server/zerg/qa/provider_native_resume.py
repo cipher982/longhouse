@@ -3516,6 +3516,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     home: Path | None = None
     environment = os.environ.copy()
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
+    environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
+    environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
+    environment["LONGHOUSE_LAUNCH_SURFACE"] = "test"
     if spec.provider == "opencode":
         configured_model = str(environment.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL") or "").strip()
         if configured_model:

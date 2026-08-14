@@ -126,6 +126,60 @@ def find_hatch_automation_candidates(db: Session, *, limit: int = 100) -> list[d
     return candidates
 
 
+def find_test_or_canary_candidates(db: Session, *, limit: int = 100) -> list[dict[str, Any]]:
+    """Report QA/probe-shaped rows (coordination probes) without mutating them."""
+
+    rows = (
+        db.query(AgentSession, SessionThread)
+        .join(SessionThread, SessionThread.session_id == AgentSession.id)
+        .filter(SessionThread.is_primary == 1)
+        .filter(AgentSession.hidden_from_default_timeline == 0)
+        .filter(
+            or_(
+                AgentSession.project.ilike("%longhouse-coordination-awareness-probe%"),
+                AgentSession.cwd.ilike("%longhouse-coordination-awareness-probe%"),
+            )
+        )
+        .order_by(AgentSession.started_at.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    candidates: list[dict[str, Any]] = []
+    for session, thread in rows:
+        candidate = _candidate_dict(db, session, thread)
+        candidate["reason"] = "qa-probe project/source; report-only until reviewed"
+        candidate["confidence"] = "high"
+        candidates.append(candidate)
+    return candidates
+
+
+def find_benchmark_candidates(db: Session, *, limit: int = 100) -> list[dict[str, Any]]:
+    """Report benchmark-shaped rows (legacy ``ws_*`` workspaces) without mutating them."""
+
+    rows = (
+        db.query(AgentSession, SessionThread)
+        .join(SessionThread, SessionThread.session_id == AgentSession.id)
+        .filter(SessionThread.is_primary == 1)
+        .filter(AgentSession.hidden_from_default_timeline == 0)
+        .filter(
+            or_(
+                AgentSession.project.ilike("ws_%"),
+                AgentSession.cwd.ilike("%/ws_%"),
+            )
+        )
+        .order_by(AgentSession.started_at.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    candidates: list[dict[str, Any]] = []
+    for session, thread in rows:
+        candidate = _candidate_dict(db, session, thread)
+        candidate["reason"] = "benchmark ws_* workspace; report-only until reviewed"
+        candidate["confidence"] = "low"
+        candidates.append(candidate)
+    return candidates
+
+
 def classify_reviewed_hatch_automation_sessions(
     db: Session,
     *,

@@ -479,6 +479,8 @@ def db_classify_automation(
     from zerg.database import make_sessionmaker
     from zerg.services.agents.automation_backfill import REVIEWABLE_HIDDEN_ORIGIN_KINDS
     from zerg.services.agents.automation_backfill import classify_reviewed_hatch_automation_sessions
+    from zerg.services.agents.automation_backfill import find_benchmark_candidates
+    from zerg.services.agents.automation_backfill import find_test_or_canary_candidates
 
     if apply_changes and not session_ids:
         typer.echo("--apply requires at least one reviewed --session-id.", err=True)
@@ -499,6 +501,8 @@ def db_classify_automation(
             origin_kind=normalized_origin_kind,
             candidate_limit=candidate_limit,
         )
+        qa_candidates = find_test_or_canary_candidates(db, limit=candidate_limit)
+        benchmark_candidates = find_benchmark_candidates(db, limit=candidate_limit)
     finally:
         db.close()
 
@@ -509,6 +513,8 @@ def db_classify_automation(
         "origin_kind": normalized_origin_kind,
         "note": "Heuristic Hatch candidates are report-only; only explicit reviewed --session-id rows are applied.",
         **result.to_dict(),
+        "qa_probe_candidate_count": len(qa_candidates),
+        "benchmark_candidate_count": len(benchmark_candidates),
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -524,6 +530,12 @@ def db_classify_automation(
         typer.echo(f"Already marked: {', '.join(result.already_marked_session_ids)}")
     typer.echo(f"Heuristic candidates (report-only): {len(result.heuristic_candidates)}")
     for candidate in result.heuristic_candidates[:10]:
+        typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
+    typer.echo(f"QA probe candidates (report-only): {len(qa_candidates)}")
+    for candidate in qa_candidates[:10]:
+        typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
+    typer.echo(f"Benchmark candidates (report-only): {len(benchmark_candidates)}")
+    for candidate in benchmark_candidates[:10]:
         typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
 
 

@@ -408,6 +408,22 @@ def _add_missing_episode_columns(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE episode_embeddings ADD COLUMN start_order_time_us INTEGER")
 
 
+def _add_missing_visibility_columns(connection: sqlite3.Connection) -> None:
+    """Add nullable visibility columns in place rather than rebuilding the store.
+
+    ``hidden_from_default_timeline`` drives worklog/search visibility and is
+    derivable from the storage session facts at publish time. Old rows predate
+    the classification and remain NULL until re-published; consumers treat NULL
+    as "not hidden". ``origin_kind`` is carried for diagnostics only.
+    """
+
+    columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(session_index)").fetchall()}
+    if "hidden_from_default_timeline" not in columns:
+        connection.execute("ALTER TABLE session_index ADD COLUMN hidden_from_default_timeline INTEGER")
+    if "origin_kind" not in columns:
+        connection.execute("ALTER TABLE session_index ADD COLUMN origin_kind TEXT")
+
+
 def _discard_derived_store(path: Path) -> None:
     for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
         candidate.unlink(missing_ok=True)
@@ -574,9 +590,11 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             assistant_messages INTEGER NOT NULL,
             tool_calls INTEGER NOT NULL,
             is_sidechain INTEGER NOT NULL,
+            hidden_from_default_timeline INTEGER,
             project TEXT,
             provider TEXT NOT NULL,
             environment TEXT NOT NULL,
+            origin_kind TEXT,
             cwd TEXT,
             git_repo TEXT,
             started_at TEXT NOT NULL,
@@ -623,6 +641,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _add_missing_episode_columns(connection)
+    _add_missing_visibility_columns(connection)
     now = datetime.now(UTC).isoformat()
     existing = connection.execute("SELECT schema_version, schema_generation, store_id FROM search_meta WHERE singleton = 1").fetchone()
     if existing is None:
@@ -1309,6 +1328,8 @@ class SearchStore:
         cwd: str | None,
         git_repo: str | None,
         started_at: str,
+        hidden_from_default_timeline: bool = False,
+        origin_kind: str | None = None,
     ) -> dict[str, object]:
         now = datetime.now(UTC).isoformat()
         self.connection.execute("BEGIN IMMEDIATE")
@@ -1344,8 +1365,9 @@ class SearchStore:
                     session_id, generation_id, owner_id, desired_revision, indexed_through,
                     object_count, object_set_hash, event_count,
                     user_messages, assistant_messages, tool_calls, is_sidechain,
+                    hidden_from_default_timeline, origin_kind,
                     project, provider, environment, cwd, git_repo, started_at, published_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     generation_id=excluded.generation_id,
                     owner_id=excluded.owner_id,
@@ -1358,6 +1380,8 @@ class SearchStore:
                     assistant_messages=excluded.assistant_messages,
                     tool_calls=excluded.tool_calls,
                     is_sidechain=excluded.is_sidechain,
+                    hidden_from_default_timeline=excluded.hidden_from_default_timeline,
+                    origin_kind=excluded.origin_kind,
                     project=excluded.project,
                     provider=excluded.provider,
                     environment=excluded.environment,
@@ -1379,6 +1403,8 @@ class SearchStore:
                     int(aggregates["assistant_messages"] or 0),
                     int(aggregates["tool_calls"] or 0),
                     int(aggregates["is_sidechain"] or 0),
+                    1 if hidden_from_default_timeline else 0,
+                    origin_kind,
                     project,
                     provider,
                     environment,
@@ -1797,6 +1823,7 @@ class SearchStore:
                 WHERE s.owner_id = ?
                   AND e.order_time_us >= ? AND e.order_time_us < ?
                   AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
+                  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
                 GROUP BY e.session_id
             )
             SELECT s.session_id, s.project, s.provider, s.cwd, s.git_repo, s.started_at,
@@ -1857,6 +1884,7 @@ class SearchStore:
               AND (e.role != 'user' OR (e.title_eligible = 1
                    AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
               AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
+              AND COALESCE(s.hidden_from_default_timeline, 0) = 0
               AND (? IS NULL OR
                    (e.session_id, e.order_time_us, e.machine_id, e.provider,
                     e.opaque_source_id, e.source_epoch, e.source_position,

@@ -981,6 +981,9 @@ def _provider_runtime_environment(
             # isolation_root/longhouse, so its durable terminal event never
             # reaches the Runtime Host and Resume remains run_active.
             "LONGHOUSE_HOME": str(isolation_root / "longhouse"),
+            "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
+            "LONGHOUSE_LAUNCH_ACTOR": "automation",
+            "LONGHOUSE_LAUNCH_SURFACE": "test",
         }
     )
     return environment

@@ -197,6 +197,9 @@ def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root:
     # WebSocket starts. Bind the exact staged Cursor binary before starting
     # the shipper so cursor.send is present for directed-input delivery.
     environment["LONGHOUSE_CURSOR_BIN"] = str(args.provider_bin)
+    environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
+    environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
+    environment["LONGHOUSE_LAUNCH_SURFACE"] = "test"
 
     evidence_root = root / f"shipper-{label}"
     evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)

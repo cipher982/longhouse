@@ -842,11 +842,15 @@ def _publish_params(value: dict) -> dict:
         "cwd",
         "git_repo",
         "started_at",
+        "hidden_from_default_timeline",
+        "origin_kind",
     }
     _exact_keys(value, expected)
     for field in ("object_count", "event_count"):
         if type(value[field]) is not int or not 0 <= value[field] <= 1_000_000_000:
             raise ValueError(f"{field} is invalid")
+    if type(value["hidden_from_default_timeline"]) is not bool:
+        raise ValueError("hidden_from_default_timeline must be a boolean")
     object_set_hash = value["object_set_hash"]
     if not isinstance(object_set_hash, str) or _HASH.fullmatch(object_set_hash) is None:
         raise ValueError("object_set_hash must be a lowercase SHA-256 hash")
@@ -867,6 +871,8 @@ def _publish_params(value: dict) -> dict:
         "cwd": _text(value["cwd"], "cwd", 4_096, optional=True),
         "git_repo": _text(value["git_repo"], "git_repo", 500, optional=True),
         "started_at": _text(value["started_at"], "started_at", 64),
+        "hidden_from_default_timeline": value["hidden_from_default_timeline"],
+        "origin_kind": _text(value["origin_kind"], "origin_kind", 64, optional=True),
     }
 
 

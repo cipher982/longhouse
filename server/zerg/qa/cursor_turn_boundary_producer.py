@@ -135,6 +135,9 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         # cursor` lets Helm launch, but leaves cursor.send/interrupt/terminate
         # absent from the already-connected control channel.
         os.environ["LONGHOUSE_CURSOR_BIN"] = str(args.provider_bin)
+        os.environ["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
+        os.environ["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
+        os.environ["LONGHOUSE_LAUNCH_SURFACE"] = "test"
 
         # Passing os.environ itself (not a copy) so the machine-identity
         # LONGHOUSE_HOME binding _start_transcript_shipper writes lands on

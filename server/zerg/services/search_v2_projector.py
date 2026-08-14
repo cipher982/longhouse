@@ -279,6 +279,8 @@ class SearchV2Projector:
                 "cwd": session.get("cwd"),
                 "git_repo": session.get("git_repo"),
                 "started_at": session["started_at"],
+                "hidden_from_default_timeline": bool(session.get("hidden_from_default_timeline", False)),
+                "origin_kind": session.get("origin_kind"),
             },
         )
         if published.get("published") is not True:

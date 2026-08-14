@@ -1327,6 +1327,8 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
             "cwd": "/workspace/longhouse",
             "git_repo": "cipher982/longhouse",
             "started_at": "2026-07-12T12:00:00+00:00",
+            "hidden_from_default_timeline": False,
+            "origin_kind": None,
         }
         lagged = await client.call("search.index.publish.v2", {**base_publish, "object_count": 2})
         assert lagged["projection_lag"] is True

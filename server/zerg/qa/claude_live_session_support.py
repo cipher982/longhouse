@@ -327,6 +327,9 @@ def claude_launch_environment(
     environment = dict(base_environment)
     environment["LONGHOUSE_CLAUDE_BIN"] = str(scanner_visible_claude_binary(claude_bin, longhouse_home=longhouse_home))
     environment["LONGHOUSE_ENGINE_BIN"] = str(engine)
+    environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
+    environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
+    environment["LONGHOUSE_LAUNCH_SURFACE"] = "test"
     if model:
         environment["ANTHROPIC_MODEL"] = model
     return environment
