@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 250,
+  "file_count": 249,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1987,13 +1987,6 @@
     },
     {
       "path": "web/src/components/__tests__/SessionPickerModal.test.tsx",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "web/src/components/landing/ThesisControlFlow.tsx",
       "providers": [
         "claude",
         "codex"

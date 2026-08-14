@@ -15,10 +15,25 @@ const TICK = 1 / 30;
 
 export interface DemoClock {
   tSec: number;
+  cycle: number;
   playing: boolean;
   reducedMotion: boolean;
   seek: (tSec: number) => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
+}
+
+export function advanceDemoClock(
+  positionSec: number,
+  cycle: number,
+  dtSec: number,
+  durationSec: number,
+): { positionSec: number; cycle: number } {
+  const next = Math.max(0, positionSec) + Math.max(0, dtSec);
+  const wraps = Math.floor(next / durationSec);
+  return {
+    positionSec: next % durationSec,
+    cycle: cycle + wraps,
+  };
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -48,7 +63,9 @@ export function useDemoClock(durationSec: number, posterSec: number): DemoClock 
   );
 
   const clockRef = useRef(0);
+  const cycleRef = useRef(0);
   const [tSec, setTSec] = useState(0);
+  const [cycle, setCycle] = useState(0);
   const playing = !reducedMotion && isInViewport && isDocumentVisible;
 
   useEffect(() => {
@@ -70,7 +87,9 @@ export function useDemoClock(durationSec: number, posterSec: number): DemoClock 
   useEffect(() => {
     if (reducedMotion) {
       clockRef.current = posterSec;
+      cycleRef.current = 0;
       setTSec(posterSec);
+      setCycle(0);
     }
   }, [reducedMotion, posterSec]);
 
@@ -82,7 +101,17 @@ export function useDemoClock(durationSec: number, posterSec: number): DemoClock 
       if (last !== null) {
         // Cap dt so a background-throttled tab doesn't skip beats on return.
         const dt = Math.min((now - last) / 1000, 0.25);
-        clockRef.current = (clockRef.current + dt) % durationSec;
+        const next = advanceDemoClock(
+          clockRef.current,
+          cycleRef.current,
+          dt,
+          durationSec,
+        );
+        clockRef.current = next.positionSec;
+        if (next.cycle !== cycleRef.current) {
+          cycleRef.current = next.cycle;
+          setCycle(next.cycle);
+        }
         const quantized = Math.floor(clockRef.current / TICK) * TICK;
         setTSec((prev) => (prev === quantized ? prev : quantized));
       }
@@ -102,5 +131,5 @@ export function useDemoClock(durationSec: number, posterSec: number): DemoClock 
     [durationSec],
   );
 
-  return { tSec, playing, reducedMotion, seek, containerRef };
+  return { tSec, cycle, playing, reducedMotion, seek, containerRef };
 }

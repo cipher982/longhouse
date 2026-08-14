@@ -7,12 +7,14 @@ import {
   beatWindows,
   type BeatId,
 } from "@longhouse/video/demo";
+import { generateDemoStory, useDemoSeed, type DemoStory } from "../../../lib/demoSimulation";
 import { useDemoClock } from "./useDemoClock";
 import { AgentsBeat } from "./AgentsBeat";
 import { UnifyBeat } from "./UnifyBeat";
 import { SteerBeat } from "./SteerBeat";
 import { CloseBeat } from "./CloseBeat";
 import { clamp, clamp01 } from "./ease";
+import "../../../styles/hero-demo.css";
 
 /**
  * The landing hero demo, rendered natively as DOM — no video element, no
@@ -24,7 +26,12 @@ import { clamp, clamp01 } from "./ease";
  * video/src/demo/script.ts, shared with the mp4 export composition.
  */
 
-const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<{ tLocal: number }>> = {
+interface BeatProps {
+  tLocal: number;
+  story: DemoStory | null;
+}
+
+const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<BeatProps>> = {
   agents: AgentsBeat,
   unify: UnifyBeat,
   steer: SteerBeat,
@@ -32,7 +39,12 @@ const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<{ tLocal: number }>> =
 };
 
 export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) {
-  const { tSec, seek, containerRef } = useDemoClock(DEMO_DURATION_SEC, POSTER_SEC);
+  const { tSec, cycle, seek, containerRef } = useDemoClock(DEMO_DURATION_SEC, POSTER_SEC);
+  const seed = useDemoSeed();
+  const story = useMemo(
+    () => cycle === 0 ? null : generateDemoStory(seed, cycle - 1),
+    [cycle, seed],
+  );
   const windows = useMemo(() => beatWindows(), []);
 
   const activeIndex = windows.reduce(
@@ -41,7 +53,14 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
   );
 
   return (
-    <div ref={containerRef} className="hero-demo" role="group" aria-label={ariaLabel}>
+    <div
+      ref={containerRef}
+      className="hero-demo"
+      role="group"
+      aria-label={ariaLabel}
+      data-demo-cycle={cycle}
+      data-demo-story={story?.id ?? "recorded"}
+    >
       <div className="hero-demo-stage">
         {windows.map((w, i) => {
           const local = tSec - w.startSec;
@@ -64,7 +83,7 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
               }}
               aria-hidden={i !== activeIndex}
             >
-              <BeatComponent tLocal={clamp(local, 0, w.durSec)} />
+              <BeatComponent tLocal={clamp(local, 0, w.durSec)} story={story} />
             </div>
           );
         })}
@@ -73,13 +92,12 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
         <p className="hero-demo-caption" key={windows[activeIndex].id}>
           {windows[activeIndex].caption}
         </p>
-        <div className="hero-demo-dots" role="tablist" aria-label="Demo parts">
+        <div className="hero-demo-dots" role="group" aria-label="Demo parts">
           {windows.map((w, i) => (
             <button
               key={w.id}
               type="button"
-              role="tab"
-              aria-selected={i === activeIndex}
+              aria-pressed={i === activeIndex}
               className={`hero-demo-dot${i === activeIndex ? " is-active" : ""}`}
               aria-label={`Part ${i + 1} of ${BEATS.length}: ${w.caption}`}
               onClick={() => seek(w.startSec + (i === 0 ? 0 : CROSSFADE_SEC))}

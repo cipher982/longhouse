@@ -4,7 +4,7 @@ import { ramp } from "./ease";
 
 /** Beat 4: wordmark close (the footer caption carries the tagline). */
 
-function Beat({ tLocal }: { tLocal: number }) {
+function Beat({ tLocal }: { tLocal: number; story?: unknown }) {
   const markIn = ramp(tLocal, 0.1, 0.5);
   const namesIn = ramp(tLocal, 0.7, 0.5);
   return (

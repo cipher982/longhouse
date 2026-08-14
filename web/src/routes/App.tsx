@@ -1,4 +1,4 @@
-import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
+import { useRoutes, Outlet, Navigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
 import BlogIndexPage from "../pages/BlogIndexPage";

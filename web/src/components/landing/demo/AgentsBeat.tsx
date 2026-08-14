@@ -12,7 +12,7 @@ import { ResponsiveTerminal } from "./ResponsiveTerminal";
 
 const RECORDINGS = { claudeTile, codexTile, opencodeTile } as const;
 
-function Beat({ tLocal }: { tLocal: number }) {
+function Beat({ tLocal }: { tLocal: number; story?: unknown }) {
   return (
     <div className="hero-demo-agents">
       {AGENT_TILES.map((tile) => {

@@ -8,7 +8,7 @@ import { HeroDemoFallback } from "./demo/HeroDemoFallback";
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
 const DEMO_ARIA_LABEL =
-  "Longhouse demo: recorded coding-agent sessions unify into one system, then a phone sends an instruction and the recorded Claude Code session responds";
+  "Longhouse demo: real recorded coding-agent sessions unify into one system, then later loops simulate varied remote work without running a live model";
 const HeroDemo = lazy(() =>
   import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({ default: Component })),
 );
@@ -85,15 +85,14 @@ export function HeroSection() {
         </p>
 
         <h1 className="landing-hero-headline">
-          Remote control for <span className="gradient-text">every coding agent you run.</span>
+          Remote control for <span className="gradient-text">your coding agents.</span>
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse plugs into the Claude Code, Codex, Cursor, and OpenCode installs
-          already on your machines and normalizes every session into one system.
-          Watch any agent work from anywhere; launch through Longhouse and steer it
-          too — send the next instruction, interrupt, resume — from the web or your
-          iPhone.
+          Longhouse connects to coding-agent CLIs already installed on your machines
+          and puts every session in one system. Watch from the web or your iPhone.
+          Launch supported agents through Longhouse to send instructions, interrupt,
+          and resume, with the controls each provider exposes.
         </p>
 
         <div className="hero-install">
@@ -118,7 +117,10 @@ export function HeroSection() {
               aria-label={`Copy install command: ${INSTALL_COMMAND}`}
             >
               <span className="hero-install-prompt" aria-hidden="true">$</span>
-              <code className="hero-install-text">{INSTALL_COMMAND}</code>
+              <code className="hero-install-text">
+                <span>curl -fsSL</span>{" "}
+                <span>https://get.longhouse.ai/install.sh | bash</span>
+              </code>
               <span className={`hero-install-copy ${copied ? "copied" : ""}`}>
                 <CopyIcon copied={copied} />
               </span>
@@ -152,8 +154,8 @@ export function HeroSection() {
           <HeroDemo aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
         <p className="landing-hero-video-note">
-          Demo shows real provider CLIs replayed from recordings, with scripted model
-          responses.
+          First loop: real recorded sessions. Later loops simulate new tasks locally.
+          No live model runs in this hero demo.
         </p>
       </div>
     </section>

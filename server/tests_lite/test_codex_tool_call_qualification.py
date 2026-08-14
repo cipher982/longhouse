@@ -158,7 +158,12 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     assert {record["outcome"] for record in bundle["records"]} == {"pass"}
     assert {record["evidence_class"] for record in bundle["records"]} == {"live_token"}
     assert {record["assertion_id"] for record in bundle["records"]} == set(profile.ASSERTIONS)
+    assert (output / "proof-bundle.json").read_bytes() == json.dumps(
+        bundle, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    assert (output / "proof-bundle.json").read_bytes().endswith(b"\n") is False
     raw = (output / "raw-evidence.json").read_bytes()
+    assert raw.endswith(b"\n")
     assert bundle["execution_metadata"]["raw_evidence_digest"] == f"sha256:{hashlib.sha256(raw).hexdigest()}"
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
     assert invocations[0]["argv"] == ["--version"]

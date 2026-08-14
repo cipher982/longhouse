@@ -1,6 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { render, screen } from "@testing-library/react";
+import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { config } from "../../lib/config";
 import { TestRouter } from "../../test/test-utils";
@@ -35,12 +34,8 @@ vi.mock("../../components/landing/HeroSection", () => ({
   HeroSection: () => <div>Hero Section</div>,
 }));
 
-vi.mock("../../components/landing/KernelThesisSection", () => ({
-  KernelThesisSection: () => <div>Kernel Thesis</div>,
-}));
-
-vi.mock("../../components/landing/HowItWorksSection", () => ({
-  HowItWorksSection: () => <div>How It Works</div>,
+vi.mock("../../components/landing/RemoteWorkSceneSection", () => ({
+  RemoteWorkSceneSection: () => <div>Remote Work Scene</div>,
 }));
 
 vi.mock("../../components/landing/MachineSurfaceSection", () => ({
@@ -63,18 +58,9 @@ vi.mock("../../components/landing/TrustSection", () => ({
   TrustSection: () => <div>Trust Section</div>,
 }));
 
-vi.mock("../../components/landing/InstallSection", () => ({
-  InstallSection: () => <div>Install Section</div>,
-}));
-
 vi.mock("../../components/landing/FooterCTA", () => ({
   FooterCTA: () => <div>Footer CTA</div>,
 }));
-
-function LocationProbe() {
-  const location = useLocation();
-  return <div data-testid="location-search">{location.search}</div>;
-}
 
 function renderLandingPage(initialEntry = "/") {
   return render(
@@ -83,7 +69,6 @@ function renderLandingPage(initialEntry = "/") {
         <Route path="/" element={<LandingPage />} />
         <Route path="/timeline" element={<div>Timeline Home</div>} />
       </Routes>
-      <LocationProbe />
     </TestRouter>,
   );
 }
@@ -112,7 +97,7 @@ describe("LandingPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("redirects authenticated users to the timeline unless noredirect is set", async () => {
+  it("redirects authenticated users to the timeline", async () => {
     authMocks.useAuth.mockReturnValue({
       isAuthenticated: true,
       isLoading: false,
@@ -123,40 +108,4 @@ describe("LandingPage", () => {
     expect(await screen.findByText("Timeline Home")).toBeInTheDocument();
   });
 
-  it("keeps authenticated users on landing when noredirect=1", async () => {
-    authMocks.useAuth.mockReturnValue({
-      isAuthenticated: true,
-      isLoading: false,
-    });
-
-    renderLandingPage("/?noredirect=1");
-
-    expect(await screen.findByText("Hero Section")).toBeInTheDocument();
-    expect(screen.queryByText("Timeline Home")).not.toBeInTheDocument();
-  });
-
-  it("treats screenshot theme as URL-owned state", async () => {
-    const user = userEvent.setup();
-
-    renderLandingPage("/?marketing=true&screenshot_theme=warm");
-
-    expect(await screen.findByText("Hero Section")).toBeInTheDocument();
-    expect(document.querySelector(".landing-page")).toHaveAttribute("data-screenshot-theme", "warm");
-
-    await user.click(screen.getByRole("button", { name: "Cool Pop" }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("location-search")).toHaveTextContent(
-        /\?marketing=true&screenshot_theme=cool-pop|\\?screenshot_theme=cool-pop&marketing=true/,
-      );
-    });
-    expect(document.querySelector(".landing-page")).toHaveAttribute("data-screenshot-theme", "cool-pop");
-  });
-
-  it("updates the root ui-effects attribute from URL-driven fx state", async () => {
-    renderLandingPage("/?fx=none");
-
-    expect(await screen.findByText("Hero Section")).toBeInTheDocument();
-    expect(document.getElementById("react-root")).toHaveAttribute("data-ui-effects", "off");
-  });
 });

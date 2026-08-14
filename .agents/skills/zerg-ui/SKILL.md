@@ -12,6 +12,18 @@ mcp__browser-hub__browser(action="navigate", url="https://longhouse.ai")
 mcp__browser-hub__browser(action="look")  # Screenshot + A11y tree
 ```
 
+## Remote Scene Visual QA
+
+For the ASCII scene on the landing page, capture a review bundle before making a visual-quality claim:
+
+```bash
+make qa-remote-scene
+# Standalone Vite or a denser sample:
+FRONTEND_URL=http://localhost:3000 EVERY=4 OUTPUT=artifacts/remote-scene-qa/my-run make qa-remote-scene
+```
+
+The bundle contains sampled desktop and mobile frames, chronological contact sheets, a manifest, and `review-prompt.md`. Give only that bundle to a separate vision-capable agent. Ask it to follow the prompt without reading source code or the implementation brief. The prompt is deliberately open-ended so the reviewer describes what the images actually communicate instead of confirming a prescribed rubric.
+
 ## Local Debug Bundle (Authenticated Views)
 Requires `make dev` running. Produces a full debug bundle:
 

@@ -27,6 +27,7 @@ export interface PhoneSessionScreenProps {
   sendEnabled?: boolean;
   sent: boolean;
   working: boolean;
+  machineName?: string;
   onComposerChange?: (value: string) => void;
   onSend: () => void;
 }
@@ -105,6 +106,7 @@ export function PhoneSessionScreen({
   composerDisabled = false,
   sent,
   working,
+  machineName = "macbook",
   runtimeLabel = working ? "Working" : "Idle",
   runtimeDetail = working ? undefined : "Waiting for input",
   runtimeTone = working ? "working" : "waiting",
@@ -204,7 +206,7 @@ export function PhoneSessionScreen({
           </div>
           <span className="phone-session-capability">
             <span className="phone-session-capability-dot" aria-hidden="true" />
-            macbook
+            {machineName}
           </span>
         </div>
 

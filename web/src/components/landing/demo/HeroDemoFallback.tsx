@@ -1,3 +1,5 @@
+import "../../../styles/hero-demo.css";
+
 const TERMINALS = [
   {
     title: "Claude Code",
