@@ -1972,13 +1972,23 @@ class SearchStore:
                 cursor = self.connection.execute(
                     f"""
                     UPDATE {table}
-                    SET hidden_from_default_timeline = 1, origin_kind = ?
+                    SET hidden_from_default_timeline = 1
                     WHERE session_id = ?
                       AND COALESCE(hidden_from_default_timeline, 0) = 0
                     """,
-                    (normalized, str(session_id)),
+                    (str(session_id),),
                 )
                 changed_rows += int(cursor.rowcount or 0)
+            cursor = self.connection.execute(
+                """
+                UPDATE session_index
+                SET origin_kind = ?
+                WHERE session_id = ?
+                  AND COALESCE(origin_kind, '') != ?
+                """,
+                (normalized, str(session_id), normalized),
+            )
+            changed_rows += int(cursor.rowcount or 0)
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")

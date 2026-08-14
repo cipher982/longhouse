@@ -1966,3 +1966,109 @@ def test_searchd_upgrades_legacy_empty_object_for_same_subject_only(tmp_path):
             store.index_object(**{**params, "session_id": str(uuid4()), "desired_revision": 3})
     finally:
         connection.close()
+
+
+def test_reclassify_origin_flips_hidden_across_index_and_searchable_corpus(tmp_path):
+    """Reclassify must flip both session_index and searchable_events, and the
+    origin-kind diagnostics write must not touch searchable_events (which only
+    carries the hidden flag)."""
+
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = str(uuid4())
+    source_epoch = str(uuid4())
+    records = [
+        {**record, "order_time_us": now_us + index}
+        for index, record in enumerate(_records("indexed answer"))
+    ]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="claude",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="claude/session.jsonl",
+            source_epoch=source_epoch,
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="claude",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+
+        def search(include_origin_hidden: bool):
+            return store.search(
+                owner_id="42",
+                query="answer",
+                project=None,
+                provider=None,
+                environment=None,
+                window_start_us=now_us - 60_000_000,
+                window_end_us=None,
+                limit=10,
+                include_origin_hidden=include_origin_hidden,
+            )
+
+        assert session_id in [row["session_id"] for row in search(False)["results"]]
+        assert session_id in [row["session_id"] for row in search(True)["results"]]
+
+        result = store.reclassify_session_origin(
+            session_id=session_id,
+            origin_kind="hatch_automation",
+            observed_at=datetime.now(UTC).isoformat(),
+        )
+        assert result["reclassified"] is True
+        assert result["rows_changed"] >= 1
+        assert session_id not in [row["session_id"] for row in search(False)["results"]]
+        assert session_id in [row["session_id"] for row in search(True)["results"]]
+
+        index_row = connection.execute(
+            "SELECT hidden_from_default_timeline, origin_kind FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        assert index_row["hidden_from_default_timeline"] == 1
+        assert index_row["origin_kind"] == "hatch_automation"
+        searchable_row = connection.execute(
+            "SELECT hidden_from_default_timeline FROM searchable_events WHERE session_id = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        assert searchable_row is not None
+        assert searchable_row["hidden_from_default_timeline"] == 1
+
+        # Idempotent: a second flip changes nothing more.
+        again = store.reclassify_session_origin(session_id=session_id, origin_kind="hatch_automation")
+        assert again["reclassified"] is True
+        assert again["rows_changed"] == 0
+    finally:
+        connection.close()
+
+
+def test_reclassify_origin_rejects_unknown_kind(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    try:
+        result = store.reclassify_session_origin(session_id=str(uuid4()), origin_kind="human")
+        assert result["invalid_origin_kind"] is True
+        assert result["reclassified"] is False
+    finally:
+        connection.close()
