@@ -70,7 +70,14 @@ def test_writer_stats_window_is_bounded() -> None:
 
 
 def test_catalog_engine_sets_cache_and_mmap(tmp_path) -> None:
-    """A default 2 MB page cache against a multi-GB catalog was the old state."""
+    """Cache and mmap are opt-in, and that default is a measurement.
+
+    Enabling them (64 MiB cache, 1 GiB mmap) on a 34.9 GB catalog in a 15.6 GB
+    VM drove free memory from 2.7 GB to 187 MB, pushed 300 MB to swap, and took
+    write p90 from 67 ms to 1027 ms. On a host whose page cache is already
+    smaller than the database, both mostly buy eviction. The knobs remain for a
+    host with real headroom; shipping them on by default is the regression.
+    """
 
     engine = create_catalog_engine(str(tmp_path / "catalog.db"))
     try:
@@ -83,14 +90,31 @@ def test_catalog_engine_sets_cache_and_mmap(tmp_path) -> None:
     finally:
         engine.dispose()
 
-    # Negative means KiB. The default is -2000; anything at or above that is the
-    # bug this replaced.
-    assert cache_size < -2000
-    assert mmap_size > 0
+    assert cache_size == -2000, "SQLite's default; sizing this is a per-host decision"
+    assert mmap_size == 0, "mmap maps the main DB while the WAL still uses the pager"
+    # temp_store is bounded by the query rather than the catalog, so it carries
+    # none of the memory risk the other two did, and it keeps sorts off a data
+    # volume whose fsync is 3.81ms.
     assert temp_store == 2  # MEMORY
-    # The durability posture must not have changed while tuning throughput.
+    # The durability posture must not change while tuning throughput.
     assert journal_mode.lower() == "wal"
     assert synchronous == 1  # NORMAL
+
+
+def test_cache_and_mmap_are_opt_in_when_a_host_has_headroom(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CATALOGD_CACHE_SIZE_KIB", "16384")
+    monkeypatch.setenv("CATALOGD_MMAP_SIZE_BYTES", str(64 * 1024 * 1024))
+
+    engine = create_catalog_engine(str(tmp_path / "catalog.db"))
+    try:
+        with engine.connect() as connection:
+            cache_size = connection.exec_driver_sql("PRAGMA cache_size").scalar()
+            mmap_size = connection.exec_driver_sql("PRAGMA mmap_size").scalar()
+    finally:
+        engine.dispose()
+
+    assert cache_size == -16384
+    assert mmap_size == 64 * 1024 * 1024
 
 
 def test_truncate_checkpoint_reclaims_the_wal_file(tmp_path) -> None:

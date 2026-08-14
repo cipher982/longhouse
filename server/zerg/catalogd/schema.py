@@ -431,17 +431,20 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
 
     engine = create_engine(database_url, **kwargs)
 
-    # Sized for the machine, not the database. `cache_size` is per connection and
-    # this engine is pooled, so the number that matters is the aggregate across
-    # live connections on a host with a few GB free -- not what would "cover" a
-    # multi-GB catalog, which is unreachable anyway and duplicates the kernel
-    # page cache. `mmap_size` is an address-space ceiling, demand-paged rather
-    # than reserved, and it maps the main database only: the WAL still goes
-    # through the pager, so this helps reads and does nothing for write
-    # queueing. Both are overridable because the right values depend on the
-    # deployment's RAM, which this module cannot see.
-    cache_size_kib = os.getenv("CATALOGD_CACHE_SIZE_KIB", "65536")
-    mmap_size_bytes = os.getenv("CATALOGD_MMAP_SIZE_BYTES", str(1024 * 1024 * 1024))
+    # Off by default, and that default is a measurement, not caution.
+    #
+    # Setting cache_size=64MiB and mmap_size=1GiB on the dogfood tenant (34.9GB
+    # catalog, 15.6GB VM) made things sharply worse: free memory fell from
+    # 2.7GB to 187MB, 300MB went to swap, sustained reads hit ~124MB/s, and
+    # write p90 went from 67ms to 1027ms. cache_size is per connection on a
+    # pooled engine, and mmap maps the main database while the WAL still goes
+    # through the pager -- so on a host whose page cache is already smaller than
+    # the database, both mostly buy eviction.
+    #
+    # The knobs stay because a host with real headroom would benefit. They are
+    # opt-in so nobody re-derives the above by shipping it.
+    cache_size_kib = os.getenv("CATALOGD_CACHE_SIZE_KIB", "")
+    mmap_size_bytes = os.getenv("CATALOGD_MMAP_SIZE_BYTES", "")
 
     @event.listens_for(engine, "connect")
     def _configure_connection(dbapi_connection, _connection_record) -> None:
@@ -452,9 +455,14 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             cursor.execute("PRAGMA wal_autocheckpoint=0")
-            # Negative cache_size is KiB rather than pages.
-            cursor.execute(f"PRAGMA cache_size=-{int(cache_size_kib)}")
-            cursor.execute(f"PRAGMA mmap_size={int(mmap_size_bytes)}")
+            if cache_size_kib.strip():
+                # Negative cache_size is KiB rather than pages.
+                cursor.execute(f"PRAGMA cache_size=-{int(cache_size_kib)}")
+            if mmap_size_bytes.strip():
+                cursor.execute(f"PRAGMA mmap_size={int(mmap_size_bytes)}")
+            # Sorts and joins spill to memory instead of the data volume, whose
+            # fsync is 3.81ms. Bounded by the query, not by the catalog size, so
+            # this does not carry the memory risk the other two did.
             cursor.execute("PRAGMA temp_store=MEMORY")
         finally:
             cursor.close()
