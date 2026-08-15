@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import Connection
 from sqlalchemy import delete
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy import tuple_
 from sqlalchemy import update
@@ -519,6 +520,39 @@ def _prune_candidate_rows(connection: Connection, table, candidate: tuple[Any, .
     connection.execute(delete(table).where(*candidate, table.c.id.not_in(keep_ids)))
 
 
+def _prune_candidate_rows_setwise(connection: Connection, table, candidates: list[tuple[str, str, str, str]], keep: int) -> None:
+    """Bound every candidate's retained rows in one statement.
+
+    The row-wise helper issues two DELETEs per candidate, and a fact-heavy
+    heartbeat touches ~186 candidates, so bounds enforcement cost more than the
+    reduction it was bounding: 186ms of a 476ms batch, against 108ms for the
+    actual fold.
+
+    Same rule, expressed once: keep the `keep` highest ids per candidate. This
+    must not be shared with the row-wise reducer -- the oracle compares the two,
+    and a helper changed underneath both would make them agree while both moved.
+    """
+
+    if not candidates:
+        return
+    scope = tuple_(table.c.family, table.c.subject_key, table.c.source, table.c.source_epoch)
+    ranked = (
+        select(
+            table.c.id,
+            func.row_number()
+            .over(
+                partition_by=(table.c.family, table.c.subject_key, table.c.source, table.c.source_epoch),
+                order_by=table.c.id.desc(),
+            )
+            .label("rank"),
+        )
+        .where(scope.in_(candidates))
+        .subquery()
+    )
+    doomed = select(ranked.c.id).where(ranked.c.rank > keep)
+    connection.execute(delete(table).where(table.c.id.in_(doomed)))
+
+
 def _prune_fact_family(connection: Connection, family: str) -> None:
     """Bound heads and all child history for one family in the same transaction."""
 
@@ -898,19 +932,9 @@ def reduce_fact_batch_setwise(
         connection.execute(conflict_table.insert(), pending_conflicts)
 
     fold_finished_at = time.perf_counter()
-    for fact in touched_candidates.values():
-        _prune_candidate_rows(
-            connection,
-            FactReceipt.__table__,
-            _candidate_predicates(fact, FactReceipt.__table__),
-            MAX_RECEIPTS_PER_CANDIDATE,
-        )
-        _prune_candidate_rows(
-            connection,
-            FactConflict.__table__,
-            _candidate_predicates(fact, FactConflict.__table__),
-            MAX_CONFLICTS_PER_CANDIDATE,
-        )
+    pruned_candidates = sorted(touched_candidates)
+    _prune_candidate_rows_setwise(connection, FactReceipt.__table__, pruned_candidates, MAX_RECEIPTS_PER_CANDIDATE)
+    _prune_candidate_rows_setwise(connection, FactConflict.__table__, pruned_candidates, MAX_CONFLICTS_PER_CANDIDATE)
     candidate_pruned_at = time.perf_counter()
     for family in sorted({fact.family for fact in touched_candidates.values()}):
         _prune_fact_family(connection, family)

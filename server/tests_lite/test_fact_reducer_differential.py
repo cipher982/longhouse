@@ -384,3 +384,31 @@ def test_dedupe_key_established_earlier_in_the_batch_is_visible_to_later_facts(t
     )
     assert snapshot.result[1] == 1, "the second fact must not become a head"
     assert snapshot.conflicts, "reusing a dedupe key at a new position is a recorded conflict"
+
+
+def test_retention_bound_is_per_candidate_not_global(tmp_path):
+    """Each candidate keeps its own 16, and one candidate cannot evict another.
+
+    The set-based prune expresses this as a window partitioned by candidate. A
+    window missing its PARTITION BY still passes a single-candidate test while
+    silently keeping 16 rows across the whole table -- so the bound has to be
+    checked with several candidates simultaneously over the limit.
+    """
+
+    batch = []
+    for subject in ("s1", "s2", "s3"):
+        batch.extend(make_fact(subject=subject, seq=n, payload=f"{subject}-v{n}") for n in range(1, 26))
+
+    snapshot = assert_equivalent(
+        tmp_path,
+        name="per-candidate-bound",
+        seed_batches=[],
+        batch=batch,
+    )
+
+    kept_per_candidate: dict[tuple, int] = {}
+    for row in snapshot.receipts:
+        kept_per_candidate[row[1:5]] = kept_per_candidate.get(row[1:5], 0) + 1
+    assert len(kept_per_candidate) == 3, f"every candidate must survive: {kept_per_candidate}"
+    for candidate, kept in kept_per_candidate.items():
+        assert kept == 16, f"{candidate} kept {kept}, expected its own bound of 16"
