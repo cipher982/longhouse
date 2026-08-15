@@ -58,10 +58,15 @@ _ARCHIVE_SEARCH_SQL = """
            snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
            s.project, s.provider, s.environment, s.indexed_through, s.event_count,
            events_fts.rank AS rank
+    -- CROSS JOIN pins the join order so events_fts stays the outer loop and its
+    -- rank-ordered scan satisfies ORDER BY directly. SQLite is otherwise free to
+    -- reorder, and 3.51's planner does: it drives from session_index instead and
+    -- adds USE TEMP B-TREE FOR ORDER BY, sorting the whole match set. Production
+    -- runs 3.40 so this is latent there, but it degrades silently on upgrade.
     FROM events_fts
-    JOIN events e ON e.id = events_fts.rowid
-    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-    JOIN projection_membership m
+    CROSS JOIN events e ON e.id = events_fts.rowid
+    CROSS JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    CROSS JOIN projection_membership m
       ON m.session_id = e.session_id
      AND m.generation_id = e.generation_id
      AND m.desired_revision = s.indexed_through
