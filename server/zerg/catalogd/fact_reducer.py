@@ -590,3 +590,328 @@ __all__ = [
     "reducer_facts_from_machine_evidence",
     "reduce_fact_batch",
 ]
+
+
+def reduce_fact_batch_setwise(
+    connection: Connection,
+    facts: list[ReducerFact],
+    *,
+    received_at: datetime,
+    commit_seq_override: int | None = None,
+) -> ReducerResult:
+    """Reduce one batch with a statement count independent of batch size.
+
+    The row-wise reducer issues at least three queries per fact, so a 256-fact
+    heartbeat cost 768+ sequential round trips while holding the single writer.
+
+    The rewrite is not a translation of the loop into SQL. Facts interact only
+    within a candidate (family, subject_key, source, source_epoch), and every
+    per-candidate input is already bounded -- one head, at most
+    MAX_RECEIPTS_PER_CANDIDATE receipts, at most MAX_CONFLICTS_PER_CANDIDATE
+    conflicts. So the whole decision state for a batch can be loaded in three
+    queries, folded in memory with exactly the original sequential logic, and
+    written back in three bulk statements.
+
+    Keeping the fold in Python is deliberate. The head outcome depends on
+    earlier facts in the same batch, and expressing that cascade as set
+    operations is where an "equivalent" rewrite silently stops being
+    equivalent. Reproducing it in memory makes the semantics preserved by
+    construction, and the differential oracle proves it.
+    """
+
+    if len(facts) > MAX_REDUCER_FACTS:
+        raise ValueError(f"reducer batch exceeds {MAX_REDUCER_FACTS} facts")
+    received_at = _aware(received_at, "received_at")
+    prepared, batch_duplicates, batch_conflicts = _prepare_batch(facts)
+    current_commit = _current_commit_seq(connection)
+    if commit_seq_override is not None and commit_seq_override != current_commit:
+        raise ValueError("reducer commit_seq_override must equal the current catalog commit")
+
+    allocated_commit: int | None = None
+    changed_heads = stale = conflicts = 0
+    duplicates = batch_duplicates
+    touched_candidates: dict[tuple[str, str, str, str], ReducerFact] = {}
+
+    def commit_seq() -> int:
+        nonlocal allocated_commit
+        if allocated_commit is None:
+            allocated_commit = commit_seq_override if commit_seq_override is not None else _advance_commit_seq(connection, received_at)
+        return allocated_commit
+
+    receipts = FactReceipt.__table__
+    heads = FactHead.__table__
+    conflict_table = FactConflict.__table__
+
+    candidates = {_candidate_key(fact) for fact, _ in prepared}
+    candidates.update(_candidate_key(incoming) for _winner, incoming in batch_conflicts)
+    if not candidates:
+        return ReducerResult(
+            commit_seq=current_commit,
+            changed_heads=0,
+            duplicates=duplicates,
+            stale=0,
+            conflicts=0,
+        )
+
+    candidate_list = sorted(candidates)
+    receipt_scope = tuple_(receipts.c.family, receipts.c.subject_key, receipts.c.source, receipts.c.source_epoch)
+    head_scope = tuple_(heads.c.family, heads.c.subject_key, heads.c.source, heads.c.source_epoch)
+    conflict_scope = tuple_(
+        conflict_table.c.family,
+        conflict_table.c.subject_key,
+        conflict_table.c.source,
+        conflict_table.c.source_epoch,
+    )
+
+    # Three reads for the whole batch, replacing three reads per fact.
+    dedupe_index: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    position_index: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    for row in connection.execute(
+        select(
+            receipts.c.family,
+            receipts.c.subject_key,
+            receipts.c.source,
+            receipts.c.source_epoch,
+            receipts.c.dedupe_key,
+            receipts.c.position_key,
+            receipts.c.evidence_hash,
+        ).where(receipt_scope.in_(candidate_list))
+    ).mappings():
+        key = (row["family"], row["subject_key"], row["source"], row["source_epoch"])
+        dedupe_index.setdefault(key, {})[str(row["dedupe_key"])] = str(row["evidence_hash"])
+        position_index.setdefault(key, {})[str(row["position_key"])] = str(row["evidence_hash"])
+
+    head_index: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in connection.execute(select(heads).where(head_scope.in_(candidate_list))).mappings():
+        key = (row["family"], row["subject_key"], row["source"], row["source_epoch"])
+        head_index[key] = {
+            "ordering_mode": str(row["ordering_mode"]),
+            "source_seq": row["source_seq"],
+            "evidence_hash": str(row["evidence_hash"]),
+            "observed_at": _sqlite_datetime(row["observed_at"]),
+        }
+
+    known_conflicts: set[tuple[tuple[str, str, str, str], str, str]] = set()
+    for row in connection.execute(
+        select(
+            conflict_table.c.family,
+            conflict_table.c.subject_key,
+            conflict_table.c.source,
+            conflict_table.c.source_epoch,
+            conflict_table.c.position_key,
+            conflict_table.c.incoming_hash,
+        ).where(conflict_scope.in_(candidate_list))
+    ):
+        known_conflicts.add(((row[0], row[1], row[2], row[3]), str(row[4]), str(row[5])))
+
+    pending_heads: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    pending_receipts: list[dict[str, Any]] = []
+    pending_conflicts: list[dict[str, Any]] = []
+
+    def note_conflict(fact: ReducerFact, *, existing_hash: str, position_key: str, kind: str) -> int:
+        """In-memory twin of `_record_conflict`, including its replay suppression."""
+
+        candidate = _candidate_key(fact)
+        marker = (candidate, position_key, fact.evidence_hash)
+        if marker in known_conflicts:
+            return 0
+        known_conflicts.add(marker)
+        pending_conflicts.append(
+            {
+                "family": fact.family,
+                "subject_key": fact.subject_key,
+                "source": fact.source,
+                "source_epoch": fact.source_epoch,
+                "position_key": position_key,
+                "source_seq": fact.source_seq,
+                "conflict_kind": kind,
+                "existing_hash": existing_hash,
+                "incoming_hash": fact.evidence_hash,
+                "detected_at": received_at,
+                "commit_seq": commit_seq(),
+            }
+        )
+        return 1
+
+    for fact, value_json in prepared:
+        candidate = _candidate_key(fact)
+        position_key = _position_key(fact)
+        ordering_mode = _ordering_mode(fact)
+
+        dedupe_hit = dedupe_index.get(candidate, {}).get(fact.dedupe_key)
+        if dedupe_hit is not None:
+            if dedupe_hit == fact.evidence_hash:
+                duplicates += 1
+            else:
+                conflicts += note_conflict(fact, existing_hash=dedupe_hit, position_key=position_key, kind="dedupe_key_reuse")
+                touched_candidates[candidate] = fact
+            continue
+
+        position_hit = position_index.get(candidate, {}).get(position_key)
+        if position_hit is not None:
+            if position_hit == fact.evidence_hash:
+                duplicates += 1
+            else:
+                conflicts += note_conflict(fact, existing_hash=position_hit, position_key=position_key, kind="source_position_reuse")
+                touched_candidates[candidate] = fact
+            continue
+
+        head = head_index.get(candidate)
+        if head is not None:
+            if head["ordering_mode"] != ordering_mode:
+                conflicts += note_conflict(
+                    fact,
+                    existing_hash=head["evidence_hash"],
+                    position_key=position_key,
+                    kind="ordering_mode_change",
+                )
+                touched_candidates[candidate] = fact
+                continue
+            if ordering_mode == "sequenced":
+                head_seq = int(head["source_seq"])
+                assert fact.source_seq is not None
+                if int(fact.source_seq) < head_seq:
+                    stale += 1
+                    continue
+                if int(fact.source_seq) == head_seq:
+                    if head["evidence_hash"] == fact.evidence_hash:
+                        duplicates += 1
+                    else:
+                        conflicts += note_conflict(
+                            fact,
+                            existing_hash=head["evidence_hash"],
+                            position_key=position_key,
+                            kind="head_position_reuse",
+                        )
+                        touched_candidates[candidate] = fact
+                    continue
+            else:
+                head_observed = head["observed_at"]
+                assert fact.observed_at is not None
+                if head_observed is not None and fact.observed_at < head_observed:
+                    stale += 1
+                    continue
+                if head_observed is not None and fact.observed_at == head_observed:
+                    if head["evidence_hash"] == fact.evidence_hash:
+                        duplicates += 1
+                    else:
+                        conflicts += note_conflict(
+                            fact,
+                            existing_hash=head["evidence_hash"],
+                            position_key=position_key,
+                            kind="head_position_reuse",
+                        )
+                        touched_candidates[candidate] = fact
+                    continue
+
+        seq = commit_seq()
+        pending_heads[candidate] = {
+            "family": fact.family,
+            "subject_key": fact.subject_key,
+            "source": fact.source,
+            "source_epoch": fact.source_epoch,
+            "session_id": fact.session_id,
+            "ordering_mode": ordering_mode,
+            "source_seq": fact.source_seq,
+            "evidence_hash": fact.evidence_hash,
+            "observed_at": fact.observed_at,
+            "valid_until": fact.valid_until,
+            "value_json": value_json,
+            "raw_locator": fact.raw_locator,
+            "updated_commit_seq": seq,
+            "received_at": received_at,
+        }
+        pending_receipts.append(
+            {
+                "family": fact.family,
+                "subject_key": fact.subject_key,
+                "source": fact.source,
+                "source_epoch": fact.source_epoch,
+                "position_key": position_key,
+                "source_seq": fact.source_seq,
+                "dedupe_key": fact.dedupe_key,
+                "evidence_hash": fact.evidence_hash,
+                "received_at": received_at,
+                "commit_seq": seq,
+            }
+        )
+        # Later facts in this batch must see what this one just established,
+        # exactly as they would have seen the row-wise writes.
+        dedupe_index.setdefault(candidate, {})[fact.dedupe_key] = fact.evidence_hash
+        # The position update cannot be observed today: `_prepare_batch` emits
+        # exactly one winner per (candidate, position_key), so no later fact in
+        # this batch can read it. Mutation testing confirms removing it changes
+        # nothing. It is kept because it mirrors the row-wise write and would
+        # become load-bearing the moment that grouping changes.
+        position_index.setdefault(candidate, {})[position_key] = fact.evidence_hash
+        head_index[candidate] = {
+            "ordering_mode": ordering_mode,
+            "source_seq": fact.source_seq,
+            "evidence_hash": fact.evidence_hash,
+            "observed_at": fact.observed_at,
+        }
+        touched_candidates[candidate] = fact
+        changed_heads += 1
+
+    for winner, incoming in batch_conflicts:
+        conflicts += note_conflict(
+            incoming,
+            existing_hash=winner.evidence_hash,
+            position_key=_position_key(incoming),
+            kind="same_batch_position_reuse",
+        )
+        touched_candidates[_candidate_key(incoming)] = incoming
+
+    # Three writes for the whole batch. Receipt insertion order is preserved
+    # because retention keeps the highest ids, so a reordered insert would
+    # silently change which receipts survive pruning.
+    if pending_heads:
+        head_rows = list(pending_heads.values())
+        statement = sqlite_insert(heads).values(head_rows)
+        statement = statement.on_conflict_do_update(
+            index_elements=[heads.c.family, heads.c.subject_key, heads.c.source, heads.c.source_epoch],
+            set_={
+                column: getattr(statement.excluded, column)
+                for column in (
+                    "session_id",
+                    "ordering_mode",
+                    "source_seq",
+                    "evidence_hash",
+                    "observed_at",
+                    "valid_until",
+                    "value_json",
+                    "raw_locator",
+                    "updated_commit_seq",
+                    "received_at",
+                )
+            },
+        )
+        connection.execute(statement)
+    if pending_receipts:
+        connection.execute(receipts.insert(), pending_receipts)
+    if pending_conflicts:
+        connection.execute(conflict_table.insert(), pending_conflicts)
+
+    for fact in touched_candidates.values():
+        _prune_candidate_rows(
+            connection,
+            FactReceipt.__table__,
+            _candidate_predicates(fact, FactReceipt.__table__),
+            MAX_RECEIPTS_PER_CANDIDATE,
+        )
+        _prune_candidate_rows(
+            connection,
+            FactConflict.__table__,
+            _candidate_predicates(fact, FactConflict.__table__),
+            MAX_CONFLICTS_PER_CANDIDATE,
+        )
+    for family in sorted({fact.family for fact in touched_candidates.values()}):
+        _prune_fact_family(connection, family)
+
+    return ReducerResult(
+        commit_seq=allocated_commit if allocated_commit is not None else current_commit,
+        changed_heads=changed_heads,
+        duplicates=duplicates,
+        stale=stale,
+        conflicts=conflicts,
+    )

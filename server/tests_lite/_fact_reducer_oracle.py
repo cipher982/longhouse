@@ -31,6 +31,7 @@ from sqlalchemy import select
 from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import ReducerResult
 from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.fact_reducer import reduce_fact_batch_setwise
 from zerg.catalogd.models import FactConflict
 from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import FactReceipt
@@ -259,3 +260,9 @@ def coverage_of(snapshots) -> dict[str, int]:
         totals["stale"] += stale
         totals["conflicts"] += conflicts
     return totals
+
+
+def setwise_reduce(connection, facts, **kwargs) -> ReducerResult:
+    """The set-based candidate, validated against the reference."""
+
+    return reduce_fact_batch_setwise(connection, facts, **kwargs)

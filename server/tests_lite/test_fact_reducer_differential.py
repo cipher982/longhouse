@@ -25,9 +25,9 @@ from tests_lite._fact_reducer_oracle import make_fact
 from tests_lite._fact_reducer_oracle import random_batch
 from tests_lite._fact_reducer_oracle import reference_reduce
 from tests_lite._fact_reducer_oracle import run_scenario
+from tests_lite._fact_reducer_oracle import setwise_reduce
 
-# Append the set-based implementation here to activate the oracle.
-CANDIDATE_REDUCERS = [reference_reduce]
+CANDIDATE_REDUCERS = [setwise_reduce]
 
 
 def assert_equivalent(tmp_path, *, name, seed_batches, batch):
@@ -333,3 +333,54 @@ def test_randomized_suite_reaches_every_reduction_branch(tmp_path):
     coverage = coverage_of(snapshots)
     missing = [branch for branch, count in coverage.items() if count == 0]
     assert not missing, f"randomized suite never exercised: {missing} (coverage={coverage})"
+
+
+def test_head_established_earlier_in_the_batch_is_visible_to_later_facts(tmp_path):
+    """An accepted fact must be visible to the rest of its own batch.
+
+    The row-wise reducer writes each head before reading the next fact, so a
+    later fact in the same batch sees it. A set-based rewrite that preloads
+    state and forgets to fold its own writes back in produces a different
+    outcome only in this shape -- a sequenced fact establishing a head, then an
+    unsequenced fact for the same candidate, which must be an
+    ordering_mode_change rather than a second accepted head.
+
+    Found by a planted-bug run: the randomized seeds caught it and none of the
+    hand-written scenarios did.
+    """
+
+    snapshot = assert_equivalent(
+        tmp_path,
+        name="intra-batch-cascade",
+        seed_batches=[],
+        batch=[
+            make_fact(seq=1, payload="v1"),
+            make_fact(seq=None, observed_offset_s=7, payload="v7"),
+        ],
+    )
+    assert snapshot.conflicts, "the second fact must conflict against the head the first established"
+    assert snapshot.result[1] == 1, "only the first fact may become a head"
+
+
+def test_dedupe_key_established_earlier_in_the_batch_is_visible_to_later_facts(tmp_path):
+    """The dedupe index must also fold in this batch's own accepted facts.
+
+    Two facts sharing a dedupe key at different positions survive `_prepare_batch`
+    as separate entries, so the second must see the receipt the first wrote and
+    classify as dedupe_key_reuse rather than being accepted as a second head.
+
+    Also found by planted-bug run rather than by design: removing this cascade
+    left every other test green.
+    """
+
+    snapshot = assert_equivalent(
+        tmp_path,
+        name="intra-batch-dedupe",
+        seed_batches=[],
+        batch=[
+            make_fact(seq=1, dedupe="shared", payload="v1"),
+            make_fact(seq=2, dedupe="shared", payload="v2"),
+        ],
+    )
+    assert snapshot.result[1] == 1, "the second fact must not become a head"
+    assert snapshot.conflicts, "reusing a dedupe key at a new position is a recorded conflict"
