@@ -39,7 +39,7 @@ from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
-from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.fact_reducer import reduce_fact_batch_setwise
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
 from zerg.catalogd.models import FactConflict
 from zerg.catalogd.models import FactHead
@@ -11065,19 +11065,28 @@ def _apply_shadow_reducer(
 ) -> dict[str, Any]:
     """Reduce retained schema-v3 evidence without affecting legacy heartbeat writes."""
 
+    timer = _StageTimer("shadow_reducer")
     try:
         with connection.begin_nested():
             evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
             if evidence_status != "ready":
                 return {"status": evidence_status}
-            reduced = reduce_fact_batch(
+            timer.mark("extract_facts")
+            reduced = reduce_fact_batch_setwise(
                 connection,
                 facts,
                 received_at=received_at,
                 commit_seq_override=commit_seq,
             )
+            timer.mark("reduce")
+            # The reducer was one of three per-fact loops in this transaction.
+            # Timing the other two separately answers whether they matter at
+            # production fact mixes, rather than assuming they do.
             identity_binding = _bind_control_evidence_identities(connection, facts)
+            timer.mark("bind_identities")
             run_terminal = _apply_exact_run_terminal_evidence(connection, facts)
+            timer.mark("run_terminal")
+            timer.log_if_slow()
             return {
                 "status": "applied",
                 "changed_heads": reduced.changed_heads,

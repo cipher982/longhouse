@@ -758,13 +758,13 @@ async def test_shadow_reducer_validation_failure_preserves_legacy_heartbeat(daem
 @pytest.mark.asyncio
 async def test_shadow_reducer_statement_failure_rolls_back_only_savepoint(daemon_paths, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
-    original_reduce = catalog_store.reduce_fact_batch
+    original_reduce = catalog_store.reduce_fact_batch_setwise
 
     def fail_after_reducer_writes(*args, **kwargs):
         original_reduce(*args, **kwargs)
         raise SQLAlchemyError("forced reducer statement failure")
 
-    monkeypatch.setattr(catalog_store, "reduce_fact_batch", fail_after_reducer_writes)
+    monkeypatch.setattr(catalog_store, "reduce_fact_batch_setwise", fail_after_reducer_writes)
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
@@ -809,7 +809,7 @@ async def test_shadow_reducer_invalidated_connection_aborts_outer_heartbeat(daem
             connection_invalidated=True,
         )
 
-    monkeypatch.setattr(catalog_store, "reduce_fact_batch", fail_with_invalidated_connection)
+    monkeypatch.setattr(catalog_store, "reduce_fact_batch_setwise", fail_with_invalidated_connection)
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
