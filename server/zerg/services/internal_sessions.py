@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from sqlalchemy import and_
 from sqlalchemy import func
 from sqlalchemy import or_
 
@@ -13,6 +14,9 @@ PROVIDER_LIVE_CANARY_CWD_SEGMENT = "/canaries/provider-live/"
 PROVIDER_LIVE_PROOF_WORKTREE_MARKER = "longhouse-provider-live-proof"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
+PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
+PROVIDER_PRODUCT_CANARY_MARKER_PREFIX = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_"
+PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE = r"Reply with exactly LONGHOUSE\_CURSOR\_PRODUCT\_ONE\_%"
 SQL_LIKE_ESCAPE = "\\"
 
 
@@ -34,25 +38,44 @@ def is_provider_noreply_marker(text: str | None) -> bool:
     return bool(PROVIDER_NOREPLY_MARKER_RE.match(str(text or "").strip()))
 
 
+def is_provider_product_canary_marker(text: str | None) -> bool:
+    """Recognize the bounded Cursor product canary prompt."""
+
+    return bool(PROVIDER_PRODUCT_CANARY_MARKER_RE.fullmatch(str(text or "").strip()))
+
+
 def classify_provider_proof_environment(
     *,
     cwd: str | None = None,
     first_user_text: str | None = None,
 ) -> str | None:
     """Return the normalized environment for provider proof/canary sessions."""
-    if is_provider_live_canary_cwd(cwd) or is_provider_live_proof_worktree_cwd(cwd) or is_provider_noreply_marker(first_user_text):
+    if (
+        is_provider_live_canary_cwd(cwd)
+        or is_provider_live_proof_worktree_cwd(cwd)
+        or is_provider_noreply_marker(first_user_text)
+        or is_provider_product_canary_marker(first_user_text)
+    ):
         return "test"
     return None
 
 
 def provider_proof_session_clause(model):
     """Return a SQLAlchemy clause matching provider live-proof sessions."""
-    cwd = func.lower(func.coalesce(model.cwd, ""))
-    first_user = func.trim(func.coalesce(model.first_user_message_preview, ""))
+    columns = getattr(model, "c", model)
+    cwd = func.lower(func.coalesce(columns.cwd, ""))
+    first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""))
+    product_suffix = func.substr(first_user, len(PROVIDER_PRODUCT_CANARY_MARKER_PREFIX) + 1)
+    product_marker = and_(
+        first_user.like(PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
+        func.length(product_suffix) > 0,
+        ~(product_suffix.op("GLOB")("*[^0-9a-f]*")),
+    )
     return or_(
         cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
         first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
+        product_marker,
     )
 
 

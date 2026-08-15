@@ -249,6 +249,9 @@ async def _write_hot_managed_local_launch_readiness(
                 "permission_mode": plan.permission_mode,
                 "launch_actor": plan.launch_actor,
                 "launch_surface": plan.launch_surface,
+                "environment": plan.environment,
+                "origin_kind": plan.origin_kind,
+                "hidden_from_default_timeline": plan.hidden_from_default_timeline,
                 "managed_transport": plan.managed_transport,
                 "attach_command": plan.attach_command,
                 "provider_config": plan.provider_config,
@@ -360,6 +363,9 @@ async def _write_hot_managed_local_launch_readiness(
                 loop_mode=plan.loop_mode,
                 permission_mode=plan.permission_mode,
                 provider_config=plan.provider_config,
+                environment=plan.environment,
+                origin_kind=plan.origin_kind,
+                hidden_from_default_timeline=1,
             )
             attach_live_catalog_control(
                 live_db,

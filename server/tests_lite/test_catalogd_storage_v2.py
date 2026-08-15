@@ -407,6 +407,52 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    marker = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_91b38069e7"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"marker\n",), sealed_at=now)
+        raw["session_facts"].update(
+            cwd=None,
+            origin_kind="cursor_store",
+            hidden_from_default_timeline=False,
+        )
+        manifest = _render_manifest(generation_id, source_epoch=epoch)
+        manifest.update(first_user_message_preview=marker, last_visible_text_preview=marker, user_messages=1)
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["environment"] == "test"
+        assert session["session"]["origin_kind"] == "test_or_canary"
+        assert session["session"]["hidden_from_default_timeline"] is True
+
+        timeline = await client.call(
+            "storage.session.timeline.list.v2",
+            {
+                "owner_id": "42",
+                "before_last_activity_at": None,
+                "before_session_id": None,
+                "project": None,
+                "provider": None,
+                "include_test": False,
+                "limit": 10,
+            },
+        )
+        assert timeline["sessions"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_semantic_projection_repair_updates_legacy_catalog_aggregates_and_title(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

@@ -1,10 +1,30 @@
 """Unit tests for the pure timeline-title helpers."""
 
 from zerg.services.session_title import freeze_anchor_title
+from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_title import sanitize_title
 from zerg.services.session_title import structured_fallback_title
+
+
+def test_path_only_prompt_uses_project_fallback_for_timeline_copy():
+    path = "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-08-14-provider-factory-audit.md"
+
+    assert is_path_like_title(path)
+    assert resolve_timeline_title(
+        anchor_title=None,
+        summary_title=None,
+        summary_status="pending",
+        first_user_message=path,
+        project="longhouse",
+        git_branch="main",
+        provider="claude",
+        user_messages=1,
+        assistant_messages=0,
+        tool_calls=0,
+    ) == "longhouse · main"
+    assert not is_path_like_title(f"{path} is throwing an exception")
 
 
 class TestSanitizeTitle:
@@ -170,6 +190,14 @@ class TestTitleProvenance:
             user_messages=0,
             title_retry_at=None,
         ) == ("awaiting_input", "project")
+
+    def test_path_only_prompt_is_project_fallback_provenance(self):
+        assert resolve_title_provenance(
+            anchor_title=None,
+            first_user_message="/Users/davidrose/git/longhouse/README.md",
+            user_messages=1,
+            title_retry_at=object(),
+        ) == ("degraded", "project")
 
 
 class TestFreezeAnchorTitle:

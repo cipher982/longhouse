@@ -87,6 +87,9 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
+from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_title
 from zerg.services.session_title import structured_fallback_title
@@ -3382,6 +3385,9 @@ class CatalogStore:
                     launch_actor=plan.launch_actor,
                     launch_surface=plan.launch_surface,
                     provider_config=plan.provider_config,
+                    environment=getattr(plan, "environment", "development"),
+                    origin_kind=getattr(plan, "origin_kind", None),
+                    hidden_from_default_timeline=1,
                 )
                 requires_readiness_proof = managed_provider_requires_readiness_proof(plan.provider)
                 attach_live_catalog_control(
@@ -4253,7 +4259,7 @@ class CatalogStore:
             ]
             storage_where = [
                 or_(storage.c.last_activity_at >= since, storage_unread),
-                storage.c.hidden_from_default_timeline == 0,
+                func.coalesce(catalog.c.hidden_from_default_timeline, storage.c.hidden_from_default_timeline) == 0,
                 storage.c.user_hidden_from_timeline == 0,
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
@@ -4263,12 +4269,12 @@ class CatalogStore:
             # authoritative identity for a managed session, so a durable
             # storage row with a NULL project/machine/provenance must still
             # survive the same filtered timeline request as its live shell.
-            storage_project = func.coalesce(storage.c.project, catalog.c.project)
-            storage_provider = func.coalesce(storage.c.provider, catalog.c.provider)
-            storage_environment = func.coalesce(storage.c.environment, catalog.c.environment)
-            storage_device = func.coalesce(storage.c.machine_id, catalog.c.device_id)
-            storage_launch_actor = func.coalesce(storage.c.launch_actor, catalog.c.launch_actor)
-            storage_launch_surface = func.coalesce(storage.c.launch_surface, catalog.c.launch_surface)
+            storage_project = func.coalesce(catalog.c.project, storage.c.project)
+            storage_provider = func.coalesce(catalog.c.provider, storage.c.provider)
+            storage_environment = func.coalesce(catalog.c.environment, storage.c.environment)
+            storage_device = func.coalesce(catalog.c.device_id, storage.c.machine_id)
+            storage_launch_actor = func.coalesce(catalog.c.launch_actor, storage.c.launch_actor)
+            storage_launch_surface = func.coalesce(catalog.c.launch_surface, storage.c.launch_surface)
             if project is not None:
                 legacy_where.append(card.c.project == project)
                 storage_where.append(storage_project == project)
@@ -4301,9 +4307,10 @@ class CatalogStore:
                     )
                 )
             if not include_automation:
-                legacy_where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind != "hatch_automation"))
-                storage_origin_kind = func.coalesce(storage.c.origin_kind, catalog.c.origin_kind)
-                storage_where.append(or_(storage_origin_kind.is_(None), storage_origin_kind != "hatch_automation"))
+                hidden_origin_kinds = ("hatch_automation", "test_or_canary")
+                legacy_where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind.notin_(hidden_origin_kinds)))
+                storage_origin_kind = func.coalesce(catalog.c.origin_kind, storage.c.origin_kind)
+                storage_where.append(or_(storage_origin_kind.is_(None), storage_origin_kind.notin_(hidden_origin_kinds)))
             if include_state_heads:
                 if owner_id is None:
                     raise ValueError("canonical timeline projection requires owner_id")
@@ -5690,15 +5697,11 @@ class CatalogStore:
             existing_session = (
                 connection.execute(select(storage_session).where(storage_session.c.session_id == session_key)).mappings().first()
             )
+            live_catalog_session = (
+                connection.execute(select(live_session_catalog).where(live_session_catalog.c.session_id == session_key)).mappings().first()
+            )
             live_console_session = (
-                connection.execute(
-                    select(live_session_catalog).where(
-                        live_session_catalog.c.session_id == session_key,
-                        live_session_catalog.c.origin_kind == "console",
-                    )
-                )
-                .mappings()
-                .first()
+                live_catalog_session if live_catalog_session is not None and live_catalog_session["origin_kind"] == "console" else None
             )
             if existing_session is not None and any(
                 (
@@ -6122,6 +6125,38 @@ class CatalogStore:
                 "commit_seq": commit_seq,
                 "updated_at": commit_time,
             }
+            proof_environment = classify_provider_proof_environment(
+                cwd=session_facts["cwd"],
+                first_user_text=(
+                    session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
+                ),
+            )
+            if proof_environment == "test" or (
+                live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary"
+            ):
+                # A managed canary's provider transcript has no authority to
+                # overwrite launch provenance. Its PTY looks human, and Cursor
+                # storage rows historically reported local/cursor_store.
+                if live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary":
+                    session_values.update(
+                        environment=live_catalog_session["environment"],
+                        project=live_catalog_session["project"],
+                        cwd=live_catalog_session["cwd"],
+                        git_repo=live_catalog_session["git_repo"],
+                        git_branch=live_catalog_session["git_branch"],
+                        origin_kind=live_catalog_session["origin_kind"],
+                        hidden_from_default_timeline=int(live_catalog_session["hidden_from_default_timeline"] or 0),
+                        launch_actor=live_catalog_session["launch_actor"],
+                        launch_surface=live_catalog_session["launch_surface"],
+                    )
+                else:
+                    session_values.update(
+                        environment="test",
+                        origin_kind="test_or_canary",
+                        hidden_from_default_timeline=1,
+                        launch_actor="automation",
+                        launch_surface="test",
+                    )
             if live_console_session is not None:
                 # A Console session outlives each bounded provider process. The
                 # provider transcript does not carry the Console launch
@@ -7144,6 +7179,7 @@ class CatalogStore:
                         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
                         or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
                         table.c.environment.notin_(("test", "e2e")),
+                        ~provider_proof_session_clause(table),
                         table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
                     )
                     .order_by(table.c.last_activity_at.desc(), table.c.session_id)
@@ -7228,7 +7264,11 @@ class CatalogStore:
                 # deterministic non-AI fallback and STOP. Durable (DB row), so a
                 # restart cannot resume the retry loop. anchor_title being set
                 # also removes the session from the candidate query.
-                fallback = sanitize_title(row.first_user_message_preview, max_words=6)
+                fallback = (
+                    None
+                    if is_path_like_title(row.first_user_message_preview)
+                    else sanitize_title(row.first_user_message_preview, max_words=6)
+                )
                 title = fallback or structured_fallback_title(row.project, row.git_branch)
                 commit_seq = _advance_commit_seq(connection, failed_at)
                 connection.execute(

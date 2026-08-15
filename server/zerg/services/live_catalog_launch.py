@@ -326,6 +326,9 @@ def create_live_launch_catalog_shell(
     loop_mode: str = "assist",
     permission_mode: str = "bypass",
     provider_config: dict[str, object] | None = None,
+    environment: str = "development",
+    origin_kind: str | None = None,
+    hidden_from_default_timeline: int = 1,
 ) -> LiveSessionLaunchAttempt:
     """Create the synchronous launch identity in the live writer transaction."""
 
@@ -337,7 +340,7 @@ def create_live_launch_catalog_shell(
         session = LiveSessionCatalog(
             session_id=session_key,
             provider=provider,
-            environment="development",
+            environment=environment,
             project=project,
             device_id=device_id,
             device_name=device_name or device_id,
@@ -355,7 +358,8 @@ def create_live_launch_catalog_shell(
             primary_thread_id=thread_key,
             loop_mode=loop_mode,
             permission_mode=permission_mode,
-            hidden_from_default_timeline=1,
+            origin_kind=origin_kind,
+            hidden_from_default_timeline=hidden_from_default_timeline,
             launch_actor=launch_actor,
             launch_surface=launch_surface,
             created_at=started_at,
@@ -367,6 +371,10 @@ def create_live_launch_catalog_shell(
         session.device_name = device_name or device_id
         session.cwd = cwd
         session.project = project
+        session.environment = environment
+        if origin_kind is not None:
+            session.origin_kind = origin_kind
+            session.hidden_from_default_timeline = hidden_from_default_timeline
         session.git_repo = git_repo or session.git_repo
         session.git_branch = git_branch or session.git_branch
         session.primary_thread_id = session.primary_thread_id or thread_key
@@ -375,7 +383,7 @@ def create_live_launch_catalog_shell(
     card_values = {
         "session_id": session_key,
         "provider": provider,
-        "environment": "development",
+        "environment": environment,
         "project": project,
         "device_id": device_id,
         "cwd": cwd,
@@ -390,8 +398,8 @@ def create_live_launch_catalog_shell(
         "transcript_revision": 0,
         "archive_state": "pending",
         "archive_lag_records": 0,
-        "origin_kind": None,
-        "hidden_from_default_timeline": 1,
+        "origin_kind": origin_kind,
+        "hidden_from_default_timeline": hidden_from_default_timeline,
         "launch_actor": launch_actor,
         "launch_surface": launch_surface,
         "derived_state": "pending",
@@ -403,7 +411,9 @@ def create_live_launch_catalog_shell(
     db.execute(
         card_insert.on_conflict_do_update(
             index_elements=[LiveTimelineCard.session_id],
-            set_={key: getattr(card_insert.excluded, key) for key in card_values if key != "session_id"},
+            set_={
+                key: getattr(card_insert.excluded, key) for key in card_values if key not in {"session_id", "hidden_from_default_timeline"}
+            },
         )
     )
 

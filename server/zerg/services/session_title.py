@@ -35,6 +35,7 @@ _IMAGE_TAG_RE = re.compile(r"\[image[^\]]*\]", re.IGNORECASE)
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL_RE = re.compile(r"https?://\S+|www\.\S+")
+_ABSOLUTE_PATH_TITLE_RE = re.compile(r"^(?:/(?:Users|home|private|tmp|var)/[^\s]+|[A-Za-z]:[\\/][^\s]+)$")
 _TRIPLE_QUOTE_RE = re.compile(r'"""|\'\'\'')
 _HEADING_PREFIX_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -116,6 +117,14 @@ def structured_fallback_title(project: str | None, git_branch: str | None = None
     return "Untitled session"
 
 
+def is_path_like_title(text: str | None) -> bool:
+    """Return true for a raw absolute path, which is poor timeline copy."""
+
+    stripped = str(text or "").strip()
+    first_line = stripped.splitlines()[0] if stripped else ""
+    return bool(_ABSOLUTE_PATH_TITLE_RE.fullmatch(first_line)) and ("/" in first_line or "\\" in first_line)
+
+
 def empty_session_title(project: str | None, provider: str | None) -> str:
     """Explicit headline for a durable shell with no transcript content."""
     context = str(project or "").strip() or str(provider or "Session").strip().title()
@@ -138,7 +147,8 @@ def resolve_title_provenance(
     if sanitize_title(anchor_title):
         return "ready", "ai"
     if (user_messages or 0) > 0:
-        return ("degraded" if title_retry_at is not None else "pending"), ("prompt" if sanitize_title(first_user_message) else "project")
+        prompt_title = None if is_path_like_title(first_user_message) else sanitize_title(first_user_message)
+        return ("degraded" if title_retry_at is not None else "pending"), ("prompt" if prompt_title else "project")
     return "awaiting_input", "project"
 
 
@@ -170,7 +180,7 @@ def resolve_timeline_title(
     if frozen:
         return frozen
 
-    from_message = sanitize_title(first_user_message)
+    from_message = None if is_path_like_title(first_user_message) else sanitize_title(first_user_message)
     if from_message:
         return from_message
 

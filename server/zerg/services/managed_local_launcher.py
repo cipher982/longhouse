@@ -22,6 +22,7 @@ from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_provider_contracts import managed_provider_names
@@ -138,6 +139,9 @@ class ManagedLocalLaunchPlan:
     managed_transport: str
     attach_command: str
     provider_config: dict[str, object] | None = None
+    environment: str = "development"
+    origin_kind: str | None = None
+    hidden_from_default_timeline: int = 0
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str, *, required: bool = True):
@@ -269,11 +273,13 @@ def build_managed_local_launch_plan(
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
     requested_permission_mode = str(params.permission_mode).strip()
     permission_mode = requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "bypass"
+    origin_kind = "test_or_canary" if classify_provider_proof_environment(cwd=cwd) == "test" else None
     launch_actor, launch_surface = sanitize_launch_provenance(
-        origin_kind=None,
+        origin_kind=origin_kind,
         launch_actor=params.launch_actor,
         launch_surface=params.launch_surface,
     )
+    environment = "test" if origin_kind is not None else "development"
     loop_mode = coerce_session_loop_mode(params.loop_mode).value
     plan = ManagedLocalLaunchPlan(
         session_id=plan_session_id,
@@ -292,6 +298,9 @@ def build_managed_local_launch_plan(
         managed_transport=contract.managed_transport.value,
         attach_command="",
         provider_config=params.provider_config,
+        environment=environment,
+        origin_kind=origin_kind,
+        hidden_from_default_timeline=int(origin_kind is not None),
     )
     return replace(plan, attach_command=_build_attach_command_for_plan(plan))
 
@@ -321,7 +330,7 @@ def materialize_managed_local_launch_plan_sync(
     session = AgentSession(
         id=plan.session_id,
         provider=plan.provider,
-        environment="development",
+        environment=plan.environment,
         project=plan.project,
         device_id=plan.source_name,
         cwd=plan.cwd,
@@ -334,6 +343,8 @@ def materialize_managed_local_launch_plan_sync(
         tool_calls=0,
         loop_mode=plan.loop_mode,
         permission_mode=plan.permission_mode,
+        origin_kind=plan.origin_kind,
+        hidden_from_default_timeline=plan.hidden_from_default_timeline,
         launch_actor=plan.launch_actor,
         launch_surface=plan.launch_surface,
     )

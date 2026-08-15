@@ -3821,6 +3821,9 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
     "permission_mode",
     "launch_actor",
     "launch_surface",
+    "environment",
+    "origin_kind",
+    "hidden_from_default_timeline",
     "managed_transport",
     "attach_command",
     "provider_config",
@@ -3979,9 +3982,19 @@ def _validate_local_launch_rpc(value: object) -> dict:
     if result["expires_at"] <= result["started_at"]:
         raise ValueError("local launch.expires_at must be later than started_at")
     plan = result["plan"]
-    if not isinstance(plan, dict) or set(plan) != _LOCAL_LAUNCH_PLAN_FIELDS:
+    required_plan_fields = _LOCAL_LAUNCH_PLAN_FIELDS - {
+        "environment",
+        "origin_kind",
+        "hidden_from_default_timeline",
+    }
+    if not isinstance(plan, dict) or not required_plan_fields.issubset(plan) or set(plan) - _LOCAL_LAUNCH_PLAN_FIELDS:
         raise ValueError("local launch.plan has invalid fields")
     plan = dict(plan)
+    plan.setdefault("environment", "development")
+    plan.setdefault("origin_kind", None)
+    plan.setdefault("hidden_from_default_timeline", int(plan["origin_kind"] in {"hatch_automation", "test_or_canary"}))
+    if plan["origin_kind"] in {"hatch_automation", "test_or_canary"}:
+        plan["hidden_from_default_timeline"] = 1
     if not _is_canonical_uuid(plan["session_id"]):
         raise ValueError("local launch.plan.session_id must be a canonical UUID")
     for field, maximum in (
@@ -3993,6 +4006,7 @@ def _validate_local_launch_rpc(value: object) -> dict:
         ("managed_session_name", 255),
         ("loop_mode", 32),
         ("permission_mode", 32),
+        ("environment", 32),
         ("managed_transport", 64),
     ):
         if not _is_string(plan[field], maximum=maximum):
@@ -4002,10 +4016,17 @@ def _validate_local_launch_rpc(value: object) -> dict:
     attach_command = plan["attach_command"]
     if not isinstance(attach_command, str) or len(attach_command) > 4096:
         raise ValueError("local launch.plan.attach_command must be a string of at most 4096 characters")
-    for field, maximum in (("provider_session_id", 512), ("launch_actor", 32), ("launch_surface", 32)):
+    for field, maximum in (
+        ("provider_session_id", 512),
+        ("launch_actor", 32),
+        ("launch_surface", 32),
+        ("origin_kind", 64),
+    ):
         raw = plan[field]
         if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
             raise ValueError(f"local launch.plan.{field} must be null or contain 1 to {maximum} characters")
+    if type(plan["hidden_from_default_timeline"]) is not int or plan["hidden_from_default_timeline"] not in (0, 1):
+        raise ValueError("local launch.plan.hidden_from_default_timeline must be 0 or 1")
     runner_id = plan["source_runner_id"]
     if runner_id is not None and (type(runner_id) is not int or runner_id <= 0):
         raise ValueError("local launch.plan.source_runner_id must be a positive integer or null")

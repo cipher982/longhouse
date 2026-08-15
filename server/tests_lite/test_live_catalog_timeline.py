@@ -675,6 +675,88 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.session_state.control.actions.resume.state == "unavailable"
 
 
+def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'canary-storage.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    canary_id = str(uuid4())
+    human_id = str(uuid4())
+
+    with LiveSession() as db:
+        for session_id, origin_kind, hidden, environment, project in (
+            (canary_id, "test_or_canary", 1, "development", "managed-local"),
+            (human_id, None, 0, "development", "longhouse"),
+        ):
+            db.add(
+                LiveSessionCatalog(
+                    session_id=session_id,
+                    provider="cursor",
+                    environment=environment,
+                    project=project,
+                    device_id="provider-factory-resume" if session_id == canary_id else "cinder",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    origin_kind=origin_kind,
+                    hidden_from_default_timeline=hidden,
+                    launch_actor="automation" if origin_kind else "human_shell",
+                    launch_surface="test" if origin_kind else "terminal",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveTimelineCard(
+                    session_id=session_id,
+                    provider="cursor",
+                    environment=environment,
+                    project=project,
+                    device_id="provider-factory-resume" if session_id == canary_id else "cinder",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    origin_kind=origin_kind,
+                    hidden_from_default_timeline=hidden,
+                    launch_actor="automation" if origin_kind else "human_shell",
+                    launch_surface="test" if origin_kind else "terminal",
+                    archive_state="current",
+                    parser_revision="test",
+                    updated_at=now,
+                )
+            )
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    provider="cursor",
+                    environment="local",
+                    machine_id="provider-factory-resume" if session_id == canary_id else "cinder",
+                    project="cursor_store",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    origin_kind="cursor_store",
+                    hidden_from_default_timeline=0,
+                    commit_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        db.commit()
+
+        snapshot = _snapshot(db, _params(provider="cursor", include_test=True, include_automation=True))
+
+    assert snapshot["total"] == 1
+    assert [row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]] == [human_id]
+
+
 def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'empty-shell.db'}")
     initialize_catalog_schema(engine)

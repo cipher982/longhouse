@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 249,
+  "file_count": 251,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -913,6 +913,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_internal_sessions.py",
+      "providers": [
+        "codex",
+        "cursor"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_legacy_corpus_migration.py",
       "providers": [
         "claude",
@@ -933,6 +940,7 @@
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
@@ -1422,6 +1430,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_title.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

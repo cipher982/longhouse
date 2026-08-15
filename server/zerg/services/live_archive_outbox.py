@@ -195,6 +195,9 @@ def enqueue_managed_local_launch_outbox(
                                 "permission_mode": plan.permission_mode,
                                 "launch_actor": plan.launch_actor,
                                 "launch_surface": plan.launch_surface,
+                                "environment": plan.environment,
+                                "origin_kind": plan.origin_kind,
+                                "hidden_from_default_timeline": plan.hidden_from_default_timeline,
                                 "managed_transport": plan.managed_transport,
                                 "attach_command": plan.attach_command,
                                 "provider_config": plan.provider_config,
@@ -565,6 +568,9 @@ def _restore_managed_local_launch_plan(plan_payload: dict[str, Any]) -> ManagedL
         managed_transport=str(plan_payload.get("managed_transport") or ""),
         attach_command=str(plan_payload.get("attach_command") or ""),
         provider_config=dict(plan_payload.get("provider_config") or {}),
+        environment=str(plan_payload.get("environment") or "development"),
+        origin_kind=str(plan_payload.get("origin_kind") or "").strip() or None,
+        hidden_from_default_timeline=int(plan_payload.get("hidden_from_default_timeline") or 0),
     )
 
 
