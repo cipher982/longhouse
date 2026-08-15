@@ -56,6 +56,7 @@ from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import internal_canary_session_clause
+from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
@@ -861,6 +862,9 @@ class AgentsStore:
         """Backfill richer session metadata when the same session is ingested again."""
         incoming_execution_home = _infer_execution_home_from_ingest(data)
         incoming_origin_kind = _normalize_origin_kind(data.origin_kind)
+        hatch_contract = is_hatch_execution_contract(first_user_text) or is_hatch_execution_contract(session.first_user_message_preview)
+        if hatch_contract and session.origin_kind != "console":
+            incoming_origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
         if incoming_origin_kind and session.origin_kind != incoming_origin_kind:
             session.origin_kind = incoming_origin_kind
             session.hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(incoming_origin_kind)
@@ -875,6 +879,8 @@ class AgentsStore:
             origin_kind=effective_origin_kind,
             is_sidechain=data.is_sidechain,
         )
+        if hatch_contract and session.origin_kind != "console":
+            incoming_launch_actor, incoming_launch_surface = "automation", "hatch"
         _fill_session_launch_provenance(
             session,
             launch_actor=incoming_launch_actor,
@@ -2381,8 +2387,17 @@ class AgentsStore:
             sequence_context=interaction_sequence_context,
         )
         first_user_text_from_ingest = _first_user_text_from_ingest(data, interaction_facts)
+        if is_hatch_execution_contract(first_user_text_from_ingest):
+            origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
+            origin_hidden_from_default_timeline = 1
+            launch_actor, launch_surface = "automation", "hatch"
 
         if existing:
+            if existing.origin_kind == "console" and origin_kind == HATCH_AUTOMATION_ORIGIN_KIND:
+                origin_kind = existing.origin_kind
+                origin_hidden_from_default_timeline = int(existing.hidden_from_default_timeline or 0)
+                launch_actor = existing.launch_actor
+                launch_surface = existing.launch_surface
             if resolved_child_thread is None:
                 self._refresh_existing_session_metadata(
                     existing,

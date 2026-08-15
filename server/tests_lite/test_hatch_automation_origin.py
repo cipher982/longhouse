@@ -223,6 +223,33 @@ def test_hatch_automation_ingest_persists_sticky_hidden_origin_and_edge(tmp_path
         assert card.hidden_from_default_timeline == 1
 
 
+def test_hatch_execution_contract_ingest_recovers_missing_origin_metadata(tmp_path):
+    SessionLocal = _session_factory(tmp_path, name="hatch-contract-origin.db")
+    contract = (
+        "Hatch execution contract:\n"
+        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
+    )
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        initial_payload = _root_payload(
+            session_id=HATCH_ID,
+            provider_session_id="cursor-hatch-contract",
+            text="ordinary imported session",
+        ).model_copy(update={"provider": "cursor", "origin_kind": None})
+        store.ingest_session(initial_payload)
+        contract_event = initial_payload.events[0].model_copy(update={"content_text": contract})
+        store.ingest_session(initial_payload.model_copy(update={"events": [contract_event]}))
+
+        session = db.get(AgentSession, HATCH_ID)
+        card = db.get(TimelineCard, HATCH_ID)
+        assert session.origin_kind == "hatch_automation"
+        assert session.hidden_from_default_timeline == 1
+        assert session.launch_actor == "automation"
+        assert session.launch_surface == "hatch"
+        assert card.origin_kind == "hatch_automation"
+        assert card.hidden_from_default_timeline == 1
+
+
 def test_hatch_automation_hides_from_timeline_api_and_wall_by_default(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:
@@ -423,13 +450,26 @@ def test_historical_hatch_backfill_reports_candidates_but_only_hides_reviewed_id
         hatch_session = db.get(AgentSession, HATCH_ID)
         assert hatch_session.origin_kind == "hatch_automation"
         assert hatch_session.hidden_from_default_timeline == 1
+        assert hatch_session.launch_actor == "automation"
+        assert hatch_session.launch_surface == "hatch"
         assert db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline == 1
+        assert db.get(TimelineCard, HATCH_ID).launch_actor == "automation"
+        assert db.get(TimelineCard, HATCH_ID).launch_surface == "hatch"
         hatch_thread = (
             db.query(SessionThread)
             .filter(SessionThread.session_id == HATCH_ID, SessionThread.is_primary == 1)
             .one()
         )
         assert hatch_thread.hidden_from_default_timeline == 1
+
+        hatch_session.launch_actor = None
+        hatch_session.launch_surface = None
+        db.commit()
+        repaired = classify_reviewed_hatch_automation_sessions(db, session_ids=[HATCH_ID], apply=True)
+        assert repaired.applied_session_ids == [str(HATCH_ID)]
+        db.refresh(hatch_session)
+        assert hatch_session.launch_actor == "automation"
+        assert hatch_session.launch_surface == "hatch"
 
         total, rows = store.list_timeline_thread_page(hide_autonomous=False, include_test=True)
         assert total == 1

@@ -47,11 +47,17 @@ def daemon_paths():
     root.rmdir()
 
 
-def _epoch_params(*, epoch: UUID, opened_at: datetime, predecessor: UUID | None = None) -> dict:
+def _epoch_params(
+    *,
+    epoch: UUID,
+    opened_at: datetime,
+    predecessor: UUID | None = None,
+    provider: str = "codex",
+) -> dict:
     return {
         "tenant_id": "tenant-a",
         "machine_id": "cinder",
-        "provider": "codex",
+        "provider": provider,
         "opaque_source_id": "history.jsonl",
         "source_epoch": str(epoch),
         "range_kind": "byte_offset",
@@ -447,6 +453,157 @@ async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(
             },
         )
         assert timeline["sessions"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_automation(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    contract = (
+        "Hatch execution contract:\n"
+        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"contract\n",),
+            sealed_at=now,
+            provider="cursor",
+        )
+        raw["session_facts"].update(
+            cwd=None,
+            origin_kind="cursor_store",
+            hidden_from_default_timeline=False,
+        )
+        manifest = _render_manifest(generation_id, source_epoch=epoch, provider="cursor")
+        manifest.update(first_user_message_preview=contract, last_visible_text_preview=contract, user_messages=1)
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["origin_kind"] == "hatch_automation"
+        assert session["session"]["hidden_from_default_timeline"] is True
+        assert session["session"]["launch_actor"] == "automation"
+        assert session["session"]["launch_surface"] == "hatch"
+
+        later_epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abd")
+        opened = await client.call(
+            "storage.source_epoch.open.v2",
+            _epoch_params(epoch=later_epoch, opened_at=now, predecessor=epoch, provider="cursor"),
+        )
+        assert opened["created"] is True
+        later = _raw_params(
+            epoch=later_epoch,
+            session_id=session_id,
+            start=0,
+            end=5,
+            records=(b"later\n",),
+            sealed_at=now,
+            predecessor=epoch,
+            provider="cursor",
+        )
+        later["session_facts"].update(cwd=None, origin_kind="cursor_store", hidden_from_default_timeline=False)
+        later_manifest = _render_manifest(
+            uuid4(),
+            source_epoch=later_epoch,
+            seed=b"contract-later",
+            provider="cursor",
+        )
+        later_manifest.update(
+            first_user_message_preview=None,
+            last_visible_text_preview="later",
+            user_messages=0,
+            parser_revision="engine-parser-v3",
+        )
+        later.update(render_state="ready", render_manifest=later_manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", later)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["origin_kind"] == "hatch_automation"
+        assert session["session"]["hidden_from_default_timeline"] is True
+        assert session["session"]["launch_actor"] == "automation"
+        assert session["session"]["launch_surface"] == "hatch"
+
+        timeline = await client.call(
+            "storage.session.timeline.list.v2",
+            {
+                "owner_id": "42",
+                "before_last_activity_at": None,
+                "before_session_id": None,
+                "project": None,
+                "provider": None,
+                "include_test": False,
+                "limit": 10,
+            },
+        )
+        assert timeline["sessions"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_hatch_execution_contract_does_not_override_console_storage_ingest(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    thread_id = uuid4()
+    generation_id = uuid4()
+    contract = (
+        "Hatch execution contract:\n"
+        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
+    )
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    CatalogStore(engine).create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 42,
+            "provider": "cursor",
+            "device_id": "cinder",
+            "cwd": "/workspace/longhouse",
+            "project": "longhouse",
+            "provider_config": {},
+            "started_at": now,
+        }
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"contract\n",),
+            sealed_at=now,
+            provider="cursor",
+        )
+        raw["session_facts"].update(cwd=None, origin_kind="cursor_store", hidden_from_default_timeline=False)
+        manifest = _render_manifest(generation_id, source_epoch=epoch, provider="cursor")
+        manifest.update(first_user_message_preview=contract, last_visible_text_preview=contract, user_messages=1)
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["origin_kind"] == "console"
+        assert session["session"]["launch_surface"] == "console"
+        assert session["session"]["hidden_from_default_timeline"] is False
     finally:
         await client.close()
         await daemon.close()

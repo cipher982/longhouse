@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 251,
+  "file_count": 252,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -795,7 +795,8 @@
       "path": "server/tests_lite/test_catalogd_storage_v2.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -879,6 +880,13 @@
         "antigravity",
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_hatch_automation_origin.py",
+      "providers": [
+        "cursor",
+        "opencode"
       ]
     },
     {

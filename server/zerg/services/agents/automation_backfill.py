@@ -14,6 +14,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
+from zerg.services.internal_sessions import is_hatch_execution_contract
 
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
@@ -120,7 +121,14 @@ def find_hatch_automation_candidates(db: Session, *, limit: int = 100) -> list[d
     )
     candidates: list[dict[str, Any]] = []
     for session, thread in rows:
-        prompt = (session.first_user_message_preview or _event_preview(db, session.id)).lower()
+        prompt_text = session.first_user_message_preview or _event_preview(db, session.id)
+        if is_hatch_execution_contract(prompt_text):
+            candidate = _candidate_dict(db, session, thread)
+            candidate["confidence"] = "high"
+            candidate["reason"] = "exact Hatch execution contract; safe to classify"
+            candidates.append(candidate)
+            continue
+        prompt = prompt_text.lower()
         if not any(hint in prompt for hint in _HATCH_PROMPT_HINTS):
             continue
         candidates.append(_candidate_dict(db, session, thread))
@@ -207,12 +215,20 @@ def classify_reviewed_hatch_automation_sessions(
             session = sessions_by_id.get(session_id)
             if session is None:
                 continue
-            if session.origin_kind == reviewed_origin_kind and session.hidden_from_default_timeline == 1:
+            expected_launch_surface = "hatch" if reviewed_origin_kind == HATCH_AUTOMATION_ORIGIN_KIND else "test"
+            if (
+                session.origin_kind == reviewed_origin_kind
+                and session.hidden_from_default_timeline == 1
+                and session.launch_actor == "automation"
+                and session.launch_surface == expected_launch_surface
+            ):
                 already_marked.append(str(session_id))
                 continue
 
             session.origin_kind = reviewed_origin_kind
             session.hidden_from_default_timeline = 1
+            session.launch_actor = "automation"
+            session.launch_surface = expected_launch_surface
             for thread in db.query(SessionThread).filter(SessionThread.session_id == session_id).all():
                 thread.origin_kind = reviewed_origin_kind
                 thread.hidden_from_default_timeline = 1
@@ -220,6 +236,8 @@ def classify_reviewed_hatch_automation_sessions(
             if card is not None:
                 card.origin_kind = reviewed_origin_kind
                 card.hidden_from_default_timeline = 1
+                card.launch_actor = session.launch_actor
+                card.launch_surface = session.launch_surface
             applied.append(str(session_id))
         db.commit()
 

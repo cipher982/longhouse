@@ -10,6 +10,7 @@ from typing import Any
 
 from zerg.config import get_settings
 from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_title
 
@@ -51,6 +52,9 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
             return False
         if classify_provider_proof_environment(first_user_text=first_user_message) == "test":
             logger.info("Skipping storage-v2 AI title for provider canary session=%s", session_id)
+            return False
+        if is_hatch_execution_contract(first_user_message):
+            logger.info("Skipping storage-v2 AI title for Hatch automation session=%s", session_id)
             return False
         from zerg.models_config import get_llm_client_for_use_case
         from zerg.services.title_generator import generate_initial_session_title

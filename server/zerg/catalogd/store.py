@@ -88,6 +88,8 @@ from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
 from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.internal_sessions import hatch_automation_session_clause
+from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
@@ -5024,6 +5026,8 @@ class CatalogStore:
                     .values(
                         origin_kind=normalized,
                         hidden_from_default_timeline=1,
+                        launch_actor="automation",
+                        launch_surface="hatch" if normalized == "hatch_automation" else "test",
                         updated_at=observed_at,
                     )
                 )
@@ -6131,6 +6135,17 @@ class CatalogStore:
                     session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
                 ),
             )
+            hatch_automation = (
+                (
+                    is_hatch_execution_contract(
+                        session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
+                    )
+                    or (existing_session is not None and existing_session["origin_kind"] == "hatch_automation")
+                    or (live_catalog_session is not None and live_catalog_session["origin_kind"] == "hatch_automation")
+                )
+                and live_console_session is None
+                and not (existing_session is not None and existing_session["origin_kind"] == "console")
+            )
             if proof_environment == "test" or (
                 live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary"
             ):
@@ -6207,6 +6222,35 @@ class CatalogStore:
                         ),
                     )
                     .values(hidden_from_default_timeline=0, updated_at=commit_time)
+                )
+            if hatch_automation:
+                session_values.update(
+                    origin_kind="hatch_automation",
+                    hidden_from_default_timeline=1,
+                    launch_actor="automation",
+                    launch_surface="hatch",
+                )
+                connection.execute(
+                    update(live_session_catalog)
+                    .where(live_session_catalog.c.session_id == session_key)
+                    .values(
+                        origin_kind="hatch_automation",
+                        hidden_from_default_timeline=1,
+                        launch_actor="automation",
+                        launch_surface="hatch",
+                        updated_at=commit_time,
+                    )
+                )
+                connection.execute(
+                    update(live_timeline_card)
+                    .where(live_timeline_card.c.session_id == session_key)
+                    .values(
+                        origin_kind="hatch_automation",
+                        hidden_from_default_timeline=1,
+                        launch_actor="automation",
+                        launch_surface="hatch",
+                        updated_at=commit_time,
+                    )
                 )
             if existing_session is None:
                 connection.execute(
@@ -7180,6 +7224,7 @@ class CatalogStore:
                         or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
                         table.c.environment.notin_(("test", "e2e")),
                         ~provider_proof_session_clause(table),
+                        ~hatch_automation_session_clause(table),
                         table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
                     )
                     .order_by(table.c.last_activity_at.desc(), table.c.session_id)

@@ -17,6 +17,8 @@ PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
 PROVIDER_PRODUCT_CANARY_MARKER_PREFIX = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_"
 PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE = r"Reply with exactly LONGHOUSE\_CURSOR\_PRODUCT\_ONE\_%"
+HATCH_EXECUTION_CONTRACT_RE = re.compile(r"^Hatch execution contract:\nThis is a single bounded, non-interactive run\.")
+HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single bounded, non-interactive run.%"
 SQL_LIKE_ESCAPE = "\\"
 
 
@@ -42,6 +44,20 @@ def is_provider_product_canary_marker(text: str | None) -> bool:
     """Recognize the bounded Cursor product canary prompt."""
 
     return bool(PROVIDER_PRODUCT_CANARY_MARKER_RE.fullmatch(str(text or "").strip()))
+
+
+def is_hatch_execution_contract(text: str | None) -> bool:
+    """Recognize Hatch's exact bounded-run preamble."""
+
+    return bool(HATCH_EXECUTION_CONTRACT_RE.match(str(text or "").strip()))
+
+
+def hatch_automation_session_clause(model):
+    """Return a SQLAlchemy clause matching the exact Hatch run preamble."""
+
+    columns = getattr(model, "c", model)
+    first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""))
+    return first_user.like(HATCH_EXECUTION_CONTRACT_SQL_LIKE)
 
 
 def classify_provider_proof_environment(
