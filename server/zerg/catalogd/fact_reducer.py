@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -24,6 +27,7 @@ from zerg.machine_evidence import canonical_value_json
 from zerg.machine_evidence import validate_machine_evidence_identities
 
 MAX_REDUCER_FACTS = 256
+_REDUCER_SLOW_MS = float(os.getenv("CATALOGD_REDUCER_SLOW_MS", "100"))
 MAX_VALUE_JSON_BYTES = 4 * 1024
 MAX_RAW_LOCATOR_BYTES = 1024
 MAX_RECEIPTS_PER_CANDIDATE = 16
@@ -619,6 +623,7 @@ def reduce_fact_batch_setwise(
     construction, and the differential oracle proves it.
     """
 
+    started_at = time.perf_counter()
     if len(facts) > MAX_REDUCER_FACTS:
         raise ValueError(f"reducer batch exceeds {MAX_REDUCER_FACTS} facts")
     received_at = _aware(received_at, "received_at")
@@ -892,6 +897,7 @@ def reduce_fact_batch_setwise(
     if pending_conflicts:
         connection.execute(conflict_table.insert(), pending_conflicts)
 
+    fold_finished_at = time.perf_counter()
     for fact in touched_candidates.values():
         _prune_candidate_rows(
             connection,
@@ -905,8 +911,27 @@ def reduce_fact_batch_setwise(
             _candidate_predicates(fact, FactConflict.__table__),
             MAX_CONFLICTS_PER_CANDIDATE,
         )
+    candidate_pruned_at = time.perf_counter()
     for family in sorted({fact.family for fact in touched_candidates.values()}):
         _prune_fact_family(connection, family)
+
+    # The fold is three reads and three writes; everything after it is bounds
+    # enforcement, which is per candidate and per family rather than per fact.
+    # Splitting them says which half is left to fix, instead of attributing the
+    # whole stage to "the reducer" the way the first measurement did.
+    total_ms = (time.perf_counter() - started_at) * 1000.0
+    if total_ms >= _REDUCER_SLOW_MS:
+        logging.getLogger(__name__).warning(
+            "reduce_fact_batch_setwise took %.0fms: fold=%.0fms prune_candidates=%.0fms "
+            "prune_families=%.0fms (facts=%d candidates=%d families=%d)",
+            total_ms,
+            (fold_finished_at - started_at) * 1000.0,
+            (candidate_pruned_at - fold_finished_at) * 1000.0,
+            (time.perf_counter() - candidate_pruned_at) * 1000.0,
+            len(prepared),
+            len(touched_candidates),
+            len({fact.family for fact in touched_candidates.values()}),
+        )
 
     return ReducerResult(
         commit_seq=allocated_commit if allocated_commit is not None else current_commit,
