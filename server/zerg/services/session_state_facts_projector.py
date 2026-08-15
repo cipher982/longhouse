@@ -1,8 +1,19 @@
-"""Pure, non-served session-state projection from one catalog snapshot.
+"""Session-state projection from one catalog snapshot.
 
-Reducer heads provide expiring machine observations. Durable catalog rows in
-the same snapshot provide lifecycle facts. The projection remains diagnostic
-until every served and authorized path is cut over explicitly.
+Two projections live here and they are not interchangeable:
+
+- `project_served_session_state_facts` is **served**. `claim_queued_input`
+  authorizes against it, so it is on a real control path.
+- `project_shadow_session_state_facts` is **diagnostic**, and feeds the
+  state-diagnostics endpoint only.
+
+Reducer heads provide expiring machine observations; durable catalog rows in the
+same snapshot provide lifecycle facts.
+
+This file previously described itself as non-served and diagnostic in full. That
+stopped being true when the served projection was added, and the stale wording
+survived long enough to mislead a design review into treating the fact pipeline
+as safe to defer.
 """
 
 from __future__ import annotations

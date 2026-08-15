@@ -1,4 +1,16 @@
-"""Bounded shadow reducer for independent machine-evidence fact families."""
+"""Bounded reducer for independent machine-evidence fact families.
+
+Fact heads are served. `live_catalog_timeline` raises `invalid_catalog_snapshot`
+without them on both the timeline and session-detail paths, so reduction has to
+commit with the heartbeat that produced it.
+
+This was a shadow of the legacy projection once, and the word outlived the
+cutover. It was load-bearing enough that a design review read "shadow", concluded
+the output was diagnostic and unread, and proposed moving reduction off the
+interactive write path -- which would have broken session detail. A symbol search
+could not have corrected that: the timeline consumes these rows as the string key
+"heads" out of an RPC payload.
+"""
 
 from __future__ import annotations
 
