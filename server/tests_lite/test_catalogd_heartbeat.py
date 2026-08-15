@@ -756,7 +756,21 @@ async def test_shadow_reducer_validation_failure_preserves_legacy_heartbeat(daem
 
 
 @pytest.mark.asyncio
-async def test_shadow_reducer_statement_failure_rolls_back_only_savepoint(daemon_paths, monkeypatch):
+async def test_shadow_reducer_statement_failure_aborts_the_whole_observation(daemon_paths, monkeypatch):
+    """A database failure inside reduction must take the heartbeat with it.
+
+    This previously asserted the opposite: the reducer swallowed the error, and
+    the heartbeat stamp, the lease reconciliation and a `database_error` receipt
+    all committed without the reduction. That was defensible while fact heads
+    were diagnostic.
+
+    They are served now -- `live_catalog_timeline` raises `invalid_catalog_snapshot`
+    without them -- so committing a heartbeat whose reduction rolled back leaves
+    served session state diverged from the evidence that produced it, durably and
+    with no signal. Losing one heartbeat is recoverable; silently serving state
+    that never happened is not.
+    """
+
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
     original_reduce = catalog_store.reduce_fact_batch_setwise
 
@@ -782,17 +796,67 @@ async def test_shadow_reducer_statement_failure_rolls_back_only_savepoint(daemon
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
+        with pytest.raises(CatalogRemoteError):
+            await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is None, (
+            "the heartbeat must not commit without the reduction it carried"
+        )
+        assert connection.execute(LiveControlLease.__table__.select()).first() is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unusable_evidence_still_lets_the_heartbeat_commit(daemon_paths, monkeypatch):
+    """Malformed evidence is a different failure from a broken database.
+
+    The machine sent something unusable; the catalog is healthy. Refusing the
+    whole heartbeat would let one bad payload suppress a machine's liveness, so
+    the evidence is rejected and the heartbeat still lands. This is the boundary
+    the abort policy above must not swallow.
+    """
+
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+
+    def reject_evidence(*_args, **_kwargs):
+        raise ValueError("unusable machine evidence")
+
+    monkeypatch.setattr(catalog_store, "reduce_fact_batch_setwise", reject_evidence)
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalid-evidence")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
         result = await client.call("machine.heartbeat.apply.v2", params)
     finally:
         await client.close()
         await daemon.close()
 
-    assert result["commit_seq"] == "1"
-    assert result["shadow_reducer"] == {"status": "failed", "reason": "database_error"}
+    assert result["shadow_reducer"] == {"status": "failed", "reason": "invalid_evidence"}
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
         assert connection.execute(FactHead.__table__.select()).first() is None
-        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None, (
+            "a machine with bad evidence must still register as alive"
+        )
         assert connection.execute(LiveControlLease.__table__.select()).first() is not None
     engine.dispose()
 

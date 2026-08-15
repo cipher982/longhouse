@@ -11148,15 +11148,20 @@ def _apply_shadow_reducer(
                 "identity_binding": identity_binding,
                 "run_terminal": run_terminal,
             }
-    except DBAPIError as exc:
-        if exc.connection_invalidated or connection.invalidated:
-            raise
-        return {"status": "failed", "reason": "database_error"}
-    except SQLAlchemyError:
-        if connection.invalidated:
-            raise
-        return {"status": "failed", "reason": "database_error"}
+    except (DBAPIError, SQLAlchemyError):
+        # A database failure here must abort the whole observation, not just its
+        # savepoint. This used to swallow the error and let the heartbeat, the
+        # lease reconciliation and a failure receipt commit without it -- which
+        # was defensible while fact heads were diagnostic. They are served now
+        # (`live_catalog_timeline` raises without them), so committing the
+        # heartbeat while its reduction rolled back leaves served state diverged
+        # from the evidence that produced it, silently and durably.
+        raise
     except (RecursionError, TypeError, ValueError):
+        # Malformed external evidence is different in kind: the machine sent
+        # something unusable, the database is fine, and refusing the whole
+        # heartbeat would let one bad payload block a machine's liveness. Reject
+        # the evidence, keep the heartbeat.
         return {"status": "failed", "reason": "invalid_evidence"}
 
 
