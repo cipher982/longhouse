@@ -685,27 +685,50 @@ class CatalogStore:
             }
 
     def get_user(self, *, user_id: int, touch_last_login: bool) -> dict[str, Any]:
-        """Resolve one user, optionally recording their first successful login."""
+        """Resolve one user, reporting whether a first-login stamp is still owed.
+
+        Read-only regardless of `touch_last_login`. The stamp is written by
+        `touch_user_login` only when one is actually due, because the previous
+        shape opened `BEGIN IMMEDIATE` on the strength of the *flag* rather than
+        the *need*: `last_login` is set once and never again, so every browser
+        request from an established user took SQLite's write lock and wrote
+        nothing.
+        """
+
+        user_table = LiveUser.__table__
+        with _read_snapshot(self.engine) as connection:
+            row = connection.execute(select(user_table).where(user_table.c.id == user_id)).mappings().first()
+            if row is None:
+                return {"found": False, "changed": False, "touch_due": False, "commit_seq": str(_current_commit_seq(connection))}
+            return {
+                "found": True,
+                "changed": False,
+                "touch_due": bool(touch_last_login and row["last_login"] is None),
+                "user": _user_dto(row),
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def touch_user_login(self, *, user_id: int) -> dict[str, Any]:
+        """Stamp a first successful login. Runs on the writer, only when owed.
+
+        Re-checks the condition inside the write transaction: the read that
+        decided a stamp was due happened in an earlier snapshot, so a concurrent
+        login may already have taken it.
+        """
 
         user_table = LiveUser.__table__
         now = datetime.now(UTC)
-        with _write_transaction(self.engine) if touch_last_login else _read_snapshot(self.engine) as connection:
-            row = connection.execute(select(user_table).where(user_table.c.id == user_id)).mappings().first()
-            if row is None:
-                return {"found": False, "changed": False, "commit_seq": str(_current_commit_seq(connection))}
-            changed = touch_last_login and row["last_login"] is None
-            if changed:
-                connection.execute(update(user_table).where(user_table.c.id == user_id).values(last_login=now, updated_at=now))
-                commit_seq = _advance_commit_seq(connection, now)
-                row = connection.execute(select(user_table).where(user_table.c.id == user_id)).mappings().one()
-            else:
-                commit_seq = _current_commit_seq(connection)
-            return {
-                "found": True,
-                "changed": changed,
-                "user": _user_dto(row),
-                "commit_seq": str(commit_seq),
-            }
+        with _write_transaction(self.engine) as connection:
+            updated = connection.execute(
+                update(user_table)
+                .where(user_table.c.id == user_id, user_table.c.last_login.is_(None))
+                .values(last_login=now, updated_at=now)
+            ).rowcount
+            if not updated:
+                return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
+            commit_seq = _advance_commit_seq(connection, now)
+            row = connection.execute(select(user_table).where(user_table.c.id == user_id)).mappings().one()
+            return {"changed": True, "user": _user_dto(row), "commit_seq": str(commit_seq)}
 
     def get_active_owner(self) -> dict[str, Any]:
         """Resolve the single-tenant owner without exposing a SQLite reader."""
@@ -1072,8 +1095,11 @@ class CatalogStore:
         token_table = LiveDeviceToken.__table__
         user_table = LiveUser.__table__
         now = datetime.now(UTC)
-        context = _write_transaction(self.engine) if touch_last_used else _read_snapshot(self.engine)
-        with context as connection:
+        # Read-only regardless of `touch_last_used`. The throttle means most
+        # calls are not due, and opening a write transaction for them took
+        # SQLite's write lock to write nothing. `touch_device_token` performs
+        # the stamp when one is genuinely owed.
+        with _read_snapshot(self.engine) as connection:
             row = (
                 connection.execute(
                     select(
@@ -1100,16 +1126,13 @@ class CatalogStore:
                 return {"valid": False, "changed": False, "commit_seq": str(_current_commit_seq(connection))}
 
             last_used_at = _as_aware_utc(row["device_last_used_at"])
-            changed = bool(touch_last_used and (last_used_at is None or (now - last_used_at).total_seconds() >= touch_interval_seconds))
-            if changed:
-                connection.execute(update(token_table).where(token_table.c.id == row["device_token_id"]).values(last_used_at=now))
-                commit_seq = _advance_commit_seq(connection, now)
-                last_used_at = now
-            else:
-                commit_seq = _current_commit_seq(connection)
+            touch_due = bool(touch_last_used and (last_used_at is None or (now - last_used_at).total_seconds() >= touch_interval_seconds))
+            commit_seq = _current_commit_seq(connection)
             return {
                 "valid": True,
-                "changed": changed,
+                "changed": False,
+                "touch_due": touch_due,
+                "device_token_id": str(row["device_token_id"]),
                 "token": {
                     "id": str(row["device_token_id"]),
                     "owner_id": row["device_owner_id"],
@@ -1120,6 +1143,35 @@ class CatalogStore:
                 },
                 "user": _user_dto(row),
                 "commit_seq": str(commit_seq),
+            }
+
+    def touch_device_token(self, *, token_id: str, touch_interval_seconds: int) -> dict[str, Any]:
+        """Stamp a device credential's last use. Runs on the writer, only when owed.
+
+        Re-checks revocation and the throttle inside the write transaction. The
+        read that decided a stamp was due ran in an earlier snapshot, so the
+        credential may have been revoked or already stamped since.
+        """
+
+        token_table = LiveDeviceToken.__table__
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=touch_interval_seconds)
+        with _write_transaction(self.engine) as connection:
+            updated = connection.execute(
+                update(token_table)
+                .where(
+                    token_table.c.id == token_id,
+                    token_table.c.revoked_at.is_(None),
+                    or_(token_table.c.last_used_at.is_(None), token_table.c.last_used_at <= cutoff),
+                )
+                .values(last_used_at=now)
+            ).rowcount
+            if not updated:
+                return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
+            return {
+                "changed": True,
+                "last_used_at": _encode_datetime(now),
+                "commit_seq": str(_advance_commit_seq(connection, now)),
             }
 
     def resolve_cp_user(

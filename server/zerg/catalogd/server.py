@@ -620,8 +620,17 @@ class CatalogDaemon:
         if type(touch) is not bool:
             return self._error(request, "invalid_request", "touch_last_login must be a boolean")
         assert self._store is not None
-        runner = self._run_store if touch else self._run_read_store
-        return CatalogRpcResponse(id=request.id, result=await runner(self._store.get_user, user_id=user_id, touch_last_login=touch))
+        # Resolve on the read pool always; take the writer only when a stamp is
+        # actually owed. Routing on the flag meant an authenticated read held
+        # the single writer for a write that never happened.
+        result = await self._run_read_store(self._store.get_user, user_id=user_id, touch_last_login=touch)
+        if result.pop("touch_due", False):
+            stamped = await self._run_store(self._store.touch_user_login, user_id=user_id)
+            result["changed"] = stamped["changed"]
+            result["commit_seq"] = stamped["commit_seq"]
+            if "user" in stamped:
+                result["user"] = stamped["user"]
+        return CatalogRpcResponse(id=request.id, result=result)
 
     async def _get_active_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if request.params:
@@ -669,13 +678,19 @@ class CatalogDaemon:
         if type(interval) is not int or not 0 <= interval <= 86_400:
             return self._error(request, "invalid_request", "touch_interval_seconds must be an integer from 0 through 86400")
         assert self._store is not None
-        runner = self._run_store if touch else self._run_read_store
-        result = await runner(
+        result = await self._run_read_store(
             self._store.resolve_device,
             token_hash=token_hash,
             touch_last_used=touch,
             touch_interval_seconds=interval,
         )
+        token_id = result.pop("device_token_id", None)
+        if result.pop("touch_due", False) and token_id is not None:
+            stamped = await self._run_store(self._store.touch_device_token, token_id=token_id, touch_interval_seconds=interval)
+            result["changed"] = stamped["changed"]
+            result["commit_seq"] = stamped["commit_seq"]
+            if stamped.get("last_used_at") is not None and isinstance(result.get("token"), dict):
+                result["token"]["last_used_at"] = stamped["last_used_at"]
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_cp_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
