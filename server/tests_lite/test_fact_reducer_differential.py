@@ -412,3 +412,43 @@ def test_retention_bound_is_per_candidate_not_global(tmp_path):
     assert len(kept_per_candidate) == 3, f"every candidate must survive: {kept_per_candidate}"
     for candidate, kept in kept_per_candidate.items():
         assert kept == 16, f"{candidate} kept {kept}, expected its own bound of 16"
+
+
+def test_family_eviction_still_happens_and_leaves_no_orphans(tmp_path):
+    """Push a family past MAX_HEADS_PER_FAMILY and check the gate does not skip it.
+
+    The set-based reducer only runs the family sweep when the family exceeds its
+    bound, because the sweep ranks every head in the family and previously ran on
+    every heartbeat regardless. That is only equivalent if two things hold: the
+    sweep genuinely deletes nothing below the bound, and child rows never outlive
+    the head they belong to. Randomized scenarios never build 2048 candidates, so
+    this constructs the case rather than assuming it.
+    """
+
+    from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
+
+    over = MAX_HEADS_PER_FAMILY + 40
+    batches = []
+    for start in range(0, over, 200):
+        batches.append(
+            [
+                make_fact(family="activity", subject=f"s{n}", seq=1, payload=f"v{n}")
+                for n in range(start, min(start + 200, over))
+            ]
+        )
+
+    snapshot = assert_equivalent(
+        tmp_path,
+        name="family-eviction",
+        seed_batches=batches[:-1],
+        batch=batches[-1],
+    )
+
+    assert len(snapshot.heads) <= MAX_HEADS_PER_FAMILY, (
+        f"family eviction did not run: {len(snapshot.heads)} heads retained"
+    )
+    surviving = {row[0:4] for row in snapshot.heads}
+    for row in snapshot.receipts:
+        assert row[1:5] in surviving, f"receipt outlived its head: {row[1:5]}"
+    for row in snapshot.conflicts:
+        assert row[1:5] in surviving, f"conflict outlived its head: {row[1:5]}"

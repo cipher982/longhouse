@@ -949,7 +949,22 @@ def reduce_fact_batch_setwise(
     _prune_candidate_rows_setwise(connection, FactConflict.__table__, pruned_candidates, MAX_CONFLICTS_PER_CANDIDATE)
     candidate_pruned_at = time.perf_counter()
     for family in sorted({fact.family for fact in touched_candidates.values()}):
-        _prune_fact_family(connection, family)
+        # The family sweep is O(family size), not O(batch): it ranks every head
+        # in the family to find the 2048 it keeps, and it ran on every heartbeat
+        # regardless of whether the family was anywhere near that bound. One
+        # indexed COUNT decides whether the sweep can delete anything at all.
+        #
+        # Equivalent because the sweep's own predicate is `candidate NOT IN (top
+        # 2048)`: when the family holds no more than 2048 heads that set is
+        # empty, so every DELETE in the sweep matches nothing. Child rows cannot
+        # outlive that -- receipts and conflicts are only written for a candidate
+        # that has a head, and eviction removes a candidate's children in the
+        # same statement -- so skipping cannot strand them either.
+        head_count = connection.execute(
+            select(func.count()).select_from(FactHead.__table__).where(FactHead.__table__.c.family == family)
+        ).scalar_one()
+        if head_count > MAX_HEADS_PER_FAMILY:
+            _prune_fact_family(connection, family)
 
     # The fold is three reads and three writes; everything after it is bounds
     # enforcement, which is per candidate and per family rather than per fact.
