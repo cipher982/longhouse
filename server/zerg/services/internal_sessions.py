@@ -17,8 +17,10 @@ PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
 PROVIDER_PRODUCT_CANARY_MARKER_PREFIX = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_"
 PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE = r"Reply with exactly LONGHOUSE\_CURSOR\_PRODUCT\_ONE\_%"
-HATCH_EXECUTION_CONTRACT_RE = re.compile(r"^Hatch execution contract:\nThis is a single bounded, non-interactive run\.")
-HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single bounded, non-interactive run.%"
+HATCH_EXECUTION_CONTRACT_RE = re.compile(
+    r"^Hatch execution contract:\nThis is a single bounded, non-interactive run(?:\.| with a time budget\b)"
+)
+HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single bounded, non-interactive run%"
 SQL_LIKE_ESCAPE = "\\"
 
 

@@ -23,6 +23,10 @@ def test_hatch_execution_contract_is_exact_and_automation_classified():
     )
 
     assert is_hatch_execution_contract(contract)
+    assert is_hatch_execution_contract(
+        "Hatch execution contract:\n"
+        "This is a single bounded, non-interactive run with a time budget of about 15 minutes."
+    )
     assert not is_hatch_execution_contract("Hatch execution contract: please help me write one")
 
 
