@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _in_flight: set[str] = set()
 _lock = asyncio.Lock()
+STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS = 10.0
 
 
 async def _catalog_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -27,7 +28,11 @@ async def _catalog_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     client = get_catalogd_client()
     if client is None:
         raise RuntimeError("catalogd is not supervised")
-    return await client.call(method, params, timeout_seconds=2.0)
+    # The title worker is background work, and candidate selection can wait
+    # behind catalogd's single writer on large self-hosted corpora. A two
+    # second deadline caused the worker to loop forever without reaching the
+    # model, making title generation look intermittently broken.
+    return await client.call(method, params, timeout_seconds=STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS)
 
 
 async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
