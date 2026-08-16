@@ -34,7 +34,7 @@ async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
         return {"changed": True}
 
     async def _fake_generate_initial_session_title(**kwargs):
-        assert kwargs["timeout_seconds"] == 8.0
+        assert kwargs["timeout_seconds"] == 15.0
         return "Provider Factory Audit"
 
     monkeypatch.setattr(storage_titles, "get_settings", lambda: settings)

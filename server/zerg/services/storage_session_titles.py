@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _in_flight: set[str] = set()
 _lock = asyncio.Lock()
 STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS = 10.0
-STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 8.0
+STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 15.0
 
 
 async def _catalog_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
