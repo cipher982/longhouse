@@ -30,13 +30,13 @@ def _make_store(tmp_path):
     return AgentsStore(db), db
 
 
-def _ingest_payload(session_id, *, environment: str, cwd: str) -> SessionIngest:
+def _ingest_payload(session_id, *, environment: str, cwd: str, device_id: str = "shipper-cinder") -> SessionIngest:
     return SessionIngest(
         id=session_id,
         provider="opencode",
         environment=environment,
         project="workspace",
-        device_id="shipper-cinder",
+        device_id=device_id,
         cwd=cwd,
         started_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
         provider_session_id="ses_provider_live",
@@ -96,6 +96,29 @@ def test_provider_noreply_marker_classifies_session_as_test(tmp_path):
     assert session.environment == "test"
     assert card.environment == "test"
     assert session.first_user_message_preview == "LONGHOUSE_OPENCODE_NOREPLY_abc123"
+
+
+def test_provider_factory_machine_classifies_user_repo_as_test(tmp_path):
+    store, db = _make_store(tmp_path)
+    session_id = uuid4()
+    payload = _ingest_payload(
+        session_id,
+        environment="cinder",
+        cwd="/Users/davidrose/git/user-repo",
+        device_id="provider-factory-resume",
+    )
+    payload.events = [_user_event("Review the deployment plan")]
+
+    store.ingest_session(payload, synchronous_projections=False, incremental_session_counts=True)
+
+    session = db.get(AgentSession, session_id)
+    card = db.get(TimelineCard, session_id)
+    assert session is not None
+    assert card is not None
+    assert session.environment == "test"
+    assert session.origin_kind == "test_or_canary"
+    assert session.hidden_from_default_timeline == 1
+    assert card.hidden_from_default_timeline == 1
 
 
 def test_provider_reply_exact_marker_sets_hidden_canary_origin(tmp_path):

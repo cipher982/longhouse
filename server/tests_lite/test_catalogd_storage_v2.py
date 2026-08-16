@@ -459,6 +459,49 @@ async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(
 
 
 @pytest.mark.asyncio
+async def test_provider_factory_machine_classifies_user_repo_storage_as_hidden_canary(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"human-looking factory work\n",),
+            sealed_at=now,
+            machine_id="provider-factory-resume",
+        )
+        raw["session_facts"].update(
+            cwd="/Users/davidrose/git/user-repo",
+            origin_kind=None,
+            hidden_from_default_timeline=False,
+        )
+        manifest = _render_manifest(generation_id, source_epoch=epoch)
+        manifest.update(
+            first_user_message_preview="Review the deployment plan",
+            last_visible_text_preview="Review the deployment plan",
+            user_messages=1,
+        )
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["environment"] == "test"
+        assert session["session"]["origin_kind"] == "test_or_canary"
+        assert session["session"]["hidden_from_default_timeline"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_reply_exact_marker_classifies_storage_ingest_as_hidden_canary(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -1266,6 +1309,7 @@ async def test_claude_effort_then_real_prompt_reaches_title_generation(daemon_pa
                 "provider": "claude",
                 "project": "longhouse",
                 "git_branch": "main",
+                "machine_id": "cinder",
                 "attempt_count": 0,
             }
         ]

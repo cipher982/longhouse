@@ -59,7 +59,13 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
             # Belt-and-suspenders with the candidate-query skip in catalogd.
             logger.info("Skipping storage-v2 AI title for seed-marker session=%s", session_id)
             return False
-        if classify_provider_proof_environment(first_user_text=first_user_message) == "test":
+        if (
+            classify_provider_proof_environment(
+                machine_id=candidate.get("machine_id"),
+                first_user_text=first_user_message,
+            )
+            == "test"
+        ):
             logger.info("Skipping storage-v2 AI title for provider canary session=%s", session_id)
             return False
         if is_hatch_execution_contract(first_user_message):

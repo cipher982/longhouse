@@ -273,7 +273,7 @@ def build_managed_local_launch_plan(
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
     requested_permission_mode = str(params.permission_mode).strip()
     permission_mode = requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "bypass"
-    origin_kind = "test_or_canary" if classify_provider_proof_environment(cwd=cwd) == "test" else None
+    origin_kind = "test_or_canary" if classify_provider_proof_environment(cwd=cwd, machine_id=params.machine_name) == "test" else None
     launch_actor, launch_surface = sanitize_launch_provenance(
         origin_kind=origin_kind,
         launch_actor=params.launch_actor,

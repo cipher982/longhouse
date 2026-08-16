@@ -14,10 +14,10 @@ INTERNAL_CANARY_LABEL_PREFIXES = ("canary", "cnary")
 PROVIDER_LIVE_CANARY_CWD_SEGMENT = "/canaries/provider-live/"
 PROVIDER_LIVE_PROOF_WORKTREE_MARKER = "longhouse-provider-live-proof"
 PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT = "/provider-factory/artifacts/"
-PROVIDER_FACTORY_TEMP_CWD_SEGMENT = "/provider-factory-"
-PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT = "/live-cell-run-"
+PROVIDER_FACTORY_TEMP_CWD_PREFIXES = ("/tmp/provider-factory-", "/private/tmp/provider-factory-")
+PROVIDER_FACTORY_LIVE_CELL_CWD_PREFIXES = ("/tmp/live-cell-run-", "/private/tmp/live-cell-run-")
 PROVIDER_FACTORY_MACHINE_ID = "provider-factory-resume"
-PROVIDER_COORDINATION_PROBE_CWD_SEGMENT = "/lhx-claude-coord-"
+PROVIDER_COORDINATION_PROBE_CWD_PREFIXES = ("/tmp/lhx-claude-coord-", "/private/tmp/lhx-claude-coord-")
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
@@ -59,9 +59,9 @@ def is_provider_factory_cwd(cwd: str | None) -> bool:
     normalized = str(cwd or "").replace("\\", "/").lower()
     return (
         PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT in normalized
-        or PROVIDER_FACTORY_TEMP_CWD_SEGMENT in normalized
-        or PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT in normalized
-        or PROVIDER_COORDINATION_PROBE_CWD_SEGMENT in normalized
+        or normalized.startswith(PROVIDER_FACTORY_TEMP_CWD_PREFIXES)
+        or normalized.startswith(PROVIDER_FACTORY_LIVE_CELL_CWD_PREFIXES)
+        or normalized.startswith(PROVIDER_COORDINATION_PROBE_CWD_PREFIXES)
     )
 
 
@@ -130,6 +130,8 @@ def provider_proof_session_clause(model):
     cwd = func.lower(func.coalesce(columns.cwd, ""))
     first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""))
     machine_id_column = getattr(columns, "machine_id", None)
+    if machine_id_column is None:
+        machine_id_column = getattr(columns, "device_id", None)
     product_suffix = func.substr(first_user, len(PROVIDER_PRODUCT_CANARY_MARKER_PREFIX) + 1)
     product_marker = and_(
         first_user.like(PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
@@ -169,7 +171,7 @@ def provider_proof_session_clause(model):
         for phrase in ("Reply exactly", "Reply with exactly")
         for marker in PROVIDER_REPLY_EXACT_BARE_MARKERS
     )
-    coordination_awareness_marker = first_user.like("%LONGHOUSE\\_CURSOR\\_COORD\\_AWARENESS\\_%", escape=SQL_LIKE_ESCAPE)
+    coordination_awareness_marker = func.lower(first_user).op("GLOB")("*longhouse_cursor_coord_awareness_" + six_hex + "*")
     metadata_markers = [coordination_awareness_marker]
     if machine_id_column is not None:
         metadata_markers.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)
@@ -177,9 +179,12 @@ def provider_proof_session_clause(model):
         cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
         cwd.like(f"%{PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT}%"),
-        cwd.like(f"%{PROVIDER_FACTORY_TEMP_CWD_SEGMENT}%"),
-        cwd.like(f"%{PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT}%"),
-        cwd.like(f"%{PROVIDER_COORDINATION_PROBE_CWD_SEGMENT}%"),
+        cwd.like("/tmp/provider-factory-%"),
+        cwd.like("/private/tmp/provider-factory-%"),
+        cwd.like("/tmp/live-cell-run-%"),
+        cwd.like("/private/tmp/live-cell-run-%"),
+        cwd.like("/tmp/lhx-claude-coord-%"),
+        cwd.like("/private/tmp/lhx-claude-coord-%"),
         first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
         product_marker,
         *metadata_markers,

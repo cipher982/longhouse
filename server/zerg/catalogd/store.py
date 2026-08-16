@@ -6131,6 +6131,7 @@ class CatalogStore:
             }
             proof_environment = classify_provider_proof_environment(
                 cwd=session_facts["cwd"],
+                machine_id=machine_id,
                 first_user_text=(
                     session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
                 ),
@@ -7245,6 +7246,7 @@ class CatalogStore:
                     "provider": str(row["provider"]),
                     "project": row["project"],
                     "git_branch": row["git_branch"],
+                    "machine_id": row["machine_id"],
                     "attempt_count": int(row["title_attempt_count"] or 0),
                 }
                 for row in rows

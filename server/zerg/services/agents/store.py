@@ -870,6 +870,7 @@ class AgentsStore:
             if session.origin_kind == "console"
             else classify_provider_proof_environment(
                 cwd=data.cwd or session.cwd,
+                machine_id=data.device_id or session.device_id,
                 first_user_text=session.first_user_message_preview or first_user_text,
             )
         )
@@ -950,6 +951,7 @@ class AgentsStore:
             if session.origin_kind == "console"
             else classify_provider_proof_environment(
                 cwd=data.cwd or session.cwd,
+                machine_id=data.device_id or session.device_id,
                 first_user_text=session.first_user_message_preview or first_user_text,
             )
         )
@@ -2414,6 +2416,7 @@ class AgentsStore:
         elif (
             classify_provider_proof_environment(
                 cwd=data.cwd,
+                machine_id=data.device_id,
                 first_user_text=first_user_text_from_ingest,
             )
             and origin_kind != "console"
@@ -2452,6 +2455,7 @@ class AgentsStore:
             session_environment = (
                 classify_provider_proof_environment(
                     cwd=data.cwd,
+                    machine_id=data.device_id,
                     first_user_text=first_user_text_from_ingest,
                 )
                 if origin_kind != "console"
@@ -3014,6 +3018,7 @@ class AgentsStore:
                 if session_obj.origin_kind == "console"
                 else classify_provider_proof_environment(
                     cwd=session_obj.cwd,
+                    machine_id=session_obj.device_id,
                     first_user_text=first_user_preview_delta[2] if first_user_preview_delta else session_obj.first_user_message_preview,
                 )
             )

@@ -44,6 +44,13 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
     ) == "test"
     assert classify_provider_proof_environment(machine_id="provider-factory-resume") == "test"
     assert not is_provider_factory_cwd("/Users/davidrose/git/control-plane/provider_factory")
+    assert not is_provider_factory_cwd("/Users/davidrose/git/provider-factory-project")
+    assert not is_provider_factory_cwd("/Users/davidrose/git/live-cell-run-project")
+    assert classify_provider_proof_environment(
+        cwd="/Users/davidrose/git/user-repo",
+        machine_id="provider-factory-resume",
+        first_user_text="Review the deployment plan",
+    ) == "test"
 
 
 def test_hatch_execution_contract_is_exact_and_automation_classified():
@@ -65,7 +72,7 @@ def test_managed_canary_launch_carries_hidden_provenance_without_hiding_normal_h
         ManagedLocalLaunchParams(
             owner_id=42,
             runner_target="provider-factory-resume",
-            cwd="/tmp/longhouse-provider-runtime/sandbox-home/canaries/provider-live/cursor/workspace",
+            cwd="/Users/davidrose/git/user-repo",
             provider="cursor",
             project="managed-local",
             machine_name="provider-factory-resume",

@@ -130,7 +130,14 @@ def repair_provider_proof_session_environments(
         first_user_text = session.first_user_message_preview
         if include_event_scan and not first_user_text:
             first_user_text = _first_user_event_text(db, session.id)
-        if classify_provider_proof_environment(cwd=session.cwd, first_user_text=first_user_text) != "test":
+        if (
+            classify_provider_proof_environment(
+                cwd=session.cwd,
+                machine_id=session.device_id,
+                first_user_text=first_user_text,
+            )
+            != "test"
+        ):
             skipped_false_positives += 1
             continue
         repairable.append(session)
