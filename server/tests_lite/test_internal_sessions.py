@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import is_hatch_execution_contract
+from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
 from zerg.services.internal_sessions import is_provider_factory_cwd
+from zerg.services.internal_sessions import is_provider_factory_machine_id
 from zerg.services.internal_sessions import is_provider_product_canary_marker
 from zerg.services.internal_sessions import is_provider_reply_exact_marker
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
@@ -35,9 +37,12 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
         "/var/lib/provider-factory/artifacts/_assurance/executions/run-1/cursor/process_loss/evidence/cursor-workspace"
     )
     assert is_provider_factory_cwd("/tmp/live-cell-run-cursor.coordination.directed.v1-abc123/evidence/cursor-workspace")
+    assert is_provider_factory_machine_id("provider-factory-resume")
+    assert is_provider_coordination_awareness_marker("print exactly LONGHOUSE_CURSOR_COORD_AWARENESS_f70043f7b0")
     assert classify_provider_proof_environment(
         cwd="/tmp/lhx-claude-coord-create-abc123/workspace"
     ) == "test"
+    assert classify_provider_proof_environment(machine_id="provider-factory-resume") == "test"
     assert not is_provider_factory_cwd("/Users/davidrose/git/control-plane/provider_factory")
 
 

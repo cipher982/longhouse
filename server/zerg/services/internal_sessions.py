@@ -16,6 +16,7 @@ PROVIDER_LIVE_PROOF_WORKTREE_MARKER = "longhouse-provider-live-proof"
 PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT = "/provider-factory/artifacts/"
 PROVIDER_FACTORY_TEMP_CWD_SEGMENT = "/provider-factory-"
 PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT = "/live-cell-run-"
+PROVIDER_FACTORY_MACHINE_ID = "provider-factory-resume"
 PROVIDER_COORDINATION_PROBE_CWD_SEGMENT = "/lhx-claude-coord-"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
@@ -28,6 +29,7 @@ PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
     r"|FRESH_AFTER_CANCEL_OK|CLEAN_EXIT_ORIGINAL_COMPLETE|WARM_IDLE_OK)"
     r"(?:\.| and nothing else\.)?$"
 )
+PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(r"LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}", re.IGNORECASE)
 PROVIDER_REPLY_EXACT_MARKER_PROVIDERS = ("CODEX", "OPENCODE", "CURSOR", "CLAUDE", "AGY")
 PROVIDER_REPLY_EXACT_BARE_MARKERS = ("FRESH_AFTER_CANCEL_OK", "CLEAN_EXIT_ORIGINAL_COMPLETE", "WARM_IDLE_OK")
 HATCH_EXECUTION_CONTRACT_RE = re.compile(
@@ -63,6 +65,14 @@ def is_provider_factory_cwd(cwd: str | None) -> bool:
     )
 
 
+def is_provider_factory_machine_id(machine_id: str | None) -> bool:
+    return str(machine_id or "").strip().lower() == PROVIDER_FACTORY_MACHINE_ID
+
+
+def is_provider_coordination_awareness_marker(text: str | None) -> bool:
+    return bool(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.search(str(text or "").strip()))
+
+
 def is_provider_noreply_marker(text: str | None) -> bool:
     return bool(PROVIDER_NOREPLY_MARKER_RE.match(str(text or "").strip()))
 
@@ -96,6 +106,7 @@ def hatch_automation_session_clause(model):
 def classify_provider_proof_environment(
     *,
     cwd: str | None = None,
+    machine_id: str | None = None,
     first_user_text: str | None = None,
 ) -> str | None:
     """Return the normalized environment for provider proof/canary sessions."""
@@ -103,9 +114,11 @@ def classify_provider_proof_environment(
         is_provider_live_canary_cwd(cwd)
         or is_provider_live_proof_worktree_cwd(cwd)
         or is_provider_factory_cwd(cwd)
+        or is_provider_factory_machine_id(machine_id)
         or is_provider_noreply_marker(first_user_text)
         or is_provider_product_canary_marker(first_user_text)
         or is_provider_reply_exact_marker(first_user_text)
+        or is_provider_coordination_awareness_marker(first_user_text)
     ):
         return "test"
     return None
@@ -116,6 +129,7 @@ def provider_proof_session_clause(model):
     columns = getattr(model, "c", model)
     cwd = func.lower(func.coalesce(columns.cwd, ""))
     first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""))
+    machine_id_column = getattr(columns, "machine_id", None)
     product_suffix = func.substr(first_user, len(PROVIDER_PRODUCT_CANARY_MARKER_PREFIX) + 1)
     product_marker = and_(
         first_user.like(PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
@@ -155,6 +169,10 @@ def provider_proof_session_clause(model):
         for phrase in ("Reply exactly", "Reply with exactly")
         for marker in PROVIDER_REPLY_EXACT_BARE_MARKERS
     )
+    coordination_awareness_marker = first_user.like("%LONGHOUSE\\_CURSOR\\_COORD\\_AWARENESS\\_%", escape=SQL_LIKE_ESCAPE)
+    metadata_markers = [coordination_awareness_marker]
+    if machine_id_column is not None:
+        metadata_markers.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)
     return or_(
         cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
@@ -164,6 +182,7 @@ def provider_proof_session_clause(model):
         cwd.like(f"%{PROVIDER_COORDINATION_PROBE_CWD_SEGMENT}%"),
         first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
         product_marker,
+        *metadata_markers,
         *reply_exact_marker,
     )
 
