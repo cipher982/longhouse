@@ -13,13 +13,16 @@ INTERNAL_CANARY_PROVIDER_ALIASES = {"canary", "cnary"}
 INTERNAL_CANARY_LABEL_PREFIXES = ("canary", "cnary")
 PROVIDER_LIVE_CANARY_CWD_SEGMENT = "/canaries/provider-live/"
 PROVIDER_LIVE_PROOF_WORKTREE_MARKER = "longhouse-provider-live-proof"
+PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT = "/provider-factory/artifacts/"
+PROVIDER_FACTORY_TEMP_CWD_SEGMENT = "/provider-factory-"
+PROVIDER_COORDINATION_PROBE_CWD_SEGMENT = "/lhx-claude-coord-"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
 PROVIDER_PRODUCT_CANARY_MARKER_PREFIX = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_"
 PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE = r"Reply with exactly LONGHOUSE\_CURSOR\_PRODUCT\_ONE\_%"
 PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
-    r"^Reply exactly "
+    r"^Reply (?:with )?exactly "
     r"(?:LONGHOUSE_(?:CODEX|OPENCODE|CURSOR|CLAUDE|AGY)_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_[0-9a-f]{6,}"
     r"|FRESH_AFTER_CANCEL_OK|CLEAN_EXIT_ORIGINAL_COMPLETE|WARM_IDLE_OK)"
     r"(?:\.| and nothing else\.)?$"
@@ -45,6 +48,17 @@ def is_provider_live_canary_cwd(cwd: str | None) -> bool:
 def is_provider_live_proof_worktree_cwd(cwd: str | None) -> bool:
     normalized = str(cwd or "").replace("\\", "/").lower()
     return PROVIDER_LIVE_PROOF_WORKTREE_MARKER in normalized
+
+
+def is_provider_factory_cwd(cwd: str | None) -> bool:
+    """Recognize provider-factory evidence workspaces, not user repositories."""
+
+    normalized = str(cwd or "").replace("\\", "/").lower()
+    return (
+        PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT in normalized
+        or PROVIDER_FACTORY_TEMP_CWD_SEGMENT in normalized
+        or PROVIDER_COORDINATION_PROBE_CWD_SEGMENT in normalized
+    )
 
 
 def is_provider_noreply_marker(text: str | None) -> bool:
@@ -86,6 +100,7 @@ def classify_provider_proof_environment(
     if (
         is_provider_live_canary_cwd(cwd)
         or is_provider_live_proof_worktree_cwd(cwd)
+        or is_provider_factory_cwd(cwd)
         or is_provider_noreply_marker(first_user_text)
         or is_provider_product_canary_marker(first_user_text)
         or is_provider_reply_exact_marker(first_user_text)
@@ -107,38 +122,43 @@ def provider_proof_session_clause(model):
     )
     six_hex = "[0-9a-f]" * 6
     reply_exact_marker = []
-    for provider in PROVIDER_REPLY_EXACT_MARKER_PROVIDERS:
-        prefix = f"Reply exactly LONGHOUSE_{provider}_"
-        escaped_prefix = prefix.replace("_", SQL_LIKE_ESCAPE + "_")
-        marker_body = func.substr(first_user, len(prefix) + 1)
-        marker_core = case(
-            (marker_body.like("% and nothing else."), func.substr(marker_body, 1, func.length(marker_body) - 18)),
-            (marker_body.like("%."), func.substr(marker_body, 1, func.length(marker_body) - 1)),
-            else_=marker_body,
-        )
-        reply_exact_marker.append(
-            and_(
-                first_user.like(f"{escaped_prefix}%", escape=SQL_LIKE_ESCAPE),
-                ~(marker_core.op("GLOB")("*[^A-Za-z0-9_]*")),
-                or_(
-                    and_(
-                        marker_core.op("GLOB")(f"*_{six_hex}*"),
-                        ~(marker_core.op("GLOB")("*_[0-9a-f]*[^0-9a-f]")),
-                    ),
-                ),
+    for phrase in ("Reply exactly", "Reply with exactly"):
+        for provider in PROVIDER_REPLY_EXACT_MARKER_PROVIDERS:
+            prefix = f"{phrase} LONGHOUSE_{provider}_"
+            escaped_prefix = prefix.replace("_", SQL_LIKE_ESCAPE + "_")
+            marker_body = func.substr(first_user, len(prefix) + 1)
+            marker_core = case(
+                (marker_body.like("% and nothing else."), func.substr(marker_body, 1, func.length(marker_body) - 18)),
+                (marker_body.like("%."), func.substr(marker_body, 1, func.length(marker_body) - 1)),
+                else_=marker_body,
             )
-        )
+            reply_exact_marker.append(
+                and_(
+                    first_user.like(f"{escaped_prefix}%", escape=SQL_LIKE_ESCAPE),
+                    ~(marker_core.op("GLOB")("*[^A-Za-z0-9_]*")),
+                    or_(
+                        and_(
+                            marker_core.op("GLOB")(f"*_{six_hex}*"),
+                            ~(marker_core.op("GLOB")("*_[0-9a-f]*[^0-9a-f]")),
+                        ),
+                    ),
+                )
+            )
     reply_exact_marker.extend(
         or_(
-            first_user == f"Reply exactly {marker}",
-            first_user == f"Reply exactly {marker}.",
-            first_user == f"Reply exactly {marker} and nothing else.",
+            first_user == f"{phrase} {marker}",
+            first_user == f"{phrase} {marker}.",
+            first_user == f"{phrase} {marker} and nothing else.",
         )
+        for phrase in ("Reply exactly", "Reply with exactly")
         for marker in PROVIDER_REPLY_EXACT_BARE_MARKERS
     )
     return or_(
         cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
+        cwd.like(f"%{PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT}%"),
+        cwd.like(f"%{PROVIDER_FACTORY_TEMP_CWD_SEGMENT}%"),
+        cwd.like(f"%{PROVIDER_COORDINATION_PROBE_CWD_SEGMENT}%"),
         first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
         product_marker,
         *reply_exact_marker,

@@ -2141,6 +2141,7 @@ def build_session_response(
         first_user_message=first_user_message,
         user_messages=session.user_messages,
         title_retry_at=getattr(session, "title_retry_at", None),
+        title_last_error=getattr(session, "title_last_error", None),
     )
     from zerg.services.session_preferences import load_session_preferences
 
@@ -2203,7 +2204,7 @@ def build_session_response(
         summary_title=session.summary_title,
         anchor_title=session.anchor_title,
         timeline_title=resolve_timeline_title(
-            anchor_title=session.anchor_title,
+            anchor_title=(session.anchor_title if not str(getattr(session, "title_last_error", "") or "").strip() else None),
             summary_title=session.summary_title,
             summary_status=summary_status,
             first_user_message=first_user_message,

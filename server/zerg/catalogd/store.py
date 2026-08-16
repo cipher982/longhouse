@@ -95,7 +95,6 @@ from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
-from zerg.services.session_title import structured_fallback_title
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
@@ -7219,6 +7218,10 @@ class CatalogStore:
                     select(table)
                     .where(
                         table.c.user_messages > 0,
+                        # Claude's native control records remain semantically
+                        # raw until repair. Keep them out of the title model
+                        # until the semantic projection identifies the real
+                        # conversational first prompt.
                         or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
                         or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
                         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
@@ -7304,30 +7307,24 @@ class CatalogStore:
                     table.c.provider,
                 ).where(table.c.session_id == session_key)
             ).first()
-            if row is None or row.anchor_title:
+            if row is None or row.anchor_title or int(row.title_attempt_count or 0) >= MAX_TITLE_ATTEMPTS:
                 return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
             attempts = int(row.title_attempt_count or 0) + 1
             if attempts >= MAX_TITLE_ATTEMPTS:
-                # Terminal: the AI title keeps failing, so freeze the
-                # deterministic non-AI fallback and STOP. Durable (DB row), so a
-                # restart cannot resume the retry loop. anchor_title being set
-                # also removes the session from the candidate query.
-                fallback = (
-                    None
-                    if is_path_like_title(row.first_user_message_preview)
-                    else sanitize_title(row.first_user_message_preview, max_words=6)
-                )
-                title = fallback or structured_fallback_title(row.project, row.git_branch)
+                # Terminal: stop retrying durably, but do not freeze the
+                # deterministic prompt/project fallback as an AI anchor. The
+                # timeline can still render a clearly degraded fallback while
+                # a later explicit repair is free to install a real title.
                 commit_seq = _advance_commit_seq(connection, failed_at)
                 connection.execute(
                     update(table)
                     .where(table.c.session_id == session_key)
                     .values(
-                        anchor_title=title,
-                        summary_title=title,
+                        anchor_title=None,
+                        summary_title=None,
                         title_attempt_count=attempts,
                         title_last_attempt_at=failed_at,
-                        title_retry_at=None,
+                        title_retry_at=failed_at,
                         title_last_error=reason[:128],
                         commit_seq=commit_seq,
                         updated_at=failed_at,
@@ -7337,9 +7334,9 @@ class CatalogStore:
                     update(LiveSessionCatalog.__table__)
                     .where(LiveSessionCatalog.__table__.c.session_id == session_key)
                     .values(
-                        anchor_title=title,
-                        summary_title=title,
-                        title_retry_at=None,
+                        anchor_title=None,
+                        summary_title=None,
+                        title_retry_at=failed_at,
                         title_last_error=reason[:128],
                         updated_at=failed_at,
                     )
@@ -7347,14 +7344,14 @@ class CatalogStore:
                 connection.execute(
                     update(LiveTimelineCard.__table__)
                     .where(LiveTimelineCard.__table__.c.session_id == session_key)
-                    .values(summary_title=title)
+                    .values(summary_title=None)
                 )
                 return {
                     "changed": True,
                     "terminal": True,
-                    "title": title,
+                    "title": None,
                     "attempt_count": attempts,
-                    "retry_at": None,
+                    "retry_at": failed_at.isoformat(),
                     "commit_seq": str(commit_seq),
                 }
             retry_at = None if reason == "no_meaningful_user_text" else failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))

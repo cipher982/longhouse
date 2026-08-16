@@ -1,11 +1,4 @@
-"""Bounded storage-v2 AI title retry policy.
-
-Regression coverage for the runaway title loop: a title generation that keeps
-timing out must stop after a small bounded number of attempts, freeze the
-deterministic non-AI fallback title, and persist that terminal state so a
-restart cannot resume the loop. Also covers the assurance-harness seed-marker
-skip.
-"""
+"""Bounded storage-v2 AI title retry policy."""
 
 from __future__ import annotations
 
@@ -24,6 +17,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import MAX_TITLE_ATTEMPTS
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import StorageSession
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.session_title import is_resume_seed_marker
 
 
@@ -92,6 +86,26 @@ def _candidate_ids(engine) -> set[str]:
     return {str(candidate["session_id"]) for candidate in result.get("sessions", [])}
 
 
+def _insert_visible_live_catalog(engine, *, session_id, provider="claude"):
+    now = datetime.now(UTC).replace(microsecond=0)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=str(session_id),
+                provider=provider,
+                environment="local",
+                project="longhouse",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                hidden_from_default_timeline=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
 def _build_engine(root: Path):
     engine = create_catalog_engine(root / "catalog.db")
     initialize_catalog_schema(engine)
@@ -120,8 +134,8 @@ def test_retrying_title_times_out_bounded_then_persists_terminal(tmp_path):
             assert result["retry_at"] is not None  # keeps backing off, not fixed cadence
         else:
             assert result["terminal"] is True
-            assert result["retry_at"] is None
-            assert result["title"] == first_message  # deterministic non-AI fallback
+            assert result["retry_at"] is not None
+            assert result["title"] is None  # deterministic fallback is not an AI anchor
 
     assert str(session_id) not in _candidate_ids(engine)
 
@@ -168,6 +182,20 @@ def test_candidate_listing_skips_seed_marker_and_over_budget_sessions(tmp_path):
     assert str(normal_id) in candidates
     assert str(seed_id) not in candidates
     assert str(burnt_id) not in candidates
+
+
+def test_candidate_listing_keeps_visible_claude_raw_until_semantic_repair(tmp_path):
+    engine = _build_engine(tmp_path)
+    session_id = uuid4()
+    _insert_session(
+        engine,
+        session_id=session_id,
+        provider="claude",
+        first_message="Reply with exactly LONGHOUSE_CLAUDE_TURN_BOUNDARY_abc123",
+    )
+    _insert_visible_live_catalog(engine, session_id=session_id)
+
+    assert str(session_id) not in _candidate_ids(engine)
 
 
 def test_is_resume_seed_marker_matches_only_well_formed_token():

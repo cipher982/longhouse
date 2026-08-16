@@ -36,7 +36,6 @@ from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import project_pending_interaction_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
-from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_title import sanitize_timeline_title
@@ -261,35 +260,24 @@ def project_catalog_session_facts(
 
 def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     user_messages, assistant_messages, tool_calls = _message_counts(session, card)
-    first_user_message = card.first_user_message_preview or session.first_user_message_preview
-    if (
-        not any((user_messages, assistant_messages, tool_calls))
-        and not sanitize_timeline_title(session.anchor_title)
-        and not sanitize_timeline_title(first_user_message)
-    ):
-        return resolve_timeline_title(
-            anchor_title=session.anchor_title,
-            summary_title=card.summary_title or session.summary_title,
-            summary_status="ready" if session.summary else "unavailable",
-            first_user_message=first_user_message,
-            project=session.project,
-            git_branch=session.git_branch,
-            provider=session.provider,
-            user_messages=user_messages,
-            assistant_messages=assistant_messages,
-            tool_calls=tool_calls,
-        )
-    for value in (
-        session.anchor_title,
-        card.summary_title,
-        session.summary_title,
-        first_user_message,
-        session.project,
-    ):
-        normalized = str(value or "").strip()
-        if normalized and not is_path_like_title(normalized):
-            return normalized[:255]
-    return f"{session.provider.title()} session"
+    raw_first_user_message = card.first_user_message_preview or session.first_user_message_preview
+    first_user_message = sanitize_timeline_title(raw_first_user_message, max_words=6)
+    # ``summary_title`` is a drifting artifact and failed title attempts may
+    # have copied the prompt into ``anchor_title``. Resolve one server-owned
+    # headline instead of letting either fallback masquerade as an AI title.
+    effective_anchor = _effective_ai_title(session, card, raw_first_user_message)
+    return resolve_timeline_title(
+        anchor_title=effective_anchor,
+        summary_title=None,
+        summary_status="ready" if session.summary else "unavailable",
+        first_user_message=first_user_message,
+        project=session.project,
+        git_branch=session.git_branch,
+        provider=session.provider,
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        tool_calls=tool_calls,
+    )
 
 
 def _message_counts(session: LiveSessionCatalog, card: LiveTimelineCard) -> tuple[int, int, int]:
@@ -300,22 +288,42 @@ def _message_counts(session: LiveSessionCatalog, card: LiveTimelineCard) -> tupl
     )
 
 
+def _effective_ai_title(session: LiveSessionCatalog, card: LiveTimelineCard, first_user_message: str | None) -> str | None:
+    """Return a title that is safe to present as generated in the timeline."""
+
+    title_error = str(session.title_last_error or "").strip()
+    anchor = None if title_error else sanitize_timeline_title(session.anchor_title, max_words=6)
+    if anchor:
+        return anchor
+    summary = sanitize_timeline_title(card.summary_title or session.summary_title, max_words=6)
+    prompt_fallback = sanitize_timeline_title(first_user_message, max_words=6)
+    # Storage-v2 used to copy the prompt into summary_title before AI title
+    # reconciliation. It is not a generated title when it is equivalent to
+    # that fallback.
+    return summary if summary and summary != prompt_fallback else None
+
+
 def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     user_messages, _assistant_messages, _tool_calls = _message_counts(session, card)
+    first_user_message = card.first_user_message_preview or session.first_user_message_preview
+    effective_title = _effective_ai_title(session, card, first_user_message)
     return resolve_title_provenance(
-        anchor_title=session.anchor_title,
-        first_user_message=card.first_user_message_preview or session.first_user_message_preview,
+        anchor_title=effective_title,
+        first_user_message=first_user_message,
         user_messages=user_messages,
         title_retry_at=session.title_retry_at,
+        # A surviving summary is a valid generated title even if a later
+        # anchor attempt failed. Only the failed anchor itself is degraded.
+        title_last_error=None if effective_title else session.title_last_error,
     )[1]
 
 
 def _title_state(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
-    if sanitize_timeline_title(session.anchor_title, max_words=6):
+    if _effective_ai_title(session, card, card.first_user_message_preview or session.first_user_message_preview):
         return "ready"
     if session.title_last_error == "no_meaningful_user_text":
         return "exempt"
-    if session.title_retry_at is not None:
+    if session.title_retry_at is not None or str(session.title_last_error or "").strip():
         return "degraded"
     if card.first_user_message_preview or session.first_user_message_preview:
         return "pending"

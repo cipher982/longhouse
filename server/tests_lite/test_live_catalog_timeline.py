@@ -611,6 +611,7 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
                 assistant_messages=2,
                 tool_calls=3,
                 summary_title="Storage isolation",
+                title_last_error="TimeoutError",
                 primary_thread_id=str(thread_id),
                 created_at=now,
                 updated_at=now,
@@ -664,6 +665,8 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.thread_id == str(thread_id)
     assert card.head.id == str(session_id)
     assert card.head.timeline_title == "Storage isolation"
+    assert card.head.title_state == "ready"
+    assert card.head.title_source == "ai"
     assert card.head.runtime_phase is None
     assert card.head.runtime_display.state is None
     assert card.head.timeline_card.status.label == "Activity unknown"
