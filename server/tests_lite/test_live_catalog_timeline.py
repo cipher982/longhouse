@@ -814,6 +814,34 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
     assert session.title_source == "project"
 
 
+def test_live_catalog_timeline_does_not_render_path_preview_as_title():
+    now = datetime.now(timezone.utc)
+    path = "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-08-14-provider-factory-audit.md"
+    session = LiveSessionCatalog(
+        session_id=str(uuid4()),
+        provider="claude",
+        environment="production",
+        project="longhouse",
+        user_messages=1,
+        assistant_messages=1,
+        summary_title=path,
+        anchor_title=path,
+        updated_at=now,
+    )
+    card = LiveTimelineCard(
+        session_id=session.session_id,
+        provider="claude",
+        environment="production",
+        project="longhouse",
+        first_user_message_preview=path,
+        user_messages=1,
+        assistant_messages=1,
+        updated_at=now,
+    )
+
+    assert live_catalog_timeline._title(session, card) == "longhouse"
+
+
 def test_user_hide_updates_legacy_live_timeline_card_projection(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'user-hide-card.db'}")
     initialize_catalog_schema(engine)

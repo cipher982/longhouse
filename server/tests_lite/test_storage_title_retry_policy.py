@@ -13,7 +13,11 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
+
+import pytest
 
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
@@ -21,6 +25,42 @@ from zerg.catalogd.store import MAX_TITLE_ATTEMPTS
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import StorageSession
 from zerg.services.session_title import is_resume_seed_marker
+
+
+@pytest.mark.asyncio
+async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
+    import zerg.services.storage_session_titles as storage_titles
+
+    calls: list[tuple[str, dict]] = []
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(llm_disabled=False)
+
+    async def _fake_catalog_call(method, params):
+        calls.append((method, params))
+        return {"changed": True}
+
+    async def _fake_generate_initial_session_title(**_kwargs):
+        return "Provider Factory Audit"
+
+    monkeypatch.setattr(storage_titles, "get_settings", lambda: settings)
+    monkeypatch.setattr(storage_titles, "_catalog_call", _fake_catalog_call)
+    monkeypatch.setattr("zerg.models_config.get_llm_client_for_use_case", lambda _use_case: (client, "test-model", "test"))
+    monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _fake_generate_initial_session_title)
+
+    generated = await storage_titles.generate_storage_session_title(
+        {
+            "session_id": str(uuid4()),
+            "first_user_message": "/Users/davidrose/git/obsidian_vault/AI-Sessions/provider-factory-audit.md",
+            "provider": "claude",
+            "project": "longhouse",
+            "git_branch": "main",
+        }
+    )
+
+    assert generated is True
+    assert calls[0][0] == "storage.session.title.complete.v2"
+    assert calls[0][1]["title"] == "Provider Factory Audit"
+    client.close.assert_awaited_once()
 
 
 def _insert_session(engine, *, session_id, first_message, environment="local", provider="opencode"):

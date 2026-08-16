@@ -5,6 +5,7 @@ from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_title import sanitize_title
+from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import structured_fallback_title
 
 
@@ -25,6 +26,13 @@ def test_path_only_prompt_uses_project_fallback_for_timeline_copy():
         tool_calls=0,
     ) == "longhouse · main"
     assert not is_path_like_title(f"{path} is throwing an exception")
+
+
+def test_timeline_title_sanitizer_rejects_bare_absolute_paths_but_keeps_real_titles():
+    path = "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-08-14-provider-factory-audit.md"
+
+    assert sanitize_timeline_title(path) is None
+    assert sanitize_timeline_title("Fix the title pipeline") == "Fix the title pipeline"
 
 
 class TestSanitizeTitle:

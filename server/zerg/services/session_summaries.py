@@ -30,7 +30,7 @@ from zerg.services.provider_interaction_semantics import semantic_projection_fac
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_title import freeze_anchor_title
-from zerg.services.session_title import sanitize_title
+from zerg.services.session_title import sanitize_timeline_title
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +338,7 @@ async def record_initial_title_failure(session_id: str, reason: str) -> None:
 
         def _do_update(write_db: Session) -> int:
             target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
-            if target is None or sanitize_title(target.anchor_title):
+            if target is None or sanitize_timeline_title(target.anchor_title):
                 return 0
             attempts = int(target.title_attempt_count or 0) + 1
             delay_seconds = min(
@@ -382,7 +382,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
             return False
-        if sanitize_title(session.anchor_title):
+        if sanitize_timeline_title(session.anchor_title):
             return False
         if session.environment in {"test", "e2e"}:
             return False
@@ -469,7 +469,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             metadata=metadata,
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        title = sanitize_title(raw_title, max_words=6)
+        title = sanitize_timeline_title(raw_title, max_words=6)
         if not title:
             logger.info("Initial title generation returned no title for session %s in %dms", session_id, elapsed_ms)
             await record_initial_title_failure(session_id, "empty_model_response")
@@ -481,7 +481,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
                 if not target:
                     return 0
-                if sanitize_title(target.anchor_title):
+                if sanitize_timeline_title(target.anchor_title):
                     return 0
                 target.summary_title = title
                 target.anchor_title = freeze_anchor_title(title)

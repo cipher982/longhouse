@@ -125,6 +125,18 @@ def is_path_like_title(text: str | None) -> bool:
     return bool(_ABSOLUTE_PATH_TITLE_RE.fullmatch(first_line)) and ("/" in first_line or "\\" in first_line)
 
 
+def sanitize_timeline_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> str | None:
+    """Clean a title candidate and reject a bare provider-local path.
+
+    A path can be valid transcript content, but it is not a useful session
+    headline. Keep that distinction at the title boundary so model output and
+    display fallbacks cannot freeze or render a pasted filesystem path.
+    """
+
+    title = sanitize_title(text, max_words=max_words)
+    return None if title and is_path_like_title(title) else title
+
+
 def empty_session_title(project: str | None, provider: str | None) -> str:
     """Explicit headline for a durable shell with no transcript content."""
     context = str(project or "").strip() or str(provider or "Session").strip().title()
@@ -144,10 +156,10 @@ def resolve_title_provenance(
     from an AI title so operational title debt cannot disappear in a readable
     timeline row.
     """
-    if sanitize_title(anchor_title):
+    if sanitize_timeline_title(anchor_title):
         return "ready", "ai"
     if (user_messages or 0) > 0:
-        prompt_title = None if is_path_like_title(first_user_message) else sanitize_title(first_user_message)
+        prompt_title = sanitize_timeline_title(first_user_message)
         return ("degraded" if title_retry_at is not None else "pending"), ("prompt" if prompt_title else "project")
     return "awaiting_input", "project"
 
@@ -176,11 +188,11 @@ def resolve_timeline_title(
     summary/search artifact; allowing it here would make a summary race look
     like a successfully generated session title and hide title debt.
     """
-    frozen = sanitize_title(anchor_title)
+    frozen = sanitize_timeline_title(anchor_title)
     if frozen:
         return frozen
 
-    from_message = None if is_path_like_title(first_user_message) else sanitize_title(first_user_message)
+    from_message = sanitize_timeline_title(first_user_message)
     if from_message:
         return from_message
 
@@ -199,4 +211,4 @@ def freeze_anchor_title(summary_title: str | None) -> str | None:
     nothing, returns None and the row stays unfrozen until a better title
     arrives (or close-time promotion fills it in).
     """
-    return sanitize_title(summary_title)
+    return sanitize_timeline_title(summary_title)

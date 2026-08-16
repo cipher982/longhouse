@@ -318,8 +318,9 @@ async def test_generate_initial_title_impl_skips_all_db_work_when_llm_disabled()
     get_factory.assert_not_called()
 
 
+@pytest.mark.parametrize("raw_title", ['"""', "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-08-14-provider-factory-audit.md"])
 @pytest.mark.asyncio
-async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp_path, monkeypatch):
+async def test_generate_initial_title_impl_does_not_publish_when_title_unusable(tmp_path, monkeypatch, raw_title):
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
@@ -327,7 +328,7 @@ async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp
     from zerg.services.session_summaries import generate_initial_title_impl
 
     reset_pubsub_for_test()
-    factory = _make_db(tmp_path, "initial_title_empty.db")
+    factory = _make_db(tmp_path, "initial_title_unusable.db")
 
     db = factory()
     session = AgentSession(
@@ -348,7 +349,7 @@ async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp
     db.close()
 
     async def _fake_generate_initial_session_title(**_kwargs):
-        return '"""'
+        return raw_title
 
     client = SimpleNamespace(close=AsyncMock())
     settings = SimpleNamespace(testing=False, llm_disabled=False)

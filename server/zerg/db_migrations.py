@@ -667,7 +667,7 @@ def _repair_session_semantic_projections(conn: Connection) -> tuple[int, int]:
     from zerg.models.agents import AgentSession
     from zerg.services.agents.store import AgentsStore
     from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-    from zerg.services.session_title import sanitize_title
+    from zerg.services.session_title import sanitize_timeline_title
 
     repaired = 0
     title_repaired = 0
@@ -709,7 +709,7 @@ def _repair_session_semantic_projections(conn: Connection) -> tuple[int, int]:
                 # removed. Replace it with the deterministic prompt fallback;
                 # a future title worker may upgrade it to an AI title.
                 agent_session.anchor_title = None
-                agent_session.summary_title = sanitize_title(new_first_preview, max_words=6)
+                agent_session.summary_title = sanitize_timeline_title(new_first_preview, max_words=6)
                 agent_session.title_retry_at = None
                 agent_session.title_last_error = None
                 title_repaired += 1

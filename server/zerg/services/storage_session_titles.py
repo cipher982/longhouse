@@ -12,6 +12,7 @@ from zerg.config import get_settings
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.session_title import is_resume_seed_marker
+from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         if get_settings().llm_disabled:
             return False
         first_user_message = str(candidate.get("first_user_message") or "")
+        # A path can be poor display copy while still being meaningful model
+        # input (the model may infer the file or feature being discussed).
         if sanitize_title(first_user_message) is None:
             raise ValueError("no_meaningful_user_text")
         if is_resume_seed_marker(first_user_message):
@@ -72,7 +75,7 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
             },
             timeout_seconds=4.0,
         )
-        title = sanitize_title(raw_title, max_words=6)
+        title = sanitize_timeline_title(raw_title, max_words=6)
         if not title:
             raise ValueError("empty_model_response")
         result = await _catalog_call(

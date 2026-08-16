@@ -93,6 +93,7 @@ from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
+from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
 from zerg.services.session_title import structured_fallback_title
 from zerg.storage_v2.contracts import DurableReceipt
@@ -6477,7 +6478,7 @@ class CatalogStore:
                             )
                         ),
                     }
-                    immediate_title = sanitize_title(render_manifest["first_user_message_preview"], max_words=6)
+                    immediate_title = sanitize_timeline_title(render_manifest["first_user_message_preview"], max_words=6)
                     if provider.strip().lower() != "claude" and not (existing_session or {}).get("summary_title") and immediate_title:
                         projection_values["summary_title"] = immediate_title
                     if not (existing_session or {}).get("first_user_message_preview") and render_manifest["first_user_message_preview"]:
@@ -7250,6 +7251,8 @@ class CatalogStore:
         }
 
     def complete_storage_title(self, *, session_id: UUID, title: str, completed_at: datetime) -> dict[str, Any]:
+        if is_path_like_title(title):
+            raise ValueError("path_like_title")
         table = StorageSession.__table__
         catalog = LiveSessionCatalog.__table__
         card = LiveTimelineCard.__table__
@@ -9731,7 +9734,9 @@ def _refresh_legacy_migration_run(connection, run_id: str, commit_seq: int, obse
 
 
 def _storage_card_compat_row(row) -> dict[str, Any]:
-    title = str(row["anchor_title"] or "").strip() or sanitize_title(row["first_user_message_preview"], max_words=6)
+    title = sanitize_timeline_title(row["anchor_title"], max_words=6) or sanitize_timeline_title(
+        row["first_user_message_preview"], max_words=6
+    )
     return {
         "session_id": str(row["session_id"]),
         "last_activity_at": row["last_activity_at"],
@@ -10757,7 +10762,7 @@ def _recompute_render_generation_projection(
         ),
         "summary_title": func.coalesce(
             sessions.c.summary_title,
-            sanitize_title(
+            sanitize_timeline_title(
                 str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None,
                 max_words=6,
             ),
@@ -10783,7 +10788,7 @@ def _recompute_render_generation_projection(
         # anchor_title is the write-once AI projection.
         projection_values.update(
             {
-                "summary_title": sanitize_title(
+                "summary_title": sanitize_timeline_title(
                     str(projection_values["first_user_message_preview"] or ""),
                     max_words=6,
                 ),

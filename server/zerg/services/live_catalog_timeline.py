@@ -36,9 +36,10 @@ from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import project_pending_interaction_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
+from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
-from zerg.services.session_title import sanitize_title
+from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_compat_runtime_display_response
@@ -263,8 +264,8 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     first_user_message = card.first_user_message_preview or session.first_user_message_preview
     if (
         not any((user_messages, assistant_messages, tool_calls))
-        and not sanitize_title(session.anchor_title)
-        and not sanitize_title(first_user_message)
+        and not sanitize_timeline_title(session.anchor_title)
+        and not sanitize_timeline_title(first_user_message)
     ):
         return resolve_timeline_title(
             anchor_title=session.anchor_title,
@@ -286,7 +287,7 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
         session.project,
     ):
         normalized = str(value or "").strip()
-        if normalized:
+        if normalized and not is_path_like_title(normalized):
             return normalized[:255]
     return f"{session.provider.title()} session"
 
@@ -310,7 +311,7 @@ def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
 
 
 def _title_state(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
-    if sanitize_title(session.anchor_title, max_words=6):
+    if sanitize_timeline_title(session.anchor_title, max_words=6):
         return "ready"
     if session.title_last_error == "no_meaningful_user_text":
         return "exempt"
