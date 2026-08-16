@@ -459,6 +459,36 @@ async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(
 
 
 @pytest.mark.asyncio
+async def test_reply_exact_marker_classifies_storage_ingest_as_hidden_canary(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    marker = "Reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_94afb881e8684faca669fefd44ec40 and nothing else."
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"marker\n",), sealed_at=now)
+        raw["session_facts"].update(cwd=None, origin_kind=None, hidden_from_default_timeline=False)
+        manifest = _render_manifest(generation_id, source_epoch=epoch, provider="opencode")
+        manifest.update(first_user_message_preview=marker, last_visible_text_preview=marker, user_messages=1)
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["environment"] == "test"
+        assert session["session"]["origin_kind"] == "test_or_canary"
+        assert session["session"]["hidden_from_default_timeline"] is True
+        assert session["session"]["launch_actor"] == "automation"
+        assert session["session"]["launch_surface"] == "test"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_automation(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

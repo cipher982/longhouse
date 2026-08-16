@@ -6146,7 +6146,7 @@ class CatalogStore:
                 and live_console_session is None
                 and not (existing_session is not None and existing_session["origin_kind"] == "console")
             )
-            if proof_environment == "test" or (
+            if (proof_environment == "test" and not (existing_session is not None and existing_session["origin_kind"] == "console")) or (
                 live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary"
             ):
                 # A managed canary's provider transcript has no authority to

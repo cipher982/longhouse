@@ -865,6 +865,20 @@ class AgentsStore:
         hatch_contract = is_hatch_execution_contract(first_user_text) or is_hatch_execution_contract(session.first_user_message_preview)
         if hatch_contract and session.origin_kind != "console":
             incoming_origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
+        provider_proof_environment = (
+            None
+            if session.origin_kind == "console"
+            else classify_provider_proof_environment(
+                cwd=data.cwd or session.cwd,
+                first_user_text=session.first_user_message_preview or first_user_text,
+            )
+        )
+        if (
+            provider_proof_environment
+            and incoming_origin_kind != "console"
+            and session.origin_kind not in {"console", HATCH_AUTOMATION_ORIGIN_KIND}
+        ):
+            incoming_origin_kind = TEST_OR_CANARY_ORIGIN_KIND
         if incoming_origin_kind and session.origin_kind != incoming_origin_kind:
             session.origin_kind = incoming_origin_kind
             session.hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(incoming_origin_kind)
@@ -881,6 +895,8 @@ class AgentsStore:
         )
         if hatch_contract and session.origin_kind != "console":
             incoming_launch_actor, incoming_launch_surface = "automation", "hatch"
+        elif provider_proof_environment and session.origin_kind not in {"console", HATCH_AUTOMATION_ORIGIN_KIND}:
+            incoming_launch_actor, incoming_launch_surface = "automation", "test"
         _fill_session_launch_provenance(
             session,
             launch_actor=incoming_launch_actor,
@@ -929,9 +945,13 @@ class AgentsStore:
             session.git_branch = data.git_branch
 
         incoming_environment = data.environment.strip()
-        provider_proof_environment = classify_provider_proof_environment(
-            cwd=data.cwd or session.cwd,
-            first_user_text=session.first_user_message_preview or first_user_text,
+        provider_proof_environment = (
+            None
+            if session.origin_kind == "console"
+            else classify_provider_proof_environment(
+                cwd=data.cwd or session.cwd,
+                first_user_text=session.first_user_message_preview or first_user_text,
+            )
         )
         if provider_proof_environment:
             incoming_environment = provider_proof_environment
@@ -2391,9 +2411,22 @@ class AgentsStore:
             origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
             origin_hidden_from_default_timeline = 1
             launch_actor, launch_surface = "automation", "hatch"
+        elif (
+            classify_provider_proof_environment(
+                cwd=data.cwd,
+                first_user_text=first_user_text_from_ingest,
+            )
+            and origin_kind != "console"
+        ):
+            origin_kind = TEST_OR_CANARY_ORIGIN_KIND
+            origin_hidden_from_default_timeline = 1
+            launch_actor, launch_surface = "automation", "test"
 
         if existing:
-            if existing.origin_kind == "console" and origin_kind == HATCH_AUTOMATION_ORIGIN_KIND:
+            if existing.origin_kind == "console" and origin_kind in {
+                HATCH_AUTOMATION_ORIGIN_KIND,
+                TEST_OR_CANARY_ORIGIN_KIND,
+            }:
                 origin_kind = existing.origin_kind
                 origin_hidden_from_default_timeline = int(existing.hidden_from_default_timeline or 0)
                 launch_actor = existing.launch_actor
@@ -2421,8 +2454,9 @@ class AgentsStore:
                     cwd=data.cwd,
                     first_user_text=first_user_text_from_ingest,
                 )
-                or data.environment
-            )
+                if origin_kind != "console"
+                else None
+            ) or data.environment
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
@@ -2975,9 +3009,13 @@ class AgentsStore:
                     durable_event_id=latest_inserted_event_id,
                 )
         if session_obj is not None:
-            provider_proof_environment = classify_provider_proof_environment(
-                cwd=session_obj.cwd,
-                first_user_text=first_user_preview_delta[2] if first_user_preview_delta else session_obj.first_user_message_preview,
+            provider_proof_environment = (
+                None
+                if session_obj.origin_kind == "console"
+                else classify_provider_proof_environment(
+                    cwd=session_obj.cwd,
+                    first_user_text=first_user_preview_delta[2] if first_user_preview_delta else session_obj.first_user_message_preview,
+                )
             )
             if provider_proof_environment and session_obj.environment not in {"test", "e2e"}:
                 session_obj.environment = provider_proof_environment
