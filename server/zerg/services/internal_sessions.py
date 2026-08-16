@@ -18,6 +18,8 @@ PROVIDER_FACTORY_TEMP_CWD_PREFIXES = ("/tmp/provider-factory-", "/private/tmp/pr
 PROVIDER_FACTORY_LIVE_CELL_CWD_PREFIXES = ("/tmp/live-cell-run-", "/private/tmp/live-cell-run-")
 PROVIDER_FACTORY_MACHINE_ID = "provider-factory-resume"
 PROVIDER_COORDINATION_PROBE_CWD_PREFIXES = ("/tmp/lhx-claude-coord-", "/private/tmp/lhx-claude-coord-")
+PROVIDER_EVIDENCE_CWD_PREFIXES = ("/tmp/", "/private/tmp/")
+PROVIDER_EVIDENCE_CWD_SEGMENT = "/evidence/raw/"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
@@ -63,6 +65,13 @@ def is_provider_factory_cwd(cwd: str | None) -> bool:
         or normalized.startswith(PROVIDER_FACTORY_LIVE_CELL_CWD_PREFIXES)
         or normalized.startswith(PROVIDER_COORDINATION_PROBE_CWD_PREFIXES)
     )
+
+
+def is_provider_evidence_cwd(cwd: str | None) -> bool:
+    """Recognize temporary raw provider-evidence workspaces."""
+
+    normalized = str(cwd or "").replace("\\", "/").lower()
+    return normalized.startswith(PROVIDER_EVIDENCE_CWD_PREFIXES) and PROVIDER_EVIDENCE_CWD_SEGMENT in normalized
 
 
 def is_provider_factory_machine_id(machine_id: str | None) -> bool:
@@ -114,6 +123,7 @@ def classify_provider_proof_environment(
         is_provider_live_canary_cwd(cwd)
         or is_provider_live_proof_worktree_cwd(cwd)
         or is_provider_factory_cwd(cwd)
+        or is_provider_evidence_cwd(cwd)
         or is_provider_factory_machine_id(machine_id)
         or is_provider_noreply_marker(first_user_text)
         or is_provider_product_canary_marker(first_user_text)
@@ -185,6 +195,8 @@ def provider_proof_session_clause(model):
         cwd.like("/private/tmp/live-cell-run-%"),
         cwd.like("/tmp/lhx-claude-coord-%"),
         cwd.like("/private/tmp/lhx-claude-coord-%"),
+        cwd.like("/tmp/%/evidence/raw/%"),
+        cwd.like("/private/tmp/%/evidence/raw/%"),
         first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
         product_marker,
         *metadata_markers,

@@ -5,6 +5,7 @@ from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
 from zerg.services.internal_sessions import is_provider_factory_cwd
 from zerg.services.internal_sessions import is_provider_factory_machine_id
+from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_product_canary_marker
 from zerg.services.internal_sessions import is_provider_reply_exact_marker
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
@@ -51,6 +52,14 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
         machine_id="provider-factory-resume",
         first_user_text="Review the deployment plan",
     ) == "test"
+
+
+def test_temporary_raw_provider_evidence_workspace_is_automation_classified():
+    cwd = "/private/tmp/longhouse-claude-real-print-abc/evidence/raw/claude/workspace"
+
+    assert is_provider_evidence_cwd(cwd)
+    assert classify_provider_proof_environment(cwd=cwd, first_user_text="Review the deployment plan") == "test"
+    assert not is_provider_evidence_cwd("/Users/davidrose/git/evidence/raw/my-project")
 
 
 def test_hatch_execution_contract_is_exact_and_automation_classified():
