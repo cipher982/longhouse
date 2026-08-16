@@ -502,6 +502,95 @@ async def test_provider_factory_machine_classifies_user_repo_storage_as_hidden_c
 
 
 @pytest.mark.asyncio
+async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_shell(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    thread_id = uuid4()
+    generation_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="development",
+                project="user-repo",
+                device_id="cinder",
+                device_name="cinder",
+                cwd="/Users/davidrose/git/user-repo",
+                started_at=now,
+                last_activity_at=now,
+                origin_kind="cursor_store",
+                hidden_from_default_timeline=0,
+                primary_thread_id=str(thread_id),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=str(session_id),
+                provider="codex",
+                environment="development",
+                project="user-repo",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/user-repo",
+                started_at=now,
+                last_activity_at=now,
+                origin_kind="cursor_store",
+                hidden_from_default_timeline=0,
+                parser_revision="test",
+                updated_at=now,
+            )
+        )
+        db.commit()
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"human-looking factory work\n",),
+            sealed_at=now,
+            machine_id="provider-factory-resume",
+        )
+        raw["session_facts"].update(
+            cwd="/Users/davidrose/git/user-repo",
+            origin_kind="cursor_store",
+            hidden_from_default_timeline=False,
+        )
+        manifest = _render_manifest(generation_id, source_epoch=epoch)
+        manifest.update(
+            first_user_message_preview="Review the deployment plan",
+            last_visible_text_preview="Review the deployment plan",
+            user_messages=1,
+        )
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        catalog = db.get(LiveSessionCatalog, str(session_id))
+        card = db.get(LiveTimelineCard, str(session_id))
+        assert catalog.origin_kind == "test_or_canary"
+        assert catalog.hidden_from_default_timeline == 1
+        assert card.origin_kind == "test_or_canary"
+        assert card.hidden_from_default_timeline == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reply_exact_marker_classifies_storage_ingest_as_hidden_canary(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

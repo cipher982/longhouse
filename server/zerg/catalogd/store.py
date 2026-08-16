@@ -5584,6 +5584,7 @@ class CatalogStore:
         storage_session = StorageSession.__table__
         live_session_catalog = LiveSessionCatalog.__table__
         live_timeline_card = LiveTimelineCard.__table__
+        live_session_thread = LiveSessionThread.__table__
         render_generation = RenderGeneration.__table__
         render_object = RenderObject.__table__
         media_object = MediaObject.__table__
@@ -6136,6 +6137,12 @@ class CatalogStore:
                     session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
                 ),
             )
+            provider_automation = (
+                proof_environment == "test"
+                and live_console_session is None
+                and not (existing_session is not None and existing_session["origin_kind"] == "console")
+                and not (live_catalog_session is not None and live_catalog_session["origin_kind"] == "console")
+            )
             hatch_automation = (
                 (
                     is_hatch_execution_contract(
@@ -6147,9 +6154,7 @@ class CatalogStore:
                 and live_console_session is None
                 and not (existing_session is not None and existing_session["origin_kind"] == "console")
             )
-            if (proof_environment == "test" and not (existing_session is not None and existing_session["origin_kind"] == "console")) or (
-                live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary"
-            ):
+            if provider_automation or (live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary"):
                 # A managed canary's provider transcript has no authority to
                 # overwrite launch provenance. Its PTY looks human, and Cursor
                 # storage rows historically reported local/cursor_store.
@@ -6173,6 +6178,29 @@ class CatalogStore:
                         launch_actor="automation",
                         launch_surface="test",
                     )
+                    if provider_automation:
+                        for table in (live_session_catalog, live_timeline_card):
+                            connection.execute(
+                                update(table)
+                                .where(table.c.session_id == session_key)
+                                .values(
+                                    environment="test",
+                                    origin_kind="test_or_canary",
+                                    hidden_from_default_timeline=1,
+                                    launch_actor="automation",
+                                    launch_surface="test",
+                                    updated_at=commit_time,
+                                )
+                            )
+                        connection.execute(
+                            update(live_session_thread)
+                            .where(live_session_thread.c.session_id == session_key)
+                            .values(
+                                origin_kind="test_or_canary",
+                                hidden_from_default_timeline=1,
+                                updated_at=commit_time,
+                            )
+                        )
             if live_console_session is not None:
                 # A Console session outlives each bounded provider process. The
                 # provider transcript does not carry the Console launch
