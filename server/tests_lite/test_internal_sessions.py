@@ -34,6 +34,7 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
     assert is_provider_factory_cwd(
         "/var/lib/provider-factory/artifacts/_assurance/executions/run-1/cursor/process_loss/evidence/cursor-workspace"
     )
+    assert is_provider_factory_cwd("/tmp/live-cell-run-cursor.coordination.directed.v1-abc123/evidence/cursor-workspace")
     assert classify_provider_proof_environment(
         cwd="/tmp/lhx-claude-coord-create-abc123/workspace"
     ) == "test"

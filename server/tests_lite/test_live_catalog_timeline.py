@@ -678,6 +678,32 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.session_state.control.actions.resume.state == "unavailable"
 
 
+def test_failed_matching_anchor_and_summary_fall_back_to_project_title():
+    now = datetime.now(timezone.utc)
+    session = LiveSessionCatalog(
+        session_id=str(uuid4()),
+        provider="cursor",
+        environment="development",
+        project="cursor-workspace-di-source",
+        started_at=now,
+        summary_title="Wait quietly. Do not call any…",
+        anchor_title="Wait quietly. Do not call any…",
+        title_last_error="TimeoutError",
+    )
+    card = LiveTimelineCard(
+        session_id=session.session_id,
+        provider="cursor",
+        environment="development",
+        project=session.project,
+        started_at=now,
+        summary_title=session.summary_title,
+    )
+
+    assert live_catalog_timeline._title(session, card) == "cursor-workspace-di-source · Empty session"
+    assert live_catalog_timeline._title_state(session, card) == "degraded"
+    assert live_catalog_timeline._title_source(session, card) == "project"
+
+
 def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'canary-storage.db'}")
     initialize_catalog_schema(engine)

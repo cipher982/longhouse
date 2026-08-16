@@ -15,6 +15,7 @@ PROVIDER_LIVE_CANARY_CWD_SEGMENT = "/canaries/provider-live/"
 PROVIDER_LIVE_PROOF_WORKTREE_MARKER = "longhouse-provider-live-proof"
 PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT = "/provider-factory/artifacts/"
 PROVIDER_FACTORY_TEMP_CWD_SEGMENT = "/provider-factory-"
+PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT = "/live-cell-run-"
 PROVIDER_COORDINATION_PROBE_CWD_SEGMENT = "/lhx-claude-coord-"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
@@ -57,6 +58,7 @@ def is_provider_factory_cwd(cwd: str | None) -> bool:
     return (
         PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT in normalized
         or PROVIDER_FACTORY_TEMP_CWD_SEGMENT in normalized
+        or PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT in normalized
         or PROVIDER_COORDINATION_PROBE_CWD_SEGMENT in normalized
     )
 
@@ -158,6 +160,7 @@ def provider_proof_session_clause(model):
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
         cwd.like(f"%{PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT}%"),
         cwd.like(f"%{PROVIDER_FACTORY_TEMP_CWD_SEGMENT}%"),
+        cwd.like(f"%{PROVIDER_FACTORY_LIVE_CELL_CWD_SEGMENT}%"),
         cwd.like(f"%{PROVIDER_COORDINATION_PROBE_CWD_SEGMENT}%"),
         first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
         product_marker,

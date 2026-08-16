@@ -292,11 +292,21 @@ def _effective_ai_title(session: LiveSessionCatalog, card: LiveTimelineCard, fir
     """Return a title that is safe to present as generated in the timeline."""
 
     title_error = str(session.title_last_error or "").strip()
-    anchor = None if title_error else sanitize_timeline_title(session.anchor_title, max_words=6)
+    raw_anchor = sanitize_timeline_title(session.anchor_title, max_words=6)
+    anchor = None if title_error else raw_anchor
     if anchor:
         return anchor
     summary = sanitize_timeline_title(card.summary_title or session.summary_title, max_words=6)
     prompt_fallback = sanitize_timeline_title(first_user_message, max_words=6)
+    if title_error and title_error != "no_meaningful_user_text":
+        # When the failed anchor and summary are identical, the old retry
+        # path most likely copied the prompt into both columns. Without a
+        # first-message preview there is no evidence that it is generated.
+        # Preserve a distinct summary, which is the safe compatibility case.
+        if summary and raw_anchor and summary != raw_anchor:
+            return summary
+        if first_user_message is None or summary == prompt_fallback:
+            return None
     # Storage-v2 used to copy the prompt into summary_title before AI title
     # reconciliation. It is not a generated title when it is equivalent to
     # that fallback.
