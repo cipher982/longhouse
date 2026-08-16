@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _in_flight: set[str] = set()
 _lock = asyncio.Lock()
 STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS = 10.0
+STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 8.0
 
 
 async def _catalog_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -78,7 +79,9 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
                 "provider": candidate.get("provider"),
                 "git_branch": candidate.get("git_branch"),
             },
-            timeout_seconds=4.0,
+            # Match the title generator's default. Four seconds caused large
+            # but valid first prompts to fail just before the provider replied.
+            timeout_seconds=STORAGE_TITLE_MODEL_TIMEOUT_SECONDS,
         )
         title = sanitize_timeline_title(raw_title, max_words=6)
         if not title:
