@@ -244,3 +244,113 @@ def test_claude_synthetic_result_model_is_not_provider_identity() -> None:
     assert result is not None
     assert "model" not in result
     assert "model_source" not in result
+
+
+def test_work_root_is_separate_from_the_evidence_root(tmp_path, monkeypatch) -> None:
+    """The defect: a provider's HOME lived inside the archived evidence tree.
+
+    OpenCode npm-installs into that HOME, so ~250 MB of package cache became
+    qualification evidence, twice per run, for every run ever made. The
+    canary's product is its verdict; everything it needed to reach one is
+    workspace and must not land where the factory archives forever.
+    """
+
+    canary = _load_canary()
+    evidence_root = tmp_path / "evidence"
+    artifact = evidence_root / "provider-control-e2e.json"
+
+    observed: dict[str, object] = {}
+
+    def fake_opencode_canary(args, provider_root):
+        # Stand in for the real canary: write what a provider runtime would.
+        observed["provider_root"] = provider_root
+        (provider_root / "opencode-runtime" / "home" / ".npm" / "_cacache").mkdir(parents=True)
+        (provider_root / "opencode-runtime" / "home" / ".npm" / "_cacache" / "blob").write_bytes(b"x" * 4096)
+        return {"verdict": "green"}
+
+    monkeypatch.setattr(canary, "run_opencode_canary", fake_opencode_canary)
+
+    exit_code = canary.main(
+        [
+            "--provider",
+            "opencode",
+            "--evidence-root",
+            str(evidence_root),
+            "--artifact",
+            str(artifact),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(artifact.read_text())
+    assert payload["verdict"] == "green"
+
+    # The verdict is the only thing in the evidence tree.
+    written = sorted(p.relative_to(evidence_root).as_posix() for p in evidence_root.rglob("*") if p.is_file())
+    assert written == ["provider-control-e2e.json"]
+
+    # Nothing anywhere under the evidence root looks like a package cache.
+    assert not any("_cacache" in p.as_posix() for p in evidence_root.rglob("*"))
+
+    # The work root was scratch, outside the evidence tree, and is gone.
+    provider_root = observed["provider_root"]
+    assert evidence_root not in provider_root.parents
+    assert not provider_root.exists()
+    assert payload["work_root_retained"] is False
+
+
+def test_keep_work_root_preserves_the_scratch_tree_for_debugging(tmp_path, monkeypatch) -> None:
+    canary = _load_canary()
+    evidence_root = tmp_path / "evidence"
+    work_root = tmp_path / "work"
+
+    def fake_opencode_canary(args, provider_root):
+        (provider_root / "marker").write_text("kept")
+        return {"verdict": "green"}
+
+    monkeypatch.setattr(canary, "run_opencode_canary", fake_opencode_canary)
+
+    canary.main(
+        [
+            "--provider",
+            "opencode",
+            "--evidence-root",
+            str(evidence_root),
+            "--work-root",
+            str(work_root),
+            "--artifact",
+            str(evidence_root / "provider-control-e2e.json"),
+        ]
+    )
+
+    assert (work_root / "opencode" / "marker").read_text() == "kept"
+    payload = json.loads((evidence_root / "provider-control-e2e.json").read_text())
+    assert payload["work_root_retained"] is True
+
+
+def test_work_root_is_removed_even_when_a_canary_raises(tmp_path, monkeypatch) -> None:
+    """A crashing canary must not leak a quarter-gigabyte of scratch."""
+
+    canary = _load_canary()
+    evidence_root = tmp_path / "evidence"
+    seen: dict[str, object] = {}
+
+    def exploding_canary(args, provider_root):
+        seen["provider_root"] = provider_root
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(canary, "run_opencode_canary", exploding_canary)
+
+    with pytest.raises(RuntimeError):
+        canary.main(
+            [
+                "--provider",
+                "opencode",
+                "--evidence-root",
+                str(evidence_root),
+                "--artifact",
+                str(evidence_root / "provider-control-e2e.json"),
+            ]
+        )
+
+    assert not seen["provider_root"].exists()

@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -2392,6 +2393,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="all",
     )
     parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument(
+        "--work-root",
+        type=Path,
+        help=(
+            "Scratch directory for provider runtime homes, workspaces and raw logs. "
+            "Defaults to a fresh temporary directory that is removed on exit. This is "
+            "deliberately not the evidence root: a provider's HOME is workspace, and "
+            "archiving it retained a quarter-gigabyte npm cache per scenario."
+        ),
+    )
+    parser.add_argument(
+        "--keep-work-root",
+        action="store_true",
+        help="Leave the scratch work root in place for interactive debugging.",
+    )
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--python-bin")
     parser.add_argument("--longhouse-bin")
@@ -2441,10 +2457,52 @@ def main(argv: list[str] | None = None) -> int:
     artifact_path = args.artifact or evidence_root / "provider-control-e2e.json"
     evidence_root.mkdir(parents=True, exist_ok=True)
 
+    # A canary's product is its verdict. Everything it needs to reach one —
+    # the provider's HOME, its workspace, raw stdio — is workspace, and lives
+    # in scratch that is destroyed here rather than in the evidence tree the
+    # factory archives forever. Running these roots together retained a
+    # ~250 MB npm cache per scenario, twice per run, for every run ever made.
+    owned_work_root = args.work_root is None
+    work_root = args.work_root or Path(tempfile.mkdtemp(prefix="provider-control-e2e-"))
+    work_root.mkdir(parents=True, exist_ok=True)
+
     selected = ["claude", "opencode", "antigravity"] if args.provider == "all" else [args.provider]
     canaries: dict[str, dict[str, Any]] = {}
+    try:
+        canaries = _run_selected_canaries(args, selected, work_root)
+    finally:
+        if owned_work_root and not args.keep_work_root:
+            shutil.rmtree(work_root, ignore_errors=True)
+
+    verdict, failure_code = classify(canaries)
+    artifact = {
+        "schema_version": 1,
+        "generated_at": _now_iso(),
+        "provider": args.provider,
+        "verdict": verdict,
+        "failure_code": failure_code,
+        "canaries": canaries,
+        "evidence_root": str(evidence_root),
+        # Recorded so a reader can tell that referenced working paths are gone
+        # by design rather than missing by accident.
+        "work_root": str(work_root),
+        "work_root_retained": bool(args.keep_work_root or not owned_work_root),
+    }
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(artifact, indent=2, sort_keys=True))
+    return 0 if verdict == "green" else 1
+
+
+def _run_selected_canaries(
+    args: argparse.Namespace,
+    selected: list[str],
+    work_root: Path,
+) -> dict[str, dict[str, Any]]:
+    canaries: dict[str, dict[str, Any]] = {}
     for provider in selected:
-        provider_root = evidence_root / provider
+        provider_root = work_root / provider
         provider_root.mkdir(parents=True, exist_ok=True)
         if provider == "claude":
             if args.claude_run_real_print:
@@ -2463,22 +2521,7 @@ def main(argv: list[str] | None = None) -> int:
                 canaries[provider] = run_antigravity_real_agy_send_canary(args, provider_root)
             else:
                 canaries[provider] = run_antigravity_canary(args, provider_root)
-
-    verdict, failure_code = classify(canaries)
-    artifact = {
-        "schema_version": 1,
-        "generated_at": _now_iso(),
-        "provider": args.provider,
-        "verdict": verdict,
-        "failure_code": failure_code,
-        "canaries": canaries,
-        "evidence_root": str(evidence_root),
-    }
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if args.json:
-        print(json.dumps(artifact, indent=2, sort_keys=True))
-    return 0 if verdict == "green" else 1
+    return canaries
 
 
 if __name__ == "__main__":
