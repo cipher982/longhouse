@@ -40,6 +40,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.routers.agents_search import search_storage_v2_semantic_sessions
 from zerg.routers.agents_search import search_storage_v2_sessions
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
@@ -97,6 +98,7 @@ from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import SessionActionRequest
@@ -630,21 +632,61 @@ async def list_sessions(
                             "message": "Storage-v2 search requires an owner-bound device token.",
                         },
                     )
-                sessions = await search_storage_v2_sessions(
-                    owner_id=int(owner_id),
-                    query=query,
-                    project=project,
-                    provider=provider,
-                    environment=environment,
-                    days_back=days_back,
-                    limit=limit + offset,
-                    include_test=include_test,
-                    hide_autonomous=hide_autonomous,
-                    include_automation=include_automation,
-                    device_id=device_id,
-                )
+                degraded: list[MachineSearchLaneFailure] = []
+                try:
+                    sessions = await search_storage_v2_sessions(
+                        owner_id=int(owner_id),
+                        query=query,
+                        project=project,
+                        provider=provider,
+                        environment=environment,
+                        days_back=days_back,
+                        limit=limit + offset,
+                        include_test=include_test,
+                        hide_autonomous=hide_autonomous,
+                        include_automation=include_automation,
+                        device_id=device_id,
+                        degraded=degraded,
+                    )
+                    lanes = ["lexical"]
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, dict) else {}
+                    if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE or detail.get("code") != "search_unavailable":
+                        raise
+                    try:
+                        sessions = await search_storage_v2_semantic_sessions(
+                            owner_id=int(owner_id),
+                            query=query,
+                            project=project,
+                            provider=provider,
+                            environment=environment,
+                            days_back=days_back,
+                            limit=limit + offset,
+                            include_test=include_test,
+                        )
+                    except Exception:
+                        raise exc
+                    degraded.append(
+                        MachineSearchLaneFailure(
+                            lane="lexical",
+                            status_code=exc.status_code,
+                            code=str(detail.get("code") or "search_unavailable"),
+                            message=str(detail.get("message") or "The lexical search lane is unavailable."),
+                            reason=str(detail["reason"]) if detail.get("reason") is not None else None,
+                        )
+                    )
+                    lanes = ["dense"]
                 page = sessions[offset : offset + limit]
-                return _machine_sessions_list(SessionsListResponse(sessions=page, total=len(sessions), has_real_sessions=bool(sessions)))
+                machine_sessions = [
+                    session if isinstance(session, MachineSessionResponse) else project_machine_session(session) for session in page
+                ]
+                return MachineSessionsListResponse(
+                    sessions=machine_sessions,
+                    total=len(sessions),
+                    has_real_sessions=bool(sessions),
+                    lanes=lanes,
+                    degraded=degraded,
+                )
             if (mode or "lexical") != "lexical":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

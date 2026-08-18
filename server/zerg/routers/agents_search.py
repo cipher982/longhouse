@@ -34,6 +34,8 @@ from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_views import RECALL_COVERAGE_MAX_NAMED_SESSIONS
+from zerg.services.session_views import MachineSearchLaneFailure
+from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import RecallCoverage
 from zerg.services.session_views import RecallLaneFailure
@@ -485,7 +487,8 @@ async def search_storage_v2_sessions(
     hide_autonomous: bool = False,
     include_automation: bool = False,
     device_id: str | None = None,
-) -> list[SessionResponse]:
+    degraded: list[MachineSearchLaneFailure] | None = None,
+) -> list[SessionResponse | MachineSessionResponse]:
     rows = await search_storage_v2_rows(
         owner_id=owner_id,
         query=query,
@@ -508,10 +511,31 @@ async def search_storage_v2_sessions(
                 owner_id=owner_id,
             )
             for session_id in best_rows
-        )
+        ),
+        return_exceptions=True,
     )
-    sessions = []
-    for (session, _provider_alias, _commit_seq), row in zip(projected, best_rows.values(), strict=True):
+    sessions: list[SessionResponse | MachineSessionResponse] = []
+    for projection, row in zip(projected, best_rows.values(), strict=True):
+        if isinstance(projection, BaseException):
+            if not isinstance(projection, (CatalogReadError, CatalogRemoteError, CatalogUnavailable)):
+                raise projection
+            if degraded is not None and not any(item.lane == "catalog" for item in degraded):
+                degraded.append(
+                    MachineSearchLaneFailure(
+                        lane="catalog",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        code=getattr(projection, "code", None) or "catalog_unavailable",
+                        message=getattr(projection, "message", None) or "The live catalog is temporarily unavailable.",
+                        reason=(str(projection) if isinstance(projection, CatalogUnavailable) else None),
+                    )
+                )
+            fallback = _machine_session_from_search_row(row)
+            if fallback is not None:
+                sessions.append(fallback)
+            if len(sessions) >= limit:
+                break
+            continue
+        session, _provider_alias, _commit_seq = projection
         if session is None:
             continue
         if session.user_hidden_from_timeline:
@@ -530,6 +554,39 @@ async def search_storage_v2_sessions(
         if len(sessions) >= limit:
             break
     return sessions
+
+
+def _machine_session_from_search_row(row: dict[str, object]) -> MachineSessionResponse | None:
+    """Keep a search hit useful when canonical catalog hydration times out."""
+
+    raw_started_at = row.get("started_at")
+    if not isinstance(raw_started_at, str):
+        return None
+    try:
+        started_at = datetime.fromisoformat(raw_started_at)
+    except ValueError:
+        return None
+    rank = abs(float(row.get("rank") or 0.0))
+    return MachineSessionResponse(
+        id=str(row.get("session_id") or ""),
+        provider=str(row.get("provider") or "unknown"),
+        origin_kind=str(row["origin_kind"]) if row.get("origin_kind") is not None else None,
+        project=str(row["project"]) if row.get("project") is not None else None,
+        environment=str(row["environment"]) if row.get("environment") is not None else None,
+        cwd=str(row["cwd"]) if row.get("cwd") is not None else None,
+        git_repo=str(row["git_repo"]) if row.get("git_repo") is not None else None,
+        started_at=started_at,
+        last_activity_at=started_at,
+        user_messages=int(row.get("user_messages") or 0),
+        assistant_messages=int(row.get("assistant_messages") or 0),
+        tool_calls=int(row.get("tool_calls") or 0),
+        is_sidechain=bool(row.get("is_sidechain")),
+        searchable=True,
+        match_event_id=int(row["search_event_id"]) if row.get("search_event_id") is not None else None,
+        match_snippet=str(row.get("content_snippet") or row.get("tool_output_snippet") or "") or None,
+        match_role=str(row["role"]) if row.get("role") is not None else None,
+        match_score=1.0 / (1.0 + rank),
+    )
 
 
 async def _semantic_recall(
@@ -1146,6 +1203,7 @@ async def semantic_search_sessions(
         sessions=[project_machine_session(session) for session in sessions],
         total=len(sessions),
         has_real_sessions=bool(sessions),
+        lanes=["dense"],
     )
     timing.apply(response)
     return result

@@ -68,6 +68,7 @@ class SearchV2Projector:
         self._bound_store_id: str | None = None
         self._raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
         self._sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
+        self._semantic_recovery_degraded_sessions: set[str] = set()
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:
         observed_at = now or datetime.now(UTC)
@@ -168,6 +169,7 @@ class SearchV2Projector:
     async def _project(self, *, session_id: str, claimed_revision: int) -> None:
         self._raw_manifest_cache.pop(session_id, None)
         self._sequence_context_cache = {key: value for key, value in self._sequence_context_cache.items() if key[0] != session_id}
+        self._semantic_recovery_degraded_sessions.discard(session_id)
         generation_id: str | None = None
         after_object_id: str | None = None
         expected_objects: int | None = None
@@ -315,19 +317,31 @@ class SearchV2Projector:
             )
         recovered_kinds = {}
         source_envelope_id = getattr(spec, "source_envelope_id", None)
-        if source_envelope_id:
-            recovered_kinds = await recover_render_interaction_kinds(
-                catalog=self.catalog,
-                raw_workers=self.raw_workers,
-                session_id=session_id,
-                owner_id=str(owner_id),
-                provider=spec.provider,
-                records=spec.records,
-                source_envelope_id=source_envelope_id,
-                manifest_cache=self._raw_manifest_cache,
-                sequence_context_cache=sequence_context_cache,
-                reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
-            )
+        if source_envelope_id and session_id not in self._semantic_recovery_degraded_sessions:
+            try:
+                recovered_kinds = await recover_render_interaction_kinds(
+                    catalog=self.catalog,
+                    raw_workers=self.raw_workers,
+                    session_id=session_id,
+                    owner_id=str(owner_id),
+                    provider=spec.provider,
+                    records=spec.records,
+                    source_envelope_id=source_envelope_id,
+                    manifest_cache=self._raw_manifest_cache,
+                    sequence_context_cache=sequence_context_cache,
+                    reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+                )
+            except StorageV2SemanticRecoveryPermanentError as exc:
+                # The render object already carries its parser-derived
+                # interaction kinds. A raw replay bound protects the writer
+                # from one pathological archive; it must not quarantine an
+                # otherwise indexable session forever.
+                self._semantic_recovery_degraded_sessions.add(session_id)
+                logger.warning(
+                    "Semantic recovery bounded for session=%s; indexing render-native interaction kinds: %s",
+                    session_id,
+                    exc,
+                )
         records = [
             {
                 "event_id": record.event_id,

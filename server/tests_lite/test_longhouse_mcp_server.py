@@ -481,6 +481,39 @@ async def test_search_sessions_preserves_structured_owner_scope_error():
 
 
 @pytest.mark.asyncio
+async def test_search_sessions_marks_search_unavailable_as_not_absence():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 503,
+            "text": json.dumps(
+                {
+                    "detail": {
+                        "code": "search_unavailable",
+                        "message": "The derived search index is unavailable.",
+                    }
+                }
+            ),
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ):
+        result = await tool.run({"query": "coordination"})
+
+    payload = json.loads(result)
+    assert payload["code"] == "search_unavailable"
+    assert payload["outcome"] == "unavailable"
+    assert payload["not_found"] is False
+    assert "not evidence that no sessions exist" in payload["retry"]
+
+
+@pytest.mark.asyncio
 async def test_search_sessions_description_names_canonical_longhouse_database():
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["search_sessions"]

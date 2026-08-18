@@ -56,7 +56,9 @@ _ARCHIVE_SEARCH_SQL = """
            e.role, e.tool_name,
            snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
            snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-           s.project, s.provider, s.environment, s.indexed_through, s.event_count,
+           s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
+           s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
+           s.origin_kind, s.indexed_through, s.event_count,
            events_fts.rank AS rank
     -- CROSS JOIN pins the join order so events_fts stays the outer loop and its
     -- rank-ordered scan satisfies ORDER BY directly. SQLite is otherwise free to
@@ -129,7 +131,9 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = """
            e.role, e.tool_name,
            snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
            snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-           s.project, s.provider, s.environment, s.indexed_through, s.event_count,
+           s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
+           s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
+           s.origin_kind, s.indexed_through, s.event_count,
            t.rank AS rank, t.candidate_count AS candidate_count
     FROM top t
     JOIN events e ON e.id = t.search_event_id
@@ -171,7 +175,9 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
            e.record_ordinal, e.event_id, e.order_time_us,
            e.role, e.tool_name,
            NULL AS content_snippet, NULL AS tool_output_snippet,
-           s.project, s.provider, s.environment, s.indexed_through, s.event_count,
+           s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
+           s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
+           s.origin_kind, s.indexed_through, s.event_count,
            t.rank AS rank, t.candidate_count AS candidate_count
     FROM top t
     JOIN events e ON e.id = t.search_event_id
@@ -226,11 +232,14 @@ _SEARCHABLE_SEARCH_SQL = """
            e.role, e.tool_name,
            snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
            snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-           e.project, e.provider, e.environment, e.indexed_through, e.event_count,
+           s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
+           s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
+           s.origin_kind, s.indexed_through, s.event_count,
            t.rank AS rank, t.candidate_count AS candidate_count
-    FROM top t
-    JOIN searchable_events e ON e.source_event_id = t.search_event_id
-    JOIN searchable_fts ON searchable_fts.rowid = t.search_event_id
+     FROM top t
+     JOIN searchable_events e ON e.source_event_id = t.search_event_id
+     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+     JOIN searchable_fts ON searchable_fts.rowid = t.search_event_id
     WHERE searchable_fts MATCH ?
     ORDER BY t.rank ASC
 """

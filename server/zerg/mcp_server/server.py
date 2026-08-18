@@ -80,10 +80,19 @@ def _format_api_error(
         if isinstance(detail, dict):
             code = code or detail.get("code")
             message = message or detail.get("message")
+            nested_detail = detail.get("detail")
+            if isinstance(nested_detail, dict):
+                code = code or nested_detail.get("code")
+                message = message or nested_detail.get("message")
         if code:
             payload["code"] = code
         if message:
             payload["message"] = message
+        if response.status_code == 503 and code in {"search_unavailable", "search_evidence_unavailable"}:
+            payload["outcome"] = "unavailable"
+            payload["not_found"] = False
+            if retry is None:
+                payload["retry"] = "Retry this search once; an availability failure is not evidence that no sessions exist."
     if retry:
         payload["retry"] = retry
     return json.dumps(payload)
@@ -198,7 +207,10 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                         error=f"Semantic search unavailable: API returned {resp.status_code}",
                         retry="Call search_sessions with semantic=false for lexical search.",
                     )
-                return _format_api_error(resp)
+                retry = None
+                if resp.status_code == 503 and "search_unavailable" in resp.text:
+                    retry = "Retry this search once; an availability failure is not evidence that no sessions exist."
+                return _format_api_error(resp, retry=retry)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)

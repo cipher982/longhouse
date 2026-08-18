@@ -1149,6 +1149,18 @@ def project_machine_session(session: SessionResponse) -> MachineSessionResponse:
     )
 
 
+class MachineSearchLaneFailure(BaseModel):
+    """A search-session lane that could not contribute a complete result."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    lane: Literal["lexical", "dense", "catalog"]
+    status_code: int = Field(ge=400, le=599)
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    reason: Optional[str] = None
+
+
 class MachineSessionsListResponse(BaseModel):
     """Session list for the machine surface."""
 
@@ -1158,6 +1170,8 @@ class MachineSessionsListResponse(BaseModel):
         True,
         description="True if any non-demo sessions exist.",
     )
+    lanes: List[Literal["lexical", "dense", "catalog"]] = Field(default_factory=list)
+    degraded: List[MachineSearchLaneFailure] = Field(default_factory=list)
 
 
 class SessionsListResponse(BaseModel):

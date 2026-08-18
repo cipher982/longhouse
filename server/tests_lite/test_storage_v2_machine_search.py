@@ -13,6 +13,9 @@ from zerg.routers import agents_sessions
 from zerg.routers import timeline
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
+from zerg.services.session_views import MachineSessionResponse
+from zerg.services.session_views import MachineSearchLaneFailure
+from zerg.services.catalog_read_gateway import CatalogReadError
 
 
 def _request(path: str) -> Request:
@@ -124,6 +127,59 @@ def test_storage_v2_machine_search_hydrates_hits_with_owner_scope(monkeypatch):
 
     assert result == []
     assert observed == {"requested": agents_search.UUID(session_id), "owner_id": 7}
+
+
+def test_machine_search_returns_index_hit_when_catalog_hydration_times_out(monkeypatch):
+    session_id = "11111111-1111-4111-8111-111111111111"
+    degraded: list[MachineSearchLaneFailure] = []
+
+    async def search_v2(**_kwargs):
+        return [
+            {
+                "session_id": session_id,
+                "provider": "codex",
+                "project": "longhouse",
+                "environment": "local",
+                "cwd": "/workspace/longhouse",
+                "git_repo": "cipher982/longhouse",
+                "started_at": "2026-08-17T00:00:00+00:00",
+                "user_messages": 2,
+                "assistant_messages": 3,
+                "tool_calls": 4,
+                "is_sidechain": 0,
+                "origin_kind": "console",
+                "search_event_id": 9,
+                "role": "assistant",
+                "content_snippet": "scoped hit",
+                "rank": -2.0,
+            }
+        ]
+
+    def read_session(_requested, *, owner_id):
+        assert owner_id == 7
+        raise CatalogReadError("catalog_unavailable", "catalog deadline")
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
+    monkeypatch.setattr(agents_search, "read_live_catalog_session", read_session)
+
+    result = asyncio.run(
+        agents_search.search_storage_v2_sessions(
+            owner_id=7,
+            query="scoped hit",
+            project=None,
+            provider=None,
+            environment=None,
+            days_back=14,
+            limit=10,
+            include_test=False,
+            degraded=degraded,
+        )
+    )
+
+    assert isinstance(result[0], MachineSessionResponse)
+    assert result[0].id == session_id
+    assert result[0].match_snippet == "scoped hit"
+    assert degraded[0].lane == "catalog"
 
 
 def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):

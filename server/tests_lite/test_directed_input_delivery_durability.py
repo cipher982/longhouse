@@ -434,6 +434,9 @@ def test_claiming_skips_an_input_that_aged_out_while_unclaimable(orm: Session):
     claimed = claim_next_live_queued_receipt(orm, session_id=session_id, delivery_request_id="attempt-1")
 
     assert claimed is None
+    orm.refresh(stale)
+    assert stale.status == "failed"
+    assert '"delivery_expired"' in (stale.error_json or "")
 
 
 def test_claiming_still_takes_a_fresh_input(orm: Session):

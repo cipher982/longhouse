@@ -3821,8 +3821,10 @@ class CatalogStore:
 
         from zerg.catalogd.fact_reducer import read_session_fact_heads
         from zerg.services.live_control_catalog import load_live_control_session
+        from zerg.services.live_session_inputs import MAX_DELIVERY_AGE
         from zerg.services.live_session_inputs import _snapshot
         from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+        from zerg.services.live_session_inputs import expire_stale_live_receipts
         from zerg.services.managed_provider_contracts import contract_for_provider
         from zerg.services.session_state_contract import SessionHostFacts
         from zerg.services.session_state_contract import SessionTranscriptFacts
@@ -3832,6 +3834,33 @@ class CatalogStore:
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
+                expire_stale_live_receipts(orm, session_id=session_id, now=observed_at)
+                replay_receipt = (
+                    orm.query(LiveSessionInputReceipt.id)
+                    .filter(
+                        LiveSessionInputReceipt.session_id == session_id,
+                        LiveSessionInputReceipt.delivery_request_id == delivery_request_id,
+                        LiveSessionInputReceipt.status == "delivering",
+                    )
+                    .first()
+                )
+                if replay_receipt is None:
+                    fresh_receipt = (
+                        orm.query(LiveSessionInputReceipt.id)
+                        .filter(
+                            LiveSessionInputReceipt.session_id == session_id,
+                            LiveSessionInputReceipt.status == "queued",
+                            LiveSessionInputReceipt.created_at >= observed_at - MAX_DELIVERY_AGE,
+                        )
+                        .first()
+                    )
+                    if fresh_receipt is None:
+                        orm.rollback()
+                        return {
+                            "claimed": False,
+                            "reason": "queue_empty",
+                            "commit_seq": str(_current_commit_seq(connection)),
+                        }
                 session = load_live_control_session(orm, session_id)
                 if session is None:
                     orm.rollback()

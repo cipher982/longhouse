@@ -214,6 +214,7 @@ def claim_next_live_queued_receipt(
     # would otherwise sit untouched for hours and then be injected the moment
     # the session woke up. Nobody wants a prompt they sent this morning arriving
     # after lunch.
+    expire_stale_live_receipts(db, session_id=session_id)
     cutoff = datetime.now(timezone.utc) - MAX_DELIVERY_AGE
     candidate = (
         db.query(LiveSessionInputReceipt)
@@ -294,6 +295,47 @@ MAX_DELIVERY_AGE = timedelta(minutes=30)
 # Backstop against a receipt that somehow churns without aging out. Generous on
 # purpose: it exists to stop a hot spin, not to express policy.
 MAX_DELIVERY_ATTEMPTS = 200
+
+
+def expire_stale_live_receipts(
+    db: Session,
+    *,
+    session_id: UUID | str,
+    now: datetime | None = None,
+) -> int:
+    """Fail queued receipts that can no longer be delivered on time.
+
+    Claimability checks may reject an offline or non-drainable session before
+    ``claim_next_live_queued_receipt`` gets to its age predicate. Expire those
+    rows explicitly so the recovery loop does not keep paying the catalog
+    writer cost for an input that can never be delivered.
+    """
+
+    observed_at = now or datetime.now(timezone.utc)
+    cutoff = observed_at - MAX_DELIVERY_AGE
+    rows = (
+        db.query(LiveSessionInputReceipt)
+        .filter(
+            LiveSessionInputReceipt.session_id == _session_key(session_id),
+            LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
+            LiveSessionInputReceipt.created_at < cutoff,
+        )
+        .all()
+    )
+    for row in rows:
+        attempts = int(row.delivery_attempts or 0)
+        row.status = INPUT_STATUS_FAILED
+        row.error_json = _json_or_none(
+            {
+                "message": "session input expired before delivery",
+                "attempts": attempts,
+                "reason": "delivery_expired",
+            }
+        )
+        row.updated_at = observed_at
+    if rows:
+        db.commit()
+    return len(rows)
 
 
 def requeue_live_receipt(
