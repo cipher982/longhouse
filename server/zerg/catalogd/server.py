@@ -194,6 +194,15 @@ class CatalogDaemon:
             self._maintenance_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-maintenance")
             self._store = CatalogStore(self._engine)
             self._store.retire_archive_outbox()
+            # Reap before ensuring, so a generation retired by this build's
+            # config is gone before its replacement's rows are created.
+            reaped = self._store.reap_retired_projector_states()
+            if reaped["reaped_rows"]:
+                logger.info(
+                    "Reaped retired projector generations projectors=%s rows=%d",
+                    ",".join(reaped["reaped_projectors"]),
+                    reaped["reaped_rows"],
+                )
             self._store.ensure_known_projector_states()
             # A Runtime Host replacement cannot retain claim ownership, but a
             # child-only catalogd restart must preserve work still running in

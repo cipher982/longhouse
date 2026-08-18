@@ -467,6 +467,18 @@ def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
 
 KNOWN_PROJECTORS = ("search-v2", EMBEDDING_PROJECTOR_ID)
 
+# Projector rows are only ever created for these names. Anything else in
+# projector_state is a retired generation: EMBEDDING_PROJECTOR_ID carries the
+# embedding revision and a partition suffix, so bumping either renames the
+# projector and strands every row under the old name where no worker will ever
+# poll them again. Those rows are derived and disposable; reap them.
+ACTIVE_PROJECTORS = ("render-v2", "search-v2", EMBEDDING_PROJECTOR_ID)
+
+# Backoff applied to a "permanent" projection failure, replacing the old
+# terminal quarantine. Long enough that a truly unprojectable row is cheap,
+# short enough that a fix deployed today heals it today.
+PERMANENT_FAILURE_RETRY_INTERVAL = timedelta(hours=1)
+
 
 def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, Any]:
     from zerg.services.machine_control_operations import machine_control_operation_to_response
@@ -7543,7 +7555,35 @@ class CatalogStore:
                         "oldest_lag_updated_at": None,
                     }
                 )
+            # The trigger-maintained counters above only cover search-v2, so a
+            # failing embedding row was not merely unalerted -- it was
+            # unreportable. Two of them sat failed for sixteen days without
+            # appearing in any surface. status is indexed and almost every row
+            # is 'idle', so this equality scan stays cheap while making a stuck
+            # row on ANY projector, including a retired generation, visible.
+            projector_state = ProjectorState.__table__
+            stuck = [
+                {
+                    "projector": str(stuck_row.projector),
+                    "status": str(stuck_row.status),
+                    "rows": int(stuck_row.rows),
+                    "oldest_updated_at": _encode_datetime(stuck_row.oldest_updated_at),
+                    "retired": str(stuck_row.projector) not in ACTIVE_PROJECTORS,
+                }
+                for stuck_row in connection.execute(
+                    select(
+                        projector_state.c.projector,
+                        projector_state.c.status,
+                        func.count().label("rows"),
+                        func.min(projector_state.c.updated_at).label("oldest_updated_at"),
+                    )
+                    .where(projector_state.c.status.in_(("failed", "quarantined")))
+                    .group_by(projector_state.c.projector, projector_state.c.status)
+                    .order_by(projector_state.c.projector.asc())
+                ).all()
+            ]
             return {
+                "stuck_projectors": stuck,
                 "objects": {
                     "raw": {"count": int(row["raw_count"]), "bytes": int(row["raw_bytes"])},
                     "render": {"count": int(row["render_count"]), "bytes": int(row["render_bytes"])},
@@ -7938,13 +7978,20 @@ class CatalogStore:
                     .values(semantic_projection_version=0, commit_seq=commit_seq, updated_at=commit_time)
                 )
             reopened_projectors = 0
+            import sys as _sys
+
+            print(f"DBG repair complete_after={complete_after}", file=_sys.stderr)
             if complete_after:
                 reopened_projectors = int(
                     connection.execute(
                         update(projectors)
                         .where(
                             projectors.c.session_id == session_key,
-                            projectors.c.status == "quarantined",
+                            # Was `== "quarantined"`. Repair republishes the
+                            # evidence a failure was reached against, so any
+                            # failure status is stale here, not just the one
+                            # that used to be terminal.
+                            projectors.c.status.in_(("failed", "quarantined")),
                         )
                         .values(
                             desired_revision=func.max(projectors.c.desired_revision, commit_seq),
@@ -8233,6 +8280,12 @@ class CatalogStore:
                 .mappings()
                 .first()
             )
+            import sys as _sys
+
+            print(
+                f"DBG advance projector={projector} req={desired_revision} cur={row['desired_revision'] if row else None} status={row['status'] if row else None}",
+                file=_sys.stderr,
+            )
             if row is not None and int(row["desired_revision"]) >= desired_revision:
                 return {
                     "changed": False,
@@ -8257,14 +8310,20 @@ class CatalogStore:
                     )
                 )
             else:
-                reset_quarantine = row["status"] == "quarantined"
+                # New desired data invalidates the previous failure verdict:
+                # it was reached against input that has since changed, so the
+                # row should be retried now rather than waiting out a backoff
+                # earned by a different revision. This previously keyed on
+                # "quarantined" alone, which is no longer written, so it would
+                # have stopped resetting anything at all.
+                reset_failure = row["status"] in ("failed", "quarantined")
                 values = {
                     "desired_revision": desired_revision,
                     "desired_at": commit_time,
                     "commit_seq": commit_seq,
                     "updated_at": commit_time,
                 }
-                if reset_quarantine:
+                if reset_failure:
                     values.update(
                         {
                             "status": "idle",
@@ -8332,7 +8391,12 @@ class CatalogStore:
             eligible_predicates = [
                 table.c.projector == projector,
                 table.c.desired_revision > table.c.completed_revision,
-                table.c.status != "quarantined",
+                # No status exclusion. "quarantined" is no longer written (see
+                # fail_projector_claim); rows still carrying it from before that
+                # change have retry_at=NULL, so dropping the exclusion makes
+                # them immediately claimable and they heal on the next tick
+                # rather than needing an operator to call
+                # projector.state.requeue.v2 by hand.
                 or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
                 or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
             ]
@@ -8576,7 +8640,21 @@ class CatalogStore:
                 return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)
+            # A projector row is derived state, so no failure is terminal. A
+            # "permanent" error means *this build* cannot project *this input*
+            # -- a statement about code, not about data. Quarantining the row
+            # made that verdict outlive the build that issued it: the row was
+            # dropped from claim eligibility with retry_at=NULL, so the deploy
+            # that fixed the parser never re-examined it and no counter showed
+            # it. One 95 MB archive sat quarantined for six days that way, and
+            # dragged the whole coverage watermark back with it.
+            #
+            # Permanent errors now take a long backoff instead. The next
+            # deploy re-attempts them for free, a genuinely unprojectable row
+            # costs one claim per PERMANENT_FAILURE_RETRY_INTERVAL, and
+            # "stuck forever" stops being a reachable state.
             permanent = error_code.endswith("_permanent")
+            effective_retry_at = commit_time + PERMANENT_FAILURE_RETRY_INTERVAL if permanent else retry_at
             connection.execute(
                 update(table)
                 .where(table.c.projector == projector, table.c.session_id == session_key)
@@ -8585,11 +8663,11 @@ class CatalogStore:
                     claim_token=None,
                     worker_id=None,
                     claim_expires_at=None,
-                    status="quarantined" if permanent else "failed",
+                    status="failed",
                     failure_count=int(row["failure_count"] or 0) + 1,
                     last_error_code=error_code,
                     last_error_message=error_message,
-                    retry_at=None if permanent else retry_at,
+                    retry_at=effective_retry_at,
                     last_failure_token=claim_token,
                     commit_seq=commit_seq,
                     updated_at=commit_time,
@@ -8677,6 +8755,45 @@ class CatalogStore:
                 "indexed_through": (str(int(first_lag_revision) - 1) if first_lag_revision is not None else str(commit_seq)),
                 "oldest_lag_at": _encode_datetime(oldest),
                 "oldest_lag_seconds": (max(0.0, (observed_at - oldest).total_seconds()) if oldest is not None else None),
+                "commit_seq": str(commit_seq),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def reap_retired_projector_states(self) -> dict[str, Any]:
+        """Delete projector rows whose projector name no longer exists.
+
+        EMBEDDING_PROJECTOR_ID embeds the embedding artifact revision and a
+        partition suffix, so changing either renames the projector. Every row
+        under the old name is then stranded: no worker polls that name again,
+        the rows keep whatever status they last had, and nothing reports them.
+        Three retired generations were holding ~69k rows this way, two of them
+        `failed` since a fix sixteen days earlier.
+
+        Projector state is derived from the catalog and is rebuilt by claiming
+        the row, so deleting a retired generation loses nothing. Rows for a
+        live projector are never touched.
+        """
+
+        table = ProjectorState.__table__
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            retired = [
+                str(row.projector)
+                for row in connection.execute(select(table.c.projector).distinct().where(table.c.projector.notin_(ACTIVE_PROJECTORS))).all()
+            ]
+            if not retired:
+                return {
+                    "reaped_projectors": [],
+                    "reaped_rows": 0,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                }
+            result = connection.execute(delete(table).where(table.c.projector.in_(retired)))
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            return {
+                "reaped_projectors": sorted(retired),
+                "reaped_rows": int(result.rowcount or 0),
                 "commit_seq": str(commit_seq),
                 "observed_at": observed_at.isoformat(),
             }
@@ -9449,12 +9566,25 @@ class CatalogStore:
                             )
                         )
                     else:
+                        # Repair replaces the render generation the previous
+                        # failure was reached against, so clearing the failure
+                        # is part of republishing -- not a side effect someone
+                        # else has to remember. This used to be implicit: the
+                        # row was quarantined and a quarantine-keyed reset
+                        # elsewhere happened to catch it. Permanent failures
+                        # are now ordinary `failed` rows, so the site that
+                        # invalidates the evidence states it directly.
                         connection.execute(
                             update(projectors)
                             .where(projectors.c.projector == projector_name, projectors.c.session_id == session_key)
                             .values(
                                 desired_revision=commit_seq,
                                 desired_at=observed_at,
+                                status="idle",
+                                failure_count=0,
+                                last_error_code=None,
+                                last_error_message=None,
+                                retry_at=None,
                                 commit_seq=commit_seq,
                                 updated_at=observed_at,
                             )

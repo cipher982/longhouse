@@ -306,6 +306,18 @@ try:
         labelnames=("projector",),
     )
 
+    projector_stuck_sessions = Gauge(
+        "longhouse_projector_stuck_sessions",
+        "Projector session rows in a failure status, for every projector including retired generations",
+        labelnames=("projector", "status"),
+    )
+
+    projector_stuck_oldest_age_seconds = Gauge(
+        "longhouse_projector_stuck_oldest_age_seconds",
+        "Age of the oldest failing projector row, by projector",
+        labelnames=("projector",),
+    )
+
     projector_oldest_lag_age_seconds = Gauge(
         "longhouse_projector_oldest_lag_age_seconds",
         "Age of the oldest lagging projector session",
@@ -638,6 +650,8 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     storage_object_count = _NoopGauge()  # type: ignore[assignment]
     storage_total_stored_bytes = _NoopGauge()  # type: ignore[assignment]
     projector_lag_sessions = _NoopGauge()  # type: ignore[assignment]
+    projector_stuck_sessions = _NoopGauge()  # type: ignore[assignment]
+    projector_stuck_oldest_age_seconds = _NoopGauge()  # type: ignore[assignment]
     projector_failed_sessions = _NoopGauge()  # type: ignore[assignment]
     projector_claimed_sessions = _NoopGauge()  # type: ignore[assignment]
     projector_oldest_lag_age_seconds = _NoopGauge()  # type: ignore[assignment]

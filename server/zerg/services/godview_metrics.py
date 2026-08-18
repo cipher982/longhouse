@@ -402,6 +402,27 @@ def refresh_storage_telemetry_gauges() -> None:
     # Recall has no independent bounded health source yet. Never infer it from
     # search-v2 and accidentally turn missing evidence green.
     metrics.telemetry_health.labels(component="recall_state").set(0.0)
+    # Emitted before the search-v2 early return below, because the failure this
+    # exists to catch was on a DIFFERENT projector. Two embedding rows sat
+    # failed for sixteen days while every projector metric described only
+    # search-v2. Label by projector so any stuck row, on a live generation or a
+    # retired one, reaches the same alertable series.
+    stuck_projectors = snapshot.payload.get("stuck_projectors") if snapshot.payload is not None else None
+    if isinstance(stuck_projectors, list):
+        for entry in stuck_projectors:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("projector")
+            if not isinstance(name, str) or not name:
+                continue
+            metrics.projector_stuck_sessions.labels(projector=name, status=str(entry.get("status") or "unknown")).set(
+                float(entry.get("rows") or 0)
+            )
+            oldest_stuck = _normalize_db_datetime(entry.get("oldest_updated_at"))
+            metrics.projector_stuck_oldest_age_seconds.labels(projector=name).set(
+                max(0.0, (now - oldest_stuck).total_seconds()) if oldest_stuck is not None else float("nan")
+            )
+
     if search_projector is None:
         return
     projector = "search-v2"

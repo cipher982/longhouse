@@ -288,6 +288,7 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
         await client.close()
         await daemon.close()
 
+
 @pytest.mark.asyncio
 async def test_catalog_restart_releases_projector_claim_without_losing_completed_revision(daemon_paths):
     database_path, socket_path = daemon_paths
@@ -759,7 +760,7 @@ async def test_projector_state_requeue_resets_only_explicit_completed_sessions(d
 
 
 @pytest.mark.asyncio
-async def test_permanent_projector_failure_is_quarantined_until_new_revision(daemon_paths):
+async def test_permanent_projector_failure_backs_off_instead_of_quarantining(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
@@ -800,10 +801,31 @@ async def test_permanent_projector_failure_is_quarantined_until_new_revision(dae
                 "retry_at": (now + timedelta(days=1)).isoformat(),
             },
         )
-        assert failed["state"]["status"] == "quarantined"
-        assert failed["state"]["retry_at"] is None
+        # A "permanent" error is a statement about this build's parser, not
+        # about the row. It takes a long backoff; it is never terminal. The old
+        # contract wrote status="quarantined" with retry_at=None, which only
+        # reopened if a NEW revision arrived -- so a session that had stopped
+        # receiving writes stayed stuck forever and showed up in no counter.
+        assert failed["state"]["status"] == "failed"
+        assert failed["state"]["retry_at"] is not None
+        assert failed["state"]["last_error_code"] == "semantic_recovery_permanent"
 
         blocked = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(minutes=1)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert blocked["claimed"] == []
+
+        # No new revision, no operator RPC: the backoff alone reopens it, so a
+        # deploy that fixes the parser heals the row on its own.
+        healed = await client.call(
             "projector.state.claim.v2",
             {
                 "projector": projector,
@@ -814,7 +836,19 @@ async def test_permanent_projector_failure_is_quarantined_until_new_revision(dae
                 "limit": 10,
             },
         )
-        assert blocked["claimed"] == []
+        assert [row["session_id"] for row in healed["claimed"]] == [session_id]
+        await client.call(
+            "projector.state.fail.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": healed["claimed"][0]["claim_token"],
+                "error_code": "semantic_recovery_permanent",
+                "error_message": "snapshot is too large",
+                "failed_at": (now + timedelta(days=30)).isoformat(),
+                "retry_at": (now + timedelta(days=31)).isoformat(),
+            },
+        )
 
         unchanged = await client.call("projector.state.advance.v2", advance)
         assert unchanged["changed"] is False

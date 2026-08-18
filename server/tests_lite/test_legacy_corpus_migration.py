@@ -1228,7 +1228,13 @@ async def test_render_failure_stays_hidden_and_repair_can_publish_later(legacy_d
                 "retry_at": datetime.now(UTC).isoformat(),
             },
         )
-        assert quarantined["state"]["status"] == "quarantined"
+        # A permanent projection error no longer parks the row in a terminal
+        # status; it takes a long backoff instead, so a later deploy or repair
+        # can pick it up without an operator RPC. What this test actually cares
+        # about is unchanged: the failed render stays hidden until repair
+        # republishes it, and repair returns the row to idle.
+        assert quarantined["state"]["status"] == "failed"
+        assert quarantined["state"]["last_error_code"] == "semantic_recovery_permanent"
 
         await client.call(
             "migration.render.repair.v2",
