@@ -203,12 +203,27 @@ class TestWriteIdentity:
             "channel": "dev",
         }
         out = tmp_path / "nested" / "dir" / "build-identity.json"
-        gbi.write_identity(identity, out)
+        assert gbi.write_identity(identity, out) is True
 
         assert out.exists()
         assert json.loads(out.read_text()) == identity
         # trailing newline for unix hygiene
         assert out.read_text().endswith("\n")
+
+    def test_unchanged_identity_does_not_rewrite_file(self, tmp_path: Path) -> None:
+        identity = {
+            "version": "0.2.0",
+            "commit": "a" * 40,
+            "commit_short": "aaaaaaaa",
+            "dirty": False,
+            "built_at": "2026-04-21T18:03:12Z",
+            "channel": "dev",
+        }
+        out = tmp_path / "build-identity.json"
+        assert gbi.write_identity(identity, out) is True
+        first_mtime = out.stat().st_mtime_ns
+        assert gbi.write_identity(identity, out) is False
+        assert out.stat().st_mtime_ns == first_mtime
 
 
 class TestMain:
@@ -227,6 +242,23 @@ class TestMain:
         assert data["version"] == "9.9.9"
         assert data["channel"] == "dev"
         assert data["dirty"] is False
+
+        first_built_at = data["built_at"]
+        rc = gbi.main(["--output", str(out), "--skip-python-package"])
+        assert rc == 0
+        assert json.loads(out.read_text())["built_at"] == first_built_at
+
+    def test_main_accepts_explicit_build_timestamp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = _init_repo(tmp_path)
+        pyproject = _write_pyproject(repo, "9.9.9")
+        monkeypatch.setattr(gbi, "REPO_ROOT", repo)
+        monkeypatch.setattr(gbi, "PYPROJECT_PATH", pyproject)
+
+        out = tmp_path / "out.json"
+        rc = gbi.main(["--output", str(out), "--skip-python-package", "--built-at", "1700000000"])
+
+        assert rc == 0
+        assert json.loads(out.read_text())["built_at"] == "2023-11-14T22:13:20Z"
 
     def test_main_also_stages_python_package(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _init_repo(tmp_path)

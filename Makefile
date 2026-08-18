@@ -4,6 +4,8 @@
 export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
+CARGO_ENGINE := python3 scripts/build/cargo.py exec --
+CARGO_ARTIFACT := python3 scripts/build/cargo.py artifact
 
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
@@ -21,7 +23,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
-.PHONY: test-engine-single
+.PHONY: test-engine-single build-health build-clean
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
 .PHONY: profile-ios-live-console
@@ -254,7 +256,7 @@ test-frontend: ## Frontend unit tests + type-check (~15s)
 
 test-engine: ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
 	@# --bin longhouse is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
 	@# in this repo passed only --bin longhouse-engine, so its tests -- including
@@ -267,7 +269,7 @@ test-engine: ## Rust engine tests (~20s)
 	@# timing-dependent CI gate.
 	@engine_test_log="$$(mktemp -t longhouse-engine-tests.XXXXXX)"; \
 	status=0; \
-	(cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- --test-threads=1) >"$$engine_test_log" 2>&1 || status=$$?; \
+	($(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- --test-threads=1) >"$$engine_test_log" 2>&1 || status=$$?; \
 	cat "$$engine_test_log"; \
 	if [ "$$status" -ne 0 ]; then rm -f "$$engine_test_log"; exit "$$status"; fi; \
 	if ! grep -q '^test result: ok\.' "$$engine_test_log"; then \
@@ -276,37 +278,37 @@ test-engine: ## Rust engine tests (~20s)
 		exit 1; \
 	fi; \
 	rm -f "$$engine_test_log"
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
 
 test-engine-single: ## One exact Rust engine unit test (TEST=module::tests::name)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine $(TEST) -- --exact --nocapture
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine $(TEST) -- --exact --nocapture
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine codex_exec::tests::installed_codex_completes_through_production_console_adapter -- --ignored --exact --nocapture
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine codex_exec::tests::installed_codex_completes_through_production_console_adapter -- --ignored --exact --nocapture
 
 test-codex-conversation-reset: ## Real managed-Codex /clear characterization canary
 	@cd server && uv run python -m zerg.qa.codex_conversation_reset $(ARGS)
 
 test-claude-console-live-canary: ## Real stock-Claude native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine claude_print::tests::installed_claude_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine claude_print::tests::installed_claude_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
 test-claude-conversation-reset: ## Real managed-Claude /clear characterization canary
 	@cd server && uv run python -m zerg.qa.claude_conversation_reset $(ARGS)
 
 test-cursor-console-live-canary: ## Real stock-Cursor native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine cursor_print::tests::installed_cursor_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine cursor_print::tests::installed_cursor_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
 test-cursor-conversation-reset: ## Real Cursor /clear characterization canary
 	@$(MAKE) test-cursor-helm-gate0 ARGS="--conversation-reset-only $(ARGS)"
 
 test-opencode-console-live-canary: ## Real stock-OpenCode native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine opencode_run::tests::installed_opencode_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine opencode_run::tests::installed_opencode_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
 test-opencode-conversation-reset: ## Real managed-OpenCode /new characterization canary
 	@cd server && uv run python -m zerg.qa.opencode_conversation_reset $(ARGS)
@@ -376,13 +378,13 @@ test-e2e-onboarding: ## @internal Onboarding browser ring
 
 test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
 	cd server && LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
 		uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
 test-shipper-synthetic-bench: ## Synthetic shipper bench fixture gate
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 8 --synthetic-events-per-file 100 --synthetic-bytes-per-event 1024 --level L3 --compress --parallel --workers 2
+	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 8 --synthetic-events-per-file 100 --synthetic-bytes-per-event 1024 --level L3 --compress --parallel --workers 2
 
 test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
 	@python3 scripts/build/generate_build_identity.py
@@ -393,11 +395,11 @@ test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
 	for _ in 1 2 3 4 5 6 7 8 9 10; do test -s "$$port_file" && break; sleep 0.2; done; \
 	test -s "$$port_file"; \
 	port="$$(cat "$$port_file")"; \
-	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-machine-id synthetic-machine --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
+	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-machine-id synthetic-machine --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
 
 perf-proof: ## Collect trendable startup/shipper/live perf proof JSON
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
 	cd server && uv sync --extra dev
 	@python3 scripts/ci/perf-proof.py --output "$(PERF_PROOF_OUTPUT)"
 
@@ -481,12 +483,19 @@ test-readmes: ## @internal README contract tests (MODE=smoke|full)
 # ---------------------------------------------------------------------------
 install-engine: ## Build + install Rust engine binary
 	@python3 scripts/build/generate_build_identity.py
-	cd engine && cargo build --release
-	codesign -s - engine/target/release/longhouse-engine
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --release
+	engine_binary="$$( $(CARGO_ARTIFACT) --profile release --bin longhouse-engine )"; \
+	codesign -s - "$$engine_binary"
 	@mkdir -p $$HOME/.local/bin
 	@rm -f "$$HOME/.local/bin/longhouse-engine"
-	@install -m 755 "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
+	@install -m 755 "$$( $(CARGO_ARTIFACT) --profile release --bin longhouse-engine )" "$$HOME/.local/bin/longhouse-engine"
 	@echo "longhouse-engine installed"
+
+build-health: ## Report managed Rust build output and profile sizes
+	@python3 scripts/build/cargo.py health
+
+build-clean: ## Remove the managed Rust build output after validating its ownership
+	@python3 scripts/build/cargo.py clean
 
 install-cli: ## Reinstall the longhouse CLI from current repo source (no engine/hooks/app refresh)
 	@python3 scripts/build/generate_build_identity.py

@@ -91,10 +91,13 @@ mkdir -p "$HOME_DIR" "$BIN_DIR"
 # Build the real facade + engine pair
 # ---------------------------------------------------------------------------
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
-cargo build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci \
+python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
+  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci \
   --bin longhouse --bin longhouse-engine >/dev/null
-cp "$ROOT_DIR/engine/target/ci/longhouse" "$BIN_DIR/longhouse"
-cp "$ROOT_DIR/engine/target/ci/longhouse-engine" "$BIN_DIR/longhouse-engine"
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse)" \
+  "$BIN_DIR/longhouse"
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)" \
+  "$BIN_DIR/longhouse-engine"
 
 # ---------------------------------------------------------------------------
 # Start a real Runtime Host

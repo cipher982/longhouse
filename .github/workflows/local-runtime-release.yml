@@ -44,13 +44,13 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
       - name: Build native device binaries
-        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
+        run: python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
-          cp engine/target/release/longhouse binaries/longhouse-linux-x64
-          cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-x64
+          cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse)" binaries/longhouse-linux-x64
+          cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-linux-x64
           chmod +x binaries/longhouse-linux-x64
           chmod +x binaries/longhouse-engine-linux-x64
 
@@ -86,13 +86,13 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
       - name: Build native device binaries
-        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
+        run: python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
-          cp engine/target/release/longhouse binaries/longhouse-linux-arm64
-          cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-arm64
+          cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse)" binaries/longhouse-linux-arm64
+          cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-linux-arm64
           chmod +x binaries/longhouse-linux-arm64
           chmod +x binaries/longhouse-engine-linux-arm64
 
@@ -136,13 +136,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build native device binaries
-        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
+        run: python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
-          cp engine/target/release/longhouse binaries/longhouse-darwin-arm64
-          cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
+          cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse)" binaries/longhouse-darwin-arm64
+          cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-darwin-arm64
           chmod +x binaries/longhouse-darwin-arm64
           chmod +x binaries/longhouse-engine-darwin-arm64
 

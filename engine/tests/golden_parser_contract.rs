@@ -59,8 +59,15 @@ fn engine_bin() -> PathBuf {
         }
     }
 
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("engine/ must live below the repo root")
+                .join(".build")
+                .join("cargo-target")
+        })
         .join("release")
         .join("longhouse-engine")
 }
@@ -75,7 +82,7 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
     let bin = engine_bin();
     assert!(
         bin.exists(),
-        "Engine binary not found at {}. Run `cargo test --bin longhouse-engine --test golden_parser_contract` or `cargo build --release`.",
+        "Engine binary not found at {}. Run `make test-engine` or build through scripts/build/cargo.py.",
         bin.display()
     );
 

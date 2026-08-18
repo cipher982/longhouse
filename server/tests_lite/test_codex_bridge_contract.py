@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -32,9 +33,17 @@ def _engine_bin() -> str | None:
     if explicit:
         return explicit
     repo_root = Path(__file__).resolve().parents[2]
-    for relative in ("engine/target/release/longhouse-engine", "engine/target/debug/longhouse-engine"):
-        candidate = repo_root / relative
-        if candidate.exists():
+    resolver = repo_root / "scripts" / "build" / "cargo.py"
+    for profile in ("release", "dev"):
+        resolved = subprocess.run(
+            [sys.executable, str(resolver), "artifact", "--profile", profile, "--bin", "longhouse-engine"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        candidate = Path(resolved.stdout.strip()) if resolved.returncode == 0 else None
+        if candidate and candidate.exists():
             return str(candidate)
     return shutil.which("longhouse-engine")
 

@@ -30,6 +30,18 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "perf-proof" / "perf-proof.json"
 
 
+def default_engine_path() -> Path:
+    resolver = ROOT / "scripts" / "build" / "cargo.py"
+    result = subprocess.run(
+        [sys.executable, str(resolver), "artifact", "--profile", "release", "--bin", "longhouse-engine"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip())
+
+
 @dataclass(frozen=True)
 class CommandResult:
     cmd: list[str]
@@ -483,7 +495,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--summary", type=Path, default=None)
-    parser.add_argument("--engine-bin", type=Path, default=ROOT / "engine" / "target" / "release" / "longhouse-engine")
+    parser.add_argument("--engine-bin", type=Path, default=default_engine_path())
     parser.add_argument("--python-cli", type=Path, default=None)
     parser.add_argument(
         "--startup-iterations",

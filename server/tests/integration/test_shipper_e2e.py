@@ -36,6 +36,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 from uuid import NAMESPACE_URL
@@ -55,7 +56,25 @@ REPO_ROOT = BACKEND_DIR.parent                     # repo root
 
 # Always use the repo-local binary so tests are coupled to the current source.
 _cargo_profile = os.environ.get("CARGO_PROFILE", "release")
-ENGINE_BIN = REPO_ROOT / "engine" / "target" / _cargo_profile / "longhouse-engine"
+_artifact_resolver = REPO_ROOT / "scripts" / "build" / "cargo.py"
+_resolved_engine = subprocess.run(
+    [
+        sys.executable,
+        str(_artifact_resolver),
+        "artifact",
+        "--profile",
+        _cargo_profile,
+        "--bin",
+        "longhouse-engine",
+    ],
+    cwd=REPO_ROOT,
+    capture_output=True,
+    text=True,
+    check=False,
+)
+ENGINE_BIN = Path(_resolved_engine.stdout.strip()) if _resolved_engine.returncode == 0 else (
+    REPO_ROOT / ".build" / "cargo-target" / _cargo_profile / "longhouse-engine"
+)
 
 # Fixture filenames.
 CLAUDE_FIXTURE = "1dd6c481-7d7b-498a-b492-c33c917889b9.jsonl"
@@ -635,7 +654,8 @@ def server(tmp_path_factory):
     if not ENGINE_BIN.exists():
         pytest.skip(
             f"Repo-local engine binary not found at {ENGINE_BIN}.\n"
-            "Run: cd engine && cargo build --release"
+            "Run: python3 scripts/build/cargo.py exec -- build "
+            "--manifest-path engine/Cargo.toml --release"
         )
 
     db_path = tmp_path_factory.mktemp("shipper_e2e") / "test.db"

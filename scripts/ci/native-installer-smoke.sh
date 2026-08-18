@@ -31,9 +31,13 @@ if [[ "$REMOTE_RELEASE" == "1" ]]; then
   [[ -n "$EXPECTED_COMMIT" && -n "$EXPECTED_VERSION" ]]
 else
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
-  cargo build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse --bin longhouse-engine >/dev/null
-  cp "$ROOT_DIR/engine/target/ci/longhouse" "$PAIR_DIR/longhouse"
-  cp "$ROOT_DIR/engine/target/ci/longhouse-engine" "$PAIR_DIR/longhouse-engine"
+  python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
+    --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci \
+    --bin longhouse --bin longhouse-engine >/dev/null
+  cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse)" \
+    "$PAIR_DIR/longhouse"
+  cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)" \
+    "$PAIR_DIR/longhouse-engine"
 fi
 
 for command in python python3 uv pip; do
@@ -207,8 +211,14 @@ set -e
 # canaries in the installer lane so a fresh native install cannot regress a
 # provider bridge without exercising its transcript/control contract.
 if [[ "$REMOTE_RELEASE" != "1" ]]; then
-  cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine codex_app_server_canary -- --nocapture
-  cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine claude_channel -- --nocapture
-  cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine opencode_control -- --nocapture
+  python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- test \
+    --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine \
+    codex_app_server_canary -- --nocapture
+  python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- test \
+    --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine \
+    claude_channel -- --nocapture
+  python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- test \
+    --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine \
+    opencode_control -- --nocapture
 fi
 echo "native installer smoke passed"

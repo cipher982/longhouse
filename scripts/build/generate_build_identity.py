@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Generate .build/build-identity.json — the single source of truth for build identity.
 
-Every build step calls this first. Output lands at .build/build-identity.json
-relative to the repo root and is gitignored.
+Output lands at .build/build-identity.json relative to the repo root and is
+gitignored. Development generation is content-stable: a repeated invocation
+for the same semantic identity does not rewrite the file or change its build
+timestamp.
 
 Fields:
 - version:      release semver (from server/pyproject.toml)
@@ -23,11 +25,14 @@ paper over a broken provenance.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +48,7 @@ PYTHON_PACKAGE_OUTPUT = REPO_ROOT / "server" / "zerg" / "build_identity.json"
 VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
 # refs/tags/vX.Y.Z, optionally followed by -prerelease (rc1, beta.2, etc.) or +buildmeta.
 TAG_REF_RE = re.compile(r"^refs/tags/v\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$")
+SEMANTIC_KEYS = ("version", "commit", "commit_short", "dirty", "channel")
 
 
 def read_version(pyproject_path: Path) -> str:
@@ -124,9 +130,115 @@ def build_identity(
     }
 
 
-def write_identity(identity: dict, output_path: Path) -> None:
+def _format_timestamp(value: str) -> str:
+    """Normalize an ISO timestamp or Unix epoch to the stored UTC format."""
+    raw = value.strip()
+    if not raw:
+        raise RuntimeError("build timestamp cannot be empty")
+    if raw.isdigit():
+        return datetime.fromtimestamp(int(raw), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise RuntimeError(f"build timestamp must include a timezone: {value!r}")
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _git_commit_timestamp(repo_root: Path, commit: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "show", "-s", "--format=%cI", commit],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return _format_timestamp(proc.stdout)
+
+
+def _read_identity(path: Path) -> dict | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _same_semantic_identity(left: dict | None, right: dict) -> bool:
+    return bool(left) and all(left.get(key) == right.get(key) for key in SEMANTIC_KEYS)
+
+
+def _resolve_built_at(
+    *,
+    identity: dict,
+    existing: dict | None,
+    repo_root: Path,
+    env: dict[str, str],
+    explicit: str | None,
+    now: datetime,
+) -> str:
+    requested = explicit or env.get("LONGHOUSE_BUILD_TIMESTAMP") or env.get("SOURCE_DATE_EPOCH")
+    if requested:
+        return _format_timestamp(requested)
+
+    if _same_semantic_identity(existing, identity):
+        prior = existing.get("built_at")
+        if isinstance(prior, str) and prior.strip():
+            return prior
+
+    # Separate release jobs need one deterministic value even when they start
+    # at different wall-clock times. An explicit timestamp wins; otherwise use
+    # the tagged commit timestamp as the release authority.
+    if identity["channel"] == "release":
+        from_commit = _git_commit_timestamp(repo_root, identity["commit"])
+        if from_commit:
+            return from_commit
+
+    return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@contextlib.contextmanager
+def identity_lock(repo_root: Path):
+    """Serialize identity generation across all writers in this worktree."""
+    lock_path = repo_root / ".build" / "locks" / "build-identity.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _serialized_identity(identity: dict) -> bytes:
+    return (json.dumps(identity, indent=2) + "\n").encode("utf-8")
+
+
+def write_identity(identity: dict, output_path: Path) -> bool:
+    """Atomically write identity if bytes changed; return whether it changed."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+    payload = _serialized_identity(identity)
+    try:
+        if output_path.read_bytes() == payload:
+            return False
+    except FileNotFoundError:
+        pass
+
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, output_path)
+        return True
+    finally:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -155,15 +267,30 @@ def main(argv: list[str] | None = None) -> int:
         help="skip writing the staged copy under server/zerg/build_identity.json "
         "(used by unit tests that pass a custom --output in a temp repo).",
     )
+    parser.add_argument(
+        "--built-at",
+        default=None,
+        help="explicit ISO-8601 or Unix-epoch build timestamp (release automation)",
+    )
     args = parser.parse_args(argv)
 
-    identity = build_identity(repo_root=REPO_ROOT, pyproject_path=args.pyproject_path)
-    write_identity(identity, args.output)
-    if not args.skip_python_package:
-        # Stage the same bytes into the Python package tree so
-        # `importlib.resources.files("zerg") / "build_identity.json"` always
-        # resolves, regardless of install mode (editable, wheel, docker).
-        write_identity(identity, PYTHON_PACKAGE_OUTPUT)
+    with identity_lock(REPO_ROOT):
+        identity = build_identity(repo_root=REPO_ROOT, pyproject_path=args.pyproject_path)
+        existing = _read_identity(args.output)
+        identity["built_at"] = _resolve_built_at(
+            identity=identity,
+            existing=existing,
+            repo_root=REPO_ROOT,
+            env=os.environ,
+            explicit=args.built_at,
+            now=datetime.now(timezone.utc),
+        )
+        write_identity(identity, args.output)
+        if not args.skip_python_package:
+            # Stage the same bytes into the Python package tree so
+            # `importlib.resources.files("zerg") / "build_identity.json"` always
+            # resolves, regardless of install mode (editable, wheel, docker).
+            write_identity(identity, PYTHON_PACKAGE_OUTPUT)
     if args.print:
         print(json.dumps(identity, indent=2))
     return 0

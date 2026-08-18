@@ -80,7 +80,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            engine/target
+            .build/cargo-target
           key: hosted-live-qa-engine-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'engine/Cargo.toml') }}
           restore-keys: |
             hosted-live-qa-engine-${{ runner.os }}-

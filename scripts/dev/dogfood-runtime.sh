@@ -144,8 +144,8 @@ install_engine_from_source() {
     *) fail "Unsupported LONGHOUSE_DOGFOOD_ENGINE_PROFILE=$ENGINE_PROFILE (expected ci or release)" ;;
   esac
 
-  local engine_binary="$ENGINE_DIR/target/$ENGINE_PROFILE/longhouse-engine"
-  local facade_binary="$ENGINE_DIR/target/$ENGINE_PROFILE/longhouse"
+  local engine_binary
+  local facade_binary
 
   log "==> Building Rust engine ($ENGINE_PROFILE profile)"
   # build-identity.json must be regenerated for the current HEAD before
@@ -153,7 +153,11 @@ install_engine_from_source() {
   # resulting binary reports the previous commit's SHA. See "BUILD DRIFT"
   # in the menu bar if this is wrong.
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
-  (cd "$ENGINE_DIR" && cargo build --profile "$ENGINE_PROFILE" --bin longhouse --bin longhouse-engine)
+  python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
+    --manifest-path "$ROOT_DIR/engine/Cargo.toml" \
+    --profile "$ENGINE_PROFILE" --bin longhouse --bin longhouse-engine
+  engine_binary="$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$ENGINE_PROFILE" --bin longhouse-engine)"
+  facade_binary="$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$ENGINE_PROFILE" --bin longhouse)"
 
   if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
     log "==> Ad-hoc signing engine"

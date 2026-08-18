@@ -175,19 +175,32 @@ def get_engine_executable() -> str:
     # 2. Repo dev builds
     project_root = _find_project_root()
     if project_root:
-        engine_dir = project_root.parent / "engine"
+        resolver = project_root.parent / "scripts" / "build" / "cargo.py"
         for profile in ("release", "debug"):
-            candidate = engine_dir / "target" / profile / "longhouse-engine"
-            if candidate.exists():
+            resolved = subprocess.run(
+                [
+                    sys.executable,
+                    str(resolver),
+                    "artifact",
+                    "--profile",
+                    profile,
+                    "--bin",
+                    "longhouse-engine",
+                ],
+                cwd=project_root.parent,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            candidate = Path(resolved.stdout.strip()) if resolved.returncode == 0 else None
+            if candidate and candidate.exists():
                 return str(candidate)
 
     # 3. PATH fallback.
     if path_fallback:
         return path_fallback.launch_path
 
-    raise RuntimeError(
-        "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build engine (cargo build --release)."
-    )
+    raise RuntimeError("longhouse-engine not found. " "Install it from https://longhouse.ai/install or run `make install-engine`.")
 
 
 def get_zerg_executable() -> str:

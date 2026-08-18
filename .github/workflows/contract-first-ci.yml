@@ -264,7 +264,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          engine/target
+          .build/cargo-target
         key: engine-ci-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'engine/Cargo.toml') }}
         restore-keys: |
           engine-ci-${{ runner.os }}-

@@ -25,6 +25,7 @@ REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
 ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
 BUILD_WHEEL="${INSTALLER_TEST_WHEEL:-0}"
 ENABLE_RUNTIME_ARTIFACT_SMOKE="${INSTALLER_TEST_RUNTIME_ARTIFACT_SMOKE:-0}"
+local_engine_binary=""
 BUILD_IDENTITY_GENERATED=0
 DEBUG_DUMPED=0
 
@@ -80,6 +81,7 @@ require_cmd() {
 
 cargo_build_release() {
   local -a cargo_env=()
+  local -a cargo_toolchain=()
 
   if [[ -n "$ORIGINAL_CARGO_HOME" && -d "$ORIGINAL_CARGO_HOME" ]]; then
     cargo_env+=("CARGO_HOME=$ORIGINAL_CARGO_HOME")
@@ -98,17 +100,22 @@ cargo_build_release() {
 
   if command -v cargo >/dev/null 2>&1; then
     if cargo_env_cmd cargo --version >/dev/null 2>&1; then
-      cargo_env_cmd cargo build --release "$@"
+      cargo_env_cmd python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- \
+        build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --release "$@"
       return 0
     fi
     if cargo_env_cmd cargo +stable --version >/dev/null 2>&1; then
-      cargo_env_cmd cargo +stable build --release "$@"
+      cargo_toolchain=(+stable)
+      cargo_env_cmd python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- \
+        "${cargo_toolchain[@]}" build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --release "$@"
       return 0
     fi
   fi
 
   if command -v rustup >/dev/null 2>&1 && cargo_env_cmd rustup run stable cargo --version >/dev/null 2>&1; then
-    cargo_env_cmd rustup run stable cargo build --release "$@"
+    cargo_toolchain=(+stable)
+    cargo_env_cmd python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- \
+      "${cargo_toolchain[@]}" build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --release "$@"
     return 0
   fi
 
@@ -757,13 +764,11 @@ fi
 # The engine is independent of the package source (wheel or directory).
 if [[ "$INSTALLER_MODE" == "local" ]]; then
   ensure_build_identity
-  if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
+  local_engine_binary="$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile release --bin longhouse-engine)"
+  if [[ ! -x "$local_engine_binary" ]]; then
     if command -v cargo >/dev/null 2>&1 || command -v rustup >/dev/null 2>&1; then
       log "🦀 Building local engine binary for installer validation..."
-      (
-        cd "$ROOT_DIR/engine"
-        cargo_build_release
-      )
+      cargo_build_release
     else
       log "ℹ️  Rust toolchain not available — skipping engine build"
     fi
@@ -817,9 +822,9 @@ elif [[ -n "$EXPECTED_BUILD_VERSION" ]]; then
   env_vars+=("LONGHOUSE_INSTALL_VERSION=$EXPECTED_BUILD_VERSION")
 fi
 
-if [[ "$INSTALLER_MODE" == "local" && -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
-  export LONGHOUSE_ENGINE_SOURCE="$ROOT_DIR/engine/target/release/longhouse-engine"
-  env_vars+=("LONGHOUSE_ENGINE_SOURCE=$ROOT_DIR/engine/target/release/longhouse-engine")
+if [[ "$INSTALLER_MODE" == "local" && -x "$local_engine_binary" ]]; then
+  export LONGHOUSE_ENGINE_SOURCE="$local_engine_binary"
+  env_vars+=("LONGHOUSE_ENGINE_SOURCE=$local_engine_binary")
 fi
 
 if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" != "Darwin" ]]; then
