@@ -442,12 +442,22 @@ async def read_search_coverage(*, owner_id: int) -> dict[str, object] | None:
     if search is None:
         return None
     try:
-        payload = await search.call("search.coverage.v2", {"owner_id": str(owner_id)}, timeout_seconds=2.0)
+        payload = await search.call("search.coverage.v2", {"owner_id": str(owner_id)}, timeout_seconds=1.5)
     except Exception:
         return None
     if not isinstance(payload, dict):
         return None
-    return payload
+    # searchd decorates every result with its own `timing` block, and the
+    # response model forbids extra fields, so hand back only the declared keys.
+    # Passing the raw payload through made every coverage block fail validation
+    # and silently come back null -- the failure mode this whole change exists
+    # to avoid, reproduced one layer down.
+    return {
+        "indexed_sessions": payload.get("indexed_sessions", 0),
+        "providers": payload.get("providers", []),
+        "oldest_session_at": payload.get("oldest_session_at"),
+        "newest_session_at": payload.get("newest_session_at"),
+    }
 
 
 async def search_storage_v2_episode_embeddings(

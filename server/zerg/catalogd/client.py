@@ -130,7 +130,6 @@ _SAFE_RETRY_METHODS = {
     "search.index.publish.v2",
     "search.embedding.source.v2",
     "search.query.v2",
-    "search.coverage.v2",
     "worklog.day.v2",
     "worklog.snapshot.release.v2",
     "search.session.delete.v2",

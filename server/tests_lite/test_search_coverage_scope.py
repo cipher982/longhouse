@@ -71,6 +71,39 @@ def test_coverage_is_scoped_to_one_owner(tmp_path):
         connection.close()
 
 
+def test_store_payload_survives_the_response_model(tmp_path):
+    """searchd decorates results with `timing`; the model forbids extras.
+
+    Passing the raw RPC payload straight into MachineSearchCoverage raised
+    ValidationError, and the deliberately soft failure path turned that into
+    `coverage: null` on every empty search -- the exact silent-nothing this
+    feature exists to remove, reproduced one layer down. Pin the projection.
+    """
+
+    from zerg.services.session_views import MachineSearchCoverage
+
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    try:
+        _index_session(connection, owner_id="owner-1", provider="claude", started_at="2026-01-05T00:00:00+00:00")
+        raw = dict(store.search_coverage(owner_id="owner-1"))
+        # Whatever searchd adds around the payload must not reach the model.
+        raw["timing"] = {"admit_ms": 0.0, "sql_ms": 32.5}
+
+        projected = {
+            "indexed_sessions": raw.get("indexed_sessions", 0),
+            "providers": raw.get("providers", []),
+            "oldest_session_at": raw.get("oldest_session_at"),
+            "newest_session_at": raw.get("newest_session_at"),
+        }
+        model = MachineSearchCoverage.model_validate(projected)
+
+        assert model.indexed_sessions == 1
+        assert model.providers == ["claude"]
+    finally:
+        connection.close()
+
+
 def test_coverage_on_an_empty_corpus_is_honest_not_absent(tmp_path):
     """Zero indexed sessions is a real answer, and distinct from 'unknown'."""
 
