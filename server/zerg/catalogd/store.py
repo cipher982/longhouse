@@ -8776,7 +8776,11 @@ class CatalogStore:
 
         table = ProjectorState.__table__
         observed_at = datetime.now(UTC)
-        with _write_transaction(self.engine) as connection:
+        # Runs on every catalogd start, and almost every start has nothing to
+        # reap, so look first in a read snapshot. Taking the writer just to
+        # discover "no retired generations" would put a lock acquisition on the
+        # startup path of every daemon for no benefit.
+        with _read_snapshot(self.engine) as connection:
             retired = [
                 str(row.projector)
                 for row in connection.execute(select(table.c.projector).distinct().where(table.c.projector.notin_(ACTIVE_PROJECTORS))).all()
@@ -8788,6 +8792,7 @@ class CatalogStore:
                     "commit_seq": str(_current_commit_seq(connection)),
                     "observed_at": observed_at.isoformat(),
                 }
+        with _write_transaction(self.engine) as connection:
             result = connection.execute(delete(table).where(table.c.projector.in_(retired)))
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)

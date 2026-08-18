@@ -6325,6 +6325,25 @@ export interface components {
             changed: boolean;
         };
         /**
+         * MachineSearchLaneFailure
+         * @description A search-session lane that could not contribute a complete result.
+         */
+        MachineSearchLaneFailure: {
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "lexical" | "dense" | "catalog";
+            /** Status Code */
+            status_code: number;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
          * MachineSessionResponse
          * @description A session as an agent reading the archive needs it.
          *
@@ -6497,6 +6516,10 @@ export interface components {
              * @default true
              */
             has_real_sessions: boolean;
+            /** Lanes */
+            lanes?: ("lexical" | "dense" | "catalog")[];
+            /** Degraded */
+            degraded?: components["schemas"]["MachineSearchLaneFailure"][];
         };
         /**
          * ManagedLocalLaunchOutcomeRequest
