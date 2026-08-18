@@ -352,6 +352,17 @@ class SearchDaemon:
                         **(self._store_identity or {}),
                     },
                 )
+            if request.method == "search.coverage.v2":
+                owner_id = request.params.get("owner_id")
+                if not isinstance(owner_id, str) or not owner_id:
+                    return self._error(request, "invalid_request", "search.coverage.v2 requires owner_id")
+                return self._result(
+                    request,
+                    await self._run_interactive_read(
+                        lambda store: store.search_coverage(owner_id=owner_id),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                    ),
+                )
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
                 result = await self._run_interactive_read(

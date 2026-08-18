@@ -23,6 +23,7 @@ from fastapi import Response
 from fastapi import status
 from fastapi.responses import JSONResponse
 from pydantic import Field
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -40,6 +41,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.routers.agents_search import read_search_coverage
 from zerg.routers.agents_search import search_storage_v2_semantic_sessions
 from zerg.routers.agents_search import search_storage_v2_sessions
 from zerg.services.agents import AgentsStore
@@ -98,6 +100,7 @@ from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import MachineSearchCoverage
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import MachineSessionsListResponse
@@ -680,12 +683,25 @@ async def list_sessions(
                 machine_sessions = [
                     session if isinstance(session, MachineSessionResponse) else project_machine_session(session) for session in page
                 ]
+                # Only on zero hits. A result set speaks for itself; a bare
+                # "0 results" is the shape an agent misreads as "this provider
+                # is not indexed", so that case -- and only that case -- pays
+                # one extra read to say what was actually searched.
+                coverage_payload = None
+                if not sessions:
+                    raw_coverage = await read_search_coverage(owner_id=int(owner_id))
+                    if raw_coverage is not None:
+                        try:
+                            coverage_payload = MachineSearchCoverage.model_validate(raw_coverage)
+                        except ValidationError:
+                            coverage_payload = None
                 return MachineSessionsListResponse(
                     sessions=machine_sessions,
                     total=len(sessions),
                     has_real_sessions=bool(sessions),
                     lanes=lanes,
                     degraded=degraded,
+                    coverage=coverage_payload,
                 )
             if (mode or "lexical") != "lexical":
                 raise HTTPException(

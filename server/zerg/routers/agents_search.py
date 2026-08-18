@@ -429,6 +429,27 @@ async def search_storage_v2_context(
     return _RecallContextPayload.model_validate(result)
 
 
+async def read_search_coverage(*, owner_id: int) -> dict[str, object] | None:
+    """Best-effort scope of the searched index, for empty results only.
+
+    Never raises: this exists to make a zero-hit answer honest, so failing to
+    describe the corpus must not turn a successful empty search into an error.
+    A missing coverage block is itself truthful -- it says nothing rather than
+    something wrong.
+    """
+
+    search = get_searchd_client()
+    if search is None:
+        return None
+    try:
+        payload = await search.call("search.coverage.v2", {"owner_id": str(owner_id)}, timeout_seconds=2.0)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
 async def search_storage_v2_episode_embeddings(
     *,
     model: str,

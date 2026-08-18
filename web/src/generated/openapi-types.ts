@@ -6325,6 +6325,20 @@ export interface components {
             changed: boolean;
         };
         /**
+         * MachineSearchCoverage
+         * @description What the index holds, reported alongside a search that found nothing.
+         */
+        MachineSearchCoverage: {
+            /** Indexed Sessions */
+            indexed_sessions: number;
+            /** Providers */
+            providers?: string[];
+            /** Oldest Session At */
+            oldest_session_at?: string | null;
+            /** Newest Session At */
+            newest_session_at?: string | null;
+        };
+        /**
          * MachineSearchLaneFailure
          * @description A search-session lane that could not contribute a complete result.
          */
@@ -6520,6 +6534,8 @@ export interface components {
             lanes?: ("lexical" | "dense" | "catalog")[];
             /** Degraded */
             degraded?: components["schemas"]["MachineSearchLaneFailure"][];
+            /** @description Scope of the index that was searched. Populated when a search returns no results, so that zero hits can be read as absence from a known corpus rather than as evidence the corpus lacks that provider or period. */
+            coverage?: components["schemas"]["MachineSearchCoverage"] | null;
         };
         /**
          * ManagedLocalLaunchOutcomeRequest

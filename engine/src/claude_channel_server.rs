@@ -292,7 +292,10 @@ fn coordination_tools() -> Vec<Value> {
              it. Omit query to list the most recently active sessions (project/provider/\
              days_back/limit still apply) — no need to guess search terms. Returns \
              sessions, not event text; follow a hit with tail(session_id, \
-             roles=\"user,assistant\") to read it.",
+             roles=\"user,assistant\") to read it. A zero-result response carries a \
+             `coverage` block naming the indexed session count, providers, and date \
+             range that were actually searched — read it before concluding anything \
+             is absent, and never report absence from a 503.",
             json!({
                 "query":{"type":"string","description":"Text to match in session content. Omit or leave blank to list recent sessions by last activity."},
                 "project":{"type":"string","description":"Optional project filter, e.g. g55"},

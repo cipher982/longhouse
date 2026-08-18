@@ -1161,6 +1161,17 @@ class MachineSearchLaneFailure(BaseModel):
     reason: Optional[str] = None
 
 
+class MachineSearchCoverage(BaseModel):
+    """What the index holds, reported alongside a search that found nothing."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    indexed_sessions: int = Field(ge=0)
+    providers: List[str] = Field(default_factory=list)
+    oldest_session_at: Optional[str] = None
+    newest_session_at: Optional[str] = None
+
+
 class MachineSessionsListResponse(BaseModel):
     """Session list for the machine surface."""
 
@@ -1172,6 +1183,14 @@ class MachineSessionsListResponse(BaseModel):
     )
     lanes: List[Literal["lexical", "dense", "catalog"]] = Field(default_factory=list)
     degraded: List[MachineSearchLaneFailure] = Field(default_factory=list)
+    coverage: Optional[MachineSearchCoverage] = Field(
+        None,
+        description=(
+            "Scope of the index that was searched. Populated when a search returns no "
+            "results, so that zero hits can be read as absence from a known corpus "
+            "rather than as evidence the corpus lacks that provider or period."
+        ),
+    )
 
 
 class SessionsListResponse(BaseModel):

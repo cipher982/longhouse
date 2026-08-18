@@ -720,6 +720,39 @@ class SearchStore:
             "published_sessions": int(row["count"]),
         }
 
+    def search_coverage(self, *, owner_id: str) -> dict[str, object]:
+        """Describe what the index actually holds for one owner.
+
+        An empty search result is ambiguous on its own: it can mean the corpus
+        does not contain the thing, or that the corpus does not contain that
+        *kind* of thing. An agent told only "0 results" has to guess, and the
+        cheap guess -- "this provider must not be indexed" -- produced a
+        confident false claim about a session that had simply never been
+        ingested. Returning the scope alongside the zero makes the difference
+        legible without another round trip.
+        """
+
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS sessions, MIN(started_at) AS oldest, MAX(started_at) AS newest
+            FROM session_index WHERE owner_id = ?
+            """,
+            (owner_id,),
+        ).fetchone()
+        providers = [
+            str(entry["provider"])
+            for entry in self.connection.execute(
+                "SELECT DISTINCT provider FROM session_index WHERE owner_id = ? AND provider IS NOT NULL ORDER BY provider",
+                (owner_id,),
+            ).fetchall()
+        ]
+        return {
+            "indexed_sessions": int(row["sessions"] or 0),
+            "providers": providers,
+            "oldest_session_at": str(row["oldest"]) if row["oldest"] else None,
+            "newest_session_at": str(row["newest"]) if row["newest"] else None,
+        }
+
     def index_object(
         self,
         *,
