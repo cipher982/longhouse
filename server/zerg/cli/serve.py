@@ -298,31 +298,10 @@ def _daemonize() -> None:
 
 
 def _build_demo_db(db_path: Path) -> None:
-    """Build a demo database with sample data.
+    """Build the same storage-v2 corpus used by the marketing harness."""
+    from zerg.services.demo_database import build_demo_database
 
-    Creates demo agent sessions for the timeline view.
-    """
-    from sqlalchemy.orm import sessionmaker
-
-    from zerg.database import Base
-    from zerg.database import make_engine
-    from zerg.services.demo_seed import seed_missing_demo_sessions
-
-    db_url = f"sqlite:///{db_path}"
-    engine = make_engine(db_url).execution_options(schema_translate_map={"zerg": None, "agents": None})
-    Base.metadata.create_all(bind=engine)
-
-    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
-    db = SessionLocal()
-    try:
-        seeded_count, failed_count = seed_missing_demo_sessions(db)
-        if failed_count:
-            raise RuntimeError(f"failed to seed {failed_count} demo sessions")
-        if seeded_count:
-            db.commit()
-    finally:
-        db.close()
-        engine.dispose()
+    build_demo_database(db_path)
 
 
 @app.command()
