@@ -698,6 +698,7 @@ fn launchctl_print_keeps_alive(body: &str) -> bool {
 }
 
 /// Does this service definition bring the process back after `exit(0)`?
+#[cfg_attr(not(test), allow(dead_code))]
 fn definition_restarts_clean_exit(body: &str) -> bool {
     if body.contains("<key>KeepAlive</key>") {
         // launchd restarts unconditionally only for a bare `<true/>`. The

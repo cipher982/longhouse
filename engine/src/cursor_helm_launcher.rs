@@ -20,7 +20,7 @@ use std::thread;
 use std::{
     collections::BTreeMap,
     process::Stdio,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::Context;

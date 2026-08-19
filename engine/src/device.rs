@@ -2668,6 +2668,7 @@ fn collect_native_repair_service_status(
 /// Exposed so the update path can read the *installed* restart policy rather
 /// than assume the one this binary would generate. Duplicating the label
 /// literals at the call site is how those two drift apart.
+#[allow(dead_code)]
 pub(crate) fn installed_service_definition_path(home: &Path) -> Option<PathBuf> {
     service_path(NativeServicePlatform::current(), home)
 }

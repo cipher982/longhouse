@@ -54,7 +54,7 @@ impl RunWindowIndex {
             (*started_at <= at).then_some(run_id.as_str())
         })
     }
-
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.by_session.is_empty()
     }

@@ -130,7 +130,7 @@ impl BlockKind {
             other => Self::Unrecognized(other.to_string()),
         }
     }
-
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &str {
         match self {
             Self::SourceEpochConflict => "source_epoch_conflict",
