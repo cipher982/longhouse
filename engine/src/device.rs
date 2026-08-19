@@ -1308,7 +1308,7 @@ fn native_desktop_health_from_parts(
             fresh: fast.engine_status.fresh,
             age_seconds: fast.engine_status.age_seconds,
             error: fast.engine_status.error,
-            payload: engine_payload,
+            payload: native_desktop_engine_payload(engine_payload.as_ref()),
         },
         transport: fast.transport,
         spool: fast.spool,
@@ -1324,6 +1324,38 @@ fn native_desktop_health_from_parts(
         control_channel: fast.control_channel,
         build: fast.build,
     }
+}
+
+/// Prune raw engine-status evidence down to high-signal facts consumed by Desktop
+/// health and operator diagnostics, dropping high-cardinality machine evidence
+/// blobs (hundreds of continuation contracts, transcript scopes, identities)
+/// that inflate local-health output by thousands of lines.
+fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
+    let object = payload.and_then(Value::as_object)?;
+    let mut pruned = serde_json::Map::new();
+    for key in [
+        "version",
+        "daemon_pid",
+        "last_ship_at",
+        "last_updated",
+        "spool_pending_count",
+        "spool_dead_count",
+        "storage_v2_outbox",
+        "archive_backlog",
+        "parse_error_count_1h",
+        "consecutive_ship_failures",
+        "disk_free_bytes",
+        "is_offline",
+        "local_projection",
+        "recent_dead_letters",
+        "sessions",
+        "build",
+    ] {
+        if let Some(value) = object.get(key) {
+            pruned.insert(key.to_string(), value.clone());
+        }
+    }
+    Some(Value::Object(pruned))
 }
 
 fn native_desktop_action_text(action_id: &str) -> String {
