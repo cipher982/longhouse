@@ -33,6 +33,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from typing import Mapping
 
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -3500,6 +3501,18 @@ def _initialize_cursor_workspace(path: Path) -> None:
         raise RuntimeError(f"Cursor qualification workspace could not initialize Git: {detail}")
 
 
+def _isolated_qualification_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    environment = dict(os.environ if source is None else source)
+    for key in tuple(environment):
+        if key.startswith("LONGHOUSE_MANAGED_") or key in {
+            "LONGHOUSE_SESSION_ID",
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR",
+            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR",
+        }:
+            environment.pop(key, None)
+    return environment
+
+
 def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]:
     spec = SPECS[provider]
     registration = registration_for(provider)
@@ -3514,7 +3527,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
     home: Path | None = None
-    environment = os.environ.copy()
+    environment = _isolated_qualification_environment()
+    # Qualification providers are independent sessions, even when the harness
+    # itself is launched from a managed Helm session. Never let the child
+    # inherit the parent's control identity or provider-specific hook paths.
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
     environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
     environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"

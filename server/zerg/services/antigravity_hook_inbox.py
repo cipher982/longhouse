@@ -303,7 +303,13 @@ workspace_paths = data.get("workspacePaths") or []
 cwd = str(workspace_paths[0] or "") if isinstance(workspace_paths, list) and workspace_paths else ""
 transcript = str(data.get("transcriptPath") or "")
 step_index = str(data.get("stepIdx") or data.get("step_index") or "")
-managed_session_id = os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or ""
+managed_provider = (os.environ.get("LONGHOUSE_MANAGED_PROVIDER") or "").strip().lower()
+# Provider subprocesses may inherit a parent Helm session environment. A
+# session id is authoritative only when the provider identity agrees; binding
+# an Antigravity transcript to an inherited Claude id corrupts source identity.
+managed_session_id = (
+    os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or ""
+) if managed_provider == "antigravity" else ""
 session_id = managed_session_id or conversation_id
 longhouse_home = os.environ.get("LONGHOUSE_HOOK_HOME", "")
 state_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_STATE_DIR") or default_antigravity_state_dir(longhouse_home)

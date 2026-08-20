@@ -457,6 +457,7 @@ def test_antigravity_hook_fails_closed_when_transcript_binding_fails(tmp_path: P
     transcript.write_text("{}", encoding="utf-8")
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = "11111111-1111-4111-8111-111111111111"
+    env["LONGHOUSE_MANAGED_PROVIDER"] = "antigravity"
     env["LONGHOUSE_HOME"] = str(tmp_path)
     env["LONGHOUSE_ENGINE"] = "/usr/bin/false"
 
@@ -478,3 +479,44 @@ def test_antigravity_hook_fails_closed_when_transcript_binding_fails(tmp_path: P
 
     assert completed.returncode != 0
     assert "python hook failed" in completed.stderr
+
+
+def test_antigravity_hook_ignores_managed_identity_from_another_provider(tmp_path: Path) -> None:
+    script = tmp_path / "hook.sh"
+    script.write_text(
+        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)).replace(
+            "__ENGINE_PATH__", "/usr/bin/false"
+        ),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    transcript = tmp_path / "conversation.json"
+    transcript.write_text("{}", encoding="utf-8")
+    conversation_id = "22222222-2222-4222-8222-222222222222"
+    env = os.environ.copy()
+    env["LONGHOUSE_MANAGED_SESSION_ID"] = "11111111-1111-4111-8111-111111111111"
+    env["LONGHOUSE_MANAGED_PROVIDER"] = "claude"
+    env["LONGHOUSE_HOME"] = str(tmp_path)
+    env["LONGHOUSE_ENGINE"] = "/usr/bin/false"
+
+    completed = subprocess.run(
+        [str(script), "Stop"],
+        input=json.dumps(
+            {
+                "conversationId": conversation_id,
+                "transcriptPath": str(transcript),
+                "workspacePaths": [str(tmp_path)],
+                "fullyIdle": True,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    state = json.loads(
+        (tmp_path / "managed-local" / "antigravity" / "sessions" / f"{conversation_id}.json").read_text()
+    )
+    assert state["session_id"] == conversation_id

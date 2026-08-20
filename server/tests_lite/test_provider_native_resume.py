@@ -40,6 +40,7 @@ from zerg.qa.provider_native_resume import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _finalize_result_payload
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _isolated_provider_home
+from zerg.qa.provider_native_resume import _isolated_qualification_environment
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _post_resume_response_correlated
@@ -74,6 +75,20 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         agents_token="device-token",
         provider_bin=tmp_path / "provider",
     )
+
+
+def test_qualification_environment_drops_parent_managed_identity() -> None:
+    environment = _isolated_qualification_environment(
+        {
+            "PATH": "/bin",
+            "LONGHOUSE_MANAGED_SESSION_ID": "parent-session",
+            "LONGHOUSE_MANAGED_PROVIDER": "claude",
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": "/parent/state",
+            "LONGHOUSE_SESSION_ID": "legacy-parent",
+        }
+    )
+
+    assert environment == {"PATH": "/bin"}
 
 
 def _write_cursor_binding(longhouse_home: Path, *, status: str = "observed") -> None:
