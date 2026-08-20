@@ -6,14 +6,107 @@
     "status": "available"
   },
   "commands": [
-    {"id":"auth","status":"available","native_target_command":"longhouse auth --url <runtime-url>","providers":"all","provider_binary_ownership":"not_applicable","token_policy":"env_or_state_file","cwd_policy":"not_applicable","notes":"Browser pairing writes protected device state."},
-    {"id":"local-health","status":"available","native_target_command":"longhouse local-health --fast --json","providers":"all","provider_binary_ownership":"not_applicable","token_policy":"no_token","cwd_policy":"not_applicable","notes":"The paired engine provides the Desktop health snapshot."},
-    {"id":"machine-repair","status":"available","native_target_command":"longhouse machine repair --repair-service","providers":"all","provider_binary_ownership":"not_applicable","token_policy":"env_or_state_file","cwd_policy":"not_applicable","notes":"Writes and starts the paired Machine Agent service."},
-    {"id":"claude-managed","status":"available","native_target_command":"longhouse claude","providers":["claude"],"provider_binary_ownership":"user_owned","token_policy":"env_or_state_file","cwd_policy":"strict_absolute_or_existing","notes":"Runs the user-installed Claude CLI through the native control path."},
-    {"id":"codex-managed","status":"available","native_target_command":"longhouse codex","providers":["codex"],"provider_binary_ownership":"user_owned","token_policy":"env_or_state_file","cwd_policy":"strict_absolute_or_existing","notes":"Runs the user-installed Codex CLI through the native control path."},
-    {"id":"opencode-managed","status":"available","native_target_command":"longhouse opencode","providers":["opencode"],"provider_binary_ownership":"user_owned","token_policy":"env_or_state_file","cwd_policy":"strict_absolute_or_existing","notes":"Runs the user-installed OpenCode CLI through the native control path."},
-    {"id":"pi-managed","status":"available","native_target_command":"longhouse pi","providers":["pi"],"provider_binary_ownership":"user_owned","token_policy":"env_or_state_file","cwd_policy":"strict_absolute_or_existing","notes":"Runs the user-installed Pi CLI through the native control path."},
-    {"id":"cursor-managed","status":"available","native_target_command":"longhouse cursor","providers":["cursor"],"provider_binary_ownership":"user_owned","token_policy":"env_or_state_file","cwd_policy":"strict_absolute_or_existing","notes":"Runs the user-installed cursor-agent TUI through the native Helm PTY; mid-turn steering is unsupported."},
-    {"id":"antigravity-managed","status":"excluded","native_target_command":"longhouse antigravity","providers":["antigravity"],"provider_binary_ownership":"excluded_until_provider_surface","token_policy":"not_applicable","cwd_policy":"not_applicable","notes":"Not offered until a complete native provider surface exists."}
+    {
+      "id": "auth",
+      "status": "available",
+      "native_target_command": "longhouse auth --url <runtime-url>",
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "not_applicable",
+      "notes": "Browser pairing writes protected device state."
+    },
+    {
+      "id": "local-health",
+      "status": "available",
+      "native_target_command": "longhouse local-health --fast --json",
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "no_token",
+      "cwd_policy": "not_applicable",
+      "notes": "The paired engine provides the Desktop health snapshot."
+    },
+    {
+      "id": "machine-repair",
+      "status": "available",
+      "native_target_command": "longhouse machine repair --repair-service",
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "not_applicable",
+      "notes": "Writes and starts the paired Machine Agent service."
+    },
+    {
+      "id": "claude-managed",
+      "status": "available",
+      "native_target_command": "longhouse claude",
+      "providers": [
+        "claude"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed Claude CLI through the native control path."
+    },
+    {
+      "id": "codex-managed",
+      "status": "available",
+      "native_target_command": "longhouse codex",
+      "providers": [
+        "codex"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed Codex CLI through the native control path."
+    },
+    {
+      "id": "opencode-managed",
+      "status": "available",
+      "native_target_command": "longhouse opencode",
+      "providers": [
+        "opencode"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed OpenCode CLI through the native control path."
+    },
+    {
+      "id": "pi-managed",
+      "status": "available",
+      "native_target_command": "longhouse pi",
+      "providers": [
+        "pi"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed Pi CLI through the native control path."
+    },
+    {
+      "id": "cursor-managed",
+      "status": "available",
+      "native_target_command": "longhouse cursor",
+      "providers": [
+        "cursor"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed cursor-agent TUI through the native Helm PTY; mid-turn steering is unsupported."
+    },
+    {
+      "id": "antigravity-managed",
+      "status": "excluded",
+      "native_target_command": "longhouse antigravity",
+      "providers": [
+        "antigravity"
+      ],
+      "provider_binary_ownership": "excluded_until_native_entrypoint",
+      "token_policy": "not_applicable",
+      "cwd_policy": "not_applicable",
+      "notes": "Control path is proven -- hook-inbox send is routed and gated on observed hook readiness -- but no `longhouse antigravity` launcher exists yet, so the entrypoint stays excluded rather than advertising a command that does not run."
+    }
   ]
 }

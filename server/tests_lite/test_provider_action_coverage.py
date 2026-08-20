@@ -74,14 +74,15 @@ def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell
 def test_antigravity_send_prompt_follows_executable_contract_not_old_orchestration_label():
     """Still the same principle -- coverage follows the contract, not a label.
 
-    The contract changed: antigravity's send_input is policy_disabled as of
-    2026-07-31 (Longhouse routes no control to a Shadow-only provider), so the
-    derived coverage must now report unsupported rather than supported.
+    The contract has now moved twice under this test, which is the point: it
+    read supported, then unsupported when send was routed away on 2026-07-31,
+    and supported again now that the hook-inbox path is proven and routed. The
+    assertion tracks the executable contract each time rather than a label.
     """
 
     coverage = derive_provider_action_coverage("antigravity")
 
-    assert coverage["send_prompt"].state == ActionCoverageState.UNSUPPORTED
+    assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
 
 
 def test_opencode_subagent_support_is_derived_from_required_harness_assertions():

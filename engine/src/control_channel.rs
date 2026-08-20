@@ -325,7 +325,7 @@ fn managed_provider_contract_items() -> &'static Vec<Value> {
 }
 
 pub(crate) fn granted_control_operations(provider: &str, attached: bool) -> Vec<String> {
-    if !attached || provider == "antigravity" {
+    if !attached {
         return Vec::new();
     }
     let Some(contract) = managed_provider_contract_items()
@@ -1392,18 +1392,18 @@ async fn execute_command(
     }
 }
 
+/// Refuse commands for providers Longhouse observes but does not control.
+///
+/// Antigravity was refused here wholesale while it was Shadow-only. It is no
+/// longer: its hook-inbox send path is proven and routed. The per-operation
+/// contract in `granted_control_operations` is now the only gate, so an
+/// unsupported Antigravity operation is refused for being unsupported rather
+/// than for being Antigravity.
 fn reject_excluded_provider(payload: &Value) -> std::result::Result<(), CommandError> {
     let Some(provider) = payload.get("provider").and_then(Value::as_str) else {
         return Ok(());
     };
-    if provider == "antigravity" {
-        return Err(CommandError {
-            code: "provider_shadow_only".to_string(),
-            message: format!(
-                "{provider} is Shadow-only in this release; Longhouse can archive it but cannot launch or control it"
-            ),
-        });
-    }
+    let _ = provider;
     Ok(())
 }
 
@@ -2598,6 +2598,7 @@ mod tests {
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
+        ("antigravity", "send", COMMAND_SEND_TEXT),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
         ("cursor", "terminate", COMMAND_TERMINATE),
@@ -3053,9 +3054,6 @@ mod tests {
             let (provider, operation) = support
                 .split_once('.')
                 .unwrap_or_else(|| panic!("support {support} must be provider.operation"));
-            if provider == "antigravity" {
-                continue;
-            }
             assert!(
                 support_dispatch_command(provider, operation).is_some(),
                 "manifest advertises {support}, but engine dispatch has no provider operation path"
@@ -3069,7 +3067,10 @@ mod tests {
             granted_control_operations("cursor", true),
             ["interrupt", "send_input", "terminate"]
         );
-        assert!(granted_control_operations("antigravity", true).is_empty());
+        // Antigravity grants send and nothing else: the hook inbox delivers a
+        // user turn, and has no interrupt or active-turn steer to deliver.
+        assert_eq!(granted_control_operations("antigravity", true), ["send_input"]);
+        assert!(granted_control_operations("antigravity", false).is_empty());
         assert!(granted_control_operations("cursor", false).is_empty());
         assert!(granted_control_operations("unknown", true).is_empty());
     }
@@ -3243,11 +3244,11 @@ mod tests {
         assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"opencode.turn_start".to_string()));
         // antigravity.send was advertised whenever `agy` was on PATH and then
-        // refused by reject_excluded_provider before dispatch, so the machines
-        // API listed a control that always failed. The manifest no longer
-        // declares it (operation_evidence.send_input is policy_disabled,
-        // machine_control_supports is empty), so it must not be advertised.
-        assert!(!supports.contains(&"antigravity.send".to_string()));
+        // refused before dispatch, so the machines API listed a control that
+        // always failed. It is advertised again now that it is actually routed,
+        // and the per-session gate that makes it honest is hook readiness on
+        // the server, not the presence of the binary here.
+        assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
         assert!(!supports.contains(&"antigravity.live_proof".to_string()));
@@ -3465,7 +3466,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_command_frame_refuses_antigravity_send_as_shadow_only() {
+    async fn handle_command_frame_routes_antigravity_send_through_the_hook_inbox() {
         let _guard = ENV_LOCK.lock().unwrap();
         let unique = format!(
             "lh-antigravity-send-{}-{}",
@@ -3511,9 +3512,11 @@ mod tests {
             std::env::remove_var("LONGHOUSE_ARGS_OUT");
         }
 
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "provider_shadow_only");
-        assert!(!args_path.exists());
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["result"]["transport"], "antigravity_hook_inbox");
+        let args = std::fs::read_to_string(&args_path).unwrap();
+        assert!(args.contains("antigravity-channel"), "{args}");
+        assert!(args.contains("send"), "{args}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3945,7 +3948,9 @@ exit 1
         assert_eq!(opencode["ok"], false);
         assert_eq!(opencode["error"]["code"], "unsupported_command");
         assert_eq!(antigravity["ok"], false);
-        assert_eq!(antigravity["error"]["code"], "provider_shadow_only");
+        // Refused for lacking an active-turn steer path, not for being
+        // Antigravity. The hook inbox delivers a turn; it cannot redirect one.
+        assert_eq!(antigravity["error"]["code"], "unsupported_command");
     }
 
     #[test]
@@ -4489,11 +4494,11 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
     }
 
     #[test]
-    fn only_shadow_provider_is_rejected_before_dispatch() {
-        let error = reject_excluded_provider(&json!({"provider": "antigravity"})).unwrap_err();
-        assert_eq!(error.code, "provider_shadow_only");
-        assert!(error.message.contains("Shadow-only"));
-
+    fn no_provider_is_rejected_before_dispatch() {
+        // Antigravity was refused here wholesale while it was Shadow-only. Its
+        // send path is routed now, so the per-operation contract is the only
+        // gate and nothing is refused for its provider name alone.
+        assert!(reject_excluded_provider(&json!({"provider": "antigravity"})).is_ok());
         assert!(reject_excluded_provider(&json!({"provider": "cursor"})).is_ok());
         assert!(reject_excluded_provider(&json!({"provider": "codex"})).is_ok());
     }

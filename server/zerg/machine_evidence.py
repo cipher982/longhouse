@@ -40,6 +40,9 @@ _RUN_EXIT_AUTHORITY = {
     "claude": ("provider", "claude_channel_scan"),
     "opencode": ("provider", "opencode_server_scan"),
     "cursor": ("launcher", "cursor_helm_scan"),
+    # Antigravity has no bridge process; the hook state file its scanner
+    # reads is the execution-owner record.
+    "antigravity": ("provider", "antigravity_hook_scan"),
 }
 
 

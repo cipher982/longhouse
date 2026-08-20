@@ -423,14 +423,16 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     }
 
 
-def test_antigravity_contract_is_shadow_archive_only():
-    """Antigravity is maintenance tier and Longhouse routes no control to it.
+def test_antigravity_contract_routes_hook_delivered_send_only():
+    """Antigravity routes send through the hook inbox, and nothing else.
 
     Until 2026-07-31 this declared send_input: true and advertised
     antigravity.send, which the engine published whenever `agy` was on PATH and
-    then refused at reject_excluded_provider before dispatch -- the machines API
-    listed a control that always failed. Five independent server gates already
-    zeroed the capability; the schema now says so too.
+    then refused before dispatch -- the machines API listed a control that
+    always failed. The fix then was to stop advertising it. The fix now is that
+    it is genuinely routed: the hook-inbox injection is proven live, and what
+    keeps the advertisement honest is a per-session gate on observed hook
+    readiness, because hooks do not fire under GEMINI_API_KEY auth.
     """
 
     provider = "antigravity"
@@ -438,7 +440,7 @@ def test_antigravity_contract_is_shadow_archive_only():
 
     assert contract is not None
     assert contract.launch_local is True
-    assert contract.send_input is False
+    assert contract.send_input is True
     assert contract.interrupt is False
     assert contract.steer_active_turn is False
     assert contract.answer_pause is False
@@ -446,13 +448,13 @@ def test_antigravity_contract_is_shadow_archive_only():
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
     send_evidence = contract.operation_evidence_for("send_input")
-    assert send_evidence["disposition"] == "policy_disabled"
-    assert send_evidence["level"] == "none"
-    assert send_evidence["routed_to"] == "shadow_archive_only"
+    assert send_evidence["disposition"] == "implemented"
+    assert send_evidence["level"] == "live_token"
+    assert "routed_to" not in send_evidence
     assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
-    assert contract.machine_control_supports == ()
+    assert contract.machine_control_supports == ("antigravity.send",)
     assert contract.connection_capabilities == {
-        "can_send_input": 0,
+        "can_send_input": 1,
         "can_interrupt": 0,
         "can_terminate": 0,
         "can_tail_output": 1,
@@ -517,7 +519,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.turn.start", "opencode.turn_start"),
         ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
         # Shadow-only: no machine-control capability resolves for antigravity.
-        ("antigravity", "session.send_text", None),
+        ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
         ("antigravity", "session.answer_pause", None),

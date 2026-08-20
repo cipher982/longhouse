@@ -1070,8 +1070,11 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
     # Antigravity send became policy_disabled on 2026-07-31 (Shadow-only), so
     # the action matrix reports it as settled rather than proven.
-    assert by_provider["antigravity"]["send_message"]["status"] == "not_applicable"
-    assert by_provider["antigravity"]["send_message"]["disposition"] == "policy_disabled"
+    # Send is routed and proven now, so it reads as a pass rather than a
+    # policy-routed-away row. Whether it is offered on a given session is a
+    # separate, runtime question answered by observed hook readiness.
+    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
+    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
 
 def test_old_new_release_diff_blocks_without_explicit_artifacts(tmp_path: Path) -> None:
@@ -1315,8 +1318,11 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
     assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
-    assert by_provider["antigravity"]["send_message"]["status"] == "not_applicable"
-    assert by_provider["antigravity"]["send_message"]["disposition"] == "policy_disabled"
+    # Send is routed and proven now, so it reads as a pass rather than a
+    # policy-routed-away row. Whether it is offered on a given session is a
+    # separate, runtime question answered by observed hook readiness.
+    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
+    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
 
 @pytest.mark.timeout(60)

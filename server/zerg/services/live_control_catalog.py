@@ -31,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
 
 logger = logging.getLogger(__name__)
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
-_CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor"})
+_CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity"})
 
 
 def canonical_command_authorization_providers() -> tuple[str, ...]:

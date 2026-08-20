@@ -1585,7 +1585,7 @@
       "launch_local": true,
       "run_once": false,
       "reattach": false,
-      "send_input": false,
+      "send_input": true,
       "interrupt": false,
       "steer_active_turn": false,
       "answer_pause": false,
@@ -1730,13 +1730,11 @@
           "owner_action": "antigravity --conversation reattach path and canary"
         },
         "send_input": {
-          "level": "none",
-          "source": "routed away; see reason",
-          "disposition": "policy_disabled",
-          "reason": "Antigravity is maintenance tier. Five independent server gates zero its send capability (live_control_catalog._CANONICAL_AUTH_PROVIDERS, heartbeat ControlEvidenceIn, machine_evidence._RUN_EXIT_AUTHORITY, managed_control_state, live_catalog_launch) and control_channel.rs reject_excluded_provider refuses every antigravity command with provider_shadow_only before dispatch. The hook-inbox injection works; Longhouse does not route to it.",
-          "routed_to": "shadow_archive_only",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "antigravity real agy hook-inbox injection canary"
+          "level": "live_token",
+          "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
+          "disposition": "implemented",
+          "reason": "Proven live against 1.1.16 by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: the queued message was claimed at PreInvocation, the inbox drained, and the injected text replaced the model-visible turn. Availability is gated per session on observed hook readiness rather than on the release, because whether hooks fire depends on how the user authenticated agy -- they load and never fire under GEMINI_API_KEY auth, so a session can be healthy and still uncontrollable.",
+          "observed_provider_version": "1.1.16"
         },
         "interrupt": {
           "level": "none",
@@ -1796,7 +1794,9 @@
           "owner_action": "antigravity turn-scoped Console adapter"
         }
       },
-      "machine_control_supports": [],
+      "machine_control_supports": [
+        "antigravity.send"
+      ],
       "adapter_digest": "331c2bd00409db548d13cbc47c7da8d3873fba1f223bd515e157669f769ef000"
     },
     {

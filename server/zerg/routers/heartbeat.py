@@ -1020,6 +1020,11 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
+                        machine_evidence=(
+                            payload.machine_evidence.model_dump(mode="json", exclude_none=True)
+                            if payload.machine_evidence is not None
+                            else None
+                        ),
                     )
                     seen_ids = _managed_lease_session_ids(_managed_leases)
                     if not seen_ids or seen_ids.issubset(managed_snapshot_refreshed_ids):
@@ -1040,6 +1045,11 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
+                        machine_evidence=(
+                            payload.machine_evidence.model_dump(mode="json", exclude_none=True)
+                            if payload.machine_evidence is not None
+                            else None
+                        ),
                     ):
                         publish_sessions.setdefault(
                             session_id,

@@ -253,15 +253,15 @@ def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
     assert len(entries) == 1
 
 
-def test_directory_does_not_report_antigravity_control(tmp_path):
-    """A machine advertising antigravity.send must not surface it as a control.
+def test_directory_reports_antigravity_send_control(tmp_path):
+    """A machine advertising antigravity.send surfaces it as a control.
 
-    This asserted the opposite until 2026-07-31, which is how the machines API
-    came to list a control that always failed: the engine advertised
-    antigravity.send whenever `agy` was on PATH, and reject_excluded_provider
-    refused every antigravity command before dispatch. The contract now records
-    send_input as policy_disabled, so the projection drops it even when an older
-    machine still advertises it.
+    This asserted the opposite between 2026-07-31 and 2026-08-20, for a good
+    reason: the engine advertised antigravity.send whenever `agy` was on PATH
+    and then refused every antigravity command before dispatch, so the machines
+    API listed a control that always failed. The engine routes it now. What
+    keeps the listing honest is no longer the absence of the advertisement but
+    the per-session hook-readiness gate behind it.
     """
 
     SessionLocal = _make_db(tmp_path)
@@ -272,7 +272,7 @@ def test_directory_does_not_report_antigravity_control(tmp_path):
     entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
-    assert entries[0].control_operations_by_provider == {}
+    assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
     assert entries[0].launch.blocked_by == "no_launch_support"
 
 

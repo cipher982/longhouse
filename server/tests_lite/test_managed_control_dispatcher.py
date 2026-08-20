@@ -270,15 +270,13 @@ def test_select_managed_control_transport_supports_opencode_interrupt_engine_cha
     asyncio.run(_run())
 
 
-def test_select_managed_control_transport_refuses_antigravity_send():
-    """Refuse locally rather than dispatch into a guaranteed engine refusal.
+def test_select_managed_control_transport_routes_antigravity_send_to_the_engine():
+    """Antigravity send resolves to the engine channel.
 
-    Even with a machine still advertising `antigravity.send`, the contract says
-    send_input is policy_disabled, so no capability resolves and the dispatcher
-    declines. The engine would refuse it anyway: handle_command_frame calls
-    reject_excluded_provider before dispatch and returns provider_shadow_only
-    without invoking anything (see
-    control_channel.rs handle_command_frame_refuses_antigravity_send_as_shadow_only).
+    This asserted a local refusal while send_input was policy_disabled and the
+    engine refused every antigravity command before dispatch. Both are gone:
+    the hook-inbox path is routed and proven, so the capability resolves and
+    the dispatcher hands the command to the engine like any other provider.
     """
 
     async def _run():
@@ -295,7 +293,7 @@ def test_select_managed_control_transport_refuses_antigravity_send():
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 )
-                is None
+                == "engine_channel"
             )
         finally:
             await _clear_machine_registry()
@@ -765,14 +763,12 @@ def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine():
-    """Antigravity send never reaches the engine, and must not pretend to.
+def test_dispatch_managed_control_command_sends_antigravity_to_the_engine():
+    """Antigravity send reaches the engine as a real frame.
 
-    This previously asserted a successful dispatch against a fake engine that
-    returns ok:true. The real engine returns provider_shadow_only from
-    reject_excluded_provider without invoking anything, so the fake was the only
-    reason the path looked alive. Opencode send/interrupt/terminate above cover
-    the frame-construction contract this test used to be the only proof of.
+    This asserted a refusal for as long as the engine rejected every antigravity
+    command before dispatch. The engine routes it through the hook inbox now, so
+    the dispatcher must actually emit the frame.
     """
 
     async def _run():
@@ -784,6 +780,21 @@ def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine(
                 managed_transport="antigravity_hook_inbox",
                 source_runner_id=None,
             )
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {
+                            "exit_code": 0,
+                            "stdout": "",
+                            "stderr": "",
+                            "provider": "antigravity",
+                            "transport": "antigravity_hook_inbox",
+                        },
+                    },
+                )
+            )
             result = await dispatch_managed_control_command(
                 db=object(),
                 owner_id=42,
@@ -793,9 +804,12 @@ def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine(
                 payload={"text": "continue"},
                 request_id="req-agy",
             )
+            await completer
 
-            assert result.ok is False
-            assert not websocket.sent, "no frame may be sent for a routed-away provider"
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert websocket.sent, "the send must reach the engine as a real frame"
+            assert result.data["transport"] == "antigravity_hook_inbox"
         finally:
             await _clear_machine_registry()
 
