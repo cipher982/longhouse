@@ -35,6 +35,9 @@ use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
+use crate::antigravity_print::{
+    start_antigravity_print_turn, AntigravityPrintRunConfig, ANTIGRAVITY_PRINT_ADAPTER,
+};
 use crate::pi_print::{start_pi_print_turn, PiPrintRunConfig, PI_PRINT_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
@@ -945,6 +948,14 @@ async fn execute_command(
                         .map_err(CommandError::command_failed)?;
                     PI_PRINT_ADAPTER
                 }
+                "antigravity" => {
+                    crate::antigravity_print::interrupt_antigravity_print_turn(
+                        &run_id,
+                        &session_id,
+                    )
+                    .map_err(CommandError::command_failed)?;
+                    ANTIGRAVITY_PRINT_ADAPTER
+                }
                 _ => {
                     return Err(CommandError {
                         code: "provider_unsupported".to_string(),
@@ -1709,6 +1720,48 @@ async fn execute_turn_start(
                 "stdout_path": summary.stdout_path,
                 "stderr_path": summary.stderr_path,
                 "session_dir": summary.session_dir,
+                "argv": summary.argv,
+            })
+        })
+    } else if provider == "antigravity" {
+        // The Console path does not go through hooks, which is the point: agy
+        // loads its hooks and never fires them under GEMINI_API_KEY auth, so a
+        // hook-delivered turn is not universally available and a one-shot
+        // print turn is.
+        start_antigravity_print_turn(AntigravityPrintRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            run_id: run_id.clone(),
+            client_request_id: client_request_id.clone(),
+            cwd,
+            antigravity_bin: std::env::var("LONGHOUSE_ANTIGRAVITY_BIN").unwrap_or_else(|_| {
+                crate::antigravity_print::DEFAULT_ANTIGRAVITY_BIN.to_string()
+            }),
+            prompt: message,
+            model: payload_optional_string(payload, "model"),
+            conversation_id: payload_optional_string(payload, "provider_thread_id"),
+            print_timeout_secs: payload
+                .get("print_timeout_secs")
+                .and_then(Value::as_u64),
+            permission_mode,
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+        })
+        .await
+        .map(|summary| {
+            json!({
+                "session_id": summary.session_id,
+                "thread_id": thread_id,
+                "run_id": summary.run_id,
+                "provider": "antigravity",
+                "transport": ANTIGRAVITY_PRINT_ADAPTER,
+                "provider_thread_id": summary.provider_thread_id,
+                "launch_id": summary.launch_id,
+                "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
+                "stdout_path": summary.stdout_path,
+                "stderr_path": summary.stderr_path,
                 "argv": summary.argv,
             })
         })
@@ -2599,6 +2652,7 @@ mod tests {
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
         ("antigravity", "send", COMMAND_SEND_TEXT),
+        ("antigravity", "turn_start", COMMAND_TURN_START),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
         ("cursor", "terminate", COMMAND_TERMINATE),
@@ -3067,8 +3121,10 @@ mod tests {
             granted_control_operations("cursor", true),
             ["interrupt", "send_input", "terminate"]
         );
-        // Antigravity grants send and nothing else: the hook inbox delivers a
-        // user turn, and has no interrupt or active-turn steer to deliver.
+        // Session-level grants only -- turn_start is a Console operation and
+        // is absent here for the same reason cursor.turn_start is. Antigravity
+        // grants send and nothing else: the hook inbox delivers a user turn and
+        // has no interrupt or active-turn steer to deliver.
         assert_eq!(granted_control_operations("antigravity", true), ["send_input"]);
         assert!(granted_control_operations("antigravity", false).is_empty());
         assert!(granted_control_operations("cursor", false).is_empty());
