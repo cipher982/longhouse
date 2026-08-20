@@ -2040,7 +2040,7 @@ def test_codex_resume_reattach_falls_back_to_attach_command_when_credentials_mis
     assert Path(result["data"]["raw_reattach_command_path"]).is_file()
 
 
-def test_resume_reattach_uses_claude_command_shape_and_types_the_upstream_absence(tmp_path: Path) -> None:
+def test_resume_reattach_uses_claude_command_shape_and_types_antigravity_as_work(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude", "antigravity"),
@@ -2050,9 +2050,12 @@ def test_resume_reattach_uses_claude_command_shape_and_types_the_upstream_absenc
         )
     )
 
-    # Nothing here is unfinished work: Claude passes and Antigravity's only
-    # unsupported operation is an upstream absence.
-    assert payload["verdict"] == "green"
+    # Claude passes; Antigravity reattach is unfinished Longhouse work, so the
+    # run is Yellow. It read Green until 2026-08-20, when reattach was typed as
+    # an upstream absence against a 1.1.5 observation. `agy --conversation <id>`
+    # resumes an existing conversation with intact history, so the surface is
+    # there and the absence was the stale part.
+    assert payload["verdict"] == "yellow"
     assert {result["provider"] for result in payload["results"]} == {"claude", "antigravity"}
     by_provider = {result["provider"]: result for result in payload["results"]}
     claude = by_provider["claude"]
@@ -2070,19 +2073,19 @@ def test_resume_reattach_uses_claude_command_shape_and_types_the_upstream_absenc
         "uses_resume_flag": True,
     }
     assert Path(claude["data"]["raw_resume_command_path"]).is_file()
-    # Antigravity exposes no stable reattach surface upstream, so this is a
-    # settled fact rather than Longhouse work and must not hold a verdict Yellow.
+    # Antigravity's reattach surface exists upstream and Longhouse has not built
+    # the path, so this is unfinished work and must hold the verdict at Yellow.
     antigravity = by_provider["antigravity"]
-    assert antigravity["status"] == "not_applicable"
-    assert antigravity["data"]["disposition"] == "upstream_absent"
-    assert antigravity["data"]["observed_provider_version"]
+    assert antigravity["status"] == "unsupported_gap"
+    assert antigravity["failure_code"] == "resume_reattach_unsupported"
+    assert antigravity["data"]["disposition"] == "not_implemented"
 
 
-def test_antigravity_separates_unfinished_interrupt_work_from_absent_reattach(tmp_path: Path) -> None:
+def test_antigravity_separates_unfinished_work_from_absent_pause_answer(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("antigravity",),
-            scenarios=("interrupt_cancel", "resume_reattach"),
+            scenarios=("interrupt_cancel", "resume_reattach", "answer_pause_request"),
             evidence_root=tmp_path / "evidence",
             provider_bins=_fake_bins(tmp_path),
         )
@@ -2090,16 +2093,28 @@ def test_antigravity_separates_unfinished_interrupt_work_from_absent_reattach(tm
 
     assert payload["verdict"] == "yellow"
     by_scenario = {result["scenario"]: result for result in payload["results"]}
+
+    # Interrupt and reattach are both unfinished Longhouse work. Reattach was
+    # recorded as an upstream absence until 2026-08-20 on the strength of a
+    # 1.1.5 observation; `agy --conversation <id>` resumes an existing
+    # conversation with intact history, so the absence was the stale part.
     interrupt = by_scenario["interrupt_cancel"]
     assert interrupt["status"] == "unsupported_gap"
     assert interrupt["failure_code"] == "interrupt_cancel_unsupported"
     assert interrupt["data"]["operation_evidence"]["interrupt"]["failure_code"] == "interrupt_cancel_unsupported"
+    assert interrupt["data"]["disposition"] == "not_implemented"
 
-    # Interrupt stays a gap because Longhouse could implement it once upstream
-    # semantics are proven; reattach is an upstream absence and is not work.
     resume = by_scenario["resume_reattach"]
-    assert resume["status"] == "not_applicable"
-    assert resume["data"]["disposition"] == "upstream_absent"
+    assert resume["status"] == "unsupported_gap"
+    assert resume["failure_code"] == "resume_reattach_unsupported"
+    assert resume["data"]["disposition"] == "not_implemented"
+
+    # Answering a pause is the genuine upstream absence: headless Antigravity
+    # settles the choice itself rather than pausing, so there is nothing to
+    # answer and no amount of Longhouse work creates one.
+    pause = by_scenario["answer_pause_request"]
+    assert pause["status"] == "not_applicable"
+    assert pause["data"]["disposition"] == "upstream_absent"
 
 
 def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path: Path) -> None:
@@ -2723,7 +2738,7 @@ def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp
         assert (evidence_root / "raw" / "answer-pause-dispatch.json").is_file()
 
 
-def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> None:
+def test_answer_pause_request_types_antigravity_as_an_upstream_absence(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("antigravity",),
@@ -2733,11 +2748,14 @@ def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> 
         )
     )
 
-    assert payload["verdict"] == "yellow"
+    # Headless Antigravity settles a permission or question itself rather than
+    # pausing, so there is no pause to answer and no Longhouse work that would
+    # create one. That is a settled fact, not a gap, and must not hold Yellow.
+    assert payload["verdict"] == "green"
     for result in payload["results"]:
-        assert result["status"] == "unsupported_gap"
-        assert result["failure_code"] == "answer_pause_request_unsupported"
-        assert result["data"]["operation_evidence"]["answer_pause_request"]["status"] == "unsupported_gap"
+        assert result["status"] == "not_applicable"
+        assert result["data"]["disposition"] == "upstream_absent"
+        assert result["data"]["observed_provider_version"]
 
 
 def test_observation_surface_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:

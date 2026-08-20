@@ -2200,18 +2200,81 @@ def _claimed_antigravity_loop_messages(inbox_dir: Path) -> list[dict[str, Any]]:
     return claims
 
 
+def _install_unwatched_antigravity_hook(args: argparse.Namespace, home: Path, config_dir: Path) -> Path:
+    gemini_dir = home / ".gemini"
+    code = textwrap.dedent(
+        f"""
+        from pathlib import Path
+        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        path = _ensure_antigravity_runtime_plugin(
+            config_dir=Path({str(config_dir)!r}),
+            antigravity_cli_root=Path({str(gemini_dir / "antigravity-cli")!r}),
+            engine_path="/usr/bin/true",
+            global_hooks_path=Path({str(gemini_dir / "config" / "hooks.json")!r}),
+        )
+        print(path)
+        """
+    )
+    result = subprocess.run(
+        [*_server_python_cmd(args), "-c", code],
+        cwd=str(_server_cwd(args)),
+        env=_runtime_env(args),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or result.stdout)
+    return Path(result.stdout.strip()) / "longhouse-antigravity-hook.sh"
+
+
+def _antigravity_unwatched_worker(args: argparse.Namespace, root: Path) -> tuple[dict[str, str], Path] | None:
+    """Build an unwatched provider HOME for a real agy run, or None.
+
+    A live agy turn writes a conversation into the provider's own store, where
+    the Machine Agent's shadow scanner discovers and ships it. Run against the
+    operator's real HOME this canary files its own sessions into the curated
+    timeline, which is why it was disabled rather than deleted.
+
+    agy 1.1.13 added GEMINI_API_KEY, which removes the OAuth dependency that
+    forced the shared HOME. With a key the run owns an isolated HOME that no
+    scanner watches, so the producer boundary is satisfiable rather than
+    permanently unavailable.
+    """
+
+    api_key = str(os.environ.get("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    home = root / "agy-home"
+    gemini_dir = home / ".gemini"
+    gemini_dir.mkdir(parents=True, exist_ok=True)
+    (gemini_dir / "settings.json").write_text(
+        json.dumps({"modelProvider": "gemini"}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {"HOME": str(home), "GEMINI_API_KEY": api_key}, home
+
+
 def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Prove real agy honors Longhouse PreInvocation hook-inbox injection."""
-
-    return {
-        "status": "blocked",
-        "failure_code": "antigravity_unwatched_producer_boundary_unavailable",
-        "producer_boundary": "unwatched_worker_required",
-    }
 
     binary = _resolve_antigravity_binary()
     if not binary:
         return _fail("provider_binary_not_found", "agy binary was not found on PATH")
+
+    worker = _antigravity_unwatched_worker(args, root)
+    if worker is None:
+        return {
+            "status": "blocked",
+            "failure_code": "antigravity_unwatched_producer_boundary_unavailable",
+            "producer_boundary": "unwatched_worker_required",
+            "reason": (
+                "GEMINI_API_KEY is unset, so the run cannot own an isolated provider HOME "
+                "and would ship its own conversations into the curated timeline."
+            ),
+        }
+    worker_env, worker_home = worker
 
     version, version_evidence = _run_provider_version(binary)
     if not version:
@@ -2223,7 +2286,7 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
         )
 
     try:
-        hook_script = _install_real_antigravity_hook(args, binary)
+        hook_script = _install_unwatched_antigravity_hook(args, worker_home, root / "longhouse")
     except Exception as exc:  # noqa: BLE001
         return _exception_failure("antigravity_real_hook_install_failed", exc)
 
@@ -2268,6 +2331,7 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
             "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
             "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
             "LONGHOUSE_ENGINE": "/usr/bin/true",
+            **worker_env,
         },
     )
     started = time.monotonic()
@@ -2312,6 +2376,8 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
         "provider_version": version,
         "binary": binary,
         "binary_evidence": version_evidence,
+        "producer_boundary": "unwatched_isolated_home",
+        "worker_home": str(worker_home),
         "hook_script": str(hook_script),
         "hook_script_sha256": _sha256_file(hook_script),
         "session_id": session_id,

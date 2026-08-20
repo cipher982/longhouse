@@ -1005,14 +1005,24 @@ providers:
       level: none
       source: run-once canary not implemented yet
       disposition: "not_implemented"
-      reason: "No Longhouse run-once canary exists for Antigravity."
+      reason: "No Longhouse run-once canary exists for Antigravity. The provider
+        surface is present: `agy -p <prompt> --output-format json` returns a
+        structured single-turn result carrying conversation_id, status, response
+        and usage. This is Longhouse backlog, not an upstream gap."
+      observed_provider_version: "1.1.16"
       owner_action: "antigravity run-once canary"
     reattach:
       level: none
-      source: unsupported until Antigravity exposes stable reattach
-      disposition: "upstream_absent"
-      reason: "Antigravity exposes no stable reattach surface for an existing conversation."
-      observed_provider_version: "1.1.5"
+      source: not implemented; provider reattach surface verified present
+      disposition: "not_implemented"
+      reason: "Corrected 2026-08-20. This cell previously read upstream_absent on
+        the grounds that Antigravity exposed no stable reattach surface. That was
+        true of the 1.1.5 observation it was written against and is false now:
+        `agy --conversation <id>` resumes an existing conversation with intact
+        history, including after the previous process was killed with SIGINT.
+        Verified against 1.1.16. Longhouse has not built the reattach path."
+      observed_provider_version: "1.1.16"
+      owner_action: "antigravity --conversation reattach path and canary"
     send_input:
       # level: none is required for a routed-away operation -- evidence for a
       # path the product does not take is what made this cell read as a working
@@ -1024,33 +1034,61 @@ providers:
       disposition: "policy_disabled"
       reason: "Antigravity is maintenance tier. Five independent server gates zero its send capability (live_control_catalog._CANONICAL_AUTH_PROVIDERS, heartbeat ControlEvidenceIn, machine_evidence._RUN_EXIT_AUTHORITY, managed_control_state, live_catalog_launch) and control_channel.rs reject_excluded_provider refuses every antigravity command with provider_shadow_only before dispatch. The hook-inbox injection works; Longhouse does not route to it."
       routed_to: "shadow_archive_only"
+      observed_provider_version: "1.1.16"
       owner_action: "antigravity real agy hook-inbox injection canary"
+      # Re-verified 2026-08-20 against 1.1.16. The named canary was dead code
+      # behind an early return between 2026-07-23 and 2026-08-20, so the proof
+      # above was unreproducible by the tool that claimed it. The canary body is
+      # restored and now gates on an unwatched isolated provider HOME, which
+      # GEMINI_API_KEY makes reachable; without a key it still blocks rather than
+      # filing its own conversations into the curated timeline.
     interrupt:
       level: none
-      source: unsupported until graceful stop semantics are proven
+      source: no native cancel; reconstructable as kill plus resume
       disposition: "not_implemented"
-      reason: "Antigravity graceful stop semantics are unproven upstream, so Longhouse has not designed an interrupt path."
-      owner_action: "antigravity graceful stop semantics canary"
-      blocker: "upstream"
+      reason: "Antigravity exposes no native turn cancel. `user` is the only
+        accepted stream-json input event -- interrupt, cancel, stop and abort are
+        all rejected as unsupported -- and SIGINT ends the process rather than the
+        turn. The conversation survives and resumes intact by id, so interrupt is
+        reconstructable as kill-then-resume rather than natively supported. Typing
+        it as a native interrupt would be a lie to the caller."
+      observed_provider_version: "1.1.16"
+      owner_action: "antigravity kill-and-resume interrupt path with process-group reap"
+      # Native cancel is upstream-absent, but the reconstructed kill-and-resume
+      # path needs nothing from upstream, so nothing external blocks Longhouse
+      # from shipping interrupt. The reason field carries that distinction.
+      blocker: "none"
     steer_active_turn:
       level: none
-      source: unsupported until bounded active-turn injection is proven
+      source: not implemented; bounded injection verified against 1.1.16
       disposition: "not_implemented"
-      reason: "Bounded active-turn injection is unproven upstream."
+      reason: "Corrected 2026-08-20. Bounded active-turn injection is proven, not
+        unproven: a message queued in the hook inbox is claimed at the next
+        PreInvocation inside the running turn and changes the model's course
+        before that turn ends. Steering lands at an invocation boundary, so a
+        single long tool call delays it -- it is bounded, not immediate, and
+        product copy must say so. Longhouse does not route to it."
+      observed_provider_version: "1.1.16"
       owner_action: "antigravity bounded active-turn injection canary"
-      blocker: "upstream"
     answer_pause:
       level: none
-      source: unsupported until pause-answer semantics are proven
-      disposition: "not_implemented"
-      reason: "Antigravity pause-answer semantics are unproven upstream."
-      owner_action: "antigravity pause-answer semantics canary"
-      blocker: "upstream"
+      source: no headless pause exists upstream
+      disposition: "upstream_absent"
+      reason: "Headless Antigravity never pauses for a permission or a question.
+        It reports permission_mode always-proceed and settles the choice itself,
+        which upstream made deliberate in 1.1.12. There is no pause to answer.
+        The Helm TUI does prompt but exposes no structured surface for it, so
+        answering would mean scraping and driving a PTY."
+      observed_provider_version: "1.1.16"
     terminate:
       level: none
       source: unsupported until process termination policy is designed
       disposition: "not_implemented"
-      reason: "Longhouse has not designed a process termination policy for Antigravity."
+      reason: "SIGINT ends the process cleanly and emits a typed error result, but
+        leaves run_command children orphaned. Longhouse has not designed the
+        process-group termination policy that requires, and shipping terminate
+        without it would strand child processes on every kill."
+      observed_provider_version: "1.1.16"
       owner_action: "antigravity process termination policy and canary"
     tail_output:
       level: hermetic
