@@ -1086,6 +1086,52 @@ pub(crate) fn leases_from_cursor_helm_observations(
     leases
 }
 
+/// Antigravity leases, derived from the same hook state files that produce its
+/// readiness evidence.
+///
+/// Without these the provider never appears in `managed_sessions`, and every
+/// server-side reconciliation that promotes control capability iterates that
+/// list -- so hook readiness could be shipped and then consumed by nothing.
+/// A hook that has been observed recently is the attach evidence here; there
+/// is no bridge process to be ready.
+pub(crate) fn leases_from_antigravity_observations(
+    machine_id: &str,
+    observations: &[AntigravityHookObservation],
+    now: DateTime<Utc>,
+) -> Vec<ManagedSessionLease> {
+    let sequence = now.timestamp_millis().max(0) as u64;
+    let observed_at = now.to_rfc3339();
+    let mut leases = Vec::with_capacity(observations.len());
+
+    for obs in observations {
+        // A state file with no session identity cannot be reconciled against a
+        // Longhouse session, and publishing it would create a lease nothing
+        // can ever match or retire.
+        if obs.session_id.trim().is_empty() {
+            continue;
+        }
+        leases.push(ManagedSessionLease {
+            session_id: obs.session_id.clone(),
+            provider: "antigravity".to_string(),
+            machine_id: machine_id.trim().to_string(),
+            sequence,
+            state: "attached".to_string(),
+            phase: obs.state.clone(),
+            tool_name: None,
+            // The hook is the control path, so its liveness is the bridge
+            // status. Readiness evidence carries the detail; this only says a
+            // control path exists to be reconciled.
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
+            lease_ttl_ms: 15 * 60 * 1000,
+        });
+    }
+
+    leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    leases
+}
+
 pub fn filter_unmanaged_bindings_owned_by_managed_observations(
     bindings: Vec<UnmanagedSessionBinding>,
     codex_observations: &[CodexBridgeObservation],

@@ -1091,13 +1091,41 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         .env_remove("LONGHOUSE_ANTIGRAVITY_INBOX_DIR")
         .env_remove("LONGHOUSE_ANTIGRAVITY_STATE_DIR");
 
+    // Registration opens a launch that stays pending until it is confirmed, and
+    // the transaction reports an abort on Drop if it never is. Without this a
+    // failed exec leaves the Runtime Host holding a managed session with no
+    // process, and a successful one never leaves pending -- which for a
+    // provider with no lease adopter means launch readiness can expire to
+    // orphaned while the TUI is still running.
+    let mut launch_transaction = response.as_ref().map(|response| {
+        ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
+    });
+    let deferred_notices = DeferredNotices::default();
+    let confirm_agent_dir = managed_launch_agent_dir();
+    let confirm_notices = deferred_notices.clone();
+
     println!(
         "Managed Antigravity session launched\n\u{2192} {}/s/{}",
         url.trim_end_matches('/'),
         session_id.split('-').next().unwrap_or(&session_id)
     );
-    let exit = run_foreground_command_after_spawn(&mut command, || Ok(()))?;
-    std::process::exit(exit);
+    let run_result = run_foreground_command_after_spawn(&mut command, || {
+        // The child is spawned but still blocked on the terminal-release
+        // barrier, so confirmation must degrade in place rather than fail the
+        // launch: the provider starts either way and the unrecorded outcome
+        // converges in the background.
+        if let Some(transaction) = launch_transaction.as_mut() {
+            transaction.confirm_or_degrade("Antigravity", &confirm_agent_dir, &confirm_notices);
+        }
+        Ok(())
+    });
+    // Drop before draining so an un-confirmed transaction reports its abort
+    // while the terminal is already restored.
+    drop(launch_transaction);
+    for notice in deferred_notices.drain() {
+        eprintln!("{notice}");
+    }
+    std::process::exit(run_result?);
 }
 
 fn native_machine_name() -> String {

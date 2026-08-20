@@ -218,6 +218,105 @@ pub async fn start_antigravity_print_turn(
     })
 }
 
+/// Settle or re-adopt Console turns that outlived the engine that spawned them.
+///
+/// Without this an engine restart strands every in-flight claim non-terminal:
+/// the session shows a turn that never ends, and the run is never reported
+/// failed, cancelled or complete. Every other one-shot adapter does this at
+/// startup; Antigravity needs it for the same reason.
+pub async fn recover_antigravity_print_turns(
+    machine_name: &str,
+    local_db_path: Option<PathBuf>,
+) -> Result<usize> {
+    let registry = crate::turn_claims::default_registry()?;
+    let mut recovered = 0;
+    for claim in registry.list_nonterminal()? {
+        if claim.adapter.as_deref() != Some(ANTIGRAVITY_PRINT_ADAPTER) || claim.state != "spawned" {
+            continue;
+        }
+        let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
+            let _ = registry.mark_terminal(
+                &claim.run_id,
+                "run_failed",
+                Some("Antigravity Console claim has no stdout path".to_string()),
+            );
+            continue;
+        };
+        let stderr_path = claim
+            .stderr_path
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
+        let sink = AntigravityPrintSink {
+            session_id: claim.session_id.clone(),
+            thread_id: claim.thread_id.clone(),
+            turn_id: claim.turn_id.clone(),
+            run_id: claim.run_id.clone(),
+            client_request_id: claim.client_request_id.clone(),
+            launch_id: claim.launch_id.clone().unwrap_or_default(),
+            process_group_id: claim.process_group_id,
+            stdout_path,
+            machine_name: machine_name.to_string(),
+            local_db_path: local_db_path.clone(),
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        };
+        if claim_process_is_live(&claim) {
+            tokio::spawn(async move {
+                monitor_recovered_claim(claim, stderr_path, sink).await;
+            });
+            recovered += 1;
+        } else {
+            settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+        }
+    }
+    Ok(recovered)
+}
+
+async fn monitor_recovered_claim(
+    claim: crate::turn_claims::TurnClaim,
+    stderr_path: PathBuf,
+    sink: AntigravityPrintSink,
+) {
+    loop {
+        if !claim_process_is_live(&claim) {
+            let cancel_requested = crate::turn_claims::default_registry()
+                .and_then(|registry| registry.read(&claim.run_id))
+                .ok()
+                .and_then(|current| current.cancel_requested_at)
+                .is_some();
+            // The exit status died with the engine that owned the child, so a
+            // recovered turn is settled from its claim and its output rather
+            // than from a code nobody can observe any more.
+            settle_antigravity_claim(&sink, cancel_requested, None, &stderr_path).await;
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+async fn settle_recovered_dead_claim(
+    claim: &crate::turn_claims::TurnClaim,
+    stderr_path: &Path,
+    sink: &AntigravityPrintSink,
+) {
+    if claim.process_group_is_from_this_boot() {
+        cleanup_process_group(sink.process_group_id).await;
+    }
+    settle_antigravity_claim(sink, claim.cancel_requested_at.is_some(), None, stderr_path).await;
+}
+
+fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
+    claim
+        .pid
+        .zip(claim.process_start_time.as_deref())
+        .and_then(|(pid, expected)| {
+            crate::process_identity::collect_process_facts_by_pid()
+                .get(&pid)
+                .map(|fact| fact.lstart == expected)
+        })
+        .unwrap_or(false)
+}
+
 pub fn interrupt_antigravity_print_turn(run_id: &str, session_id: &str) -> Result<()> {
     let registry = crate::turn_claims::default_registry()?;
     let claim = registry.read(run_id)?;
@@ -263,9 +362,9 @@ async fn monitor_antigravity_print(
     sink: AntigravityPrintSink,
 ) {
     sink.post_phase("thinking", None).await;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_status)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
                 cleanup_process_group(sink.process_group_id).await;
@@ -274,28 +373,44 @@ async fn monitor_antigravity_print(
                 return;
             }
         }
-    }
+    };
     // agy flushes its result object and the conversation transcript as it
     // exits; give the filesystem a beat before reading either.
     tokio::time::sleep(Duration::from_millis(150)).await;
-    settle_antigravity_claim(&sink, false, stderr_path).await;
+    // An interrupted turn exits like any other, so the claim -- not the exit
+    // code -- is what distinguishes cancellation from completion.
+    let cancel_requested = crate::turn_claims::default_registry()
+        .and_then(|registry| registry.read(&sink.run_id))
+        .ok()
+        .and_then(|claim| claim.cancel_requested_at)
+        .is_some();
+    settle_antigravity_claim(&sink, cancel_requested, status.code(), stderr_path).await;
 }
 
 async fn settle_antigravity_claim(
     sink: &AntigravityPrintSink,
     cancel_requested: bool,
+    exit_code: Option<i32>,
     stderr_path: &Path,
 ) {
     if cancel_requested {
         cleanup_process_group(sink.process_group_id).await;
-        sink.post_terminal("run_cancelled", None, None).await;
+        sink.post_terminal("run_cancelled", exit_code, None).await;
         return;
     }
-    let Some(conversation_id) = read_conversation_id(&sink.stdout_path) else {
+    // A non-zero exit is a failed turn even when agy left a readable result
+    // behind, so this is checked before the transcript is bound.
+    if exit_code.is_some_and(|code| code != 0) {
+        cleanup_process_group(sink.process_group_id).await;
+        sink.post_terminal("run_failed", exit_code, stderr_tail(stderr_path))
+            .await;
+        return;
+    }
+    let Some((conversation_id, status)) = read_print_result(&sink.stdout_path) else {
         cleanup_process_group(sink.process_group_id).await;
         sink.post_terminal(
             "run_failed",
-            None,
+            exit_code,
             Some(stderr_tail(stderr_path).unwrap_or_else(|| {
                 "agy exited without reporting a conversation id".to_string()
             })),
@@ -303,11 +418,29 @@ async fn settle_antigravity_claim(
         .await;
         return;
     };
+    // A reported ERROR is a failed turn even though agy exits 0 for it. Binding
+    // the transcript and calling it complete would show the operator a
+    // successful turn whose answer is an error string.
+    if status
+        .as_deref()
+        .is_some_and(|value| !value.eq_ignore_ascii_case("SUCCESS"))
+    {
+        cleanup_process_group(sink.process_group_id).await;
+        sink.post_terminal(
+            "run_failed",
+            exit_code,
+            Some(stderr_tail(stderr_path).unwrap_or_else(|| {
+                format!("agy reported status {}", status.unwrap_or_default())
+            })),
+        )
+        .await;
+        return;
+    }
     let Some(transcript) = locate_conversation_transcript(&conversation_id) else {
         cleanup_process_group(sink.process_group_id).await;
         sink.post_terminal(
             "run_failed",
-            None,
+            exit_code,
             Some(format!(
                 "agy conversation {conversation_id} has no transcript on disk"
             )),
@@ -319,7 +452,7 @@ async fn settle_antigravity_claim(
     sink.post_binding(&conversation_id, &transcript).await;
     sink.wake_transcript_shipper(&transcript, &conversation_id)
         .await;
-    sink.post_terminal("run_completed", None, None).await;
+    sink.post_terminal("run_completed", exit_code, None).await;
 }
 
 /// Build a bounded one-shot argv.
@@ -357,14 +490,27 @@ fn build_antigravity_args(
 
 /// Read `conversation_id` out of agy's `--output-format json` result object.
 fn read_conversation_id(stdout_path: &Path) -> Option<String> {
+    read_print_result(stdout_path).map(|(conversation_id, _status)| conversation_id)
+}
+
+/// agy reports a failed turn as `status: ERROR` in a result object it still
+/// exits 0 for, so the exit code alone cannot decide whether a turn succeeded.
+fn read_print_result(stdout_path: &Path) -> Option<(String, Option<String>)> {
     let bytes = std::fs::read(stdout_path).ok()?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
-    value
+    let conversation_id = value
         .get("conversation_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .map(str::to_string)?;
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Some((conversation_id, status))
 }
 
 /// agy writes one append-only transcript per conversation under its brain dir.
@@ -587,16 +733,15 @@ async fn cleanup_process_group(process_group_id: Option<i32>) {
     let Some(pgid) = process_group_id else {
         return;
     };
-    #[cfg(unix)]
-    unsafe {
-        // agy's run_command children survive a bare SIGINT to the leader, so
-        // terminate the whole group and then reap what ignored it.
-        libc::killpg(pgid, libc::SIGTERM);
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    #[cfg(unix)]
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
+    // The shared helper polls for group exit instead of assuming a fixed grace
+    // window, and reports what survived. An ad-hoc SIGTERM/sleep/SIGKILL is how
+    // orphans got left behind before: a child in uninterruptible I/O outlives
+    // the window, and nobody finds out. agy leaks run_command children on
+    // signal, so this provider needs the reporting more than most.
+    let outcome =
+        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
+    if !outcome.is_gone() {
+        eprintln!("[antigravity-print] process group {pgid} survived SIGKILL and was left running");
     }
 }
 
@@ -651,6 +796,84 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_cancelled_turn_settles_as_cancelled_not_completed() {
+        // Regression: the first cut of this adapter never read the claim, so an
+        // interrupted turn reported run_completed and the caller saw its own
+        // cancel succeed as a normal answer.
+        let dir = std::env::temp_dir().join(format!("agy-cancel-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stdout = dir.join("stdout.log");
+        std::fs::write(&stdout, br#"{"conversation_id":"c-1","status":"SUCCESS"}"#).unwrap();
+        let stderr = dir.join("stderr.log");
+        std::fs::write(&stderr, b"").unwrap();
+        let sink = AntigravityPrintSink {
+            session_id: Uuid::new_v4().to_string(),
+            thread_id: Uuid::new_v4().to_string(),
+            turn_id: None,
+            run_id: Uuid::new_v4().to_string(),
+            client_request_id: None,
+            launch_id: Uuid::new_v4().to_string(),
+            process_group_id: None,
+            stdout_path: stdout,
+            machine_name: "test".to_string(),
+            local_db_path: None,
+            runtime_events_outbox_dir: dir.join("outbox"),
+        };
+        settle_antigravity_claim(&sink, true, Some(0), &stderr).await;
+        let events = read_outbox_kinds(&dir.join("outbox"));
+        assert!(events.contains(&"terminal_signal".to_string()));
+        // A cancelled turn must not bind a transcript: the conversation is
+        // half-written and claiming it as this turn's output is a lie.
+        assert!(!events.contains(&"binding_signal".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_nonzero_exit_fails_the_turn_even_with_a_readable_result() {
+        let dir = std::env::temp_dir().join(format!("agy-exit-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stdout = dir.join("stdout.log");
+        std::fs::write(&stdout, br#"{"conversation_id":"c-1","status":"ERROR"}"#).unwrap();
+        let stderr = dir.join("stderr.log");
+        std::fs::write(&stderr, b"agy: model call failed\n").unwrap();
+        let sink = AntigravityPrintSink {
+            session_id: Uuid::new_v4().to_string(),
+            thread_id: Uuid::new_v4().to_string(),
+            turn_id: None,
+            run_id: Uuid::new_v4().to_string(),
+            client_request_id: None,
+            launch_id: Uuid::new_v4().to_string(),
+            process_group_id: None,
+            stdout_path: stdout,
+            machine_name: "test".to_string(),
+            local_db_path: None,
+            runtime_events_outbox_dir: dir.join("outbox"),
+        };
+        settle_antigravity_claim(&sink, false, Some(1), &stderr).await;
+        let events = read_outbox_kinds(&dir.join("outbox"));
+        assert!(events.contains(&"terminal_signal".to_string()));
+        assert!(!events.contains(&"binding_signal".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn read_outbox_kinds(outbox: &Path) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(outbox) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .filter_map(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .filter_map(|value| {
+                value
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
 
     #[test]
     fn print_flag_is_last_so_it_takes_the_prompt_as_its_value() {

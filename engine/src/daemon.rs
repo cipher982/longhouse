@@ -2613,6 +2613,13 @@ fn build_local_status_projection(
             cursor_observations,
             now,
         ));
+    payload
+        .managed_sessions
+        .extend(heartbeat::leases_from_antigravity_observations(
+            machine_id,
+            antigravity_observations,
+            now,
+        ));
     payload.managed_sessions.sort_by(|a, b| {
         a.provider
             .cmp(&b.provider)

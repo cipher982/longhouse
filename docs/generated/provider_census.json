@@ -980,7 +980,6 @@
     {
       "path": "server/tests_lite/test_machines_directory.py",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
         "cursor"

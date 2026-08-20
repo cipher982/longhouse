@@ -172,14 +172,15 @@ def test_onboard_does_not_suggest_an_excluded_native_entrypoint(monkeypatch, tmp
     assert result.exit_code == 0, result.output
     # Antigravity is still detected -- it imports into the timeline.
     assert "[OK] Antigravity found" in result.output
-    # But it must not be offered as a managed launch. `longhouse agy` is not a
-    # subcommand of the facade (engine/src/longhouse.rs declares claude, codex,
-    # opencode, cursor only) and antigravity-managed is `excluded` in
-    # config/native_device_entrypoints.json. This test asserted the opposite
-    # until 2026-07-31, so onboarding told users to run a command that does not
-    # exist.
+    # It is offered as a managed launch again as of 2026-08-20, because the
+    # command it names now exists: engine/src/longhouse.rs declares an
+    # `antigravity` subcommand and config/native_device_entrypoints.json is
+    # `available`. Between 2026-07-31 and then this asserted the opposite, and
+    # correctly so -- onboarding had been telling users to run a command that
+    # did not exist. The invariant is that the two agree, not the value.
+    assert "longhouse antigravity" in result.output
+    # `longhouse agy` was never a subcommand and must not be suggested.
     assert "longhouse agy" not in result.output
-    assert "longhouse antigravity" not in result.output
 
 
 def test_onboard_in_ci_skips_service_manager_install(monkeypatch, tmp_path):

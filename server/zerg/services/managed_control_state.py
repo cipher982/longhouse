@@ -364,9 +364,20 @@ def upsert_live_control_leases(
     *,
     device_id: str,
     received_at: datetime,
+    machine_evidence: Any = None,
 ) -> set[UUID]:
-    """Materialize managed lease snapshots into the Live Store hot lane."""
+    """Materialize managed lease snapshots into the Live Store hot lane.
 
+    This is the served lane, not the compatibility one: the projector reads
+    LiveSessionConnection to decide whether send_input is available, and
+    catalogd refuses a queued input with ``control_unavailable`` when it is
+    not. Antigravity's hook-readiness promotion therefore has to happen here
+    or the capability is advertised everywhere except where it is enforced.
+    """
+
+    from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
+
+    send_ready_session_ids = antigravity_send_ready_session_ids(machine_evidence)
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
     normalized_device_id = _normalized(device_id) or device_id
@@ -418,6 +429,12 @@ def upsert_live_control_leases(
                 device_id=normalized_device_id,
                 state={"online": "attached", "degraded": "degraded"}.get(control_state, "detached"),
                 external_name=row.machine_id,
+                # None keeps every other provider on its contract default.
+                # Antigravity is explicit in both directions so the capability
+                # is withdrawn again when the hook stops being observed.
+                can_send_input=(
+                    (1 if str(session_id) in send_ready_session_ids else 0) if managed_provider_requires_readiness_proof(provider) else None
+                ),
                 observed_at=seen_at,
             )
             if control_state in {"online", "degraded"}:

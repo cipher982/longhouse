@@ -442,7 +442,7 @@ def test_canonical_control_prepare_has_no_ingest_disable_kill_switch(monkeypatch
     engine.dispose()
 
 
-def test_canonical_control_prepare_rejects_antigravity_without_a_live_session(daemon_paths):
+def test_canonical_control_prepare_rejects_antigravity_as_unsupported(daemon_paths):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
@@ -452,10 +452,7 @@ def test_canonical_control_prepare_rejects_antigravity_without_a_live_session(da
     )
 
     assert prepared["allowed"] is False
-    # Antigravity is a control provider now, so it is no longer refused for
-    # being unsupported -- it is refused for the same reason any provider is
-    # without a live catalog session to command.
-    assert prepared["reason"] == "control_unavailable"
+    assert prepared["reason"] == "unsupported"
     engine.dispose()
 
 

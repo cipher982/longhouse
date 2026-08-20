@@ -976,6 +976,11 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
+                        machine_evidence=(
+                            payload.machine_evidence.model_dump(mode="json", exclude_none=True)
+                            if payload.machine_evidence is not None
+                            else None
+                        ),
                     )
                     upsert_live_sessions_from_managed_leases(
                         write_db,

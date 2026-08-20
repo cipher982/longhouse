@@ -1583,9 +1583,9 @@
       "harness_safe_managed_session_scenarios": [],
       "harness_real_managed_session_e2e": true,
       "launch_local": true,
-      "run_once": false,
+      "run_once": true,
       "reattach": false,
-      "send_input": true,
+      "send_input": false,
       "interrupt": false,
       "steer_active_turn": false,
       "answer_pause": false,
@@ -1677,8 +1677,8 @@
           ]
         },
         "session.input.send": {
-          "disposition": "policy_disabled",
-          "reason_code": "policy_disabled",
+          "disposition": "not_implemented",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.antigravity.send_input",
           "action_gate": "strict",
           "contexts": {
@@ -1714,12 +1714,11 @@
           "owner_action": "real agy loop invocation canary"
         },
         "run_once": {
-          "level": "none",
-          "source": "run-once canary not implemented yet",
-          "disposition": "not_implemented",
-          "reason": "No Longhouse run-once canary exists for Antigravity. The provider surface is present: `agy -p <prompt> --output-format json` returns a structured single-turn result carrying conversation_id, status, response and usage. This is Longhouse backlog, not an upstream gap.",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "antigravity run-once canary"
+          "level": "live_token",
+          "source": "real agy --print returned a structured single-turn result carrying the requested marker",
+          "disposition": "implemented",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-run-once, which drives the exact argv antigravity_print builds. A pass therefore covers the Console adapter's argv, its structured-result parse and its transcript resolution against the installed release, not only the run-once operation.",
+          "observed_provider_version": "1.1.17"
         },
         "reattach": {
           "level": "none",
@@ -1730,11 +1729,12 @@
           "owner_action": "antigravity --conversation reattach path and canary"
         },
         "send_input": {
-          "level": "live_token",
-          "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
-          "disposition": "implemented",
-          "reason": "Proven live against 1.1.16 by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: the queued message was claimed at PreInvocation, the inbox drained, and the injected text replaced the model-visible turn. Availability is gated per session on observed hook readiness rather than on the release, because whether hooks fire depends on how the user authenticated agy -- they load and never fire under GEMINI_API_KEY auth, so a session can be healthy and still uncontrollable.",
-          "observed_provider_version": "1.1.16"
+          "level": "none",
+          "source": "provider surface proven; Longhouse-side control identity missing",
+          "disposition": "not_implemented",
+          "reason": "The provider surface is proven: scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send shows a queued message claimed at PreInvocation and replacing the model-visible turn, and the engine routes session.send_text to it. What is missing is Longhouse-side. Served authorization requires a bound control identity plus a matching control fact head (live_control_catalog.get_live_control_grant), and a hook has neither because there is no bridge process to own a connection_id or lease_generation. Advertising send before that exists produces identity_unbound at the API while every schema layer agrees it should work.",
+          "observed_provider_version": "1.1.17",
+          "owner_action": "hook-derived control identity and control fact for the antigravity_hook_inbox control plane"
         },
         "interrupt": {
           "level": "none",
@@ -1796,7 +1796,6 @@
         }
       },
       "machine_control_supports": [
-        "antigravity.send",
         "antigravity.turn_start"
       ],
       "adapter_digest": "331c2bd00409db548d13cbc47c7da8d3873fba1f223bd515e157669f769ef000"

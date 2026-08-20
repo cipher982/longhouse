@@ -666,7 +666,7 @@ def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_p
         api_app_ref.dependency_overrides = {}
 
 
-def test_antigravity_auto_input_is_routed_through_the_hook_inbox(monkeypatch, tmp_path):
+def test_antigravity_auto_input_is_refused_not_routed(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_antigravity_session(session_local)
     websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
@@ -687,13 +687,11 @@ def test_antigravity_auto_input_is_routed_through_the_hook_inbox(monkeypatch, tm
             json={"text": "ship through agy hooks", "intent": "auto", "client_request_id": "agy-send-1"},
         )
 
-        # The hook-inbox send path is proven and routed, so the input is
-        # accepted and reaches the machine. This asserted a successful send
-        # until 2026-07-31, then a refusal while send was routed away; it is a
-        # real send again, and the honesty gate is per-session hook readiness
-        # rather than a blanket refusal here.
-        assert resp.status_code == 200, resp.text
-        assert websocket.sent, "the send must reach the machine control channel"
+        # The provider surface works, but served authorization needs a bound
+        # control identity a hook cannot provide, so the request is declined
+        # here rather than dispatched into a refusal the caller cannot read.
+        assert resp.status_code != 200, resp.text
+        assert not websocket.sent, "no machine-control frame may be sent for an unauthorizable provider"
 
         with session_local() as db:
             session = db.query(AgentSession).filter_by(id=session_id).one()

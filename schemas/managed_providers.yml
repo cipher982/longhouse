@@ -914,9 +914,9 @@ providers:
   harness_safe_managed_session_scenarios: []
   harness_real_managed_session_e2e: true
   launch_local: true
-  run_once: false
+  run_once: true
   reattach: false
-  send_input: true
+  send_input: false
   interrupt: false
   steer_active_turn: false
   answer_pause: false
@@ -978,8 +978,11 @@ providers:
         acceptable_evidence: [live_no_token]
         max_age_seconds: 604800
     session.input.send:
-      disposition: policy_disabled
-      reason_code: policy_disabled
+      # Not policy_disabled: policy_disabled means Longhouse routes the
+      # operation elsewhere, and it does not -- it intends to route here and
+      # cannot yet, for want of a hook-derived control identity.
+      disposition: not_implemented
+      reason_code: semantic_proof_missing
       policy_key: provider.antigravity.send_input
       action_gate: strict
       contexts:
@@ -1002,15 +1005,15 @@ providers:
       disposition: "implemented"
       owner_action: "real agy loop invocation canary"
     run_once:
-      level: none
-      source: run-once canary not implemented yet
-      disposition: "not_implemented"
-      reason: "No Longhouse run-once canary exists for Antigravity. The provider
-        surface is present: `agy -p <prompt> --output-format json` returns a
-        structured single-turn result carrying conversation_id, status, response
-        and usage. This is Longhouse backlog, not an upstream gap."
-      observed_provider_version: "1.1.16"
-      owner_action: "antigravity run-once canary"
+      level: live_token
+      source: real agy --print returned a structured single-turn result carrying the requested marker
+      disposition: "implemented"
+      reason: "Proven live by scripts/qa/provider-control-e2e-canary.py
+        --antigravity-real-run-once, which drives the exact argv
+        antigravity_print builds. A pass therefore covers the Console adapter's
+        argv, its structured-result parse and its transcript resolution against
+        the installed release, not only the run-once operation."
+      observed_provider_version: "1.1.17"
     reattach:
       level: none
       source: not implemented; provider reattach surface verified present
@@ -1024,18 +1027,24 @@ providers:
       observed_provider_version: "1.1.16"
       owner_action: "antigravity --conversation reattach path and canary"
     send_input:
-      level: live_token
-      source: real agy --print PreInvocation hook-inbox injection changed the model-visible turn
-      disposition: "implemented"
-      reason: "Proven live against 1.1.16 by
-        scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send:
-        the queued message was claimed at PreInvocation, the inbox drained, and
-        the injected text replaced the model-visible turn. Availability is
-        gated per session on observed hook readiness rather than on the
-        release, because whether hooks fire depends on how the user
-        authenticated agy -- they load and never fire under GEMINI_API_KEY
-        auth, so a session can be healthy and still uncontrollable."
-      observed_provider_version: "1.1.16"
+      # The provider-side proof is real and recorded in `reason`; the level is
+      # none because the schema reserves evidence levels for operations
+      # Longhouse actually serves, and this one is not served yet.
+      level: none
+      source: provider surface proven; Longhouse-side control identity missing
+      disposition: "not_implemented"
+      reason: "The provider surface is proven: scripts/qa/provider-control-e2e-canary.py
+        --antigravity-real-agy-send shows a queued message claimed at
+        PreInvocation and replacing the model-visible turn, and the engine
+        routes session.send_text to it. What is missing is Longhouse-side.
+        Served authorization requires a bound control identity plus a matching
+        control fact head (live_control_catalog.get_live_control_grant), and a
+        hook has neither because there is no bridge process to own a
+        connection_id or lease_generation. Advertising send before that exists
+        produces identity_unbound at the API while every schema layer agrees it
+        should work."
+      observed_provider_version: "1.1.17"
+      owner_action: "hook-derived control identity and control fact for the antigravity_hook_inbox control plane"
     interrupt:
       level: none
       source: no native cancel; reconstructable as kill plus resume
@@ -1109,17 +1118,17 @@ providers:
         control surface that works under either credential authority."
       observed_provider_version: "1.1.16"
       owner_action: "real agy Console turn canary"
-  # Re-enabled 2026-08-20. The 2026-07-31 emptying was correct at the time: the
-  # engine advertised antigravity.send whenever `agy` was on PATH and then
-  # refused it before dispatch, so the machines API listed a control that always
-  # failed. What closes that gap is not the advertisement but the gate behind
-  # it -- send is now promoted from observed hook readiness per session, so it
-  # is listed exactly when the hook has been seen firing.
+  # antigravity.send is withheld again as of 2026-08-20. The hook-inbox
+  # injection is real and the engine routes it, but served authorization needs
+  # a bound control identity (connection_id + lease_generation) and a matching
+  # control fact head, and a hook has neither -- there is no bridge to own one.
+  # Until that identity exists, a browser send returns identity_unbound, so
+  # advertising it would repeat exactly the failure this file already corrected once.
   # antigravity.turn_interrupt is deliberately absent: the schema ties it to
   # the session-level interrupt capability, which is not built. The console
   # adapter can cancel its own one-shot turn, and that code stays reachable for
   # when interrupt lands, but it is not advertised before it is whole.
-  machine_control_supports: ["antigravity.send", "antigravity.turn_start"]
+  machine_control_supports: ["antigravity.turn_start"]
 - provider: cursor
   display_name: Cursor
   marketing_name: Cursor Agent

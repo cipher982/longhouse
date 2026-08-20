@@ -1073,8 +1073,7 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     # Send is routed and proven now, so it reads as a pass rather than a
     # policy-routed-away row. Whether it is offered on a given session is a
     # separate, runtime question answered by observed hook readiness.
-    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
-    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+    assert by_provider["antigravity"]["send_message"]["status"] == "unsupported_gap"
 
 
 def test_old_new_release_diff_blocks_without_explicit_artifacts(tmp_path: Path) -> None:
@@ -1321,8 +1320,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     # Send is routed and proven now, so it reads as a pass rather than a
     # policy-routed-away row. Whether it is offered on a given session is a
     # separate, runtime question answered by observed hook readiness.
-    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
-    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+    assert by_provider["antigravity"]["send_message"]["status"] == "unsupported_gap"
 
 
 @pytest.mark.timeout(60)

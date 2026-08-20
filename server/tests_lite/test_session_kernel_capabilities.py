@@ -277,7 +277,7 @@ def test_opencode_server_bridge_projects_live_send_without_steer(db):
     assert caps.can_steer_active_turn is False
 
 
-def test_antigravity_hook_inbox_passes_contract_send_through(db):
+def test_antigravity_hook_inbox_clamps_send_to_the_contract(db):
     s = _make_session(db, provider="antigravity")
     t = _make_thread(db, s)
     r = _make_run(db, t)
@@ -293,11 +293,10 @@ def test_antigravity_hook_inbox_passes_contract_send_through(db):
     caps = project_session_capabilities(db, session_id=s.id)
 
     assert caps.managed_transport.value == "antigravity_hook_inbox"
-    # The contract now implements send, so a connection carrying send=1 keeps
-    # it. The clamp still bites for everything the contract does not implement,
-    # and the honesty gate for send lives upstream of this row: it is only set
-    # to 1 while the hook is observably firing.
-    assert caps.can_send_input is True
+    # A stale row carrying send=1 must not resurrect the capability: the
+    # contract does not implement send for antigravity, because served
+    # authorization needs a control identity a hook cannot provide.
+    assert caps.can_send_input is False
     assert caps.can_interrupt is False
     assert caps.can_terminate is False
     assert caps.can_tail_output is True
@@ -321,10 +320,10 @@ def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
     caps = project_session_capabilities(db, session_id=s.id)
     coverage = derive_provider_action_coverage("antigravity")
 
-    # Send is implemented in the contract now and passes the clamp; the
-    # operations the contract still lacks are what the clamp holds down.
-    assert caps.can_send_input is True
-    assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
+    # Send is not implemented in the contract, so both the projected
+    # capability and the derived coverage must say so.
+    assert caps.can_send_input is False
+    assert coverage["send_prompt"].state == ActionCoverageState.UNSUPPORTED
     assert caps.can_interrupt is False
     assert coverage["abort"].state == ActionCoverageState.UNSUPPORTED
     assert caps.can_terminate is False
@@ -364,7 +363,7 @@ def test_all_manifest_control_planes_clamp_session_capabilities_to_contract(db, 
 @pytest.mark.parametrize(
     ("provider", "control_plane", "expected"),
     [
-        ("antigravity", "antigravity_process", {"send": True, "interrupt": False, "terminate": False, "resume": False}),
+        ("antigravity", "antigravity_process", {"send": False, "interrupt": False, "terminate": False, "resume": False}),
         ("opencode", "opencode_process", {"send": True, "interrupt": True, "terminate": True, "resume": True}),
     ],
 )

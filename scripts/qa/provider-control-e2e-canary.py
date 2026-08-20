@@ -2318,6 +2318,163 @@ def _antigravity_unwatched_worker(
     return {"HOME": str(home), "GEMINI_API_KEY": api_key, **_no_browser_env(root)}, home, "api_key"
 
 
+def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Prove a real single-turn agy run, using the Console adapter's own argv.
+
+    This is the run_once evidence and the Console adapter's live proof at once:
+    antigravity_print builds exactly this command line, so a pass here means the
+    adapter's argv, its structured-result parse, and its transcript resolution
+    all hold against the installed release -- not just against a fake binary.
+    """
+
+    binary = _resolve_antigravity_binary()
+    if not binary:
+        return _fail("provider_binary_not_found", "agy binary was not found on PATH")
+
+    worker = _antigravity_unwatched_worker(args, root)
+    if worker is None:
+        return {
+            "status": "blocked",
+            "failure_code": "antigravity_unwatched_producer_boundary_unavailable",
+            "producer_boundary": "unwatched_worker_required",
+            "reason": (
+                "Neither LONGHOUSE_ANTIGRAVITY_PROFILE_HOME nor GEMINI_API_KEY is set, so the run "
+                "cannot own an isolated provider HOME and would ship its own conversation into the "
+                "curated timeline."
+            ),
+        }
+    worker_env, worker_home, worker_authority = worker
+
+    version, version_evidence = _run_provider_version(binary)
+    if not version:
+        return _fail(
+            "provider_version_failed", "agy --version failed", path=binary, evidence=version_evidence
+        )
+
+    marker = f"LONGHOUSE_AGY_RUN_ONCE_{uuid.uuid4().hex}"
+    workspace = root / "run-once-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    # Byte-for-byte the argv antigravity_print builds, including `--print` last.
+    command = [
+        binary,
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "json",
+        "--print-timeout",
+        f"{args.antigravity_print_timeout_secs}s",
+        "--print",
+        f"Reply with exactly {marker} and nothing else.",
+    ]
+    env = _runtime_env(args, {"LONGHOUSE_HOOK_PYTHON": _hook_python(args), **worker_env})
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(workspace),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=max(args.antigravity_print_timeout_secs + 30, 45),
+        )
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            command,
+            returncode=124,
+            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
+        )
+        timed_out = True
+    elapsed = round(time.monotonic() - started, 3)
+
+    stdout = result.stdout or ""
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        payload = None
+    conversation_id = str((payload or {}).get("conversation_id") or "").strip()
+    status = str((payload or {}).get("status") or "").strip()
+    response = str((payload or {}).get("response") or "")
+    transcript = (
+        Path(worker_home)
+        / ".gemini/antigravity-cli/brain"
+        / conversation_id
+        / ".system_generated/logs/transcript_full.jsonl"
+        if conversation_id
+        else None
+    )
+    evidence = {
+        "provider_version": version,
+        "binary": binary,
+        "producer_boundary": "unwatched_isolated_home",
+        "credential_authority": worker_authority,
+        "worker_home": str(worker_home),
+        "marker": marker,
+        "argv": command,
+        "returncode": result.returncode,
+        "elapsed_secs": elapsed,
+        "timed_out": timed_out,
+        "structured_result": payload is not None,
+        "result_status": status,
+        "conversation_id": conversation_id,
+        "marker_in_response": marker in response,
+        "transcript_path": str(transcript) if transcript else None,
+        "transcript_exists": bool(transcript and transcript.is_file()),
+        "stderr_tail": (result.stderr or "")[-2000:],
+    }
+    if result.returncode != 0 or timed_out:
+        return _fail("antigravity_run_once_failed", "agy --print did not complete", **evidence)
+    if payload is None:
+        return _fail(
+            "antigravity_run_once_unstructured",
+            "agy --output-format json did not emit a parsable result object",
+            **evidence,
+        )
+    if status != "SUCCESS":
+        return _fail("antigravity_run_once_status", f"agy reported status {status}", **evidence)
+    if not conversation_id:
+        return _fail(
+            "antigravity_run_once_no_conversation",
+            "agy result carried no conversation id, so no transcript can be bound",
+            **evidence,
+        )
+    if marker not in response:
+        return _fail(
+            "antigravity_run_once_marker_missing",
+            "agy did not return the requested marker, so the turn is not the one we asked for",
+            **evidence,
+        )
+    # The adapter binds this exact path; a pass that cannot resolve it would
+    # leave a completed turn with no shippable transcript.
+    if not evidence["transcript_exists"]:
+        return _fail(
+            "antigravity_run_once_transcript_missing",
+            "agy completed but its conversation transcript is not where the adapter binds it",
+            **evidence,
+        )
+
+    return _status(
+        "pass",
+        canary="antigravity_real_run_once",
+        operation_evidence={
+            "run_once": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "real agy --print returned a structured single-turn result carrying the requested marker",
+                "canary": "antigravity_real_run_once",
+            },
+            "turn_start": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "antigravity_print adapter argv proved against the installed release",
+                "canary": "antigravity_real_run_once",
+            },
+        },
+        **evidence,
+    )
+
+
 def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Prove real agy honors Longhouse PreInvocation hook-inbox injection."""
 
@@ -2593,6 +2750,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout for real opencode run canaries; the execution guard uses a minimum of 45 seconds.",
     )
     parser.add_argument(
+        "--antigravity-real-run-once",
+        action="store_true",
+        help="For --provider antigravity/all, spend a real agy --print single turn.",
+    )
+    parser.add_argument(
         "--antigravity-real-agy-send",
         action="store_true",
         help="For --provider antigravity/all, spend a real agy --print turn to prove hook-inbox send injection.",
@@ -2671,7 +2833,9 @@ def _run_selected_canaries(
             else:
                 canaries[provider] = run_opencode_canary(args, provider_root)
         elif provider == "antigravity":
-            if args.antigravity_real_agy_send:
+            if args.antigravity_real_run_once:
+                canaries[provider] = run_antigravity_real_run_once_canary(args, provider_root)
+            elif args.antigravity_real_agy_send:
                 canaries[provider] = run_antigravity_real_agy_send_canary(args, provider_root)
             else:
                 canaries[provider] = run_antigravity_canary(args, provider_root)
