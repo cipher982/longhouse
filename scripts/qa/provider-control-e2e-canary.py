@@ -15,6 +15,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -2247,13 +2248,43 @@ def _antigravity_unwatched_worker(args: argparse.Namespace, root: Path) -> tuple
     if not api_key:
         return None
     home = root / "agy-home"
-    gemini_dir = home / ".gemini"
-    gemini_dir.mkdir(parents=True, exist_ok=True)
-    (gemini_dir / "settings.json").write_text(
+    # modelProvider belongs to the Antigravity CLI's own settings file. The
+    # sibling ~/.gemini/settings.json is Gemini CLI's and agy ignores it: with
+    # modelProvider written there the run logs "Auth mode is unspecified",
+    # fails silent auth and escalates to interactive OAuth. Written here it
+    # logs "ChainedAuth: authenticated via gemini_api_key" and never asks.
+    agy_config_dir = home / ".gemini" / "antigravity-cli"
+    agy_config_dir.mkdir(parents=True, exist_ok=True)
+    (agy_config_dir / "settings.json").write_text(
         json.dumps({"modelProvider": "gemini"}, indent=2) + "\n",
         encoding="utf-8",
     )
-    return {"HOME": str(home), "GEMINI_API_KEY": api_key}, home
+    # Defense in depth: a QA canary must never be able to open a browser on the
+    # operator's machine, whatever the provider decides about auth. Shadowing
+    # the launchers agy shells out to makes an OAuth escalation inert instead of
+    # merely unlikely, and leaves a receipt when one is attempted.
+    shim_dir = root / "no-browser-bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    attempt_log = root / "browser-launch-attempts.log"
+    for launcher in ("open", "xdg-open", "google-chrome", "firefox"):
+        _write_executable(
+            shim_dir / launcher,
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> ' + shlex.quote(str(attempt_log)) + "\nexit 0\n",
+        )
+    # A launcher that resolves the provider through $HOME -- the conventional
+    # ~/.local/bin/agy wrapper is one -- stops resolving the moment HOME moves.
+    # Give the isolated HOME the same binary at the same relative location so an
+    # unwatched run is a faithful stand-in for a normal one rather than a
+    # subtly different environment that only works for direct invocations.
+    real_binary = shutil.which("agy")
+    if real_binary:
+        local_bin = home / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        link = local_bin / "agy"
+        if not link.exists():
+            link.symlink_to(Path(real_binary).resolve())
+    path = f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    return {"HOME": str(home), "GEMINI_API_KEY": api_key, "PATH": path}, home
 
 
 def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
@@ -2314,12 +2345,18 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
     pending_path = inbox_dir / "msg-real-loop-proof.json"
     _write_private_json(pending_path, message)
 
+    # `--print` takes the prompt as its own value, so it must come last. With
+    # `--print --print-timeout 60s <prompt>` agy reads the literal string
+    # "--print-timeout" as the prompt and answers a question about its own
+    # flag, leaving the real prompt as a stray positional. The fake agy in the
+    # unit tests only checks that "--print" appears in argv, so it cannot catch
+    # this -- the ordering is load-bearing against the real binary.
     command = [
         binary,
         "--dangerously-skip-permissions",
-        "--print",
         "--print-timeout",
         f"{args.antigravity_print_timeout_secs}s",
+        "--print",
         baseline_prompt,
     ]
     env = _runtime_env(
