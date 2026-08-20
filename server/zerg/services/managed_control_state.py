@@ -113,8 +113,12 @@ def _connection_capabilities_for_provider(
     contract = contract_for_provider(provider)
     if contract is None or control_plane not in contract.control_planes:
         return {}
+    # Lazy import: managed_local_launcher imports this module, so a top-level
+    # import here closes the cycle.
+    from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
+
     capabilities = contract.connection_capabilities
-    if provider == "antigravity":
+    if managed_provider_requires_readiness_proof(provider):
         # Hook-delivered send is advertised only while the hook is observably
         # firing. Absent readiness this is 0 -- not because the provider lacks
         # the capability, but because an advertised control that silently does

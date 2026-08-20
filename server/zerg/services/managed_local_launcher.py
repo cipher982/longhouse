@@ -47,8 +47,9 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # bridge can fail to start AFTER the API session is created, and a birth-time
 # ``attached`` would briefly claim live control with no server. Antigravity has
 # no control lease observer. Its typed hook readiness is still
-# shadow evidence in Phase 2, so launch must remain detached/send-disabled
-# until a later authority cutover explicitly promotes it from fresh hook proof.
+# shadow evidence, so launch alone never grants send. That promotion now
+# exists: managed_control_state raises can_send_input from the engine's hook
+# readiness evidence, per session, and drops it again when the hook goes quiet.
 _HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
 
 
@@ -57,7 +58,13 @@ def managed_provider_has_lease_observer(provider: str | None) -> bool:
 
 
 def managed_provider_requires_readiness_proof(provider: str | None) -> bool:
-    """Whether launch alone is insufficient to grant the send capability."""
+    """Whether launch alone is insufficient to grant the send capability.
+
+    True only for Antigravity, and not because its release is unproven: its
+    control is hook-delivered and hooks do not fire under GEMINI_API_KEY auth,
+    so a launched, healthy session may still be uncontrollable. Observation is
+    the only thing that can tell those apart.
+    """
 
     return str(provider or "").strip().lower() == "antigravity"
 
