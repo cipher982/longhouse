@@ -2230,6 +2230,25 @@ def _install_unwatched_antigravity_hook(args: argparse.Namespace, home: Path, co
     return Path(result.stdout.strip()) / "longhouse-antigravity-hook.sh"
 
 
+def _mirror_provider_binary(home: Path) -> None:
+    """Give an isolated HOME the provider binary at its conventional location.
+
+    A launcher that resolves the provider through $HOME -- the ~/.local/bin/agy
+    wrapper is one -- stops resolving the moment HOME moves. Both the API-key
+    worker and the signed-in profile move it, so both need the mirror; without
+    it the run dies at exec with 126 before any provider behavior is exercised.
+    """
+
+    real_binary = shutil.which("agy")
+    if not real_binary:
+        return
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True, exist_ok=True)
+    link = local_bin / "agy"
+    if not link.exists():
+        link.symlink_to(Path(real_binary).resolve())
+
+
 def _no_browser_env(root: Path) -> dict[str, str]:
     """Env overrides that make an interactive OAuth escalation inert.
 
@@ -2277,6 +2296,7 @@ def _antigravity_unwatched_worker(
         home = Path(profile_home).expanduser()
         if not (home / ".gemini").is_dir():
             return None
+        _mirror_provider_binary(home)
         return {"HOME": str(home), **_no_browser_env(root)}, home, "isolated_profile"
 
     api_key = str(os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -2294,18 +2314,7 @@ def _antigravity_unwatched_worker(
         json.dumps({"modelProvider": "gemini"}, indent=2) + "\n",
         encoding="utf-8",
     )
-    # A launcher that resolves the provider through $HOME -- the conventional
-    # ~/.local/bin/agy wrapper is one -- stops resolving the moment HOME moves.
-    # Give the isolated HOME the same binary at the same relative location so an
-    # unwatched run is a faithful stand-in for a normal one rather than a
-    # subtly different environment that only works for direct invocations.
-    real_binary = shutil.which("agy")
-    if real_binary:
-        local_bin = home / ".local" / "bin"
-        local_bin.mkdir(parents=True, exist_ok=True)
-        link = local_bin / "agy"
-        if not link.exists():
-            link.symlink_to(Path(real_binary).resolve())
+    _mirror_provider_binary(home)
     return {"HOME": str(home), "GEMINI_API_KEY": api_key, **_no_browser_env(root)}, home, "api_key"
 
 
