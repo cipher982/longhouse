@@ -98,15 +98,15 @@
     },
     {
       "id": "antigravity-managed",
-      "status": "excluded",
+      "status": "available",
       "native_target_command": "longhouse antigravity",
       "providers": [
         "antigravity"
       ],
-      "provider_binary_ownership": "excluded_until_native_entrypoint",
-      "token_policy": "not_applicable",
-      "cwd_policy": "not_applicable",
-      "notes": "Control path is proven -- hook-inbox send is routed and gated on observed hook readiness -- but no `longhouse antigravity` launcher exists yet, so the entrypoint stays excluded rather than advertising a command that does not run."
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed Antigravity CLI under the hook-inbox control path. Requires the Longhouse hook to be installed; the launcher refuses rather than starting an unmanaged session wearing a managed session id. Send availability is then gated per session on observed hook readiness."
     }
   ]
 }

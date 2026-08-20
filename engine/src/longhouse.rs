@@ -93,6 +93,11 @@ enum Commands {
         #[command(flatten)]
         launch: OpencodeLaunchArgs,
     },
+    /// Launch the stock Antigravity TUI under Longhouse hook control.
+    Antigravity {
+        #[command(flatten)]
+        launch: AntigravityLaunchArgs,
+    },
     /// Launch the stock Cursor TUI through the native Helm PTY or configure its hooks.
     #[command(args_conflicts_with_subcommands = true)]
     Cursor {
@@ -334,6 +339,28 @@ struct OpencodeLaunchArgs {
     resume_session: Option<String>,
     #[arg(long, alias = "config-dir")]
     claude_dir: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(trailing_var_arg = true, allow_hyphen_values = true)]
+struct AntigravityLaunchArgs {
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long, default_value = "assist")]
+    loop_mode: String,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    token: Option<String>,
+    #[arg(long)]
+    antigravity_bin: Option<String>,
+    /// Pass-through arguments handed to the stock `agy` TUI.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    antigravity_args: Vec<String>,
 }
 
 #[derive(Args)]
@@ -904,6 +931,173 @@ fn configure_cursor_hooks(cursor_dir: Option<PathBuf>) -> anyhow::Result<()> {
         anyhow::bail!("native Cursor hook configuration failed");
     }
     Ok(())
+}
+
+/// The Antigravity hook is what Longhouse controls the session through, so a
+/// launch without it is a plain `agy` run wearing a managed session id.
+fn antigravity_hook_script_path() -> anyhow::Result<PathBuf> {
+    Ok(longhouse_home()?
+        .join("managed-local")
+        .join("antigravity")
+        .join("plugins")
+        .join("longhouse-runtime")
+        .join("longhouse-antigravity-hook.sh"))
+}
+
+fn ensure_antigravity_hook_installed() -> anyhow::Result<()> {
+    let script = antigravity_hook_script_path()?;
+    if !script.is_file() {
+        anyhow::bail!(
+            "Antigravity hook is not installed at {}. Run `longhouse connect --install` (or \
+             `longhouse machine repair`) before launching a managed Antigravity session.",
+            script.display()
+        );
+    }
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let hooks = PathBuf::from(home)
+        .join(".gemini")
+        .join("config")
+        .join("hooks.json");
+    let registered = std::fs::read_to_string(&hooks)
+        .ok()
+        .is_some_and(|raw| raw.contains("longhouse-runtime"));
+    if !registered {
+        anyhow::bail!(
+            "Antigravity hooks are not registered in {}. Run `longhouse connect --install` before \
+             launching a managed Antigravity session.",
+            hooks.display()
+        );
+    }
+    Ok(())
+}
+
+fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()> {
+    if !interactive_stdio() {
+        anyhow::bail!(
+            "longhouse antigravity Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console."
+        );
+    }
+    // Antigravity owns conversation identity through its own resume picker;
+    // accepting a selector here would mint a managed session bound to a
+    // conversation the hook may never report.
+    for arg in &args.antigravity_args {
+        if matches!(
+            arg.split('=').next(),
+            Some("--conversation" | "--continue" | "-c")
+        ) {
+            anyhow::bail!(
+                "Antigravity Helm owns native session identity; resume/continue selectors are not accepted as passthrough args."
+            );
+        }
+    }
+    let cwd = std::fs::canonicalize(&args.cwd)?;
+    // Check the local prerequisite before the network one. The hook is what
+    // makes the session managed at all, and reporting a missing device token
+    // first sends the operator to re-authenticate a launch that would still
+    // come up uncontrolled.
+    ensure_antigravity_hook_installed()?;
+    let binary = resolve_provider_binary(
+        args.antigravity_bin
+            .or_else(|| std::env::var("LONGHOUSE_ANTIGRAVITY_BIN").ok()),
+        "agy",
+        "Antigravity",
+        "--antigravity-bin",
+    )?;
+    let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
+
+    let (launch_actor, launch_surface) =
+        managed_launch_payload::interactive_human_shell_provenance();
+    let mut payload = ManagedLaunchRegistration {
+        provider: "antigravity",
+        cwd: &cwd,
+        project: args.project.as_deref(),
+        display_name: args.name.as_deref(),
+        loop_mode: &args.loop_mode,
+        machine_name: &machine_name,
+        // The hook inbox has no remote-approval surface; agy settles its own
+        // permissions and Longhouse routes no approval to it.
+        permission_mode: PermissionMode::Bypass,
+        extra: vec![],
+    }
+    .to_json();
+    if let Some(actor) = launch_actor {
+        payload["launch_actor"] = json!(actor);
+    }
+    if let Some(surface) = launch_surface {
+        payload["launch_surface"] = json!(surface);
+    }
+    // Mint locally so a degraded launch still owns a stable session id: the
+    // hook stamps every presence and claim receipt with it, and a session that
+    // changed identity mid-run would strand those receipts.
+    payload["session_id"] = json!(Uuid::new_v4().to_string());
+    let expected_session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let response = match register_managed_launch_with_timeout(
+        &runtime,
+        &url,
+        &token,
+        "Antigravity",
+        &payload,
+        expected_session_id.as_deref(),
+        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
+    ) {
+        Ok(response) => Some(response),
+        Err(error) => {
+            eprintln!(
+                "Longhouse warning: starting Antigravity without Longhouse control because registration failed ({error:#})"
+            );
+            None
+        }
+    };
+    let session_id = response
+        .as_ref()
+        .map(|response| response.session_id.clone())
+        .or(expected_session_id)
+        .context("degraded Antigravity launch has no session identity")?;
+    let run_id = response
+        .as_ref()
+        .map(|response| response.run_id.clone())
+        .unwrap_or_else(|| {
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+            )
+            .to_string()
+        });
+
+    let mut command = Command::new(&binary);
+    command
+        .arg("--dangerously-skip-permissions")
+        .args(&args.antigravity_args)
+        .current_dir(&cwd)
+        .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
+        // Tag the claim with its owner. The session id alone is ambient: any
+        // child inherits it, so an `agy` started from inside another managed
+        // session would otherwise bind its transcripts to that session.
+        .env("LONGHOUSE_MANAGED_PROVIDER", "antigravity")
+        .env("LONGHOUSE_RUN_ID", &run_id)
+        .env("LONGHOUSE_HOME", longhouse_home()?)
+        .env_remove("LONGHOUSE_SESSION_ID")
+        .env_remove("LONGHOUSE_CHANNEL_SESSION_ID")
+        .env_remove("LONGHOUSE_PROVIDER_SESSION_ID")
+        .env_remove("LONGHOUSE_CHANNEL_CWD")
+        // The hook derives its inbox and state directories from LONGHOUSE_HOME
+        // and the managed session id. Inheriting another session's overrides
+        // would deliver this session's input into that one's inbox.
+        .env_remove("LONGHOUSE_ANTIGRAVITY_INBOX_DIR")
+        .env_remove("LONGHOUSE_ANTIGRAVITY_STATE_DIR");
+
+    println!(
+        "Managed Antigravity session launched\n\u{2192} {}/s/{}",
+        url.trim_end_matches('/'),
+        session_id.split('-').next().unwrap_or(&session_id)
+    );
+    let exit = run_foreground_command_after_spawn(&mut command, || Ok(()))?;
+    std::process::exit(exit);
 }
 
 fn native_machine_name() -> String {
@@ -3924,6 +4118,7 @@ fn main() -> anyhow::Result<()> {
             Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id, None)?,
             None => launch_managed_opencode(launch)?,
         },
+        Commands::Antigravity { launch } => launch_managed_antigravity(launch)?,
         Commands::Cursor {
             command: Some(CursorCommand::Configure { cursor_dir }),
             ..
@@ -3944,6 +4139,39 @@ mod tests {
     // notice sink must drain its buffered messages exactly once, in order.
     // Raw eprintln! inside thread bodies is prevented structurally by routing
     // thread notices through DeferredNotices (see spawn_managed_registration_retry).
+    #[test]
+    fn antigravity_launch_parses_passthrough_args_after_flags() {
+        let cli = Cli::parse_from([
+            "longhouse",
+            "antigravity",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "demo",
+            "--model",
+            "gemini-3.7-flash",
+        ]);
+        let Some(Commands::Antigravity { launch }) = cli.command else {
+            panic!("expected antigravity command");
+        };
+        assert_eq!(launch.cwd, PathBuf::from("/tmp"));
+        assert_eq!(launch.name.as_deref(), Some("demo"));
+        // --model is not a launcher flag; it belongs to the stock TUI and must
+        // survive as passthrough rather than being rejected.
+        assert_eq!(
+            launch.antigravity_args,
+            vec!["--model".to_string(), "gemini-3.7-flash".to_string()]
+        );
+    }
+
+    #[test]
+    fn antigravity_hook_script_lives_under_the_managed_local_plugin_root() {
+        let path = antigravity_hook_script_path().unwrap();
+        assert!(path.ends_with(
+            "managed-local/antigravity/plugins/longhouse-runtime/longhouse-antigravity-hook.sh"
+        ));
+    }
+
     #[test]
     fn deferred_notices_drain_is_fifo_and_consuming() {
         let notices = DeferredNotices::default();
