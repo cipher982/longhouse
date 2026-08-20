@@ -2230,7 +2230,29 @@ def _install_unwatched_antigravity_hook(args: argparse.Namespace, home: Path, co
     return Path(result.stdout.strip()) / "longhouse-antigravity-hook.sh"
 
 
-def _antigravity_unwatched_worker(args: argparse.Namespace, root: Path) -> tuple[dict[str, str], Path] | None:
+def _no_browser_env(root: Path) -> dict[str, str]:
+    """Env overrides that make an interactive OAuth escalation inert.
+
+    A QA canary must never be able to open a browser on the operator's machine,
+    whatever the provider decides about auth. Shadowing the launchers agy shells
+    out to turns an escalation into a logged no-op instead of a window, and the
+    receipt means an attempt is visible in evidence rather than silent.
+    """
+
+    shim_dir = root / "no-browser-bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    attempt_log = root / "browser-launch-attempts.log"
+    for launcher in ("open", "xdg-open", "google-chrome", "firefox"):
+        _write_executable(
+            shim_dir / launcher,
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> ' + shlex.quote(str(attempt_log)) + "\nexit 0\n",
+        )
+    return {"PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+def _antigravity_unwatched_worker(
+    args: argparse.Namespace, root: Path
+) -> tuple[dict[str, str], Path, str] | None:
     """Build an unwatched provider HOME for a real agy run, or None.
 
     A live agy turn writes a conversation into the provider's own store, where
@@ -2243,6 +2265,19 @@ def _antigravity_unwatched_worker(args: argparse.Namespace, root: Path) -> tuple
     scanner watches, so the producer boundary is satisfiable rather than
     permanently unavailable.
     """
+
+    # A signed-in profile is preferred and is the only authority that can prove
+    # the control path. agy loads its hooks under gemini_api_key auth but never
+    # fires them, and every Longhouse Antigravity control operation is
+    # hook-delivered, so an API-key run can prove model calls and never prove
+    # send or steer. The profile is a dedicated HOME rather than a config dir
+    # because agy has no config-dir override.
+    profile_home = str(os.environ.get("LONGHOUSE_ANTIGRAVITY_PROFILE_HOME") or "").strip()
+    if profile_home:
+        home = Path(profile_home).expanduser()
+        if not (home / ".gemini").is_dir():
+            return None
+        return {"HOME": str(home), **_no_browser_env(root)}, home, "isolated_profile"
 
     api_key = str(os.environ.get("GEMINI_API_KEY") or "").strip()
     if not api_key:
@@ -2259,18 +2294,6 @@ def _antigravity_unwatched_worker(args: argparse.Namespace, root: Path) -> tuple
         json.dumps({"modelProvider": "gemini"}, indent=2) + "\n",
         encoding="utf-8",
     )
-    # Defense in depth: a QA canary must never be able to open a browser on the
-    # operator's machine, whatever the provider decides about auth. Shadowing
-    # the launchers agy shells out to makes an OAuth escalation inert instead of
-    # merely unlikely, and leaves a receipt when one is attempted.
-    shim_dir = root / "no-browser-bin"
-    shim_dir.mkdir(parents=True, exist_ok=True)
-    attempt_log = root / "browser-launch-attempts.log"
-    for launcher in ("open", "xdg-open", "google-chrome", "firefox"):
-        _write_executable(
-            shim_dir / launcher,
-            '#!/bin/sh\nprintf "%s\\n" "$*" >> ' + shlex.quote(str(attempt_log)) + "\nexit 0\n",
-        )
     # A launcher that resolves the provider through $HOME -- the conventional
     # ~/.local/bin/agy wrapper is one -- stops resolving the moment HOME moves.
     # Give the isolated HOME the same binary at the same relative location so an
@@ -2283,8 +2306,7 @@ def _antigravity_unwatched_worker(args: argparse.Namespace, root: Path) -> tuple
         link = local_bin / "agy"
         if not link.exists():
             link.symlink_to(Path(real_binary).resolve())
-    path = f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
-    return {"HOME": str(home), "GEMINI_API_KEY": api_key, "PATH": path}, home
+    return {"HOME": str(home), "GEMINI_API_KEY": api_key, **_no_browser_env(root)}, home, "api_key"
 
 
 def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
@@ -2305,7 +2327,26 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
                 "and would ship its own conversations into the curated timeline."
             ),
         }
-    worker_env, worker_home = worker
+    worker_env, worker_home, worker_authority = worker
+    if worker_authority == "api_key":
+        # Not a regression and not a passing proof. agy authenticates fine from
+        # GEMINI_API_KEY and runs real turns, but it loads its hooks under that
+        # authority and never fires them, and this canary proves a hook-delivered
+        # operation. Typing it as a failure would report a provider regression
+        # every scheduled run; typing it as a pass would claim a control path
+        # that was never exercised. It is unprovable under this authority.
+        return {
+            "status": "blocked",
+            "failure_code": "antigravity_control_requires_signed_in_profile",
+            "producer_boundary": "unwatched_isolated_home",
+            "credential_authority": "api_key",
+            "reason": (
+                "GEMINI_API_KEY authenticates and runs model calls, but agy does not fire "
+                "hooks under gemini_api_key auth and Longhouse delivers Antigravity control "
+                "through hooks. Set LONGHOUSE_ANTIGRAVITY_PROFILE_HOME to a signed-in "
+                "Antigravity profile to prove the control path."
+            ),
+        }
 
     version, version_evidence = _run_provider_version(binary)
     if not version:
@@ -2414,6 +2455,7 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
         "binary": binary,
         "binary_evidence": version_evidence,
         "producer_boundary": "unwatched_isolated_home",
+        "credential_authority": worker_authority,
         "worker_home": str(worker_home),
         "hook_script": str(hook_script),
         "hook_script_sha256": _sha256_file(hook_script),

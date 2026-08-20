@@ -465,6 +465,7 @@ def test_antigravity_real_agy_send_canary_requires_model_visible_marker() -> Non
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_home = root / "home"
+        (fake_home / ".gemini").mkdir(parents=True, exist_ok=True)
         fake_bin = _fake_agy(root / "bin" / "agy", emit_marker=True)
         result, payload = _run_canary(
             root,
@@ -479,7 +480,7 @@ def test_antigravity_real_agy_send_canary_requires_model_visible_marker() -> Non
                 "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
                 "HOME": str(fake_home),
                 "LONGHOUSE_ANTIGRAVITY_BIN": str(fake_bin),
-                "GEMINI_API_KEY": "fake-gemini-key",
+                "LONGHOUSE_ANTIGRAVITY_PROFILE_HOME": str(fake_home),
             },
         )
 
@@ -495,13 +496,14 @@ def test_antigravity_real_agy_send_canary_requires_model_visible_marker() -> Non
         # The run must own a HOME the shadow scanner does not watch, or the
         # canary files its own conversations into the curated timeline.
         assert agy["producer_boundary"] == "unwatched_isolated_home"
-        assert agy["worker_home"] != str(fake_home)
+        assert agy["credential_authority"] == "isolated_profile"
 
 
 def test_antigravity_real_agy_send_canary_fails_without_injected_marker() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_home = root / "home"
+        (fake_home / ".gemini").mkdir(parents=True, exist_ok=True)
         fake_bin = _fake_agy(root / "bin" / "agy", emit_marker=False)
         result, payload = _run_canary(
             root,
@@ -516,7 +518,7 @@ def test_antigravity_real_agy_send_canary_fails_without_injected_marker() -> Non
                 "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
                 "HOME": str(fake_home),
                 "LONGHOUSE_ANTIGRAVITY_BIN": str(fake_bin),
-                "GEMINI_API_KEY": "fake-gemini-key",
+                "LONGHOUSE_ANTIGRAVITY_PROFILE_HOME": str(fake_home),
             },
         )
 
@@ -543,6 +545,7 @@ def test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation() -> N
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_home = root / "home"
+        (fake_home / ".gemini").mkdir(parents=True, exist_ok=True)
         fake_bin = _fake_agy(root / "bin" / "agy", emit_marker=False)
         result, payload = _run_canary(
             root,
@@ -565,6 +568,39 @@ def test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation() -> N
         agy = payload["canaries"]["antigravity"]
         assert agy["status"] == "blocked"
         assert agy["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
+
+
+def test_antigravity_send_canary_blocks_under_api_key_authority() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_home = root / "home"
+        fake_bin = _fake_agy(root / "bin" / "agy", emit_marker=True)
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "antigravity",
+                "--antigravity-real-agy-send",
+                "--antigravity-print-timeout-secs",
+                "5",
+            ],
+            env={
+                "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
+                "HOME": str(fake_home),
+                "LONGHOUSE_ANTIGRAVITY_BIN": str(fake_bin),
+                "GEMINI_API_KEY": "fake-gemini-key",
+            },
+        )
+
+        # agy authenticates from GEMINI_API_KEY and runs real turns, but it does
+        # not fire hooks under that authority and this canary proves a
+        # hook-delivered operation. Failing would report a provider regression on
+        # every scheduled run; passing would claim an unexercised control path.
+        assert result.returncode == 0, result.stderr + result.stdout
+        agy = payload["canaries"]["antigravity"]
+        assert agy["status"] == "blocked"
+        assert agy["failure_code"] == "antigravity_control_requires_signed_in_profile"
+        assert agy["credential_authority"] == "api_key"
 
 
 def test_opencode_real_tool_canary_requires_completed_tool_marker() -> None:
@@ -679,6 +715,7 @@ def main() -> int:
         test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation,
         test_antigravity_real_agy_send_canary_requires_model_visible_marker,
         test_antigravity_real_agy_send_canary_fails_without_injected_marker,
+        test_antigravity_send_canary_blocks_under_api_key_authority,
         test_opencode_real_tool_canary_requires_completed_tool_marker,
         test_opencode_real_tool_canary_fails_without_marker_output,
         test_opencode_real_tool_canary_fails_without_done_text,
