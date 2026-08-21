@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import TranscriptShipper
@@ -54,7 +55,10 @@ OBSERVED_ACTIVITY = (
 )
 RECEIPT_FILES = (
     "provider-binary-receipt.json",
+    "provider-auth-receipt.json",
     "adapter-dispatch-receipt.json",
+    "transcript-flush-receipt.json",
+    "console-boundary-receipt.json",
     "provider-response-binding-receipt.json",
     "interrupt-contract-receipt.json",
     "cleanup-receipt.json",
@@ -81,7 +85,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=1,
@@ -103,10 +107,15 @@ REGISTRATION = ProducerRegistration(
     required_artifacts=(
         "provider_binary_receipt",
         "adapter_dispatch_receipt",
+        "transcript_flush_receipt",
+        "console_boundary_receipt",
         "provider_response_binding_receipt",
         "interrupt_contract_receipt",
         "cleanup_receipt",
     ),
+    required_artifacts_by_scenario={
+        "codex_console_adapter_lifecycle": ("provider_auth_receipt",),
+    },
     required_cleanup=(
         "provider_process_dead",
         "process_group_dead",
@@ -166,6 +175,11 @@ def _provider_environment(provider: str, args: argparse.Namespace, home: Path) -
     environment[PROVIDER_BIN_ENV[provider]] = str(args.provider_bin)
     if provider == "codex" and args.model:
         environment["CODEX_MODEL"] = args.model
+    if provider == "codex":
+        environment["CODEX_HOME"] = str(home / ".codex")
+        environment["XDG_CONFIG_HOME"] = str(home / ".config")
+        environment["XDG_DATA_HOME"] = str(home / ".local" / "share")
+        environment["XDG_CACHE_HOME"] = str(home / ".cache")
     environment.setdefault("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     environment.setdefault("CURSOR_HOME", str(home / ".cursor"))
     return environment
@@ -249,13 +263,21 @@ def _create_session(*, api_url: str, token: str, provider: str, device_id: str, 
 
 
 def _start_turn(*, api_url: str, token: str, session_id: str, message: str, request_id: str) -> dict[str, Any]:
-    result = _request(
-        api_url,
-        token,
-        "POST",
-        f"/api/agents/sessions/{session_id}/turns",
-        {"message": message, "client_request_id": request_id},
-    )
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            result = _request(
+                api_url,
+                token,
+                "POST",
+                f"/api/agents/sessions/{session_id}/turns",
+                {"message": message, "client_request_id": request_id},
+            )
+            break
+        except RuntimeError as exc:
+            if "adapter_unavailable" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
     if result.get("state") not in {"queued", "starting", "active", "completed"}:
         raise RuntimeError(f"Console turn was not accepted: {result}")
     if not isinstance(result.get("run_id"), str) or not result["run_id"]:
@@ -343,23 +365,86 @@ def _bounded_marker_excerpt(value: str, marker: str, radius: int = 160) -> str:
     return value[start:end]
 
 
-def _claim_output_evidence(claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
+def _assistant_output_texts(provider: str, content: str) -> list[str]:
+    texts: list[str] = []
+    for line in content.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        if provider in {"claude", "cursor"} and event.get("type") == "assistant":
+            message = event.get("message")
+            blocks = message.get("content") if isinstance(message, Mapping) else None
+            if isinstance(blocks, list):
+                texts.extend(
+                    str(block["text"])
+                    for block in blocks
+                    if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+                )
+        elif provider == "opencode" and event.get("type") == "text":
+            part = event.get("part")
+            if isinstance(part, Mapping) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                texts.append(str(part["text"]))
+        elif provider == "codex" and event.get("type") == "response_item":
+            payload = event.get("payload")
+            if not isinstance(payload, Mapping) or payload.get("role") != "assistant":
+                continue
+            blocks = payload.get("content")
+            if isinstance(blocks, list):
+                texts.extend(
+                    str(block["text"])
+                    for block in blocks
+                    if isinstance(block, Mapping) and block.get("type") in {"output_text", "text"} and isinstance(block.get("text"), str)
+                )
+            elif isinstance(payload.get("text"), str):
+                texts.append(str(payload["text"]))
+    return texts
+
+
+def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
+    candidates: list[dict[str, object]] = []
     for key in ("stdout_path", "source_path"):
         raw = claim.get(key)
         if not isinstance(raw, str) or not raw:
             continue
         try:
             content = Path(raw).read_text(encoding="utf-8", errors="replace")
-            marker_count = content.count(marker)
-            if marker_count:
-                return {
-                    "provider_response_source_kind": key,
-                    "provider_response_marker_count": marker_count,
-                    "provider_response_excerpt": _bounded_marker_excerpt(content, marker),
-                }
         except OSError:
             continue
-    return None
+        assistant_output = "\n".join(_assistant_output_texts(provider, content))
+        candidates.append(
+            {
+                "provider_response_source_kind": key,
+                "provider_response_marker_count": assistant_output.count(marker),
+                "provider_response_excerpt": _bounded_marker_excerpt(assistant_output, marker),
+                "provider_response_source_bytes": len(content.encode("utf-8")),
+                "provider_response_source_sha256": _sha256_bytes(content.encode("utf-8")),
+            }
+        )
+    return max(candidates, key=lambda item: int(item["provider_response_marker_count"])) if candidates else None
+
+
+def _retain_flush_diagnostics(receipt: Mapping[str, object]) -> dict[str, object]:
+    retained = dict(receipt)
+    raw_path = retained.pop("log_path", None)
+    if not isinstance(raw_path, str) or not raw_path:
+        return retained
+    try:
+        content = Path(raw_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        retained["log_retained"] = False
+        return retained
+    retained.update(
+        {
+            "log_retained": True,
+            "log_size_bytes": len(content.encode("utf-8")),
+            "log_sha256": _sha256_bytes(content.encode("utf-8")),
+            "log_tail": content[-2048:],
+        }
+    )
+    return retained
 
 
 def _pid_dead(pid: object) -> bool:
@@ -483,6 +568,7 @@ def _observation_from_receipts(
         and isinstance(provider_excerpt, str)
         and marker in provider_excerpt
         and isinstance(binding.get("provider_response_marker_count"), int)
+        and not isinstance(binding.get("provider_response_marker_count"), bool)
         and int(binding["provider_response_marker_count"]) >= 1
         and isinstance(assistant_excerpt, str)
         and marker in assistant_excerpt
@@ -523,6 +609,16 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         raise RuntimeError(f"{provider} requires variant={_expected_variant(provider)}")
     home = _isolated_provider_home()
     environment = _provider_environment(provider, args, home)
+    if provider == "codex":
+        auth_receipt = login_with_api_key(
+            args.provider_bin,
+            api_key=str(environment.get("CODEX_API_KEY") or ""),
+            environment=environment,
+            cwd=home,
+        )
+        environment.pop("CODEX_API_KEY", None)
+        environment.pop("OPENAI_API_KEY", None)
+        _write_json(root / "provider-auth-receipt.json", auth_receipt)
     if provider == "claude":
         _prepare_claude_hook(home, environment)
 
@@ -624,10 +720,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             raise RuntimeError("adapter claim did not preserve exact Console identity")
         if not _claim_uses_provider_binary(first_claim, args.provider_bin):
             raise RuntimeError("Console adapter did not launch the exact staged provider binary")
-        first_events = _wait_exact_assistant_marker(api_url, token, session_id, marker)
-        provider_response_evidence = _claim_output_evidence(first_claim, marker)
-        if provider_response_evidence is None:
-            raise RuntimeError("stock provider output did not contain the qualification marker")
+        provider_response_evidence = _claim_output_evidence(provider, first_claim, marker)
         dispatch = {
             "status": "pass",
             "provider": provider,
@@ -643,6 +736,39 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "provider_thread_id": first_claim.get("provider_thread_id"),
             "argv": (first_claim.get("result") or {}).get("argv"),
         }
+        _write_json(root / "adapter-dispatch-receipt.json", dispatch)
+        flush_receipt = _retain_flush_diagnostics(shipper.flush("console-first-turn"))
+        _write_json(root / "transcript-flush-receipt.json", flush_receipt)
+        marker_count = provider_response_evidence.get("provider_response_marker_count") if provider_response_evidence is not None else None
+        flush_ok = (
+            flush_receipt.get("status") == "pass"
+            and flush_receipt.get("exit_code") == 0
+            and flush_receipt.get("daemon_paused") is True
+            and flush_receipt.get("daemon_restarted") is True
+        )
+        boundary_receipt = {
+            "status": "pass" if flush_ok and isinstance(marker_count, int) and marker_count >= 1 else "fail",
+            "provider": provider,
+            "session_id": session_id,
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "claim_state": first_claim.get("state"),
+            "claim_terminal_state": (first_claim.get("result") or {}).get("terminal_state"),
+            "assistant_output_source_kind": (
+                provider_response_evidence.get("provider_response_source_kind") if provider_response_evidence is not None else None
+            ),
+            "assistant_output_marker_count": marker_count,
+            "transcript_flush_status": flush_receipt.get("status"),
+            "transcript_flush_events_shipped": flush_receipt.get("events_shipped"),
+        }
+        _write_json(root / "console-boundary-receipt.json", boundary_receipt)
+        if not flush_ok:
+            raise RuntimeError("Console transcript flush failed before durable convergence")
+        if provider_response_evidence is None:
+            raise RuntimeError("stock provider output source was unavailable")
+        if not isinstance(marker_count, int) or isinstance(marker_count, bool) or marker_count < 1:
+            raise RuntimeError("stock provider assistant output did not contain the qualification marker")
+        first_events = _wait_exact_assistant_marker(api_url, token, session_id, marker)
         binding = {
             "status": "pass",
             "provider": provider,
@@ -662,7 +788,6 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "assistant_event_count": len(first_events),
             "transcript_converged_exactly_once": len(first_events) == 1,
         }
-        _write_json(root / "adapter-dispatch-receipt.json", dispatch)
         _write_json(root / "provider-response-binding-receipt.json", binding)
 
         if provider in CAN_RESUME:
@@ -693,7 +818,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             api_url=api_url,
             token=token,
             session_id=session_id,
-            message=("Use the shell tool to run `sleep 8`, then reply with exactly " f"{interrupt_marker} and nothing else."),
+            message=(f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."),
             request_id=f"console-interrupt-{uuid4()}",
         )
         interrupt_claim_path = _claim_path(longhouse_home, str(interrupt_turn["run_id"]))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -53,6 +54,13 @@ def test_source_oracle_proves_production_selection_and_wiring() -> None:
         "unlaunchable_machine_clears_implicit_default": True,
         "legacy_cache_generation_invalidated": True,
     }
+
+
+def test_producer_result_has_aware_generation_time(tmp_path) -> None:
+    result = run(tmp_path / "evidence")
+
+    assert result["status"] == "pass"
+    assert datetime.fromisoformat(result["generated_at"]).tzinfo is not None
 
 
 def test_source_oracle_rejects_original_cached_implicit_default_bug() -> None:

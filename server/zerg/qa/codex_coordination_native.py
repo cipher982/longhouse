@@ -74,6 +74,7 @@ _ASSERTION_POST_COMPACTION_VISIBLE = "coordination_instructions_model_visible_af
 _ASSERTION_NO_DUP_BOOTSTRAP = "no_duplicate_visible_bootstrap"
 _ASSERTION_SEND = "provider_input_receipt_linked"
 _ASSERTION_RECEIVE = "attributed_input_visible"
+_SESSION_HEADER = "X-Longhouse-Session-Id"
 
 _CELLS: tuple[tuple[str, str], ...] = (
     (_ASSERTION_CREATE, _SCENARIO_CREATE),
@@ -97,7 +98,7 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=_SCENARIO_CREATE,
     scenario_revision=2,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
@@ -125,9 +126,12 @@ REGISTRATION = ProducerRegistration(
     required_artifacts=(
         "provider_binary_receipt",
         "coordination_observation",
-        "typed_compaction_receipt",
         "cleanup_receipt",
     ),
+    required_artifacts_by_scenario={
+        _SCENARIO_POST_COMPACTION: ("typed_compaction_receipt",),
+        _SCENARIO_DIRECTED_INPUT: ("target_send_readiness",),
+    },
     required_cleanup=(
         "final_bridge_stopped",
         "final_socket_absent",
@@ -215,12 +219,15 @@ def _api_call(
     *,
     method: str = "GET",
     json_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     headers = {
         "X-Agents-Token": token,
         "Accept": "application/json",
         "User-Agent": _RUNTIME_HOST_USER_AGENT,
     }
+    if extra_headers:
+        headers.update(extra_headers)
     data: bytes | None = None
     if json_body is not None:
         data = json.dumps(json_body).encode("utf-8")
@@ -261,6 +268,38 @@ def _issue_coordination_token(args: argparse.Namespace, session_id: str) -> str:
     if not token:
         raise RuntimeError("Runtime Host did not return a session coordination token")
     return token
+
+
+def _wait_target_send_readiness(args: argparse.Namespace, session_id: str) -> dict[str, Any]:
+    deadline = time.monotonic() + args.live_send_timeout_secs
+    last: dict[str, Any] = {}
+    transient_errors: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        try:
+            last = _api_call(
+                args.api_url,
+                args.agents_token,
+                f"sessions/{session_id}/state-diagnostics",
+            )
+        except _RuntimeHostHTTPError as exc:
+            if exc.status not in {404, 429, 503}:
+                raise
+            transient_errors.append({"status": exc.status, "detail": exc.detail[:240]})
+            time.sleep(0.25)
+            continue
+        shadow = last.get("shadow") if isinstance(last.get("shadow"), dict) else {}
+        control = shadow.get("control") if isinstance(shadow.get("control"), dict) else {}
+        actions = control.get("actions") if isinstance(control.get("actions"), dict) else {}
+        send_input = actions.get("send_input") if isinstance(actions.get("send_input"), dict) else {}
+        if send_input.get("state") == "available":
+            return {
+                "session_id": session_id,
+                "send_input_state": "available",
+                "catalog_commit_seq": last.get("catalog_commit_seq"),
+                "transient_poll_errors": transient_errors[-5:],
+            }
+        time.sleep(0.25)
+    raise RuntimeError(f"directed-input target never became send-ready: {session_id}")
 
 
 def _last_assistant_message(thread_path: Path) -> str:
@@ -546,12 +585,6 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         state_file = Path(str(summary.get("state_file") or ""))
         if not session_id or not ws_url or not state_file.is_file():
             raise RuntimeError("post-compaction bridge did not return its typed control state")
-        state = bridge_canary._read_json(state_file)
-        thread_id = str(state.get("thread_id") or "").strip()
-        thread_path = Path(str(state.get("thread_path") or ""))
-        if not thread_id or not thread_path.is_file():
-            raise RuntimeError("post-compaction bridge did not materialize a native Codex thread")
-
         seed_marker = f"LONGHOUSE_COORD_COMPACT_SEED_{uuid.uuid4().hex}"
         state = _live_send_and_wait(
             args,
@@ -561,9 +594,10 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             f"Reply with exactly {seed_marker} and nothing else.",
             timeout=args.live_send_timeout_secs,
         )
+        thread_id = str(state.get("thread_id") or "").strip()
         seeded_thread_path = Path(str(state.get("thread_path") or ""))
         seed_reply = _last_assistant_message(seeded_thread_path) if seeded_thread_path.is_file() else ""
-        if state.get("last_turn_status") != "completed" or seed_marker not in seed_reply:
+        if not thread_id or state.get("last_turn_status") != "completed" or seed_marker not in seed_reply:
             raise RuntimeError("Codex seed turn did not produce structured assistant history before compaction")
 
         compaction_receipt = _typed_compact_thread(
@@ -644,39 +678,53 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
         source_token = _issue_coordination_token(args, source_session_id)
         target_token = _issue_coordination_token(args, target_session_id)
         minted_secrets.extend((source_token, target_token))
+        readiness = _wait_target_send_readiness(args, target_session_id)
+        _write_json(root / "target-send-readiness.json", readiness)
 
         text = f"LONGHOUSE_DIRECTED_INPUT_{uuid.uuid4().hex}: please note you received this from a peer session."
         client_request_id = str(uuid.uuid4())
-        created = _api_call(
-            args.api_url,
-            source_token,
-            "directed-inputs",
-            method="POST",
-            json_body={
-                "target_session_id": target_session_id,
-                "text": text,
-                "client_request_id": client_request_id,
-            },
-        )
-        directed_input_id = created.get("id")
-        input_persisted = directed_input_id is not None
-        _write_json(
-            root / "directed-input-create-receipt.json",
-            {"id": directed_input_id, "has_immediate_receipt": created.get("input_receipt") is not None},
-        )
-
-        input_receipt_linked = created.get("input_receipt") is not None
+        created: dict[str, Any] = {}
+        directed_input_id: object = None
+        input_persisted = False
+        input_receipt_linked = False
         input_visible = False
         observed_source_session_id = ""
         deadline = time.monotonic() + args.live_send_timeout_secs
         while time.monotonic() < deadline and (not input_receipt_linked or not input_visible):
             if not input_receipt_linked:
-                outbound = _api_call(args.api_url, source_token, "directed-inputs?direction=outbound", method="GET")
+                created = _api_call(
+                    args.api_url,
+                    source_token,
+                    "directed-inputs",
+                    method="POST",
+                    extra_headers={_SESSION_HEADER: source_session_id},
+                    json_body={
+                        "target_session_id": target_session_id,
+                        "text": text,
+                        "client_request_id": client_request_id,
+                    },
+                )
+                directed_input_id = created.get("id")
+                input_persisted = directed_input_id is not None
+                input_receipt_linked = created.get("input_receipt") is not None
+                outbound = _api_call(
+                    args.api_url,
+                    source_token,
+                    "directed-inputs?direction=outbound",
+                    method="GET",
+                    extra_headers={_SESSION_HEADER: source_session_id},
+                )
                 for item in outbound.get("directed_inputs", []):
                     if isinstance(item, dict) and item.get("id") == directed_input_id and item.get("input_receipt") is not None:
                         input_receipt_linked = True
                         break
-            inbound = _api_call(args.api_url, target_token, "directed-inputs?direction=inbound", method="GET")
+            inbound = _api_call(
+                args.api_url,
+                target_token,
+                "directed-inputs?direction=inbound",
+                method="GET",
+                extra_headers={_SESSION_HEADER: target_session_id},
+            )
             for item in inbound.get("directed_inputs", []):
                 if isinstance(item, dict) and item.get("id") == directed_input_id:
                     input_visible = True
@@ -684,6 +732,10 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
                     break
             if not input_receipt_linked or not input_visible:
                 time.sleep(0.5)
+        _write_json(
+            root / "directed-input-create-receipt.json",
+            {"id": directed_input_id, "has_immediate_receipt": created.get("input_receipt") is not None},
+        )
         _write_json(
             root / "directed-input-poll-result.json",
             {

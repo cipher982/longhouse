@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import os
+import subprocess
 import threading
 import time
 import urllib.request
+from pathlib import Path
+
+import pytest
 
 import zerg.qa.codex_helm_launch_visibility as launch
 
@@ -21,6 +26,24 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
     assert registration["producer_revision"] == 2
     assert registration["scenario_revision"] == 2
+
+
+def test_helm_launch_bridge_socket_fits_linux_unix_path_budget():
+    for prefix in ("lch-", "lca-"):
+        isolation_root = Path("/tmp") / f"{prefix}{'x' * 8}"
+        socket_path = launch.bridge_canary._bridge_state_root(isolation_root) / f"{'s' * 36}.sock"
+        assert len(os.fsencode(socket_path)) < 108
+
+
+def test_recording_proxy_reports_wrapper_exit_before_registration():
+    proxy = launch.RuntimeHostRecordingProxy("https://runtime.invalid")
+    process = subprocess.Popen(["/usr/bin/true"], stdout=subprocess.PIPE)
+    process.wait(timeout=5)
+    try:
+        with pytest.raises(RuntimeError, match="exited before registration"):
+            proxy.wait_registration(after=0, timeout=5, process=process)
+    finally:
+        proxy.server.server_close()
 
 
 def test_cleanup_evidence_binds_both_registered_cleanup_requirements():

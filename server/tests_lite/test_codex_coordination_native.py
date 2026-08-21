@@ -50,9 +50,13 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.required_executables == ("jq",)
-    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.producer_revision == 4
     assert m.REGISTRATION.scenario_revision == 2
-    assert "typed_compaction_receipt" in m.REGISTRATION.required_artifacts
+    assert "typed_compaction_receipt" not in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_artifacts_by_scenario == {
+        "codex_coordination_awareness_post_compaction": ("typed_compaction_receipt",),
+        "codex_coordination_directed_input": ("target_send_readiness",),
+    }
     assert len(m._CELL_BY_VARIANT) == 5
 
 
@@ -264,7 +268,7 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
             assistant = f"{marker}: use inbox for durable recovery and reply for attributed input."
         with thread_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"payload": {"type": "agent_message", "message": assistant}}) + "\n")
-        return {"last_turn_status": "completed", "thread_path": str(thread_path)}
+        return {"last_turn_status": "completed", "thread_id": "thread-1", "thread_path": str(thread_path)}
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
@@ -341,7 +345,7 @@ def test_run_awareness_post_compaction_rejects_user_prompt_echo(tmp_path: Path, 
         with thread_path.open("a", encoding="utf-8") as stream:
             for row in rows:
                 stream.write(json.dumps(row) + "\n")
-        return {"last_turn_status": "completed", "thread_path": str(thread_path)}
+        return {"last_turn_status": "completed", "thread_id": "thread-1", "thread_path": str(thread_path)}
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
@@ -385,7 +389,21 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
     def fake_issue_token(_args: object, session_id: str) -> str:
         return f"token-for-{session_id}"
 
-    def fake_api_call(_api_url: str, token: str, path: str, *, method: str = "GET", json_body: dict[str, object] | None = None):
+    def fake_api_call(
+        _api_url: str,
+        token: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: dict[str, object] | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ):
+        if path.endswith("/state-diagnostics"):
+            assert token == args.agents_token
+            assert extra_headers is None
+            return {"catalog_commit_seq": 7, "shadow": {"control": {"actions": {"send_input": {"state": "available"}}}}}
+        expected_session = "source-session-1" if token.endswith("source-session-1") else "target-session-1"
+        assert extra_headers == {m._SESSION_HEADER: expected_session}
         if path == "directed-inputs" and method == "POST":
             assert json_body is not None
             store.clear()
@@ -422,6 +440,32 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
     assert (root / "cleanup-receipt.json").is_file()
 
 
+def test_target_send_readiness_retries_transient_runtime_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    args = argparse.Namespace(
+        api_url="https://runtime.example",
+        agents_token="token",
+        live_send_timeout_secs=1,
+    )
+    responses: list[object] = [
+        m._RuntimeHostHTTPError(503, "warming"),
+        {"catalog_commit_seq": 8, "shadow": {"control": {"actions": {"send_input": {"state": "available"}}}}},
+    ]
+
+    def api_call(*_args, **_kwargs):
+        value = responses.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(m, "_api_call", api_call)
+    monkeypatch.setattr(m.time, "sleep", lambda _seconds: None)
+
+    receipt = m._wait_target_send_readiness(args, "target-session")
+
+    assert receipt["send_input_state"] == "available"
+    assert receipt["transient_poll_errors"] == [{"status": 503, "detail": "warming"}]
+
+
 def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     args.live_send_timeout_secs = 1
@@ -435,7 +479,21 @@ def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path
         summary = {"session_id": session_id, "state_file": str(isolation_root / "state.json")}
         return summary, subprocess.CompletedProcess(["start"], 0, "{}", ""), isolation_root
 
-    def fake_api_call(_api_url: str, token: str, path: str, *, method: str = "GET", json_body: dict[str, object] | None = None):
+    def fake_api_call(
+        _api_url: str,
+        token: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: dict[str, object] | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ):
+        if path.endswith("/state-diagnostics"):
+            assert token == args.agents_token
+            assert extra_headers is None
+            return {"catalog_commit_seq": 7, "shadow": {"control": {"actions": {"send_input": {"state": "available"}}}}}
+        expected_session = "source-session-1" if token.endswith("source-session-1") else "target-session-1"
+        assert extra_headers == {m._SESSION_HEADER: expected_session}
         if path == "directed-inputs" and method == "POST":
             assert json_body is not None
             store.clear()

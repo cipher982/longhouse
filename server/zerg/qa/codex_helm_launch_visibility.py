@@ -15,6 +15,7 @@ import http.server
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -224,14 +225,22 @@ class RuntimeHostRecordingProxy:
             self._registrations.append(record)
             self._condition.notify_all()
 
-    def wait_registration(self, *, after: int, timeout: float) -> dict[str, Any]:
+    def wait_registration(
+        self,
+        *,
+        after: int,
+        timeout: float,
+        process: subprocess.Popen[bytes] | None = None,
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         with self._condition:
             while len(self._registrations) <= after:
+                if process is not None and process.poll() is not None:
+                    raise RuntimeError(f"managed launch wrapper exited before registration (exit={process.returncode})")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise RuntimeError("timed out waiting for managed launch registration")
-                self._condition.wait(timeout=remaining)
+                self._condition.wait(timeout=min(remaining, 0.1 if process is not None else remaining))
             return copy.deepcopy(self._registrations[after])
 
 
@@ -418,7 +427,7 @@ def _human_launch_sequence(
     proxy: RuntimeHostRecordingProxy,
     registration_offset: int,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]:
-    isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-launch-human-", dir="/tmp"))
+    isolation_root = Path(tempfile.mkdtemp(prefix="lch-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(mode=0o700)
     project = f"provider-factory-codex-launch-{uuid.uuid4().hex}"
@@ -462,7 +471,11 @@ def _human_launch_sequence(
         )
         launched_tuis.append(fresh_tui)
         pids.append(fresh_tui.process.pid)
-        fresh_record = proxy.wait_registration(after=registration_offset, timeout=args.wait_ready_secs)
+        fresh_record = proxy.wait_registration(
+            after=registration_offset,
+            timeout=args.wait_ready_secs,
+            process=fresh_tui.process,
+        )
         fresh_registration = _safe_registration(fresh_record)
         fresh_canonical = _wait_canonical_launch(
             args,
@@ -490,7 +503,11 @@ def _human_launch_sequence(
         )
         launched_tuis.append(resumed_tui)
         pids.append(resumed_tui.process.pid)
-        resumed_record = proxy.wait_registration(after=registration_offset + 1, timeout=args.wait_ready_secs)
+        resumed_record = proxy.wait_registration(
+            after=registration_offset + 1,
+            timeout=args.wait_ready_secs,
+            process=resumed_tui.process,
+        )
         resumed_registration = _safe_registration(resumed_record)
         resumed_canonical = _wait_canonical_launch(
             args,
@@ -553,7 +570,7 @@ def _automation_launch(
     proxy: RuntimeHostRecordingProxy,
     registration_offset: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-launch-automation-", dir="/tmp"))
+    isolation_root = Path(tempfile.mkdtemp(prefix="lca-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(mode=0o700)
     project = f"provider-factory-codex-automation-{uuid.uuid4().hex}"
@@ -593,7 +610,11 @@ def _automation_launch(
             terminal_path=root / "automation-terminal.log",
         )
         pids.append(tui.process.pid)
-        record = proxy.wait_registration(after=registration_offset, timeout=args.wait_ready_secs)
+        record = proxy.wait_registration(
+            after=registration_offset,
+            timeout=args.wait_ready_secs,
+            process=tui.process,
+        )
         registration = _safe_registration(record)
         session_id = str(registration["session_id"])
         canonical = _wait_canonical_launch(

@@ -75,13 +75,11 @@ def test_schema_gates_every_console_adapter_on_its_typed_release_assertion():
     assertions = {
         (item.provider, item.variant, item.scenario_id)
         for item in load_capability_assertions()
-        if item.capability == "session.turn.start"
-        and item.assertion_id == lifecycle.ASSERTION_ID
+        if item.capability == "session.turn.start" and item.assertion_id == lifecycle.ASSERTION_ID
     }
 
     assert assertions == {
-        (provider, lifecycle._expected_variant(provider), lifecycle._scenario_id(provider))
-        for provider in lifecycle.PROVIDERS
+        (provider, lifecycle._expected_variant(provider), lifecycle._scenario_id(provider)) for provider in lifecycle.PROVIDERS
     }
 
 
@@ -94,9 +92,7 @@ def test_console_oracle_accepts_complete_independent_receipts():
         cleanup=cleanup,
     )
 
-    assert lifecycle.console_lifecycle_assertions(observation) == {
-        lifecycle.ASSERTION_ID: True
-    }
+    assert lifecycle.console_lifecycle_assertions(observation) == {lifecycle.ASSERTION_ID: True}
 
 
 @pytest.mark.parametrize(
@@ -111,9 +107,7 @@ def test_console_oracle_accepts_complete_independent_receipts():
         (3, "orphan_count", 1),
     ],
 )
-def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(
-    receipt_index: int, field: str, value: object
-):
+def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(receipt_index: int, field: str, value: object):
     receipts = list(_receipts())
     receipts[receipt_index] = copy.deepcopy(receipts[receipt_index])
     receipts[receipt_index][field] = value
@@ -125,9 +119,7 @@ def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(
         cleanup=receipts[3],
     )
 
-    assert lifecycle.console_lifecycle_assertions(observation) == {
-        lifecycle.ASSERTION_ID: False
-    }
+    assert lifecycle.console_lifecycle_assertions(observation) == {lifecycle.ASSERTION_ID: False}
 
 
 @pytest.mark.parametrize(
@@ -143,9 +135,7 @@ def test_interrupt_expectation_is_provider_typed(provider: str, variant: str):
     assert lifecycle._expected_variant(provider) == variant
 
 
-def test_codex_model_argument_controls_spawned_machine_agent_environment(
-    monkeypatch, tmp_path
-):
+def test_codex_model_argument_controls_spawned_machine_agent_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_MODEL", "ambient-model")
     args = argparse.Namespace(
         engine=tmp_path / "longhouse-engine",
@@ -157,6 +147,8 @@ def test_codex_model_argument_controls_spawned_machine_agent_environment(
 
     assert environment["CODEX_MODEL"] == "qualified-model"
     assert environment["LONGHOUSE_CODEX_BIN"] == str(args.provider_bin)
+    assert environment["CODEX_HOME"] == str(tmp_path / "home" / ".codex")
+    assert environment["XDG_CONFIG_HOME"] == str(tmp_path / "home" / ".config")
 
 
 @pytest.mark.parametrize(
@@ -168,9 +160,7 @@ def test_codex_model_argument_controls_spawned_machine_agent_environment(
         ("cursor", "2026.07.23-e383d2b", "2026.07.23-e383d2b"),
     ],
 )
-def test_provider_version_probe_normalizes_the_staged_release(
-    monkeypatch, tmp_path, provider: str, raw: str, normalized: str
-):
+def test_provider_version_probe_normalizes_the_staged_release(monkeypatch, tmp_path, provider: str, raw: str, normalized: str):
     binary = tmp_path / provider
     binary.write_text("fixture", encoding="utf-8")
     monkeypatch.setattr(
@@ -199,11 +189,97 @@ def test_dispatch_claim_must_name_the_exact_staged_binary(tmp_path):
     staged = tmp_path / "provider"
     staged.write_text("fixture", encoding="utf-8")
 
-    assert lifecycle._claim_uses_provider_binary(
-        {"result": {"argv": [str(staged), "--print"]}}, staged
+    assert lifecycle._claim_uses_provider_binary({"result": {"argv": [str(staged), "--print"]}}, staged)
+    assert not lifecycle._claim_uses_provider_binary({"result": {"argv": [str(tmp_path / "other"), "--print"]}}, staged)
+
+
+def test_codex_local_output_evidence_ignores_prompt_echo(tmp_path):
+    marker = "LH_CODEX_CONSOLE_" + "c" * 32
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": f"Reply with {marker}"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "different answer"}],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
     )
-    assert not lifecycle._claim_uses_provider_binary(
-        {"result": {"argv": [str(tmp_path / "other"), "--print"]}}, staged
+
+    without_marker = lifecycle._claim_output_evidence("codex", {"source_path": str(rollout)}, marker)
+
+    assert without_marker is not None
+    assert without_marker["provider_response_marker_count"] == 0
+    assert without_marker["provider_response_excerpt"] == ""
+
+    with rollout.open("a", encoding="utf-8") as stream:
+        stream.write(
+            "\n"
+            + json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": marker}],
+                    },
+                }
+            )
+        )
+    with_marker = lifecycle._claim_output_evidence("codex", {"source_path": str(rollout)}, marker)
+
+    assert with_marker is not None
+    assert with_marker["provider_response_marker_count"] == 1
+    assert marker in str(with_marker["provider_response_excerpt"])
+
+
+def test_start_turn_retries_only_adapter_readiness_with_stable_request(monkeypatch):
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise RuntimeError("adapter_unavailable")
+        return {"state": "queued", "run_id": "run-1"}
+
+    monkeypatch.setattr(lifecycle, "_request", request)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda _seconds: None)
+
+    result = lifecycle._start_turn(
+        api_url="https://runtime.example",
+        token="token",
+        session_id="session-1",
+        message="hello",
+        request_id="stable-request",
+    )
+
+    assert result["run_id"] == "run-1"
+    assert len(calls) == 2
+    assert (
+        calls[0][0][-1]
+        == calls[1][0][-1]
+        == {
+            "message": "hello",
+            "client_request_id": "stable-request",
+        }
     )
 
 
@@ -233,9 +309,7 @@ def test_provider_console_registration_cli_is_hermetic_without_database_env(tmp_
 
 
 def test_console_runtime_wake_socket_stays_below_linux_path_limit():
-    _runtime, _evidence, _workspace, longhouse_home = lifecycle._console_runtime_paths(
-        Path("/run/lhq/sandbox-home")
-    )
+    _runtime, _evidence, _workspace, longhouse_home = lifecycle._console_runtime_paths(Path("/run/lhq/sandbox-home"))
     wake_socket = longhouse_home / "agent" / "transcript-wake.sock"
 
     assert len(os.fsencode(wake_socket)) <= 90

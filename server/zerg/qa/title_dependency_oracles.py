@@ -617,7 +617,7 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
                 last_activity_at=obligation_started,
                 user_messages=1,
                 first_user_message_preview=(
-                    "Reply with exactly LONGHOUSE_CLAUDE_PRINT_74694349fb694c97af560ac98572f989 " "and nothing else.\n"
+                    "Reply with exactly LONGHOUSE_CLAUDE_PRINT_74694349fb694c97af560ac98572f989 and nothing else.\n"
                 ),
                 semantic_projection_version=1,
                 title_attempt_count=0,
@@ -749,11 +749,15 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
             def recovered_snapshot():
                 snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
                 rows, unrelated, _row_local_empty, legacy_proof = fixture_rows(snapshot)
+                rows_by_id = {str(row["session_id"]): row for row in rows}
                 dependency_rows = snapshot["dependencies"]
                 recovered = (
                     len(rows) == 8
                     and all(row["anchor_title"] for row in rows)
-                    and all(row["title_attempt_count"] == 0 for row in rows)
+                    and rows_by_id[session_ids[1]]["title_attempt_count"] == 5
+                    and all(
+                        rows_by_id[session_id]["title_attempt_count"] == 0 for session_id in session_ids if session_id != session_ids[1]
+                    )
                     and all(row["title_dependency_incident_id"] is None for row in rows)
                     and dependency_rows
                     and dependency_rows[0]["state"] == "healthy"
@@ -855,7 +859,8 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
             failed_by_id[session_ids[0]]["title_attempt_count"] == 5
             and failed_by_id[session_ids[1]]["title_attempt_count"] == 5
             and all(failed_by_id[session_id]["title_attempt_count"] == 0 for session_id in session_ids[2:])
-            and all(row["title_attempt_count"] == 0 for row in recovered_rows)
+            and recovered_by_id[session_ids[1]]["title_attempt_count"] == 5
+            and all(recovered_by_id[session_id]["title_attempt_count"] == 0 for session_id in session_ids if session_id != session_ids[1])
         ),
         "legacy_terminal_timeout_reentered": (
             failed_by_id[session_ids[0]]["title_dependency_incident_id"] in incident_ids
@@ -865,7 +870,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
         "terminal_empty_response_reentered": (
             failed_by_id[session_ids[1]]["title_attempt_count"] == 5
             and failed_by_id[session_ids[1]]["title_dependency_incident_id"] in incident_ids
-            and recovered_by_id[session_ids[1]]["title_attempt_count"] == 0
+            and recovered_by_id[session_ids[1]]["title_attempt_count"] == 5
             and bool(recovered_by_id[session_ids[1]]["anchor_title"])
         ),
         "row_local_empty_response_isolated": (

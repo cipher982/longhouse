@@ -15,6 +15,8 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Callable
@@ -438,6 +440,7 @@ def run(evidence_root: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             "observation": {},
             "assertions": {ASSERTION_ID: False},
         }
+    result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = _artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)
     return result

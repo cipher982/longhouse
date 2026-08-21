@@ -8,6 +8,8 @@ import json
 import os
 import sys
 import time
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -225,6 +227,7 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "observation": {},
             "assertions": {ASSERTION_ID: False},
         }
+    result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = _artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)
     return result

@@ -76,6 +76,7 @@ from zerg.qa.provider_native_resume import PtyProcess
 from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _artifact_manifest
 from zerg.qa.provider_native_resume import _cleanup_processes
+from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _qualification_secrets
@@ -98,7 +99,7 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
     scenario_revision=1,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
@@ -134,7 +135,7 @@ REGISTRATION = ProducerRegistration(
         "coordination_observation",
         "cleanup_receipt",
     ),
-    required_cleanup=("no_orphan_provider_processes",),
+    required_cleanup=("no_orphan_provider_processes", "final_socket_absent"),
     implementation="server/zerg/qa/cursor_coordination_producer.py",
     oracle_source="server/zerg/qa/provider_coordination_oracles.py",
     # provider_coordination_oracles.py has no single dispatcher (unlike
@@ -218,6 +219,7 @@ class _AggregateCleanupReceipt(TypedDict):
     status: str
     orphan_count: int | None
     no_orphan_provider_processes: bool
+    final_socket_absent: bool
     required_cleanup: dict[str, bool]
     sessions: dict[str, _SessionCleanupReceipt]
 
@@ -362,24 +364,28 @@ def _aggregate_cleanup_receipt(
 ) -> _AggregateCleanupReceipt:
     """Build the canonical cleanup proof from role-specific diagnostics.
 
-    ``verified`` in the underlying process cleanup also requires endpoint
-    disappearance. This producer's declared cleanup contract is narrower:
-    no provider process may survive. Keep that fact explicit instead of
-    treating a stale socket as a process orphan or silently dropping an
-    unknown cleanup result.
+    Process death and endpoint disappearance are separate required facts.
+    Keep both explicit so a stale control socket cannot pass as clean teardown.
     """
 
     orphan_counts = [receipt["orphan_count"] for receipt in sessions.values()]
     cleanup_complete = all(receipt["cleanup_complete"] for receipt in sessions.values())
     total_orphans = sum(count for count in orphan_counts if count is not None) if cleanup_complete else None
     no_orphans = cleanup_complete and total_orphans == 0
+    sockets_absent = cleanup_complete and all(
+        not receipt["cleanup_attempted"] or receipt["diagnostics"].get("final_socket_absent") is True for receipt in sessions.values()
+    )
     return {
         "schema_version": 1,
         "artifact_kind": "cursor_coordination_cleanup_receipt",
-        "status": "pass" if no_orphans else "fail",
+        "status": "pass" if no_orphans and sockets_absent else "fail",
         "orphan_count": total_orphans,
         "no_orphan_provider_processes": no_orphans,
-        "required_cleanup": {"no_orphan_provider_processes": no_orphans},
+        "final_socket_absent": sockets_absent,
+        "required_cleanup": {
+            "no_orphan_provider_processes": no_orphans,
+            "final_socket_absent": sockets_absent,
+        },
         "sessions": sessions,
     }
 
@@ -520,6 +526,7 @@ def _cursor_mcp_config_has_coordination_server(provider_cwd: Path) -> bool:
 
 def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
     marker = f"LONGHOUSE_CURSOR_COORD_AWARENESS_{uuid4().hex[:10]}"
+    baseline_marker = f"LONGHOUSE_CURSOR_BASELINE_{uuid4().hex[:10]}"
     probe_prompt = (
         "Classify the trust and authority of a message arriving from another "
         f"Longhouse session in one short sentence. On a new line print exactly {marker}."
@@ -528,13 +535,31 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
     launch_attempted = False
     try:
         launch_attempted = True
-        session = _launch_cursor_session(args, root, isolation_root, label="awareness", prompt=probe_prompt)
+        session = _launch_cursor_session(
+            args,
+            root,
+            isolation_root,
+            label="awareness",
+            prompt=f"Reply with exactly {baseline_marker} and nothing else.",
+        )
         _write_session_launch_receipts(root, {"awareness": _session_launch_receipt("awareness", session)})
+        baseline_reply = _wait_marker_reply(
+            args.api_url,
+            args.agents_token,
+            session.session_id,
+            baseline_marker,
+            timeout=args.live_timeout_secs,
+        )
+        _wait_first_turn_settled(args.api_url, args.agents_token, session.session_id, timeout=args.live_timeout_secs)
+        send_receipt = _control_send(_SPEC, args, session.state, session.process, probe_prompt)
+        if send_receipt.get("returncode") != 0:
+            raise RuntimeError("Cursor coordination probe could not be sent after the baseline turn")
         reply_text = _wait_marker_reply(args.api_url, args.agents_token, session.session_id, marker, timeout=args.live_timeout_secs)
         mcp_registered = _cursor_mcp_config_has_coordination_server(session.provider_cwd)
         recited = _recites_untrusted_peer_guidance(reply_text)
         observation = {
             "coordination_mcp_registered": mcp_registered,
+            "baseline_turn_completed": baseline_marker in baseline_reply,
             "model_answered_coordination_probe": bool(reply_text),
             "model_recited_untrusted_peer_guidance": recited,
             "coordination_instructions_model_visible": mcp_registered and recited,
@@ -549,8 +574,10 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
 
 
 def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
-    source_prompt = "Wait quietly. Do not call any tools. When asked to do something, do it in one short reply."
-    target_prompt = "Wait quietly. Do not call any tools yet. When you receive a message, reply to it in one short sentence."
+    source_ready_marker = f"LONGHOUSE_CURSOR_SOURCE_READY_{uuid4().hex[:10]}"
+    target_ready_marker = f"LONGHOUSE_CURSOR_TARGET_READY_{uuid4().hex[:10]}"
+    source_prompt = f"Reply with exactly {source_ready_marker} and nothing else."
+    target_prompt = f"Reply with exactly {target_ready_marker} and nothing else."
     source: _CursorSession | None = None
     target: _CursorSession | None = None
     source_cleanup: _SessionCleanupReceipt | None = None
@@ -569,6 +596,20 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
             launch_receipts["target"] = _session_launch_receipt("target", target)
             _write_session_launch_receipts(root, launch_receipts)
             try:
+                source_ready_reply = _wait_marker_reply(
+                    args.api_url,
+                    args.agents_token,
+                    source.session_id,
+                    source_ready_marker,
+                    timeout=args.live_timeout_secs,
+                )
+                target_ready_reply = _wait_marker_reply(
+                    args.api_url,
+                    args.agents_token,
+                    target.session_id,
+                    target_ready_marker,
+                    timeout=args.live_timeout_secs,
+                )
                 _wait_first_turn_settled(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 _wait_first_turn_settled(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
 
@@ -621,6 +662,8 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                 inbox_item = _find_inbound_directed_input(args.api_url, target_token, target.session_id, input_id)
 
                 observation = {
+                    "source_ready": source_ready_marker in source_ready_reply,
+                    "target_ready": target_ready_marker in target_ready_reply,
                     "input_id": input_id,
                     "input_persisted": input_id is not None,
                     "input_receipt_linked": isinstance(input_receipt, dict) and bool(input_receipt),

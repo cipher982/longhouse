@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import httpx
 
@@ -31,6 +32,7 @@ def test_live_workspace_producer_accepts_responsive_human_only_projection(tmp_pa
 
     assert result["status"] == "pass"
     assert result["assertions"] == {producer.ASSERTION_ID: True}
+    assert datetime.fromisoformat(result["generated_at"]).tzinfo is not None
     assert result["observation"]["proof_path_leak_count"] == 0
     assert (tmp_path / "evidence/live-runtime-observation.json").is_file()
 
@@ -49,9 +51,7 @@ def test_live_workspace_producer_rejects_provider_proof_root(tmp_path, monkeypat
             200,
             {
                 "device_id": "cinder",
-                "workspaces": [
-                    {"path": "/Users/d/.longhouse/canaries/provider-live/claude/qualification-r5"}
-                ],
+                "workspaces": [{"path": "/Users/d/.longhouse/canaries/provider-live/claude/qualification-r5"}],
             },
         )
 
@@ -69,7 +69,5 @@ def test_live_workspace_registration_is_a_providerless_product_cell() -> None:
     assert registration["producer_revision"] == 2
     assert registration["subject_kind"] == "longhouse_product"
     assert registration["providers"] == []
-    assert registration["assertion_cells"] == [
-        {"assertion_id": producer.ASSERTION_ID, "variant": None}
-    ]
+    assert registration["assertion_cells"] == [{"assertion_id": producer.ASSERTION_ID, "variant": None}]
     assert json.loads(json.dumps(registration))["scenario_id"] == "workspace_suggestions_live"

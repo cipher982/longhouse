@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
 
+import zerg.qa.title_dependency_live_producer as live_producer
 import zerg.qa.title_dependency_oracles as oracles
+import zerg.qa.title_dependency_recovery_producer as recovery_producer
 from zerg.qa.title_dependency_live_producer import REGISTRATION as LIVE_REGISTRATION
 from zerg.qa.title_dependency_recovery_producer import REGISTRATION as RECOVERY_REGISTRATION
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
@@ -22,6 +25,22 @@ def test_title_product_registrations_have_no_provider_axis():
         assert payload["provider_artifact_required"] is False
         assert payload["sandbox_policy"] == "provider-qualification-bwrap-v3"
         assert payload["network_policy"] == "shared_provider_egress"
+
+
+@pytest.mark.parametrize(
+    ("module", "oracle_name"),
+    (
+        (live_producer, "run_live_title_dependency_oracle"),
+        (recovery_producer, "run_hermetic_title_dependency_oracle"),
+    ),
+)
+def test_title_producer_results_have_aware_generation_time(tmp_path, monkeypatch, module, oracle_name):
+    monkeypatch.setattr(module, oracle_name, lambda **_kwargs: {"passed": True, "observation": {}})
+
+    result = module.run(tmp_path / module.__name__.rsplit(".", 1)[-1])
+
+    assert result["status"] == "pass"
+    assert datetime.fromisoformat(result["generated_at"]).tzinfo is not None
 
 
 def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatch):
@@ -104,9 +123,7 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
 
 
 def test_live_title_envelope_exercises_native_claude_semantic_projection():
-    session_id, payload = oracles._envelope(
-        tenant_id="tenant", machine_id=PROVIDER_FACTORY_MACHINE_ID, message="Human request"
-    )
+    session_id, payload = oracles._envelope(tenant_id="tenant", machine_id=PROVIDER_FACTORY_MACHINE_ID, message="Human request")
 
     assert payload["session_id"] == session_id
     assert payload["provider"] == "claude"

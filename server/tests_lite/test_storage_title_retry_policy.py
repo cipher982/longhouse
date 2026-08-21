@@ -147,9 +147,7 @@ async def test_provider_timeout_opens_availability_incident_without_row_failure(
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _timeout)
 
     generated = await storage_titles.generate_storage_session_title(
-        _authorized_candidate(
-            session_id=str(uuid4()), first_user_message="Explain the provider timeout", provider="opencode"
-        )
+        _authorized_candidate(session_id=str(uuid4()), first_user_message="Explain the provider timeout", provider="opencode")
     )
 
     assert generated is False
@@ -173,9 +171,7 @@ async def test_catalog_timeout_does_not_poison_provider_or_spend_row_attempt(mon
     monkeypatch.setattr(storage_titles, "_dependency_identity", lambda: _dependency_identity())
 
     generated = await storage_titles.generate_storage_session_title(
-        _authorized_candidate(
-            session_id=str(uuid4()), first_user_message="Explain the catalog timeout", provider="opencode"
-        )
+        _authorized_candidate(session_id=str(uuid4()), first_user_message="Explain the catalog timeout", provider="opencode")
     )
 
     assert generated is False
@@ -254,9 +250,7 @@ async def test_scheduler_reserves_four_slots_before_creating_tasks_and_drains_ba
     )
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _model_call)
     candidates = [
-        _authorized_candidate(
-            session_id=str(uuid4()), first_user_message=f"Title backlog item {index}", provider="opencode"
-        )
+        _authorized_candidate(session_id=str(uuid4()), first_user_message=f"Title backlog item {index}", provider="opencode")
         for index in range(8)
     ]
 
@@ -310,9 +304,7 @@ async def test_worker_shutdown_releases_capacity_even_when_client_close_fails(mo
     )
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _blocked_model)
     assert storage_titles.schedule_storage_session_title(
-        _authorized_candidate(
-            session_id=str(uuid4()), first_user_message="Cancel this title worker", provider="opencode"
-        )
+        _authorized_candidate(session_id=str(uuid4()), first_user_message="Cancel this title worker", provider="opencode")
     )
     await asyncio.wait_for(entered.wait(), timeout=1)
 
@@ -520,10 +512,7 @@ def test_typed_factory_title_assurance_is_the_only_factory_machine_title_obligat
         "launch_actor": "human_ui",
         "launch_surface": "test",
     }
-    near_miss_rows = {
-        field: {**common, "session_id": str(uuid4()), field: value}
-        for field, value in near_misses.items()
-    }
+    near_miss_rows = {field: {**common, "session_id": str(uuid4()), field: value} for field, value in near_misses.items()}
     with engine.begin() as connection:
         connection.execute(
             StorageSession.__table__.insert(),
@@ -785,13 +774,16 @@ def test_dependency_incident_survives_restart_and_exact_replay(tmp_path):
 def test_dependency_recovery_rearms_only_incident_bound_terminal_debt(tmp_path):
     engine = _build_engine(tmp_path)
     auth_id = uuid4()
+    retryable_id = uuid4()
     unrelated_id = uuid4()
     _insert_session(engine, session_id=auth_id, first_message="auth debt")
+    _insert_session(engine, session_id=retryable_id, first_message="empty response debt")
     _insert_session(engine, session_id=unrelated_id, first_message="row-specific debt")
     store = CatalogStore(engine)
     now = (datetime.now(UTC) - timedelta(seconds=5)).replace(microsecond=0)
     for _ in range(MAX_TITLE_ATTEMPTS):
         store.fail_storage_title(session_id=auth_id, reason="AuthenticationError: 401", failed_at=now)
+        store.fail_storage_title(session_id=retryable_id, reason="empty_model_response", failed_at=now)
         store.fail_storage_title(session_id=unrelated_id, reason="invalid_title_payload", failed_at=now)
 
     identity_a = _dependency_identity("a" * 64)
@@ -805,7 +797,7 @@ def test_dependency_recovery_rearms_only_incident_bound_terminal_debt(tmp_path):
     assert str(auth_id) in _candidate_ids(engine)
     token = uuid4()
     acquired = store.acquire_storage_title_dependency(
-        session_id=auth_id,
+        session_id=retryable_id,
         probe_token=token,
         observed_at=now + timedelta(seconds=1),
         lease_seconds=60,
@@ -819,15 +811,21 @@ def test_dependency_recovery_rearms_only_incident_bound_terminal_debt(tmp_path):
         **identity_b,
     )
 
-    assert recovered["rearmed_sessions"] == 1
+    assert recovered["rearmed_sessions"] == 2
     auth_row = _title_row(engine, auth_id)
+    retryable_row = _title_row(engine, retryable_id)
     unrelated_row = _title_row(engine, unrelated_id)
     assert auth_row["title_attempt_count"] == 0
     assert auth_row["title_dependency_incident_id"] is None
     assert auth_row["title_last_error"] is None
+    assert retryable_row["title_attempt_count"] == MAX_TITLE_ATTEMPTS
+    assert retryable_row["title_dependency_incident_id"] is None
+    assert retryable_row["title_last_error"] == "empty_model_response"
+    assert retryable_row["title_retry_at"].replace(tzinfo=UTC) == now + timedelta(seconds=2)
     assert unrelated_row["title_attempt_count"] == MAX_TITLE_ATTEMPTS
     assert unrelated_row["title_last_error"] == "invalid_title_payload"
     assert str(auth_id) in _candidate_ids(engine)
+    assert str(retryable_id) in _candidate_ids(engine)
     assert str(unrelated_id) not in _candidate_ids(engine)
 
 

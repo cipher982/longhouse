@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +107,7 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "observation": {},
             "assertions": {ASSERTION_ID: False},
         }
+    result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)
     return result

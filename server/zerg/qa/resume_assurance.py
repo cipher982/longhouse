@@ -96,6 +96,10 @@ class ProducerRegistration:
     # selected provider.  The flat tuple remains the compatibility shape for
     # single-provider producers.
     credential_binding_ids_by_provider: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
+    # A producer spanning several scenarios may require evidence that is only
+    # meaningful in one of them. The compiler adds these roles to the common
+    # required_artifacts for the selected scenario.
+    required_artifacts_by_scenario: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
     # Non-Python tools invoked by the producer from the sandbox-visible PATH.
     # The immutable worker image validates these before an epoch can execute.
     required_executables: tuple[str, ...] = ()
@@ -129,6 +133,12 @@ class ProducerRegistration:
             }
         else:
             payload.pop("credential_binding_ids_by_provider", None)
+        if self.required_artifacts_by_scenario:
+            payload["required_artifacts_by_scenario"] = {
+                scenario: list(artifacts) for scenario, artifacts in sorted(self.required_artifacts_by_scenario.items())
+            }
+        else:
+            payload.pop("required_artifacts_by_scenario", None)
         return payload
 
 
@@ -337,6 +347,15 @@ def _producer_supports_cell(
         failures.append("observed_activity")
     if not registration.get("required_artifacts"):
         failures.append("required_artifacts")
+    scenario_artifacts = registration.get("required_artifacts_by_scenario") or {}
+    if not isinstance(scenario_artifacts, Mapping) or any(
+        scenario not in supported_scenarios
+        or not isinstance(artifacts, list)
+        or not artifacts
+        or any(not isinstance(artifact, str) or not artifact for artifact in artifacts)
+        for scenario, artifacts in scenario_artifacts.items()
+    ):
+        failures.append("required_artifacts_by_scenario")
     if not registration.get("required_cleanup"):
         failures.append("required_cleanup")
     return failures
@@ -558,7 +577,17 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "oracle_entrypoint": registration["oracle_entrypoint"],
                 "evidence_class": sorted(set(registration["evidence_classes"]).intersection(cell["acceptable_evidence"]))[0],
                 "required_activity": list(registration["observed_activity"]),
-                "required_artifacts": list(registration["required_artifacts"]),
+                "required_artifacts": list(
+                    dict.fromkeys(
+                        [
+                            *registration["required_artifacts"],
+                            *(registration.get("required_artifacts_by_scenario") or {}).get(
+                                str(cell["scenario_id"]),
+                                [],
+                            ),
+                        ]
+                    )
+                ),
                 "required_cleanup": list(registration["required_cleanup"]),
                 "required_executables": list(registration.get("required_executables", [])),
                 "credential_binding_ids": list(

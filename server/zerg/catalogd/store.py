@@ -8364,6 +8364,16 @@ class CatalogStore:
                     select(sessions.c.session_id).where(sessions.c.title_dependency_incident_id == incident_key)
                 ).scalars()
             ]
+            retryable_debt_ids = [
+                str(value)
+                for value in connection.execute(
+                    select(sessions.c.session_id).where(
+                        sessions.c.title_dependency_incident_id == incident_key,
+                        _retryable_title_row_failure_clause(sessions),
+                    )
+                ).scalars()
+            ]
+            shared_debt_ids = sorted(set(debt_ids) - set(retryable_debt_ids))
             commit_seq = _advance_commit_seq(connection, recovered_at)
             connection.execute(
                 update(dependency)
@@ -8385,10 +8395,10 @@ class CatalogStore:
                     updated_at=recovered_at,
                 )
             )
-            if debt_ids:
+            if shared_debt_ids:
                 connection.execute(
                     update(sessions)
-                    .where(sessions.c.session_id.in_(debt_ids), sessions.c.title_dependency_incident_id == incident_key)
+                    .where(sessions.c.session_id.in_(shared_debt_ids), sessions.c.title_dependency_incident_id == incident_key)
                     .values(
                         title_attempt_count=0,
                         title_retry_at=recovered_at,
@@ -8400,8 +8410,27 @@ class CatalogStore:
                 )
                 connection.execute(
                     update(catalog)
-                    .where(catalog.c.session_id.in_(debt_ids))
+                    .where(catalog.c.session_id.in_(shared_debt_ids))
                     .values(title_retry_at=recovered_at, title_last_error=None, updated_at=recovered_at)
+                )
+            if retryable_debt_ids:
+                connection.execute(
+                    update(sessions)
+                    .where(
+                        sessions.c.session_id.in_(retryable_debt_ids),
+                        sessions.c.title_dependency_incident_id == incident_key,
+                    )
+                    .values(
+                        title_retry_at=recovered_at,
+                        title_dependency_incident_id=None,
+                        commit_seq=commit_seq,
+                        updated_at=recovered_at,
+                    )
+                )
+                connection.execute(
+                    update(catalog)
+                    .where(catalog.c.session_id.in_(retryable_debt_ids))
+                    .values(title_retry_at=recovered_at, updated_at=recovered_at)
                 )
             return {
                 "changed": True,
