@@ -68,6 +68,12 @@ def _free_port() -> int:
         return int(listener.getsockname()[1])
 
 
+def _ephemeral_fernet_secret() -> str:
+    """Return one process-local encryption key for the hermetic Runtime Host."""
+
+    return base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+
+
 class _StubState:
     def __init__(self, unavailable_token: str, healthy_token: str) -> None:
         self.unavailable_token = unavailable_token
@@ -216,13 +222,17 @@ class _RuntimeHost:
         self.process: subprocess.Popen[bytes] | None = None
         self._log_stream = None
 
-    def start(self) -> None:
-        if self.process is not None:
-            raise RuntimeError("Runtime Host is already running")
+    def _child_environment(self, server_root: Path) -> dict[str, str]:
         environment = dict(os.environ)
+        # The oracle owns every Runtime Host dependency. Never borrow a host or
+        # factory credential: inherited values make the check non-hermetic and
+        # can leak a durable secret into a child that needs only an ephemeral
+        # encryption key.
+        environment.pop("FERNET_SECRET", None)
         environment.update(
             {
                 "DATABASE_URL": f"sqlite:///{self.root / 'runtime.db'}",
+                "FERNET_SECRET": _ephemeral_fernet_secret(),
                 "TESTING": "1",
                 "AUTH_DISABLED": "1",
                 "SINGLE_TENANT": "1",
@@ -239,8 +249,14 @@ class _RuntimeHost:
             }
         )
         environment.pop("OPENROUTER_API_KEY", None)
-        server_root = self.repo_root / "server"
         environment["PYTHONPATH"] = os.pathsep.join(item for item in (str(server_root), environment.get("PYTHONPATH", "")) if item)
+        return environment
+
+    def start(self) -> None:
+        if self.process is not None:
+            raise RuntimeError("Runtime Host is already running")
+        server_root = self.repo_root / "server"
+        environment = self._child_environment(server_root)
         self._log_stream = self.log_path.open("ab")
         self.process = subprocess.Popen(
             [

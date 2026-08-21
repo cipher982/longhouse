@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 
 import zerg.qa.title_dependency_oracles as oracles
 from zerg.qa.title_dependency_live_producer import REGISTRATION as LIVE_REGISTRATION
@@ -124,13 +125,33 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
     assert "runtime_host_title_provenance" in LIVE_REGISTRATION.observed_activity
-    assert RECOVERY_REGISTRATION.producer_revision == 6
-    assert RECOVERY_REGISTRATION.scenario_revision == 6
+    assert RECOVERY_REGISTRATION.producer_revision == 7
+    assert RECOVERY_REGISTRATION.scenario_revision == 7
     assert "legacy_exact_provider_proof_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
 
 
+def test_hermetic_runtime_owns_an_ephemeral_fernet_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("FERNET_SECRET", "poisoned-ambient-secret")
+    runtime = oracles._RuntimeHost(
+        repo_root=Path(__file__).resolve().parents[2],
+        root=tmp_path,
+        base_url="http://127.0.0.1:1/v1",
+        token_file=tmp_path / "title-token",
+    )
+
+    environment = runtime._child_environment(Path(__file__).resolve().parents[1])
+
+    assert environment["FERNET_SECRET"] != "poisoned-ambient-secret"
+    Fernet(environment["FERNET_SECRET"].encode("ascii"))
+    assert environment.get("OPENROUTER_API_KEY") is None
+
+
 @pytest.mark.timeout(120)
-def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path):
+def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path, monkeypatch):
+    ambient_secret = "poisoned-ambient-secret"
+    ephemeral_secret = Fernet.generate_key().decode("ascii")
+    monkeypatch.setenv("FERNET_SECRET", ambient_secret)
+    monkeypatch.setattr(oracles, "_ephemeral_fernet_secret", lambda: ephemeral_secret)
     evidence_root = tmp_path / "evidence"
     result = oracles.run_hermetic_title_dependency_oracle(
         evidence_root=evidence_root,
@@ -154,3 +175,8 @@ def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path):
     assert observation["aged_backlog_degrades_with_healthy_dependency"] is True
     assert observation["same_rows_recovered"] is True
     assert observation["storage_v2_read_count"] == 0
+    for artifact in evidence_root.rglob("*"):
+        if artifact.is_file():
+            retained = artifact.read_text(encoding="utf-8", errors="replace")
+            assert ambient_secret not in retained
+            assert ephemeral_secret not in retained
