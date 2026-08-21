@@ -323,9 +323,19 @@ class Settings:  # noqa: D401 – simple data container
     def data_dir(self) -> Path:
         """Return the absolute path to the persistent data directory.
 
+        An explicit LONGHOUSE_DATA_DIR supports immutable source checkouts and
+        non-Docker runtimes with a separately mounted data volume.
         In Docker containers, uses /data (mounted volume).
         In local dev, uses repo_root/data.
         """
+        configured = str(os.getenv("LONGHOUSE_DATA_DIR") or "").strip()
+        if configured:
+            path = Path(configured).expanduser()
+            if not path.is_absolute():
+                raise ValueError("LONGHOUSE_DATA_DIR must be an absolute path")
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
         # Prefer /data if it exists (Docker volume mount)
         docker_data = Path("/data")
         if docker_data.exists():

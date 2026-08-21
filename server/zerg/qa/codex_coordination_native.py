@@ -105,7 +105,7 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=_SCENARIO_CREATE,
     scenario_revision=1,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
@@ -139,6 +139,7 @@ REGISTRATION = ProducerRegistration(
         "final_socket_absent",
         "no_orphan_provider_processes",
     ),
+    required_executables=("jq",),
     implementation="server/zerg/qa/codex_coordination_native.py",
     oracle_source="server/zerg/qa/provider_coordination_oracles.py",
     # provider_coordination_oracles.py has three real pure judges

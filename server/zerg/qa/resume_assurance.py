@@ -96,6 +96,9 @@ class ProducerRegistration:
     # selected provider.  The flat tuple remains the compatibility shape for
     # single-provider producers.
     credential_binding_ids_by_provider: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
+    # Non-Python tools invoked by the producer from the sandbox-visible PATH.
+    # The immutable worker image validates these before an epoch can execute.
+    required_executables: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -112,8 +115,11 @@ class ProducerRegistration:
             "required_artifacts",
             "required_cleanup",
             "scenario_ids",
+            "required_executables",
         ):
             payload[field] = list(payload[field])
+        if not self.required_executables:
+            payload.pop("required_executables", None)
         if self.credential_binding_ids_by_provider:
             payload["credential_binding_ids_by_provider"] = {
                 provider: list(bindings) for provider, bindings in sorted(self.credential_binding_ids_by_provider.items())
@@ -537,6 +543,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "required_activity": list(registration["observed_activity"]),
                 "required_artifacts": list(registration["required_artifacts"]),
                 "required_cleanup": list(registration["required_cleanup"]),
+                "required_executables": list(registration.get("required_executables", [])),
                 "credential_binding_ids": list(
                     (registration.get("credential_binding_ids_by_provider") or {}).get(
                         str(selected.get("provider") or ""),

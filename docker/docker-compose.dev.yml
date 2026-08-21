@@ -69,7 +69,6 @@ services:
     volumes:
       - ../server:/app:cached
       - ../config:/app/config:ro
-      - backend_static:/app/static
       - ../data:/app/data
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
       - ../logs/backend:/app/logs
@@ -167,7 +166,3 @@ services:
 networks:
   swarm-network:
     driver: bridge
-
-volumes:
-  backend_static:
-    driver: local

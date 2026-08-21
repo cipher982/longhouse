@@ -13,7 +13,6 @@ from __future__ import annotations
 # Standard library
 import io
 import uuid
-from pathlib import Path
 
 # typing order per Ruff
 from typing import Any
@@ -25,23 +24,12 @@ from fastapi import UploadFile
 from fastapi import status
 from fastapi.exceptions import HTTPException
 
+from zerg.services.avatar_storage import avatar_storage_dir
+
 # Constants ------------------------------------------------------------------
 
 MAX_RAW_BYTES: Final[int] = 2 * 1024 * 1024  # 2 MiB raw upload limit
 ALLOWED_MIME: Final[set[str]] = {"image/png", "image/jpeg", "image/webp"}
-
-
-# Directory where avatars are persisted. Resolve against the repo root in local
-# development and `/app` in the runtime image.
-def _static_base_dir(module_path: Path) -> Path:
-    resolved = module_path.resolve()
-    if resolved.parents[2] == Path("/app"):
-        return Path("/app")
-    return resolved.parents[3]
-
-
-AVATARS_DIR = _static_base_dir(Path(__file__)) / "static" / "avatars"
-AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # Helper functions -----------------------------------------------------------
@@ -127,8 +115,12 @@ def store_avatar_for_user(upload: UploadFile) -> str:
 
     # 3) Persist to ./static/avatars -----------------------------------------
     unique_name = f"{uuid.uuid4().hex}.{ext}"
-    dest_path: Path = AVATARS_DIR / unique_name
+    avatars_dir = avatar_storage_dir()
+    dest_path = avatars_dir / unique_name
     try:
+        # Create mutable storage only when it is used. Importing the API from
+        # an immutable checkout remains read-only.
+        avatars_dir.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(processed_bytes)
     except Exception as exc:  # pragma: no cover
         raise HTTPException(

@@ -213,3 +213,12 @@ def test_provider_console_registration_cli_is_hermetic_without_database_env(tmp_
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert json.loads(completed.stdout)["producer_id"] == "provider.console_lifecycle.v1"
+
+
+def test_console_runtime_wake_socket_stays_below_linux_path_limit():
+    _runtime, _evidence, _workspace, longhouse_home = lifecycle._console_runtime_paths(
+        Path("/run/lhq/sandbox-home")
+    )
+    wake_socket = longhouse_home / "agent" / "transcript-wake.sock"
+
+    assert len(os.fsencode(wake_socket)) <= 90

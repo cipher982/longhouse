@@ -227,6 +227,7 @@ class _RuntimeHost:
                 "AUTH_DISABLED": "1",
                 "SINGLE_TENANT": "1",
                 "INSTANCE_ID": "factory-title-assurance",
+                "LONGHOUSE_DATA_DIR": str(self.root / "data"),
                 "LONGHOUSE_HOME": str(self.root / "home"),
                 "LONGHOUSE_STORAGE_V2_ROOT": str(self.root / "storage-v2"),
                 "LONGHOUSE_FACTORY_ASSURANCE": "1",

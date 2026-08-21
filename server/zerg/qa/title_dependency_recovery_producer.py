@@ -15,9 +15,9 @@ from zerg.qa.title_dependency_oracles import run_hermetic_title_dependency_oracl
 ASSERTION_ID = "dependency_incident_recovery"
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.title_dependency_recovery.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id="title_dependency_recovery",
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
     providers=(),
     platforms=("linux",),

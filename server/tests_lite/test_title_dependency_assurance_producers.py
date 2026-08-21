@@ -124,8 +124,8 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
     assert "runtime_host_title_provenance" in LIVE_REGISTRATION.observed_activity
-    assert RECOVERY_REGISTRATION.producer_revision == 5
-    assert RECOVERY_REGISTRATION.scenario_revision == 5
+    assert RECOVERY_REGISTRATION.producer_revision == 6
+    assert RECOVERY_REGISTRATION.scenario_revision == 6
     assert "legacy_exact_provider_proof_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
 
 

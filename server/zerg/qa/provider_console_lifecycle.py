@@ -81,7 +81,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=1,
@@ -171,6 +171,13 @@ def _probe_version(provider: str, binary: Path) -> tuple[str, str]:
     if match is None:
         raise RuntimeError(f"{provider} --version did not match its release grammar")
     return str(match.group("version")), raw
+
+
+def _console_runtime_paths(home: Path) -> tuple[Path, Path, Path, Path]:
+    """Return compact per-sandbox paths for Console runtime and IPC state."""
+
+    runtime_root = home / "c"
+    return runtime_root, runtime_root / "e", runtime_root / "w", runtime_root / "lh"
 
 
 def _request(
@@ -528,9 +535,11 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     }
     _write_json(root / "provider-binary-receipt.json", binary_receipt)
 
-    runtime_root = home / ".longhouse-console-qualification" / uuid4().hex
-    engine_evidence = runtime_root / "engine-evidence"
-    workspace = runtime_root / "workspace"
+    # HOME is already unique to one mount-isolated qualification. Keep
+    # ephemeral IPC paths compact: Linux Unix sockets cap the complete path
+    # near 108 bytes, so semantic directory names plus another UUID make the
+    # Console harness deployment-path dependent for no isolation benefit.
+    runtime_root, engine_evidence, workspace, longhouse_home = _console_runtime_paths(home)
     engine_evidence.mkdir(mode=0o700, parents=True)
     workspace.mkdir(mode=0o700, parents=True)
     if provider == "cursor":
@@ -558,7 +567,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             home=home,
             environment=environment,
             evidence_root=engine_evidence,
-            longhouse_home=runtime_root / "longhouse",
+            longhouse_home=longhouse_home,
         )
         longhouse_home = Path(environment["LONGHOUSE_HOME"])
         device_id = str(shipper.receipt["machine_name"])

@@ -49,6 +49,7 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
         ("attributed_input_visible", None),
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
+    assert m.REGISTRATION.required_executables == ("jq",)
     assert len(m._CELL_BY_VARIANT) == 5
 
 

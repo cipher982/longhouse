@@ -199,10 +199,11 @@ COPY --from=embedding-model --chown=longhouse:longhouse /opt/longhouse/embedding
 # Bootstrap pip in the venv so job packs can pip-install their own deps at startup
 RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true
 
-# Create required directories
-RUN mkdir -p /app/static/avatars /data \
-    && chown -R longhouse:longhouse /app/static /data \
-    && chmod 755 /app/static /app/static/avatars /data
+# Create the durable Runtime Host data root. User uploads live below this
+# volume; application source remains immutable and replaceable.
+RUN mkdir -p /data \
+    && chown -R longhouse:longhouse /data \
+    && chmod 755 /data
 
 # Entrypoint script (decodes SSH key from env var)
 COPY --chown=root:root docker/entrypoint.sh /entrypoint.sh

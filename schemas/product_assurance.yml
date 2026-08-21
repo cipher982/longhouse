@@ -28,7 +28,7 @@ assertions:
     assertion_id: dependency_incident_recovery
     variant: null
     scenario_id: title_dependency_recovery
-    minimum_scenario_revision: 5
+    minimum_scenario_revision: 6
     oracle_source: server/zerg/qa/title_dependency_oracles.py
     acceptable_evidence:
       - hermetic

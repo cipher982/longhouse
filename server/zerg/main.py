@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 
 # Logging configuration
 from zerg.logging_config import configure_logging
+from zerg.services.avatar_storage import avatar_storage_dir
 
 configure_logging(_settings.log_level)
 
@@ -45,8 +46,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 STATIC_DIR = BASE_DIR / "static"
-AVATARS_DIR = STATIC_DIR / "avatars"
-AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+AVATARS_DIR = avatar_storage_dir()
 
 
 def _get_frontend_dist_path() -> tuple[Path | None, str]:
@@ -213,7 +213,13 @@ if _settings.demo_mode:
 
     app.add_middleware(DemoGuardMiddleware)
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# User uploads belong to the durable data root, not the application checkout.
+# Keep the more specific route before the general static mount.
+app.mount("/static/avatars", StaticFiles(directory=str(AVATARS_DIR), check_dir=False), name="avatars")
+# Static assets are optional at API-process startup (the hosted image and local
+# dev compose mount them separately). Importing the Runtime Host must never
+# write into its source checkout merely to make this mount possible.
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR), check_dir=False), name="static")
 
 from zerg.middleware.no_cache_static import NoCacheStaticMiddleware
 
