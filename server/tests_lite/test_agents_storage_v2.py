@@ -517,6 +517,18 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
                 "media_state": "complete",
                 "missing_media_hashes": [],
             }
+            semantic_claim = await catalog.call(
+                "projector.state.claim.v2",
+                {
+                    "projector": "semantic-v2",
+                    "worker_id": "semantic-test",
+                    "claim_token": str(uuid4()),
+                    "now": datetime.now(UTC).isoformat(),
+                    "lease_seconds": 60,
+                    "limit": 10,
+                },
+            )
+            assert semantic_claim["claimed"] == []
 
             replay = await client.post(
                 "/agents/storage/v2/envelopes",
@@ -804,6 +816,19 @@ async def test_storage_v2_first_claude_effort_envelope_is_admitted(monkeypatch):
             receipt = response.json()
             assert receipt["raw_state"] == "durable"
             assert receipt["render_state"] == "ready"
+
+            semantic_claim = await catalog.call(
+                "projector.state.claim.v2",
+                {
+                    "projector": "semantic-v2",
+                    "worker_id": "semantic-test",
+                    "claim_token": str(uuid4()),
+                    "now": datetime.now(UTC).isoformat(),
+                    "lease_seconds": 60,
+                    "limit": 10,
+                },
+            )
+            assert [row["session_id"] for row in semantic_claim["claimed"]] == [payload["session_id"]]
 
             detail = await client.get(f"/agents/storage/v2/sessions/{payload['session_id']}/events?limit=20")
             assert detail.status_code == 200, detail.text

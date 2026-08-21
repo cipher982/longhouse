@@ -54,7 +54,14 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
     monkeypatch.setattr(
         oracles,
         "_session_projection",
-        lambda *_args, **_kwargs: {"id": session_id, "title": "Healthy Hidden Obligation"},
+        lambda *_args, **_kwargs: {
+            "id": session_id,
+            "provider": "claude",
+            "title": "Healthy Hidden Obligation",
+            "anchor_title": "Healthy Hidden Obligation",
+            "title_state": "ready",
+            "title_source": "ai",
+        },
     )
     monkeypatch.setattr(
         oracles,
@@ -69,11 +76,25 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
 
     assert result["passed"] is True, result
     assert calls == ["runtime_write"]
+    assert result["observation"]["claude_semantic_path_consumed"] is True
     assert result["observation"]["direct_provider_probe_count"] == 0
     assert result["observation"]["credential_rotation_count"] == 0
     request_receipt = (tmp_path / "evidence" / "runtime-request-receipt.json").read_text()
     assert "direct_provider_paths\": []" in request_receipt
     assert "credential_mutations\": []" in request_receipt
+
+
+def test_live_title_envelope_exercises_native_claude_semantic_projection():
+    session_id, payload = oracles._envelope(tenant_id="tenant", machine_id="machine", message="Human request")
+
+    assert payload["session_id"] == session_id
+    assert payload["provider"] == "claude"
+    assert payload["session"]["origin_kind"] == "console"
+    raw = payload["records"][0]["data_b64"]
+    assert raw
+    assert LIVE_REGISTRATION.producer_revision == 2
+    assert LIVE_REGISTRATION.scenario_revision == 2
+    assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
 
 
 @pytest.mark.timeout(120)

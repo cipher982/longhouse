@@ -23,7 +23,9 @@ from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import SEMANTIC_PROJECTOR_ID
 from zerg.catalogd.store import CatalogStore
+from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSessionCatalog
@@ -2543,6 +2545,71 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
         table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
     engine.dispose()
     assert set(CatalogBase.metadata.tables).issubset(table_names)
+
+
+def test_storage_projector_registration_is_provider_specific():
+    assert storage_projectors_for_provider("claude") == (
+        SEMANTIC_PROJECTOR_ID,
+        "search-v2",
+        EMBEDDING_PROJECTOR_ID,
+    )
+    assert storage_projectors_for_provider("codex") == ("search-v2", EMBEDDING_PROJECTOR_ID)
+    assert storage_projectors_for_provider(None) == ("search-v2", EMBEDDING_PROJECTOR_ID)
+
+
+@pytest.mark.asyncio
+async def test_startup_reaps_non_claude_semantic_debt_without_losing_claude_debt(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    identities = {"claude": (uuid4(), uuid4()), "codex": (uuid4(), uuid4())}
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for provider, (epoch, session_id) in identities.items():
+            opaque_source_id = f"{provider}-history.jsonl"
+            record = f"{provider}\n".encode()
+            raw = _raw_params(
+                epoch=epoch,
+                session_id=session_id,
+                start=0,
+                end=len(record),
+                records=(record,),
+                sealed_at=now,
+                provider=provider,
+                opaque_source_id=opaque_source_id,
+            )
+            raw.update(
+                render_state="ready",
+                render_manifest=_render_manifest(
+                    uuid4(),
+                    seed=f"{provider}-render".encode(),
+                    provider=provider,
+                    source_epoch=epoch,
+                    opaque_source_id=opaque_source_id,
+                ),
+                projectors=list(storage_projectors_for_provider("claude")),
+            )
+            await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    repaired = CatalogStore(engine).ensure_known_projector_states()
+    with engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT projector, session_id FROM projector_state ORDER BY projector, session_id"
+        ).all()
+    engine.dispose()
+
+    by_session = {
+        str(session_id): {str(row.projector) for row in rows if str(row.session_id) == str(session_id)}
+        for _provider, (_epoch, session_id) in identities.items()
+    }
+    assert repaired["reaped_irrelevant_semantic"] == 1
+    assert by_session[str(identities["claude"][1])] == set(storage_projectors_for_provider("claude"))
+    assert by_session[str(identities["codex"][1])] == set(storage_projectors_for_provider("codex"))
 
 
 def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):

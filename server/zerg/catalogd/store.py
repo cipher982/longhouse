@@ -558,6 +558,20 @@ def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
 SEMANTIC_PROJECTOR_ID = "semantic-v2"
 KNOWN_PROJECTORS = (SEMANTIC_PROJECTOR_ID, "search-v2", EMBEDDING_PROJECTOR_ID)
 
+
+def storage_projectors_for_provider(provider: str | None) -> tuple[str, ...]:
+    """Return only the derived ledgers that can do work for one provider.
+
+    Semantic-v2 exists solely to replay Claude's sequence-dependent native
+    controls.  Registering it for every provider turned a few dozen real
+    Claude repairs into a 27k-row no-op backlog after restart, delaying the
+    human title debt the projector was introduced to repair.
+    """
+
+    downstream = ("search-v2", EMBEDDING_PROJECTOR_ID)
+    return (SEMANTIC_PROJECTOR_ID, *downstream) if str(provider or "").strip().lower() == "claude" else downstream
+
+
 # Projector rows are only ever created for these names. Anything else in
 # projector_state is a retired generation: EMBEDDING_PROJECTOR_ID carries the
 # embedding revision and a partition suffix, so bumping either renames the
@@ -594,8 +608,22 @@ class CatalogStore:
         sessions = StorageSession.__table__
         states = ProjectorState.__table__
         with _write_transaction(self.engine) as connection:
+            irrelevant_semantic = int(
+                connection.execute(
+                    delete(states).where(
+                        states.c.projector == SEMANTIC_PROJECTOR_ID,
+                        states.c.session_id.in_(select(sessions.c.session_id).where(func.lower(sessions.c.provider) != "claude")),
+                    )
+                ).rowcount
+                or 0
+            )
             eligible = connection.execute(
-                select(sessions.c.session_id, sessions.c.commit_seq).where(
+                select(
+                    sessions.c.session_id,
+                    sessions.c.commit_seq,
+                    sessions.c.provider,
+                    sessions.c.semantic_projection_version,
+                ).where(
                     sessions.c.user_state != "deleted",
                     sessions.c.current_render_generation.is_not(None),
                     sessions.c.render_state == "ready",
@@ -610,13 +638,17 @@ class CatalogStore:
                 )
             }
             missing: dict[tuple[str, str], int] = {}
-            for session_id, session_revision in eligible:
+            for session_id, session_revision, provider, semantic_projection_version in eligible:
                 session_key = str(session_id)
                 semantic_key = (SEMANTIC_PROJECTOR_ID, session_key)
                 search_key = ("search-v2", session_key)
                 embedding_key = (EMBEDDING_PROJECTOR_ID, session_key)
                 search_revision = existing.get(search_key, int(session_revision))
-                if semantic_key not in existing:
+                if (
+                    str(provider or "").strip().lower() == "claude"
+                    and int(semantic_projection_version or 0) < 1
+                    and semantic_key not in existing
+                ):
                     missing[semantic_key] = int(session_revision)
                 if search_key not in existing:
                     missing[search_key] = search_revision
@@ -718,6 +750,7 @@ class CatalogStore:
             return {
                 "inserted": len(missing),
                 "eligible_sessions": len(eligible),
+                "reaped_irrelevant_semantic": irrelevant_semantic,
                 "aligned_embeddings": aligned_embeddings,
                 "advanced_retired": advanced_retired,
             }

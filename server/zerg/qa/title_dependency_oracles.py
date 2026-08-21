@@ -259,11 +259,22 @@ def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, di
     session_id = str(uuid4())
     source_epoch = uuid4()
     opaque_source_id = f"factory-title-assurance/{session_id}.jsonl"
-    raw = json.dumps({"type": "user", "message": message}, separators=(",", ":")).encode() + b"\n"
+    raw = (
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": str(uuid4()),
+                "timestamp": _now(),
+                "message": {"role": "user", "content": message},
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
     identity = EnvelopeIdentity(
         tenant_id=tenant_id,
         machine_id=machine_id,
-        provider="opencode",
+        provider="claude",
         opaque_source_id=opaque_source_id,
         source_epoch=source_epoch,
         range_kind="byte_offset",
@@ -277,7 +288,7 @@ def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, di
         "tenant_id": tenant_id,
         "machine_id": machine_id,
         "session_id": session_id,
-        "provider": "opencode",
+        "provider": "claude",
         "opaque_source_id": opaque_source_id,
         "source_epoch": str(source_epoch),
         "predecessor_source_epoch": None,
@@ -620,7 +631,13 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
         _health, check = _product_health(api_url, token)
         if check.get("verdict") == "degraded":
             return {"session": session, "title_health": check, "degraded": True}
-        if session and session.get("title") and check.get("verdict") == "ok":
+        if (
+            session
+            and session.get("anchor_title")
+            and session.get("title_state") == "ready"
+            and session.get("title_source") == "ai"
+            and check.get("verdict") == "ok"
+        ):
             return {"session": session, "title_health": check, "degraded": False}
         return None
 
@@ -630,7 +647,13 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     observation = {
         "ordinary_hidden_obligation_created": write_receipt["status_code"] == 200,
         "obligation_session_id": session_id,
-        "obligation_titled": bool(session.get("title")),
+        "obligation_titled": bool(session.get("anchor_title")),
+        "claude_semantic_path_consumed": (
+            session.get("provider") == "claude"
+            and session.get("title_state") == "ready"
+            and session.get("title_source") == "ai"
+            and bool(session.get("anchor_title"))
+        ),
         "dependency_health_verdict": title_health.get("verdict"),
         "dependency_health_consumed": True,
         "direct_provider_probe_count": 0,
@@ -639,6 +662,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     passed = (
         observation["ordinary_hidden_obligation_created"]
         and observation["obligation_titled"]
+        and observation["claude_semantic_path_consumed"]
         and observation["dependency_health_verdict"] == "ok"
     )
     _write_json(

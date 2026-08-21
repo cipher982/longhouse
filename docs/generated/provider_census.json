@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 259,
+  "file_count": 260,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1827,6 +1827,13 @@
         "claude",
         "codex",
         "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/title_dependency_oracles.py",
+      "providers": [
+        "claude",
         "opencode"
       ]
     },
