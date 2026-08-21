@@ -36,6 +36,7 @@ from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
+from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import _prepare_claude_profile
@@ -59,7 +60,7 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_create.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=_SCENARIO_ID,
     scenario_revision=1,
     assertion_cells=((_ASSERTION_ID, None),),
@@ -117,7 +118,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # needs the same priming call explicitly.
         home, longhouse_home = isolation_paths(isolation_root)
         onboarding = _prepare_claude_profile(
-            binary=args.claude_bin,
+            binary=args.provider_bin,
             home=home,
             workspace=workspace,
             environment=environment,
@@ -127,7 +128,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
 
         launch_env = claude_launch_environment(
             environment,
-            claude_bin=args.claude_bin,
+            claude_bin=args.provider_bin,
             engine=args.engine,
             model=args.model,
             longhouse_home=longhouse_home,
@@ -226,16 +227,15 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True, choices=(_EXECUTION_VARIANT,))
-    parser.add_argument("--evidence-root", type=Path)
-    parser.add_argument("--repo-root", type=Path)
-    parser.add_argument("--engine", type=Path)
-    parser.add_argument("--claude-bin", type=Path)
+    add_factory_provider_arguments(
+        parser,
+        variants=(_EXECUTION_VARIANT,),
+        provider_bin_aliases=("--claude-bin",),
+    )
     parser.add_argument("--project", default="zerg")
     parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL"))
     parser.add_argument("--launch-timeout-secs", type=float, default=60.0)
     parser.add_argument("--response-timeout-secs", type=float, default=120.0)
-    parser.add_argument("--registration", action="store_true")
     return parser
 
 
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
         return 0
     args = _parser().parse_args(arguments)
-    for required in ("evidence_root", "repo_root", "engine", "claude_bin"):
+    for required in ("evidence_root", "repo_root", "engine", "provider_bin"):
         if getattr(args, required) is None:
             print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{required.replace('_', '-')}"}))
             return 2
@@ -257,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
         print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
         return 2
-    if not args.claude_bin.is_file() or not os.access(args.claude_bin, os.X_OK):
+    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
         print(json.dumps({"status": "fail", "failure_code": "claude_binary_missing"}))
         return 2
     result = run_awareness_create_scenario(args)

@@ -25,7 +25,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     claude_bin.chmod(0o755)
     return argparse.Namespace(
         evidence_root=tmp_path / "evidence",
-        claude_bin=claude_bin,
+        provider_bin=claude_bin,
         variant=m._EXECUTION_VARIANT,
     )
 

@@ -52,7 +52,7 @@ def _args(tmp_path: Path, variant: str) -> argparse.Namespace:
         evidence_root=tmp_path / "evidence",
         repo_root=tmp_path,
         engine=engine,
-        claude_bin=claude_bin,
+        provider_bin=claude_bin,
         project="zerg",
         model=None,
         api_url="https://runtime.invalid",

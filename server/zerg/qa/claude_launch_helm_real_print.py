@@ -25,13 +25,13 @@ import argparse
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
@@ -52,7 +52,7 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.launch_helm_real_print.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=_SCENARIO_ID,
     scenario_revision=1,
     assertion_cells=((_ASSERTION_ID, None),),
@@ -92,7 +92,7 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     try:
-        provider_receipt = {"path": str(args.claude_bin), "sha256": sha256_file(args.claude_bin)}
+        provider_receipt = {"path": str(args.provider_bin), "sha256": sha256_file(args.provider_bin)}
         write_json(root / "provider-binary-receipt.json", provider_receipt)
 
         canary_root = root / "no-token-canary"
@@ -100,7 +100,7 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
         canary = run_provider_live_canary(
             {
                 "provider": "claude",
-                "provider_bin": str(args.claude_bin),
+                "provider_bin": str(args.provider_bin),
                 "artifact": artifact_path,
                 "evidence_root": canary_root,
                 "wait_ready_secs": args.wait_ready_secs,
@@ -160,11 +160,12 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True, choices=(_EXECUTION_VARIANT,))
-    parser.add_argument("--evidence-root", type=Path)
-    parser.add_argument("--claude-bin", type=Path)
+    add_factory_provider_arguments(
+        parser,
+        variants=(_EXECUTION_VARIANT,),
+        provider_bin_aliases=("--claude-bin",),
+    )
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
-    parser.add_argument("--registration", action="store_true")
     return parser
 
 
@@ -174,11 +175,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
         return 0
     args = _parser().parse_args(arguments)
-    for required in ("evidence_root", "claude_bin"):
+    for required in ("evidence_root", "provider_bin"):
         if getattr(args, required) is None:
             print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{required.replace('_', '-')}"}))
             return 2
-    if not args.claude_bin.is_file() or not os.access(args.claude_bin, os.X_OK):
+    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
         print(json.dumps({"status": "fail", "failure_code": "claude_binary_missing"}))
         return 2
     result = run_launch_helm_scenario(args)
