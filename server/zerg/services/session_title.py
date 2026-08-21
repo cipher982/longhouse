@@ -47,7 +47,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 # so we skip LLM work for them. Matching on the well-formed "_RESUME_SEED_"
 # token keeps this honest: content must carry the marker shape, never a loose
 # prefix that could clip a real user's message.
-_RESUME_SEED_TOKEN = "_RESUME_SEED_"
+RESUME_SEED_TOKEN = "_RESUME_SEED_"
 
 
 def is_resume_seed_marker(text: str | None) -> bool:
@@ -60,7 +60,7 @@ def is_resume_seed_marker(text: str | None) -> bool:
     the marker itself. Returns True only for text containing the well-formed
     "_RESUME_SEED_" token so a normal prompt can never accidentally match.
     """
-    return bool(text) and _RESUME_SEED_TOKEN in str(text)
+    return bool(text) and RESUME_SEED_TOKEN in str(text)
 
 
 def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> str | None:

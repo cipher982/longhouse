@@ -442,6 +442,30 @@ def test_candidate_listing_drains_oldest_due_obligation_before_new_arrivals(tmp_
     assert [row["session_id"] for row in result["sessions"]] == [str(old_id)]
 
 
+def test_old_seed_markers_cannot_consume_bounded_candidate_page(tmp_path):
+    engine = _build_engine(tmp_path)
+    seed_ids = [uuid4() for _ in range(10)]
+    for index, session_id in enumerate(seed_ids):
+        _insert_session(
+            engine,
+            session_id=session_id,
+            first_message=f"LONGHOUSE_CODEX_RESUME_SEED_{index:08x}",
+        )
+    normal_id = uuid4()
+    _insert_session(engine, session_id=normal_id, first_message="real user title obligation")
+    old = datetime.now(UTC) - timedelta(hours=1)
+    with engine.begin() as connection:
+        connection.execute(
+            update(StorageSession.__table__)
+            .where(StorageSession.__table__.c.session_id.in_([str(session_id) for session_id in seed_ids]))
+            .values(created_at=old, last_activity_at=old)
+        )
+
+    result = CatalogStore(engine).list_storage_title_candidates(limit=1)
+
+    assert [row["session_id"] for row in result["sessions"]] == [str(normal_id)]
+
+
 def test_candidate_listing_keeps_visible_claude_raw_until_semantic_repair(tmp_path):
     engine = _build_engine(tmp_path)
     session_id = uuid4()

@@ -101,6 +101,7 @@ from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import hatch_automation_session_clause
 from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.services.session_title import RESUME_SEED_TOKEN
 from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_timeline_title
@@ -311,6 +312,7 @@ def _storage_title_obligation_clause(table):
         or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
         table.c.first_user_message_preview.is_not(None),
         func.length(func.trim(table.c.first_user_message_preview)) > 0,
+        ~table.c.first_user_message_preview.contains(RESUME_SEED_TOKEN, autoescape=True),
         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
         table.c.environment.notin_(("test", "e2e")),
         ~provider_proof_session_clause(table),
