@@ -73,6 +73,7 @@ def _inputs() -> dict:
         "network_policy": "shared_provider_egress",
         "credential_binding_ids": ["codex_provider_token", "runtime_host_control"],
         "acquisition_methods": ["staged_release"],
+        "qualification_model_pins": {"codex": "gpt-5.3-codex-low"},
     }
     census["census_digest"] = content_digest(census, "census_digest")
     return {
@@ -141,6 +142,9 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
         "process_loss",
     ]
     assert {command["module"] for command in first["plan"]["commands"]} == {"zerg.qa.codex_native_resume"}
+    assert {command["qualification_model"] for command in first["plan"]["commands"]} == {
+        "gpt-5.3-codex-low"
+    }
 
 
 def test_compiler_selects_provider_specific_producer_credentials() -> None:

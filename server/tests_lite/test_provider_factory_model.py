@@ -101,6 +101,10 @@ def test_release_poll_runs_for_cursor_observed_install(facts) -> None:
     cell = plan_run(facts, "cursor", "observed_install", "release_poll")
     assert cell.status == "runs"
     assert cell.qualification_profile == "cursor_observed_install_v1"
+    assert cell.qualification_profiles == (
+        "cursor_observed_install_v1",
+        "cursor_observed_install_grok_v1",
+    )
     assert cell.harness_scenarios == facts.default_harness_scenarios
     assert cell.credential_requirement == (
         "CURSOR_API_KEY",

@@ -99,6 +99,9 @@ class ProducerRegistration:
     # Non-Python tools invoked by the producer from the sandbox-visible PATH.
     # The immutable worker image validates these before an epoch can execute.
     required_executables: tuple[str, ...] = ()
+    # Only assertion-neutral scenario envelopes may be shared by sibling
+    # assertion cells. Cell-scoped producers remain one invocation per cell.
+    observation_scope: str = "cell"
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -248,6 +251,8 @@ def _producer_supports_cell(
         failures.append("subject_kind")
     elif registration_subject_kind != cell_subject_kind:
         failures.append("subject_kind")
+    if registration.get("observation_scope", "cell") not in {"cell", "scenario"}:
+        failures.append("observation_scope")
     if declared_subject_kind == LONGHOUSE_PRODUCT_SUBJECT:
         if registration.get("providers"):
             failures.append("product_provider_declaration")
@@ -567,6 +572,12 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "worker_architecture": census.get("architecture"),
                 "sandbox_policy": registration["sandbox_policy"],
                 "network_policy": registration["network_policy"],
+                "observation_scope": registration.get("observation_scope", "cell"),
+                "qualification_model": (
+                    (census.get("qualification_model_pins") or {}).get(str(selected.get("provider")))
+                    if selected.get("provider") is not None
+                    else None
+                ),
                 "priority": "release_gate",
                 "timeout_seconds": 600,
                 "max_cost_usd": 2.0,

@@ -36,6 +36,10 @@ _PROFILES = {
     ("codex", codex_tool_call_result.PROFILE): codex_tool_call_result.run,
     ("cursor", cursor_release_identity.PROFILE): cursor_release_identity.run,
     ("cursor", cursor_release_identity.OBSERVED_INSTALL_PROFILE): cursor_release_identity.run_observed_install,
+    (
+        "cursor",
+        cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_PROFILE,
+    ): cursor_release_identity.run_observed_install_model_lane,
     ("opencode", opencode_release_identity.PROFILE): opencode_release_identity.run,
     ("opencode", opencode_server_qualification.PROFILE): opencode_server_qualification.run,
     ("pi", pi_qualification.PROFILE): pi_qualification.run,

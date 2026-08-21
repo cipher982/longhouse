@@ -11,6 +11,7 @@ PROFILE = "cursor_release_identity_v1"
 SCENARIO_ID = "cursor_release_identity"
 ASSERTIONS = identity.ASSERTIONS
 OBSERVED_INSTALL_PROFILE = "cursor_observed_install_v1"
+OBSERVED_INSTALL_MODEL_LANE_PROFILE = "cursor_observed_install_grok_v1"
 OBSERVED_INSTALL_SCENARIO_ID = "cursor_observed_install"
 OBSERVED_INSTALL_ASSERTIONS = ("cursor_observed_install_contract_preserved",)
 # cursor-agent prints a bare calendar build such as 2026.07.23-e383d2b.
@@ -31,6 +32,14 @@ _OBSERVED_INSTALL_PROFILE = identity.IdentityProfile(
     oracle_source=Path(__file__),
     version_grammar=identity.CALENDAR_BUILD,
 )
+_OBSERVED_INSTALL_MODEL_LANE_PROFILE = identity.IdentityProfile(
+    provider="cursor",
+    profile=OBSERVED_INSTALL_MODEL_LANE_PROFILE,
+    scenario_id=OBSERVED_INSTALL_SCENARIO_ID,
+    version_line=VERSION_LINE,
+    oracle_source=Path(__file__),
+    version_grammar=identity.CALENDAR_BUILD,
+)
 
 
 def run_observed_install(request_path: Path, output_root: Path) -> dict[str, Any]:
@@ -45,6 +54,20 @@ def run_observed_install(request_path: Path, output_root: Path) -> dict[str, Any
 
 
 run_observed_install.SCENARIO_ID = OBSERVED_INSTALL_SCENARIO_ID  # type: ignore[attr-defined]
+
+
+def run_observed_install_model_lane(request_path: Path, output_root: Path) -> dict[str, Any]:
+    return identity.run_identity_profile(
+        request_path,
+        output_root,
+        profile=_OBSERVED_INSTALL_MODEL_LANE_PROFILE,
+        repo_root=Path(__file__).resolve().parents[3],
+        git_sha_fn=identity.git_sha,
+        git_dirty_fn=identity.git_dirty,
+    )
+
+
+run_observed_install_model_lane.SCENARIO_ID = OBSERVED_INSTALL_SCENARIO_ID  # type: ignore[attr-defined]
 
 
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:

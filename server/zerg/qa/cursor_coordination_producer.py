@@ -145,6 +145,7 @@ REGISTRATION = ProducerRegistration(
     # run_coordination below.
     oracle_entrypoint="directed_input_assertions",
     executable_module="zerg.qa.cursor_coordination_producer",
+    observation_scope="scenario",
 )
 
 _AWARENESS_CREATE_VARIANT_KEY = execution_variant_key(
@@ -684,7 +685,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "result.json", result)
         return result
 
-    kind, scenario_id, assertion_id = dispatch
+    kind, scenario_id, _assertion_id = dispatch
     isolation_root = Path(tempfile.mkdtemp(prefix="lhx-cursor-coord-", dir="/tmp"))
     try:
         if kind == "awareness_create":
@@ -695,7 +696,6 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             assertions = directed_input_assertions(observation)
 
         redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
-        status = "pass" if assertions.get(assertion_id) is True else "fail"
         result: dict[str, Any] = {
             "schema_version": 1,
             "artifact_kind": "direct_coordination_result",
@@ -712,8 +712,11 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "generated_at": _now(),
-            "status": status,
-            "requested_assertion_id": assertion_id,
+            # This producer executes one scenario and emits its complete
+            # assertion map.  Assertion truth is judged by the factory for
+            # each compiled cell; it is not process/execution status.
+            "status": "pass",
+            "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,
             "provider_binary": provider_receipt,
@@ -735,8 +738,8 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": _now(),
             "status": "fail",
+            "observation_scope": "scenario",
             "failure_code": "direct_coordination_failed",
-            "requested_assertion_id": assertion_id,
             "error": f"{type(exc).__name__}: {exc}",
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": _artifact_manifest(root),

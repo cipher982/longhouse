@@ -80,6 +80,7 @@ def test_registration_shape() -> None:
     )
     assert m.REGISTRATION.executable is True
     assert m.REGISTRATION.executable_module == "zerg.qa.cursor_coordination_producer"
+    assert m.REGISTRATION.observation_scope == "scenario"
     assert m.REGISTRATION.oracle_source == "server/zerg/qa/provider_coordination_oracles.py"
 
 
@@ -166,7 +167,8 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
     assert result["provider"] == "cursor"
     assert result["variant"] is None
     assert result["scenario_id"] == "cursor_coordination_awareness_create"
-    assert result["requested_assertion_id"] == "coordination_instructions_model_visible"
+    assert result["observation_scope"] == "scenario"
+    assert "requested_assertion_id" not in result
     assert result["assertions"] == {"coordination_instructions_model_visible": True}
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
 
@@ -185,7 +187,9 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
     assert written == result
 
 
-def test_run_coordination_awareness_create_fails_when_recitation_is_missing(tmp_path: Path, monkeypatch) -> None:
+def test_run_coordination_awareness_create_retains_false_assertion_without_failing_observation(
+    tmp_path: Path, monkeypatch
+) -> None:
     args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-awareness-fail")
     args.variant = execution_variant_key(
         provider="cursor",
@@ -203,7 +207,8 @@ def test_run_coordination_awareness_create_fails_when_recitation_is_missing(tmp_
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "fail"
+    assert result["status"] == "pass"
+    assert result["observation_scope"] == "scenario"
     assert result["assertions"] == {"coordination_instructions_model_visible": False}
 
 
@@ -250,7 +255,8 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     assert result["status"] == "pass"
     assert result["variant"] is None
     assert result["scenario_id"] == "cursor_coordination_directed_input"
-    assert result["requested_assertion_id"] == "provider_input_receipt_linked"
+    assert result["observation_scope"] == "scenario"
+    assert "requested_assertion_id" not in result
     assert result["assertions"] == {
         "directed_input_persisted": True,
         "provider_input_receipt_linked": True,
@@ -296,7 +302,9 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     assert written == result
 
 
-def test_run_coordination_directed_input_fails_when_receipt_is_not_linked(tmp_path: Path, monkeypatch) -> None:
+def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_observation(
+    tmp_path: Path, monkeypatch
+) -> None:
     """A directed input sent to a target that is not live-connectable is
     persisted but never receives a linked receipt -- see
     _attempt_directed_input_delivery in agents_sessions.py, which leaves
@@ -337,7 +345,8 @@ def test_run_coordination_directed_input_fails_when_receipt_is_not_linked(tmp_pa
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "fail"
+    assert result["status"] == "pass"
+    assert result["observation_scope"] == "scenario"
     assert result["assertions"]["provider_input_receipt_linked"] is False
     assert result["assertions"]["attributed_input_visible"] is True
 
