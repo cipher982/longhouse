@@ -168,6 +168,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scanner_reads_the_control_identity_a_helm_launch_actually_writes() {
+        // Byte shape taken from a real `longhouse antigravity` launch followed
+        // by one hook invocation: the launcher seeds identity, the hook merges
+        // liveness over it, and both must survive into the observation. If the
+        // hook ever clobbered the identity instead of merging, control would
+        // silently stop being authorizable and only a live session would show
+        // it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f57b62ad-2aee-4e12-9dd2-af7aac643799.json");
+        fs::write(
+            &path,
+            r#"{
+                "schema_version":3,
+                "session_id":"f57b62ad-2aee-4e12-9dd2-af7aac643799",
+                "connection_id":"101cc5f7-2c32-4dc2-ad80-1c67a24b3019",
+                "lease_generation":"b88dfaf4-07c0-4d0d-b88a-97736a04a172",
+                "run_id":"8c5f2301-13f1-5783-a3fc-24ea4d18d43f",
+                "provider":"antigravity",
+                "control_plane":"antigravity_hook_inbox",
+                "provider_session_id":"conv-live-1",
+                "state":"thinking",
+                "updated_at":"2026-08-21T01:06:20.501701Z",
+                "last_hook_event":"PreInvocation",
+                "last_hook_observed_at":"2026-08-21T01:06:20.501701Z"
+            }"#,
+        )
+        .unwrap();
+        fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+
+        let observations = collect_observations_from_paths(&[path]);
+        assert_eq!(observations.len(), 1);
+        let observation = &observations[0];
+        assert_eq!(
+            observation.connection_id.as_deref(),
+            Some("101cc5f7-2c32-4dc2-ad80-1c67a24b3019")
+        );
+        assert_eq!(
+            observation.lease_generation.as_deref(),
+            Some("b88dfaf4-07c0-4d0d-b88a-97736a04a172")
+        );
+        assert_eq!(
+            observation.run_id.as_deref(),
+            Some("8c5f2301-13f1-5783-a3fc-24ea4d18d43f")
+        );
+        assert_eq!(observation.provider_session_id.as_deref(), Some("conv-live-1"));
+        assert_eq!(observation.state.as_deref(), Some("thinking"));
+    }
+
+    #[test]
     fn scanner_preserves_hook_claim_and_response_receipts() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-1.json");
