@@ -81,7 +81,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=1,
@@ -154,6 +154,21 @@ def _expected_variant(provider: str) -> str:
 
 def _scenario_id(provider: str) -> str:
     return f"{provider}_console_adapter_lifecycle"
+
+
+def _provider_environment(provider: str, args: argparse.Namespace, home: Path) -> dict[str, str]:
+    environment = dict(os.environ)
+    environment["HOME"] = str(home)
+    environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
+    environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
+    environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
+    environment["LONGHOUSE_LAUNCH_SURFACE"] = "test"
+    environment[PROVIDER_BIN_ENV[provider]] = str(args.provider_bin)
+    if provider == "codex" and args.model:
+        environment["CODEX_MODEL"] = args.model
+    environment.setdefault("CLAUDE_CONFIG_DIR", str(home / ".claude"))
+    environment.setdefault("CURSOR_HOME", str(home / ".cursor"))
+    return environment
 
 
 def _probe_version(provider: str, binary: Path) -> tuple[str, str]:
@@ -507,15 +522,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     if variant != _expected_variant(provider):
         raise RuntimeError(f"{provider} requires variant={_expected_variant(provider)}")
     home = _isolated_provider_home()
-    environment = dict(os.environ)
-    environment["HOME"] = str(home)
-    environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
-    environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
-    environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
-    environment["LONGHOUSE_LAUNCH_SURFACE"] = "test"
-    environment[PROVIDER_BIN_ENV[provider]] = str(args.provider_bin)
-    environment.setdefault("CLAUDE_CONFIG_DIR", str(home / ".claude"))
-    environment.setdefault("CURSOR_HOME", str(home / ".cursor"))
+    environment = _provider_environment(provider, args, home)
     if provider == "claude":
         _prepare_claude_hook(home, environment)
 

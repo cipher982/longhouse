@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import os
@@ -140,6 +141,22 @@ def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(
 )
 def test_interrupt_expectation_is_provider_typed(provider: str, variant: str):
     assert lifecycle._expected_variant(provider) == variant
+
+
+def test_codex_model_argument_controls_spawned_machine_agent_environment(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CODEX_MODEL", "ambient-model")
+    args = argparse.Namespace(
+        engine=tmp_path / "longhouse-engine",
+        provider_bin=tmp_path / "codex",
+        model="qualified-model",
+    )
+
+    environment = lifecycle._provider_environment("codex", args, tmp_path / "home")
+
+    assert environment["CODEX_MODEL"] == "qualified-model"
+    assert environment["LONGHOUSE_CODEX_BIN"] == str(args.provider_bin)
 
 
 @pytest.mark.parametrize(
