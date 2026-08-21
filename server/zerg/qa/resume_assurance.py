@@ -523,7 +523,19 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             decision = decision_by_key[key]
             compiled["disposition"] = decision["action"]
             if decision["action"] == "reuse":
-                reused_proofs.append(dict(decision["proof"]))
+                reused_proofs.append(
+                    {
+                        **dict(decision["proof"]),
+                        # Proof rows are assertion-shaped, but a scenario
+                        # producer makes one observation for all of its cells.
+                        # Keep that grouping inside the retained plan so exact
+                        # admission can reject legacy/mixed generations.
+                        "producer_id": registration["producer_id"],
+                        "scenario_id": cell["scenario_id"],
+                        "scenario_revision": registration["scenario_revision"],
+                        "observation_scope": registration.get("observation_scope", "cell"),
+                    }
+                )
                 compiled_cells.append(compiled)
                 continue
             command = {
