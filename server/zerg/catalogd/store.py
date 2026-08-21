@@ -339,6 +339,20 @@ def _storage_title_obligation_clause(table):
     )
 
 
+def _storage_title_candidate_clause(table, *, observed_at: datetime):
+    """Due executable subset of the durable title obligation set."""
+
+    return and_(
+        _storage_title_obligation_clause(table),
+        or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
+        or_(
+            table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
+            table.c.title_dependency_incident_id.is_not(None),
+            _retryable_title_row_failure_clause(table),
+        ),
+    )
+
+
 def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
     return {
         **result,
@@ -7204,17 +7218,21 @@ class CatalogStore:
                         )
                     )
             row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
+            title_generation_required = bool(
+                connection.execute(
+                    select(StorageSession.__table__.c.session_id)
+                    .where(
+                        StorageSession.__table__.c.session_id == session_key,
+                        _storage_title_candidate_clause(StorageSession.__table__, observed_at=commit_time),
+                    )
+                    .limit(1)
+                ).first()
+            )
             return {
                 "created": True,
                 "exact_replay": False,
                 "receipt": _raw_object_receipt(row),
-                "title_generation_required": bool(
-                    render_manifest is not None
-                    and render_manifest["user_messages"] > 0
-                    and int((existing_session or {}).get("user_messages") or 0) == 0
-                    and not (existing_session or {}).get("anchor_title")
-                    and int(render_manifest.get("semantic_projection_version", 0)) >= 1
-                ),
+                "title_generation_required": title_generation_required,
             }
 
     def read_source_epoch_manifest(
@@ -7877,15 +7895,7 @@ class CatalogStore:
             rows = (
                 connection.execute(
                     select(table)
-                    .where(
-                        _storage_title_obligation_clause(table),
-                        or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
-                        or_(
-                            table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
-                            table.c.title_dependency_incident_id.is_not(None),
-                            _retryable_title_row_failure_clause(table),
-                        ),
-                    )
+                    .where(_storage_title_candidate_clause(table, observed_at=observed_at))
                     # Durable debt drains oldest-first. New activity must not
                     # continually push an older eligible obligation beyond a
                     # bounded worker pool.
@@ -7909,6 +7919,7 @@ class CatalogStore:
                     "git_branch": row["git_branch"],
                     "machine_id": row["machine_id"],
                     "attempt_count": int(row["title_attempt_count"] or 0),
+                    "canonical_title_eligible": True,
                 }
                 for row in rows
                 if str(row["first_user_message_preview"] or "").strip() and not is_resume_seed_marker(row["first_user_message_preview"])

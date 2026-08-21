@@ -7,6 +7,10 @@ import pytest
 import zerg.qa.title_dependency_oracles as oracles
 from zerg.qa.title_dependency_live_producer import REGISTRATION as LIVE_REGISTRATION
 from zerg.qa.title_dependency_recovery_producer import REGISTRATION as RECOVERY_REGISTRATION
+from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
+from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
+from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
+from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 
 def test_title_product_registrations_have_no_provider_axis():
@@ -28,7 +32,7 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
     monkeypatch.setattr(
         oracles,
         "_capabilities",
-        lambda *_args, **_kwargs: {"tenant_id": "tenant", "machine_id": "machine"},
+        lambda *_args, **_kwargs: {"tenant_id": "tenant", "machine_id": PROVIDER_FACTORY_MACHINE_ID},
     )
     monkeypatch.setattr(
         oracles,
@@ -57,6 +61,11 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
         lambda *_args, **_kwargs: {
             "id": session_id,
             "provider": "claude",
+            "environment": "local",
+            "project": FACTORY_TITLE_ASSURANCE_PROJECT,
+            "cwd": FACTORY_TITLE_ASSURANCE_CWD,
+            "device_id": PROVIDER_FACTORY_MACHINE_ID,
+            "origin_kind": "console",
             "title": "Healthy Hidden Obligation",
             "anchor_title": "Healthy Hidden Obligation",
             "title_state": "ready",
@@ -81,6 +90,8 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
     assert result["passed"] is True, result
     assert calls == ["runtime_write"]
     assert result["observation"]["claude_semantic_path_consumed"] is True
+    assert result["observation"]["factory_machine_identity_verified"] is True
+    assert result["observation"]["typed_title_assurance_identity_persisted"] is True
     assert result["observation"]["direct_provider_probe_count"] == 0
     assert result["observation"]["credential_rotation_count"] == 0
     request_receipt = (tmp_path / "evidence" / "runtime-request-receipt.json").read_text()
@@ -89,15 +100,24 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
 
 
 def test_live_title_envelope_exercises_native_claude_semantic_projection():
-    session_id, payload = oracles._envelope(tenant_id="tenant", machine_id="machine", message="Human request")
+    session_id, payload = oracles._envelope(
+        tenant_id="tenant", machine_id=PROVIDER_FACTORY_MACHINE_ID, message="Human request"
+    )
 
     assert payload["session_id"] == session_id
     assert payload["provider"] == "claude"
+    assert payload["machine_id"] == PROVIDER_FACTORY_MACHINE_ID
+    assert payload["session"]["environment"] == "local"
+    assert payload["session"]["project"] == FACTORY_TITLE_ASSURANCE_PROJECT
+    assert payload["session"]["cwd"] == FACTORY_TITLE_ASSURANCE_CWD
     assert payload["session"]["origin_kind"] == "console"
+    assert payload["session"]["hidden_from_default_timeline"] is True
+    assert payload["session"]["launch_actor"] == "automation"
+    assert payload["session"]["launch_surface"] == FACTORY_TITLE_ASSURANCE_SURFACE
     raw = payload["records"][0]["data_b64"]
     assert raw
-    assert LIVE_REGISTRATION.producer_revision == 4
-    assert LIVE_REGISTRATION.scenario_revision == 4
+    assert LIVE_REGISTRATION.producer_revision == 5
+    assert LIVE_REGISTRATION.scenario_revision == 5
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
     assert RECOVERY_REGISTRATION.producer_revision == 5

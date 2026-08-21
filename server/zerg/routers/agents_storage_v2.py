@@ -1143,6 +1143,7 @@ async def _commit_admitted_envelope(
                     "provider": spec.provider,
                     "project": parsed["session_facts"].get("project"),
                     "git_branch": parsed["session_facts"].get("git_branch"),
+                    "canonical_title_eligible": True,
                 }
             )
         if render_manifest is not None and any(

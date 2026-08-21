@@ -11,9 +11,6 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.config import get_settings
-from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_hatch_execution_contract
-from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
 
@@ -137,31 +134,14 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         slot_acquired = True
         if get_settings().llm_disabled:
             return False
+        if candidate.get("canonical_title_eligible") is not True:
+            logger.warning("Skipping storage-v2 title without canonical catalog eligibility session=%s", session_id)
+            return False
         first_user_message = str(candidate.get("first_user_message") or "")
         # A path can be poor display copy while still being meaningful model
         # input (the model may infer the file or feature being discussed).
         if sanitize_title(first_user_message) is None:
             raise ValueError("no_meaningful_user_text")
-        if is_resume_seed_marker(first_user_message):
-            # Automation seed marker (e.g. LONGHOUSE_OPENCODE_RESUME_SEED_<hex>)
-            # from the provider-resume/factory assurance harness. It is a
-            # deterministic synthetic token, not a user request, so it never
-            # deserves an AI title; the fallback title is the marker itself.
-            # Belt-and-suspenders with the candidate-query skip in catalogd.
-            logger.info("Skipping storage-v2 AI title for seed-marker session=%s", session_id)
-            return False
-        if (
-            classify_provider_proof_environment(
-                machine_id=candidate.get("machine_id"),
-                first_user_text=first_user_message,
-            )
-            == "test"
-        ):
-            logger.info("Skipping storage-v2 AI title for provider canary session=%s", session_id)
-            return False
-        if is_hatch_execution_contract(first_user_message):
-            logger.info("Skipping storage-v2 AI title for Hatch automation session=%s", session_id)
-            return False
         from zerg.models_config import get_llm_client_for_use_case
         from zerg.services.title_generator import generate_initial_session_title
 

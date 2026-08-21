@@ -26,6 +26,22 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.session_title import is_resume_seed_marker
 
 
+def _authorized_candidate(**values):
+    return {**values, "canonical_title_eligible": True}
+
+
+@pytest.mark.asyncio
+async def test_title_worker_requires_canonical_catalog_eligibility(monkeypatch):
+    import zerg.services.storage_session_titles as storage_titles
+
+    monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=False))
+    generated = await storage_titles.generate_storage_session_title(
+        {"session_id": str(uuid4()), "first_user_message": "Untrusted direct schedule", "provider": "claude"}
+    )
+
+    assert generated is False
+
+
 @pytest.mark.asyncio
 async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
@@ -53,13 +69,13 @@ async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _fake_generate_initial_session_title)
 
     generated = await storage_titles.generate_storage_session_title(
-        {
-            "session_id": str(uuid4()),
-            "first_user_message": "/Users/davidrose/git/obsidian_vault/AI-Sessions/provider-factory-audit.md",
-            "provider": "claude",
-            "project": "longhouse",
-            "git_branch": "main",
-        }
+        _authorized_candidate(
+            session_id=str(uuid4()),
+            first_user_message="/Users/davidrose/git/obsidian_vault/AI-Sessions/provider-factory-audit.md",
+            provider="claude",
+            project="longhouse",
+            git_branch="main",
+        )
     )
 
     assert generated is True
@@ -86,13 +102,13 @@ async def test_missing_title_credential_opens_dependency_incident_without_spendi
 
     monkeypatch.setattr(storage_titles, "_catalog_call", _fake_catalog_call)
     generated = await storage_titles.generate_storage_session_title(
-        {
-            "session_id": str(uuid4()),
-            "first_user_message": "Explain why the title credential is missing",
-            "provider": "opencode",
-            "project": "longhouse",
-            "git_branch": "main",
-        }
+        _authorized_candidate(
+            session_id=str(uuid4()),
+            first_user_message="Explain why the title credential is missing",
+            provider="opencode",
+            project="longhouse",
+            git_branch="main",
+        )
     )
 
     assert generated is False
@@ -131,7 +147,9 @@ async def test_provider_timeout_opens_availability_incident_without_row_failure(
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _timeout)
 
     generated = await storage_titles.generate_storage_session_title(
-        {"session_id": str(uuid4()), "first_user_message": "Explain the provider timeout", "provider": "opencode"}
+        _authorized_candidate(
+            session_id=str(uuid4()), first_user_message="Explain the provider timeout", provider="opencode"
+        )
     )
 
     assert generated is False
@@ -155,7 +173,9 @@ async def test_catalog_timeout_does_not_poison_provider_or_spend_row_attempt(mon
     monkeypatch.setattr(storage_titles, "_dependency_identity", lambda: _dependency_identity())
 
     generated = await storage_titles.generate_storage_session_title(
-        {"session_id": str(uuid4()), "first_user_message": "Explain the catalog timeout", "provider": "opencode"}
+        _authorized_candidate(
+            session_id=str(uuid4()), first_user_message="Explain the catalog timeout", provider="opencode"
+        )
     )
 
     assert generated is False
@@ -186,7 +206,7 @@ async def test_empty_model_response_remains_row_scoped(monkeypatch):
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _empty)
 
     generated = await storage_titles.generate_storage_session_title(
-        {"session_id": str(uuid4()), "first_user_message": "Return a useful title", "provider": "opencode"}
+        _authorized_candidate(session_id=str(uuid4()), first_user_message="Return a useful title", provider="opencode")
     )
 
     assert generated is False
@@ -234,7 +254,10 @@ async def test_scheduler_reserves_four_slots_before_creating_tasks_and_drains_ba
     )
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _model_call)
     candidates = [
-        {"session_id": str(uuid4()), "first_user_message": f"Title backlog item {index}", "provider": "opencode"} for index in range(8)
+        _authorized_candidate(
+            session_id=str(uuid4()), first_user_message=f"Title backlog item {index}", provider="opencode"
+        )
+        for index in range(8)
     ]
 
     first_wave = [storage_titles.schedule_storage_session_title(candidate) for candidate in candidates]
@@ -287,7 +310,9 @@ async def test_worker_shutdown_releases_capacity_even_when_client_close_fails(mo
     )
     monkeypatch.setattr("zerg.services.title_generator.generate_initial_session_title", _blocked_model)
     assert storage_titles.schedule_storage_session_title(
-        {"session_id": str(uuid4()), "first_user_message": "Cancel this title worker", "provider": "opencode"}
+        _authorized_candidate(
+            session_id=str(uuid4()), first_user_message="Cancel this title worker", provider="opencode"
+        )
     )
     await asyncio.wait_for(entered.wait(), timeout=1)
 

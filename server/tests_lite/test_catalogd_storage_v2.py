@@ -492,7 +492,8 @@ async def test_provider_factory_machine_classifies_user_repo_storage_as_hidden_c
             user_messages=1,
         )
         raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
-        await client.call("storage.raw_object.commit.v2", raw)
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        assert committed["title_generation_required"] is False
 
         session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert session["session"]["environment"] == "test"
@@ -538,9 +539,11 @@ async def test_typed_factory_title_assurance_preserves_hidden_console_provenance
             first_user_message_preview="Verify native Claude title projection",
             last_visible_text_preview="Verify native Claude title projection",
             user_messages=1,
+            semantic_projection_version=1,
         )
         raw.update(render_state="ready", render_manifest=manifest, projectors=["semantic-v2"])
-        await client.call("storage.raw_object.commit.v2", raw)
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        assert committed["title_generation_required"] is False
 
         session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert session["session"]["environment"] == "local"
@@ -1452,6 +1455,7 @@ async def test_claude_effort_then_real_prompt_reaches_title_generation(daemon_pa
                 "git_branch": "main",
                 "machine_id": "cinder",
                 "attempt_count": 0,
+                "canonical_title_eligible": True,
             }
         ]
         assert candidates["sessions"][0]["first_user_message"] != "Effort level settings"

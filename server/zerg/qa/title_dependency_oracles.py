@@ -31,6 +31,10 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
+from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
+from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
+from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
@@ -379,8 +383,8 @@ def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, di
         "media": [],
         "session": {
             "environment": "local",
-            "project": "longhouse-title-assurance",
-            "cwd": "/factory/title-assurance",
+            "project": FACTORY_TITLE_ASSURANCE_PROJECT,
+            "cwd": FACTORY_TITLE_ASSURANCE_CWD,
             "git_repo": "cipher982/longhouse",
             "git_branch": "assurance",
             "started_at": observed,
@@ -389,7 +393,7 @@ def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, di
             "origin_kind": "console",
             "hidden_from_default_timeline": True,
             "launch_actor": "automation",
-            "launch_surface": "factory_assurance",
+            "launch_surface": FACTORY_TITLE_ASSURANCE_SURFACE,
             "provider_session_id": session_id,
         },
         "records": [{"source_position": 0, "data_b64": base64.b64encode(raw).decode()}],
@@ -955,11 +959,13 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     token = str(os.environ.get(RUNTIME_API_TOKEN_ENV) or "").strip()
     if not api_url or not token:
         raise ValueError("live title assurance requires Runtime Host API URL and token")
-    capabilities = _capabilities(api_url, token, machine_id="factory-title-assurance")
+    capabilities = _capabilities(api_url, token, machine_id=PROVIDER_FACTORY_MACHINE_ID)
+    if str(capabilities.get("machine_id") or "") != PROVIDER_FACTORY_MACHINE_ID:
+        raise ValueError("live title assurance token is not bound to the canonical provider-factory machine")
     session_id, payload = _envelope(
         tenant_id=str(capabilities["tenant_id"]),
-        machine_id=str(capabilities["machine_id"]),
-        message=f"Verify ordinary hidden title dependency health {uuid4().hex[:12]}",
+        machine_id=PROVIDER_FACTORY_MACHINE_ID,
+        message=f"Verify typed hidden title assurance health {uuid4().hex[:12]}",
     )
     write_receipt = _post_envelope(api_url, token, payload)
 
@@ -970,6 +976,12 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
             return None
         if (
             session
+            and session.get("provider") == "claude"
+            and session.get("environment") == "local"
+            and session.get("project") == FACTORY_TITLE_ASSURANCE_PROJECT
+            and session.get("cwd") == FACTORY_TITLE_ASSURANCE_CWD
+            and session.get("device_id") == PROVIDER_FACTORY_MACHINE_ID
+            and session.get("origin_kind") == "console"
             and session.get("anchor_title")
             and session.get("title_state") == "ready"
             and session.get("title_source") == "ai"
@@ -984,6 +996,15 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     health_signals = title_health.get("signals") if isinstance(title_health.get("signals"), dict) else {}
     observation = {
         "typed_hidden_title_assurance_obligation_created": write_receipt["status_code"] == 200,
+        "factory_machine_identity_verified": capabilities.get("machine_id") == PROVIDER_FACTORY_MACHINE_ID,
+        "typed_title_assurance_identity_persisted": (
+            session.get("provider") == "claude"
+            and session.get("environment") == "local"
+            and session.get("project") == FACTORY_TITLE_ASSURANCE_PROJECT
+            and session.get("cwd") == FACTORY_TITLE_ASSURANCE_CWD
+            and session.get("device_id") == PROVIDER_FACTORY_MACHINE_ID
+            and session.get("origin_kind") == "console"
+        ),
         "obligation_session_id": session_id,
         "obligation_titled": bool(session.get("anchor_title")),
         "claude_semantic_path_consumed": (
@@ -1004,6 +1025,8 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     }
     passed = (
         observation["typed_hidden_title_assurance_obligation_created"]
+        and observation["factory_machine_identity_verified"]
+        and observation["typed_title_assurance_identity_persisted"]
         and observation["obligation_titled"]
         and observation["claude_semantic_path_consumed"]
         and observation["dependency_health_verdict"] == "ok"
