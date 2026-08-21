@@ -651,7 +651,7 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
     }
     assert PROVIDER_CLI_ENV_BY_PROVIDER == {
         "codex": "LONGHOUSE_CODEX_BIN",
-        "claude": None,
+        "claude": "LONGHOUSE_CLAUDE_BIN",
         "opencode": "LONGHOUSE_OPENCODE_BIN",
         "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
         "cursor": "LONGHOUSE_CURSOR_BIN",
