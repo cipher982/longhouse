@@ -19,6 +19,7 @@ from sqlalchemy import update
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import MAX_TITLE_ATTEMPTS
+from zerg.catalogd.store import TITLE_ROW_TRANSIENT_RETRY_DELAY
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import StorageSession
 from zerg.models.live_store import LiveSessionCatalog
@@ -397,6 +398,41 @@ def test_terminal_state_survives_restart(tmp_path):
     fresh = create_catalog_engine(db_path)
     initialize_catalog_schema(fresh)
     assert str(session_id) not in _candidate_ids(fresh)
+
+
+def test_empty_model_response_remains_a_slow_retry_obligation_after_budget(tmp_path):
+    engine = _build_engine(tmp_path)
+    session_id = uuid4()
+    _insert_session(engine, session_id=session_id, first_message="recover from an empty model response")
+    store = CatalogStore(engine)
+    now = datetime.now(UTC)
+
+    result = None
+    expected_attempts = [1, 2, 3, 4, 5, 5]
+    for expected_attempt in expected_attempts:
+        result = store.fail_storage_title(session_id=session_id, reason="empty_model_response", failed_at=now)
+        assert result["changed"] is True
+        assert result["attempt_count"] == expected_attempt
+        assert result["terminal"] is False
+
+    assert result is not None
+    assert datetime.fromisoformat(result["retry_at"]) == now + TITLE_ROW_TRANSIENT_RETRY_DELAY
+    with engine.begin() as connection:
+        connection.execute(
+            update(StorageSession.__table__)
+            .where(StorageSession.__table__.c.session_id == str(session_id))
+            .values(title_retry_at=now - timedelta(seconds=1))
+        )
+    assert str(session_id) in _candidate_ids(engine)
+
+    health = store.read_storage_title_dependency_health()
+    assert health["terminal_sessions"] == 0
+    assert health["pending_sessions"] == 1
+
+    terminal = store.fail_storage_title(session_id=session_id, reason="invalid_title_payload", failed_at=now)
+    assert terminal["terminal"] is True
+    assert terminal["attempt_count"] == MAX_TITLE_ATTEMPTS
+    assert str(session_id) not in _candidate_ids(engine)
 
 
 def test_candidate_listing_skips_seed_marker_and_over_budget_sessions(tmp_path):

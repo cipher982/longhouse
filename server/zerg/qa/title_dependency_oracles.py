@@ -76,17 +76,21 @@ class _StubState:
         self.active_requests = 0
         self.max_active_requests = 0
         self.healthy_requests_started = 0
+        self.empty_response_count = 0
         self.healthy_wave_release = threading.Event()
 
-    def begin(self, *, path: str, token: str) -> tuple[int, bool]:
+    def begin(self, *, path: str, token: str, empty_probe: bool) -> tuple[int, bool, bool]:
         with self.lock:
             status = 503 if token == self.unavailable_token else 200 if token == self.healthy_token else 401
             if status == 200:
                 self.healthy_requests_started += 1
+            emit_empty = status == 200 and empty_probe
+            if emit_empty:
+                self.empty_response_count += 1
             self.active_requests += 1
             self.max_active_requests = max(self.max_active_requests, self.active_requests)
-            self.requests.append({"path": path, "status": status})
-            return status, status == 200 and self.healthy_requests_started > 1
+            self.requests.append({"path": path, "status": status, "empty_probe": empty_probe})
+            return status, status == 200 and self.healthy_requests_started > 1, emit_empty
 
     def finish(self) -> None:
         with self.lock:
@@ -98,6 +102,7 @@ class _StubState:
             active_requests = self.active_requests
             max_active_requests = self.max_active_requests
             healthy_requests_started = self.healthy_requests_started
+            empty_response_count = self.empty_response_count
         return {
             "schema_version": 2,
             "artifact_kind": "title_loopback_stub_receipt",
@@ -108,6 +113,7 @@ class _StubState:
             "active_requests": active_requests,
             "max_active_requests": max_active_requests,
             "healthy_requests_started": healthy_requests_started,
+            "empty_response_count": empty_response_count,
         }
 
 
@@ -119,10 +125,14 @@ class _TitleStub:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
                 length = int(self.headers.get("content-length") or 0)
-                if length:
-                    self.rfile.read(length)
+                raw_body = self.rfile.read(length) if length else b""
+                empty_probe = b"Factory row-local empty response probe" in raw_body
                 token = str(self.headers.get("authorization") or "").removeprefix("Bearer ")
-                status, block_healthy_wave = state.begin(path=self.path, token=token)
+                status, block_healthy_wave, emit_empty = state.begin(
+                    path=self.path,
+                    token=token,
+                    empty_probe=empty_probe,
+                )
                 try:
                     if block_healthy_wave:
                         state.healthy_wave_release.wait(timeout=30)
@@ -134,6 +144,21 @@ class _TitleStub:
                         payload = {"error": {"message": "provider-shaped unauthorized", "type": "authentication_error"}}
                     elif status == 503:
                         payload = {"error": {"message": "provider-shaped temporarily unavailable", "type": "server_error"}}
+                    elif emit_empty:
+                        payload = {
+                            "id": "factory-title-assurance-empty",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": "factory-title-stub",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "finish_reason": "stop",
+                                    "message": {"role": "assistant", "content": ""},
+                                }
+                            ],
+                            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                        }
                     else:
                         payload = {
                             "id": "factory-title-assurance",
@@ -423,7 +448,7 @@ def _catalog_snapshot(database_path: Path, session_ids: list[str]) -> dict[str, 
         rows = connection.execute(
             f"""
             SELECT session_id, anchor_title, title_attempt_count, title_last_error,
-                   title_dependency_incident_id, hidden_from_default_timeline
+                   title_dependency_incident_id, title_retry_at, hidden_from_default_timeline
             FROM sessions WHERE session_id IN ({placeholders}) ORDER BY session_id
             """,
             session_ids,
@@ -441,7 +466,7 @@ def _catalog_snapshot(database_path: Path, session_ids: list[str]) -> dict[str, 
     }
 
 
-def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[list[str], str]:
+def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[list[str], str, str]:
     """Author isolated fixture facts before catalogd becomes their sole owner."""
 
     from sqlalchemy import insert
@@ -456,6 +481,7 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
     obligation_started = observed - timedelta(minutes=10)
     session_ids = [str(uuid4()) for _ in range(count)]
     unrelated_terminal_id = str(uuid4())
+    row_local_empty_id = str(uuid4())
     with engine.begin() as connection:
         for index, session_id in enumerate(session_ids):
             connection.execute(
@@ -475,10 +501,10 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
                     user_messages=1,
                     first_user_message_preview=f"Explain the title assurance recovery obligation number {index}",
                     semantic_projection_version=1,
-                    title_attempt_count=5 if index == 0 else 0,
-                    title_last_attempt_at=observed - timedelta(minutes=10) if index == 0 else None,
-                    title_retry_at=observed - timedelta(minutes=10) if index == 0 else None,
-                    title_last_error="TimeoutError" if index == 0 else None,
+                    title_attempt_count=5 if index in {0, 1} else 0,
+                    title_last_attempt_at=observed - timedelta(minutes=10) if index in {0, 1} else None,
+                    title_retry_at=observed - timedelta(minutes=10) if index in {0, 1} else None,
+                    title_last_error="TimeoutError" if index == 0 else "empty_model_response" if index == 1 else None,
                     origin_kind="console",
                     hidden_from_default_timeline=True,
                     launch_actor="automation",
@@ -515,8 +541,38 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
                 updated_at=observed,
             )
         )
+        # This capped row becomes due only after the dependency recovery wave.
+        # A healthy 200 response with blank content must remain row-local,
+        # pending, and unbound to any provider incident.
+        connection.execute(
+            insert(StorageSession).values(
+                session_id=row_local_empty_id,
+                tenant_id="factory-title-assurance",
+                owner_id="factory",
+                provider="opencode",
+                environment="local",
+                machine_id="factory-title-machine",
+                project="longhouse-title-assurance",
+                started_at=observed,
+                last_activity_at=observed,
+                user_messages=1,
+                first_user_message_preview="Factory row-local empty response probe",
+                semantic_projection_version=1,
+                title_attempt_count=5,
+                title_last_attempt_at=observed,
+                title_retry_at=observed + timedelta(seconds=10),
+                title_last_error="empty_model_response",
+                origin_kind="console",
+                hidden_from_default_timeline=True,
+                launch_actor="automation",
+                launch_surface="factory_assurance",
+                commit_seq=count + 2,
+                created_at=observed,
+                updated_at=observed,
+            )
+        )
     engine.dispose()
-    return session_ids, unrelated_terminal_id
+    return session_ids, unrelated_terminal_id, row_local_empty_id
 
 
 def _wait_for(predicate, *, timeout: float, description: str):
@@ -543,6 +599,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
     runtime_exit_codes: list[int | None] = []
     session_ids: list[str] = []
     unrelated_terminal_id = ""
+    row_local_empty_id = ""
     snapshots: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="title-assurance-", dir=evidence_root.parent) as temporary:
         root = Path(temporary)
@@ -550,19 +607,26 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
         token_file.write_text(unavailable_token, encoding="utf-8")
         token_file.chmod(0o600)
         runtime = _RuntimeHost(repo_root=repo_root, root=root, base_url=stub.base_url, token_file=token_file)
-        session_ids, unrelated_terminal_id = _seed_hidden_title_obligations(runtime.database_path, count=8)
-        all_fixture_ids = [*session_ids, unrelated_terminal_id]
+        session_ids, unrelated_terminal_id, row_local_empty_id = _seed_hidden_title_obligations(
+            runtime.database_path,
+            count=8,
+        )
+        all_fixture_ids = [*session_ids, unrelated_terminal_id, row_local_empty_id]
 
-        def fixture_rows(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        def fixture_rows(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
             by_id = {str(row["session_id"]): row for row in snapshot["sessions"]}
-            return [by_id[session_id] for session_id in session_ids if session_id in by_id], by_id.get(unrelated_terminal_id, {})
+            return (
+                [by_id[session_id] for session_id in session_ids if session_id in by_id],
+                by_id.get(unrelated_terminal_id, {}),
+                by_id.get(row_local_empty_id, {}),
+            )
 
         try:
             runtime.start()
 
             def failed_snapshot():
                 snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
-                rows, unrelated = fixture_rows(snapshot)
+                rows, unrelated, _row_local_empty = fixture_rows(snapshot)
                 incidents = {row["title_dependency_incident_id"] for row in rows}
                 dependencies = snapshot["dependencies"]
                 failed = (
@@ -621,7 +685,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
 
             def recovered_snapshot():
                 snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
-                rows, unrelated = fixture_rows(snapshot)
+                rows, unrelated, _row_local_empty = fixture_rows(snapshot)
                 dependency_rows = snapshot["dependencies"]
                 recovered = (
                     len(rows) == 8
@@ -644,6 +708,42 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 tail = runtime.log_path.read_text(encoding="utf-8", errors="replace")[-12_000:]
                 tail = tail.replace(unavailable_token, "<redacted-generation-a>").replace(healthy_token, "<redacted-generation-b>")
                 raise RuntimeError(f"{exc}; catalog={current!r}; stub={stub.state.receipt()!r}; Runtime Host tail:\n{tail}") from exc
+
+            def row_local_empty_snapshot():
+                snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
+                _rows, _unrelated, empty_row = fixture_rows(snapshot)
+                dependency_rows = snapshot["dependencies"]
+                retry_value = empty_row.get("title_retry_at")
+                retry_at = datetime.fromisoformat(str(retry_value)) if retry_value else None
+                if retry_at is not None and retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=UTC)
+                if not (
+                    empty_row.get("anchor_title") is None
+                    and empty_row.get("title_attempt_count") == 5
+                    and empty_row.get("title_last_error") == "empty_model_response"
+                    and empty_row.get("title_dependency_incident_id") is None
+                    and retry_at is not None
+                    and retry_at > datetime.now(UTC)
+                    and dependency_rows
+                    and dependency_rows[0]["state"] == "healthy"
+                    and stub.state.receipt()["empty_response_count"] >= 1
+                ):
+                    return None
+                health_payload, check = _product_health(runtime.api_url, None)
+                signals = check.get("signals") if isinstance(check.get("signals"), dict) else {}
+                isolated = (
+                    check.get("verdict") == "ok"
+                    and signals.get("open_dependencies") == 0
+                    and signals.get("terminal_sessions") == 0
+                    and int(signals.get("pending_sessions") or 0) >= 1
+                )
+                return {"catalog": snapshot, "health": health_payload} if isolated else None
+
+            snapshots["row_local_empty"] = _wait_for(
+                row_local_empty_snapshot,
+                timeout=30,
+                description="row-local capped empty response retry",
+            )
             health_payload, title_health = _product_health(runtime.api_url, None)
             snapshots["product_health"] = health_payload
             runtime_exit_codes.append(runtime.stop())
@@ -660,9 +760,14 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 )
                 (evidence_root / "runtime-log-tail.txt").write_text(runtime_log, encoding="utf-8")
 
-    failed_rows, failed_unrelated = fixture_rows(snapshots["failed"])
-    restarted_rows, _restarted_unrelated = fixture_rows(snapshots["after_restart"])
-    recovered_rows, recovered_unrelated = fixture_rows(snapshots["recovered"])
+    failed_rows, failed_unrelated, _failed_empty = fixture_rows(snapshots["failed"])
+    restarted_rows, _restarted_unrelated, _restarted_empty = fixture_rows(snapshots["after_restart"])
+    recovered_rows, recovered_unrelated, _recovered_empty = fixture_rows(snapshots["recovered"])
+    _isolated_rows, _isolated_unrelated, isolated_empty = fixture_rows(snapshots["row_local_empty"]["catalog"])
+    isolated_retry_value = isolated_empty.get("title_retry_at")
+    isolated_retry_at = datetime.fromisoformat(str(isolated_retry_value)) if isolated_retry_value else None
+    if isolated_retry_at is not None and isolated_retry_at.tzinfo is None:
+        isolated_retry_at = isolated_retry_at.replace(tzinfo=UTC)
     incident_ids = {row["title_dependency_incident_id"] for row in failed_rows}
     failed_by_id = {str(row["session_id"]): row for row in failed_rows}
     recovered_by_id = {str(row["session_id"]): row for row in recovered_rows}
@@ -679,13 +784,28 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
         == [row["title_dependency_incident_id"] for row in failed_rows],
         "zero_new_row_attempt_consumption": (
             failed_by_id[session_ids[0]]["title_attempt_count"] == 5
-            and all(failed_by_id[session_id]["title_attempt_count"] == 0 for session_id in session_ids[1:])
+            and failed_by_id[session_ids[1]]["title_attempt_count"] == 5
+            and all(failed_by_id[session_id]["title_attempt_count"] == 0 for session_id in session_ids[2:])
             and all(row["title_attempt_count"] == 0 for row in recovered_rows)
         ),
         "legacy_terminal_timeout_reentered": (
             failed_by_id[session_ids[0]]["title_dependency_incident_id"] in incident_ids
             and recovered_by_id[session_ids[0]]["title_attempt_count"] == 0
             and bool(recovered_by_id[session_ids[0]]["anchor_title"])
+        ),
+        "terminal_empty_response_reentered": (
+            failed_by_id[session_ids[1]]["title_attempt_count"] == 5
+            and failed_by_id[session_ids[1]]["title_dependency_incident_id"] in incident_ids
+            and recovered_by_id[session_ids[1]]["title_attempt_count"] == 0
+            and bool(recovered_by_id[session_ids[1]]["anchor_title"])
+        ),
+        "row_local_empty_response_isolated": (
+            isolated_empty.get("title_attempt_count") == 5
+            and isolated_empty.get("title_last_error") == "empty_model_response"
+            and isolated_empty.get("title_dependency_incident_id") is None
+            and isolated_retry_at is not None
+            and isolated_retry_at > datetime.now(UTC)
+            and stub_receipt["empty_response_count"] >= 1
         ),
         "unrelated_terminal_debt_preserved": (
             failed_unrelated.get("title_attempt_count") == 5
@@ -731,6 +851,8 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 "incident_survived_restart",
                 "zero_new_row_attempt_consumption",
                 "legacy_terminal_timeout_reentered",
+                "terminal_empty_response_reentered",
+                "row_local_empty_response_isolated",
                 "unrelated_terminal_debt_preserved",
                 "same_rows_recovered",
                 "all_rows_titled",

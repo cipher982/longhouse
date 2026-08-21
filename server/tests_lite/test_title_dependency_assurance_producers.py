@@ -116,6 +116,8 @@ def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path):
     assert observation["incident_survived_restart"] is True
     assert observation["zero_new_row_attempt_consumption"] is True
     assert observation["legacy_terminal_timeout_reentered"] is True
+    assert observation["terminal_empty_response_reentered"] is True
+    assert observation["row_local_empty_response_isolated"] is True
     assert observation["unrelated_terminal_debt_preserved"] is True
     assert observation["provider_shaped_503_observed"] is True
     assert observation["model_concurrency_bounded"] is True

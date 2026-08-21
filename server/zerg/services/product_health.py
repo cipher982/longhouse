@@ -124,8 +124,10 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
     blocked = int(health.get("blocked_sessions") or 0)
     opened = int(health.get("open_dependencies") or 0)
     terminal = int(health.get("terminal_sessions") or 0)
+    pending = int(health.get("pending_sessions") or 0)
     overdue = int(health.get("overdue_sessions") or 0)
-    oldest_age = health.get("oldest_overdue_age_seconds")
+    oldest_pending_age = health.get("oldest_pending_age_seconds")
+    oldest_overdue_age = health.get("oldest_overdue_age_seconds")
     scheduler = storage_title_scheduler_snapshot()
     degraded = health.get("status") == "degraded"
     if opened:
@@ -136,7 +138,10 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
         headline = f"Session title generation has {terminal} terminal obligation{'' if terminal == 1 else 's'}."
     elif degraded:
         verdict = "degraded"
-        headline = f"Session title generation is behind; {overdue} obligation{'' if overdue == 1 else 's'} overdue."
+        if overdue:
+            headline = f"Session title generation is behind; {overdue} obligation{'' if overdue == 1 else 's'} overdue."
+        else:
+            headline = f"Session title generation is behind; {pending} obligation{'' if pending == 1 else 's'} pending."
     else:
         verdict = "ok"
         headline = "Session title generation dependency is healthy."
@@ -150,11 +155,12 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
         signals={
             "open_dependencies": opened,
             "blocked_sessions": blocked,
-            "pending_sessions": int(health.get("pending_sessions") or 0),
+            "pending_sessions": pending,
             "overdue_sessions": overdue,
             "terminal_sessions": terminal,
             "terminal_shared_failure_sessions": int(health.get("terminal_shared_failure_sessions") or 0),
-            "oldest_overdue_age_seconds": int(oldest_age) if oldest_age is not None else None,
+            "oldest_pending_age_seconds": int(oldest_pending_age) if oldest_pending_age is not None else None,
+            "oldest_overdue_age_seconds": int(oldest_overdue_age) if oldest_overdue_age is not None else None,
             "backlog_degraded_after_seconds": int(health.get("backlog_degraded_after_seconds") or 0),
             **scheduler,
         },

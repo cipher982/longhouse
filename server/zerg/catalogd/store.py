@@ -256,6 +256,8 @@ _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
 # row-specific malformed input or programming errors so one pathological
 # session cannot retry forever.
 MAX_TITLE_ATTEMPTS = 5
+RETRYABLE_TITLE_ROW_ERRORS = frozenset({"empty_model_response"})
+TITLE_ROW_TRANSIENT_RETRY_DELAY = timedelta(minutes=5)
 TITLE_DEPENDENCY_USE_CASE = "session_title"
 TITLE_DEPENDENCY_PROBE_DELAY = timedelta(seconds=60)
 TITLE_DEPENDENCY_AVAILABILITY_PROBE_DELAY = timedelta(seconds=5)
@@ -303,6 +305,12 @@ def _legacy_title_dependency_failure_clause(table):
         table.c.title_attempt_count >= MAX_TITLE_ATTEMPTS,
         or_(_title_auth_failure_clause(table), _title_availability_failure_clause(table)),
     )
+
+
+def _retryable_title_row_failure_clause(table):
+    """Row-local model output failures that remain durable obligations."""
+
+    return func.lower(func.coalesce(table.c.title_last_error, "")).in_(RETRYABLE_TITLE_ROW_ERRORS)
 
 
 def _storage_title_obligation_clause(table):
@@ -7856,6 +7864,7 @@ class CatalogStore:
                         or_(
                             table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
                             table.c.title_dependency_incident_id.is_not(None),
+                            _retryable_title_row_failure_clause(table),
                         ),
                     )
                     # Durable debt drains oldest-first. New activity must not
@@ -8403,6 +8412,7 @@ class CatalogStore:
                 or_(
                     sessions.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
                     sessions.c.title_dependency_incident_id.is_not(None),
+                    _retryable_title_row_failure_clause(sessions),
                 ),
             )
             overdue = and_(
@@ -8413,6 +8423,7 @@ class CatalogStore:
                 obligation,
                 sessions.c.title_attempt_count >= MAX_TITLE_ATTEMPTS,
                 sessions.c.title_dependency_incident_id.is_(None),
+                ~_retryable_title_row_failure_clause(sessions),
             )
             counts = connection.execute(
                 select(
@@ -8420,18 +8431,23 @@ class CatalogStore:
                     func.count().filter(overdue).label("overdue"),
                     func.count().filter(terminal).label("terminal"),
                     func.count().filter(and_(terminal, _legacy_title_dependency_failure_clause(sessions))).label("terminal_shared"),
+                    func.min(sessions.c.last_activity_at).filter(pending).label("oldest_pending_at"),
                     func.min(sessions.c.last_activity_at).filter(overdue).label("oldest_overdue_at"),
                 ).select_from(sessions)
             ).one()
+            oldest_pending_at = _as_aware_utc(counts.oldest_pending_at)
             oldest_overdue_at = _as_aware_utc(counts.oldest_overdue_at)
+            oldest_pending_age_seconds = (
+                max(0, int((observed_at - oldest_pending_at).total_seconds())) if oldest_pending_at is not None else None
+            )
             oldest_overdue_age_seconds = (
                 max(0, int((observed_at - oldest_overdue_at).total_seconds())) if oldest_overdue_at is not None else None
             )
             backlog_degraded = bool(
                 int(counts.terminal or 0)
                 or (
-                    oldest_overdue_age_seconds is not None
-                    and oldest_overdue_age_seconds >= int(TITLE_BACKLOG_DEGRADED_AFTER.total_seconds())
+                    oldest_pending_age_seconds is not None
+                    and oldest_pending_age_seconds >= int(TITLE_BACKLOG_DEGRADED_AFTER.total_seconds())
                 )
             )
             return {
@@ -8442,6 +8458,8 @@ class CatalogStore:
                 "overdue_sessions": int(counts.overdue or 0),
                 "terminal_sessions": int(counts.terminal or 0),
                 "terminal_shared_failure_sessions": int(counts.terminal_shared or 0),
+                "oldest_pending_at": _encode_datetime(oldest_pending_at),
+                "oldest_pending_age_seconds": oldest_pending_age_seconds,
                 "oldest_overdue_at": _encode_datetime(oldest_overdue_at),
                 "oldest_overdue_age_seconds": oldest_overdue_age_seconds,
                 "backlog_degraded_after_seconds": int(TITLE_BACKLOG_DEGRADED_AFTER.total_seconds()),
@@ -8503,12 +8521,16 @@ class CatalogStore:
                     table.c.project,
                     table.c.git_branch,
                     table.c.provider,
+                    table.c.title_last_error,
                 ).where(table.c.session_id == session_key)
             ).first()
-            if row is None or row.anchor_title or int(row.title_attempt_count or 0) >= MAX_TITLE_ATTEMPTS:
+            existing_error = str(row.title_last_error or "").lower() if row is not None else ""
+            existing_retryable = existing_error in RETRYABLE_TITLE_ROW_ERRORS
+            if row is None or row.anchor_title or (int(row.title_attempt_count or 0) >= MAX_TITLE_ATTEMPTS and not existing_retryable):
                 return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
-            attempts = int(row.title_attempt_count or 0) + 1
-            if attempts >= MAX_TITLE_ATTEMPTS:
+            attempts = min(int(row.title_attempt_count or 0) + 1, MAX_TITLE_ATTEMPTS)
+            retryable = reason.lower() in RETRYABLE_TITLE_ROW_ERRORS
+            if attempts >= MAX_TITLE_ATTEMPTS and not retryable:
                 # Terminal: stop retrying durably, but do not freeze the
                 # deterministic prompt/project fallback as an AI anchor. The
                 # timeline can still render a clearly degraded fallback while
@@ -8552,7 +8574,19 @@ class CatalogStore:
                     "retry_at": failed_at.isoformat(),
                     "commit_seq": str(commit_seq),
                 }
-            retry_at = None if reason == "no_meaningful_user_text" else failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))
+            if reason == "no_meaningful_user_text":
+                retry_at = None
+            elif retryable:
+                # Empty provider output is row-local but usually transient.
+                # Retain it as a durable obligation with a capped slow retry;
+                # malformed payloads still terminate at the ordinary budget.
+                retry_at = (
+                    failed_at + TITLE_ROW_TRANSIENT_RETRY_DELAY
+                    if attempts >= MAX_TITLE_ATTEMPTS
+                    else failed_at + timedelta(seconds=2**attempts)
+                )
+            else:
+                retry_at = failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))
             commit_seq = _advance_commit_seq(connection, failed_at)
             connection.execute(
                 update(table)
