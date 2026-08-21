@@ -1266,6 +1266,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/observability/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agent Product Health Checks
+         * @description Machine-readable product health over the canonical agents authority.
+         *
+         *     Factory assurance consumes this projection exactly like any Machine Agent;
+         *     it never receives a credential-rotation or dependency-probe operation.
+         */
+        get: operations["list_agent_product_health_checks_agents_observability_checks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/observability/checks/session_titles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Agent Session Title Health Check
+         * @description Dependency-only product health with no retired archive-store reads.
+         */
+        get: operations["read_agent_session_title_health_check_agents_observability_checks_session_titles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/internal/provider-capability-proofs": {
         parameters: {
             query?: never;
@@ -5119,7 +5162,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "codex" | "claude" | "opencode" | "cursor";
+            provider: "codex" | "claude" | "opencode" | "cursor" | "antigravity";
             /** Session Id */
             session_id: string;
             /** Connection Id */
@@ -10389,6 +10432,21 @@ export interface components {
             presentation_keys: {
                 [key: string]: string | null;
             };
+            /**
+             * Working Set
+             * @enum {string}
+             */
+            working_set: "open" | "recent" | "history";
+            /** Launch Actor */
+            launch_actor?: string | null;
+            /** Launch Surface */
+            launch_surface?: string | null;
+            /** Origin Kind */
+            origin_kind?: string | null;
+            /** Hidden From Default Timeline */
+            hidden_from_default_timeline: boolean;
+            /** User Hidden From Timeline */
+            user_hidden_from_timeline: boolean;
             /** Fact Sources */
             fact_sources: {
                 [key: string]: components["schemas"]["FactHeadDiagnostic"];
@@ -14314,6 +14372,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ObservabilityOverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_product_health_checks_agents_observability_checks_get: {
+        parameters: {
+            query?: {
+                /** @description Recent observation window such as 15m, 1h, or 7d */
+                window?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductHealthCheckListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_agent_session_title_health_check_agents_observability_checks_session_titles_get: {
+        parameters: {
+            query?: {
+                /** @description Recent observation window such as 15m, 1h, or 7d */
+                window?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductHealthCheckSummaryResponse"];
                 };
             };
             /** @description Validation Error */
