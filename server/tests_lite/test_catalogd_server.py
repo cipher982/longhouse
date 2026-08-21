@@ -674,6 +674,38 @@ async def test_timeline_reads_remain_live_while_mutation_executor_is_busy(daemon
 
 
 @pytest.mark.asyncio
+async def test_machine_workspace_reads_remain_live_while_mutation_executor_is_busy(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    mutation_started = threading.Event()
+    release_mutation = threading.Event()
+
+    def block_mutations():
+        mutation_started.set()
+        release_mutation.wait(timeout=2)
+
+    blocked = asyncio.create_task(daemon._run_store(block_mutations))
+    client = CatalogClient(socket_path)
+    try:
+        assert await asyncio.to_thread(mutation_started.wait, 1)
+        result = await asyncio.wait_for(
+            client.call(
+                "machine.workspace.list.v2",
+                {"owner_id": 7, "device_id": "cinder", "limit": 12, "days_back": 45},
+            ),
+            timeout=0.2,
+        )
+        assert result["workspaces"] == []
+        assert not blocked.done()
+    finally:
+        release_mutation.set()
+        await blocked
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_catalogd_owns_periodic_passive_checkpoint(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(

@@ -2185,7 +2185,7 @@ class CatalogDaemon:
         if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 180:
             return self._error(request, "invalid_request", "days_back must be an integer from 1 through 180")
         assert self._store is not None
-        result = await self._run_store(self._store.list_machine_workspaces, **params)
+        result = await self._run_read_store(self._store.list_machine_workspaces, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _open_source_epoch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
