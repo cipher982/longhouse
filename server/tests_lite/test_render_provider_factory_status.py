@@ -11,7 +11,7 @@ def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
     assert len(table.splitlines()) == 2 + 4 * len(ALL_PROVIDERS)
     assert "codex" in table
     assert "cursor" in table
-    assert "| cursor | release_poll | observed_install | runs — 1 qualification scenario + 32 harness scenarios |" in table
+    assert "| cursor | release_poll | observed_install | runs — 2 qualification scenarios + 32 harness scenarios |" in table
 
 
 def test_harness_backed_profiles_fill_the_staged_release_diagonal() -> None:

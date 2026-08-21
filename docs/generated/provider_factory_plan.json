@@ -940,7 +940,7 @@
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
           "variant": null,
           "scenario_id": "codex_coordination_awareness_post_compaction",
-          "minimum_scenario_revision": 1,
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -951,7 +951,7 @@
           "assertion_id": "no_duplicate_visible_bootstrap",
           "variant": null,
           "scenario_id": "codex_coordination_awareness_post_compaction",
-          "minimum_scenario_revision": 1,
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "hermetic",
             "live_token"
@@ -1230,7 +1230,7 @@
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
           "variant": null,
           "scenario_id": "codex_coordination_awareness_post_compaction",
-          "minimum_scenario_revision": 1,
+          "minimum_scenario_revision": 2,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1924,9 +1924,11 @@
       "reason": "deployed release-lane profiles for cursor",
       "qualification_profile": "cursor_observed_install_v1",
       "qualification_profiles": [
-        "cursor_observed_install_v1"
+        "cursor_observed_install_v1",
+        "cursor_observed_install_grok_v1"
       ],
       "scenario_ids": [
+        "cursor_observed_install",
         "cursor_observed_install"
       ],
       "harness_scenarios": [

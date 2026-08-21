@@ -20,7 +20,7 @@
 | antigravity | push | generated_fake | runs — 4 scenarios |
 | antigravity | weekly_cron | generated_fake | runs — 32 scenarios |
 | antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed'] |
-| cursor | release_poll | observed_install | runs — 1 qualification scenario + 32 harness scenarios |
+| cursor | release_poll | observed_install | runs — 2 qualification scenarios + 32 harness scenarios |
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 32 scenarios |
 | cursor | manual | observed_install | runs — 32 scenarios |
