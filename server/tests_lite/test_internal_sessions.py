@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+from sqlalchemy import Column
+from sqlalchemy import MetaData
+from sqlalchemy import String
+from sqlalchemy import Table
+from sqlalchemy import create_engine
+from sqlalchemy import insert
+from sqlalchemy import select
+
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
+from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_factory_cwd
 from zerg.services.internal_sessions import is_provider_factory_machine_id
-from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_product_canary_marker
 from zerg.services.internal_sessions import is_provider_reply_exact_marker
+from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 
@@ -31,6 +40,49 @@ def test_provider_reply_exact_marker_is_bounded_to_longhouse_canary_shapes():
     assert is_provider_reply_exact_marker("Reply exactly FRESH_AFTER_CANCEL_OK.")
     assert not is_provider_reply_exact_marker("Reply exactly OK")
     assert not is_provider_reply_exact_marker("Please reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123")
+
+
+def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
+    prompts = (
+        "Reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_94afb881e8684faca669fefd44ec40 and nothing else.",
+        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_74694349fb694c97af560ac98572f989 and nothing else.\n",
+        "\tReply with exactly LONGHOUSE_CODEX_COLD_RESUME_SEED_8ee711c900c448f18c7762b3fa0c649c\r\n",
+        "Reply exactly FRESH_AFTER_CANCEL_OK.",
+        "Reply exactly OK",
+        "Please reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123",
+        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_not-hex and nothing else.\n",
+    )
+    metadata = MetaData()
+    sessions = Table(
+        "sessions",
+        metadata,
+        Column("session_id", String, primary_key=True),
+        Column("cwd", String),
+        Column("machine_id", String),
+        Column("first_user_message_preview", String),
+    )
+    engine = create_engine("sqlite://")
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(sessions),
+            [
+                {
+                    "session_id": str(index),
+                    "cwd": "/Users/test/repo",
+                    "machine_id": "laptop",
+                    "first_user_message_preview": prompt,
+                }
+                for index, prompt in enumerate(prompts)
+            ],
+        )
+        sql_results = dict(
+            connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all()
+        )
+
+    assert [bool(sql_results[str(index)]) for index in range(len(prompts))] == [
+        is_provider_reply_exact_marker(prompt) for prompt in prompts
+    ]
 
 
 def test_provider_factory_evidence_workspace_is_automation_classified_without_hiding_user_repos():

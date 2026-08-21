@@ -39,6 +39,7 @@ HATCH_EXECUTION_CONTRACT_RE = re.compile(
 )
 HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single bounded, non-interactive run%"
 SQL_LIKE_ESCAPE = "\\"
+SQL_WHITESPACE = " \t\r\n"
 SYNTHETIC_BENCH_PROJECTS = frozenset({"longhouse-bench"})
 
 
@@ -142,7 +143,10 @@ def provider_proof_session_clause(model):
     """Return a SQLAlchemy clause matching provider live-proof sessions."""
     columns = getattr(model, "c", model)
     cwd = func.lower(func.coalesce(columns.cwd, ""))
-    first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""))
+    # SQLite's one-argument trim() removes spaces only, while the canonical
+    # Python classifier uses str.strip(). Provider transcripts commonly retain
+    # a trailing newline, so name the shared whitespace alphabet explicitly.
+    first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""), SQL_WHITESPACE)
     machine_id_column = getattr(columns, "machine_id", None)
     if machine_id_column is None:
         machine_id_column = getattr(columns, "device_id", None)

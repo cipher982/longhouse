@@ -15,9 +15,9 @@ from zerg.qa.title_dependency_oracles import run_hermetic_title_dependency_oracl
 ASSERTION_ID = "dependency_incident_recovery"
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.title_dependency_recovery.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id="title_dependency_recovery",
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=((ASSERTION_ID, None),),
     providers=(),
     platforms=("linux",),
@@ -34,6 +34,7 @@ REGISTRATION = ProducerRegistration(
         "terminal_empty_response_reentry",
         "healthy_transport_empty_response_isolation",
         "row_scoped_terminal_negative_control",
+        "legacy_exact_provider_proof_excluded_from_title_debt",
         "runtime_restart",
         "credential_generation_advanced",
         "incident_scoped_recovery",
