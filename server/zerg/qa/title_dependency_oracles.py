@@ -37,7 +37,7 @@ from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
 from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
-RUNTIME_API_TOKEN_ENV = "LONGHOUSE_RUNTIME_API_TOKEN"
+RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 _TITLE_CHECK = "session_titles"
 
 
@@ -979,7 +979,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
 def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip()
-    token = str(os.environ.get(RUNTIME_API_TOKEN_ENV) or "").strip()
+    token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
     if not api_url or not token:
         raise ValueError("live title assurance requires Runtime Host API URL and token")
     capabilities = _capabilities(api_url, token, machine_id=PROVIDER_FACTORY_MACHINE_ID)
@@ -1100,7 +1100,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
 
 
 __all__ = [
-    "RUNTIME_API_TOKEN_ENV",
+    "RUNTIME_AGENTS_TOKEN_ENV",
     "RUNTIME_API_URL_ENV",
     "artifact_manifest",
     "run_hermetic_title_dependency_oracle",

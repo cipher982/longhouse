@@ -15,7 +15,7 @@ from zerg.qa.title_dependency_oracles import run_live_title_dependency_oracle
 ASSERTION_ID = "dependency_health"
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.title_dependency_health.v1",
-    producer_revision=6,
+    producer_revision=7,
     scenario_id="title_dependency_live_health",
     scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),

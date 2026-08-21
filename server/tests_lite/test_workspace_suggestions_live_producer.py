@@ -13,7 +13,7 @@ def _response(status: int, payload: object) -> httpx.Response:
 
 def test_live_workspace_producer_accepts_responsive_human_only_projection(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
-    monkeypatch.setenv(producer.RUNTIME_API_TOKEN_ENV, "runtime-token")
+    monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
 
     def fake_get(url, **_kwargs):
         if url.endswith("/api/agents/machines"):
@@ -37,7 +37,7 @@ def test_live_workspace_producer_accepts_responsive_human_only_projection(tmp_pa
 
 def test_live_workspace_producer_rejects_provider_proof_root(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
-    monkeypatch.setenv(producer.RUNTIME_API_TOKEN_ENV, "runtime-token")
+    monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
 
     def fake_get(url, **_kwargs):
         if url.endswith("/api/agents/machines"):
@@ -65,6 +65,8 @@ def test_live_workspace_producer_rejects_provider_proof_root(tmp_path, monkeypat
 
 def test_live_workspace_registration_is_a_providerless_product_cell() -> None:
     registration = producer.REGISTRATION.to_dict()
+    assert producer.RUNTIME_AGENTS_TOKEN_ENV == "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
+    assert registration["producer_revision"] == 2
     assert registration["subject_kind"] == "longhouse_product"
     assert registration["providers"] == []
     assert registration["assertion_cells"] == [

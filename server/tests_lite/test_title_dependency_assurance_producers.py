@@ -26,7 +26,7 @@ def test_title_product_registrations_have_no_provider_axis():
 
 def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatch):
     monkeypatch.setenv(oracles.RUNTIME_API_URL_ENV, "https://runtime.example")
-    monkeypatch.setenv(oracles.RUNTIME_API_TOKEN_ENV, "runtime-token")
+    monkeypatch.setenv(oracles.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
     calls: list[str] = []
     session_id = "5ad7f89a-f51a-4937-bca8-4ffc05497574"
 
@@ -120,7 +120,8 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert payload["session"]["launch_surface"] == FACTORY_TITLE_ASSURANCE_SURFACE
     raw = payload["records"][0]["data_b64"]
     assert raw
-    assert LIVE_REGISTRATION.producer_revision == 6
+    assert oracles.RUNTIME_AGENTS_TOKEN_ENV == "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
+    assert LIVE_REGISTRATION.producer_revision == 7
     assert LIVE_REGISTRATION.scenario_revision == 6
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity

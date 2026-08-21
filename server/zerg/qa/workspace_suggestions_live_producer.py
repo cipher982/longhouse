@@ -18,7 +18,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 
 ASSERTION_ID = "responsive_human_only_projection"
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
-RUNTIME_API_TOKEN_ENV = "LONGHOUSE_RUNTIME_API_TOKEN"
+RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 MAX_LIVE_LATENCY_SECONDS = 3.0
 MAX_MACHINES = 3
 _DISALLOWED_PATH_MARKERS = (
@@ -33,7 +33,7 @@ _DISALLOWED_PATH_MARKERS = (
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.workspace_suggestions_live.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id="workspace_suggestions_live",
     scenario_revision=1,
     assertion_cells=((ASSERTION_ID, None),),
@@ -104,7 +104,7 @@ def _workspace_paths(payload: object) -> list[str]:
 def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip().rstrip("/")
-    token = str(os.environ.get(RUNTIME_API_TOKEN_ENV) or "").strip()
+    token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
     if not api_url or not token:
         raise ValueError("live workspace assurance requires Runtime Host API URL and token")
 
