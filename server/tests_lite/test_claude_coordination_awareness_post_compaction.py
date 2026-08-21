@@ -72,6 +72,10 @@ def test_registration_covers_both_schema_declared_cells() -> None:
         (m._ASSERTION_NO_DUP_BOOTSTRAP, None),
     )
     assert m.REGISTRATION.evidence_classes == ("live_token",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
     assert len(m._CELL_BY_VARIANT) == 2
     assert set(m._CELL_BY_VARIANT.values()) == {m._ASSERTION_VISIBLE, m._ASSERTION_NO_DUP_BOOTSTRAP}
     for assertion_id in (m._ASSERTION_VISIBLE, m._ASSERTION_NO_DUP_BOOTSTRAP):
@@ -118,9 +122,11 @@ def _install_session_fakes(
     monkeypatch.setattr(m, "mcp_bootstrap_config_paths", lambda *_a, **_k: bootstrap_config_paths)
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
+    real_artifact_manifest = m.artifact_manifest
+
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
-        return []
+        return real_artifact_manifest(_root)
 
     monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
     return fake_shipper, fake_session
@@ -147,6 +153,15 @@ def test_run_passes_the_visibility_cell_when_compaction_preserves_tool_access(tm
     assert result["assertions"][m._ASSERTION_NO_DUP_BOOTSTRAP] is True
     assert result["observation"]["visible_bootstrap_count"] == 1
     assert result["observation"]["compaction_signal_observed"] is True
+    manifest_paths = {row["path"] for row in result["artifact_manifest"]}
+    assert "cleanup-receipt.json" in manifest_paths
+    assert "pre-compaction-tool-invocation-evidence.json" in manifest_paths
+    assert "post-compaction-tool-invocation-evidence.json" in manifest_paths
+    assert "pre-compaction-tool-invocation.json" not in manifest_paths
+    assert "post-compaction-tool-invocation.json" not in manifest_paths
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"claude_helm_process_exited": True}
     assert len(fake_session.submitted) == 3
     assert "Call your peers tool now" in fake_session.submitted[0]
     assert fake_session.submitted[1] == "/compact"
@@ -220,6 +235,9 @@ def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(t
     assert result["status"] == "fail"
     assert result["assertions"] == {m._ASSERTION_VISIBLE: False}
     assert fake_shipper.stopped is True
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["required_cleanup"] == {"claude_helm_process_exited": True}
 
 
 def test_main_rejects_a_variant_it_does_not_recognize(tmp_path: Path) -> None:

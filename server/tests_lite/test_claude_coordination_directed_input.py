@@ -68,6 +68,10 @@ def test_registration_covers_both_schema_declared_cells() -> None:
     assert m.REGISTRATION.scenario_id == "claude_coordination_directed_input"
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_SEND, None), (m._ASSERTION_RECEIVE, None))
     assert m.REGISTRATION.evidence_classes == ("live_token",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_cleanup == ("claude_helm_processes_exited",)
     assert len(m._CELL_BY_VARIANT) == 2
 
 
@@ -125,9 +129,11 @@ def _install_session_and_api_fakes(
 
     monkeypatch.setattr(m, "api_json", fake_api_json)
 
+    real_artifact_manifest = m.artifact_manifest
+
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
-        return []
+        return real_artifact_manifest(_root)
 
     monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
     return fake_shipper
@@ -150,6 +156,10 @@ def test_run_passes_the_send_cell_when_the_receipt_links(tmp_path: Path, monkeyp
     assert result["assertions"][m._ASSERTION_RECEIVE] is True
     assert result["observation"]["directed_input_id"] == 42
     assert result["observation"]["source_session_id"] == "sender-session"
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"claude_helm_processes_exited": True}
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
@@ -213,6 +223,9 @@ def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(t
     assert result["status"] == "fail"
     assert result["assertions"] == {m._ASSERTION_SEND: False}
     assert fake_shipper.stopped is True
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["required_cleanup"] == {"claude_helm_processes_exited": True}
 
 
 def test_main_rejects_a_variant_it_does_not_recognize(tmp_path: Path) -> None:

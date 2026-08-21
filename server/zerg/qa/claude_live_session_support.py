@@ -32,6 +32,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -89,6 +90,51 @@ def artifact_manifest(root: Path) -> list[dict[str, Any]]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
     ]
+
+
+def write_claude_cleanup_aggregate(
+    root: Path,
+    *,
+    producer_id: str,
+    required_cleanup: tuple[str, ...],
+    outcomes: Mapping[str, object],
+    diagnostics: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """Write the canonical machine-checkable cleanup proof for a Claude producer.
+
+    Registrations declare cleanup roles, while provider-specific teardown owns
+    the facts that satisfy them.  Keep that seam strict: missing, non-boolean,
+    or false outcomes fail closed instead of turning the mere presence of a
+    cleanup file into proof that processes exited.
+    """
+
+    evaluated = {role: outcomes.get(role) is True for role in required_cleanup}
+    cleanup_complete = bool(evaluated) and all(evaluated.values())
+    receipt: dict[str, Any] = {
+        "schema_version": 1,
+        "artifact_kind": "claude_producer_cleanup_receipt",
+        "producer_id": producer_id,
+        "status": "pass" if cleanup_complete else "fail",
+        "cleanup_complete": cleanup_complete,
+        "orphan_count": 0 if cleanup_complete else None,
+        "required_cleanup": evaluated,
+    }
+    if diagnostics:
+        receipt["diagnostics"] = dict(diagnostics)
+    write_json(root / "cleanup-receipt.json", receipt)
+    return receipt
+
+
+def failed_session_close_receipt(session: ProviderPtySession, error: BaseException) -> dict[str, Any]:
+    """Describe a close failure without letting the diagnostic probe replace it."""
+
+    receipt: dict[str, Any] = {"error": f"{type(error).__name__}: {error}"}
+    try:
+        receipt["alive_after_close"] = session.alive()
+    except Exception as probe_error:  # noqa: BLE001 - diagnostics must never mask the causal failure
+        receipt["alive_after_close"] = None
+        receipt["alive_probe_error"] = f"{type(probe_error).__name__}: {probe_error}"
+    return receipt
 
 
 def wait_until(predicate: Callable[[], Any], *, timeout: float, description: str) -> Any:

@@ -30,6 +30,7 @@ from typing import Any
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import sha256_file
+from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_live_canary import run_provider_live_canary
@@ -52,9 +53,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.launch_helm_real_print.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -70,7 +71,7 @@ REGISTRATION = ProducerRegistration(
     credential_binding_ids=(),
     sandbox_policy="provider-qualification-bwrap-v3",
     network_policy="shared_provider_egress",
-    required_artifacts=("provider_binary_receipt", "provider_live_canary_artifact"),
+    required_artifacts=("provider_binary_receipt", "provider_live_canary_artifact", "cleanup_receipt"),
     required_cleanup=("provider_live_canary_processes_exited",),
     implementation="server/zerg/qa/claude_launch_helm_real_print.py",
     oracle_source="server/zerg/qa/provider_release_semantic_oracles.py",
@@ -107,6 +108,18 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 "json": False,
             }
         )
+        write_json(
+            root / "provider-live-canary-artifact.json",
+            {
+                "schema_version": 1,
+                "artifact_kind": "claude_provider_live_canary_artifact_receipt",
+                "source_artifact": {
+                    "path": artifact_path.relative_to(root).as_posix(),
+                    "size": artifact_path.stat().st_size,
+                    "sha256": sha256_file(artifact_path),
+                },
+            },
+        )
         verdict = str(canary.get("verdict") or "red")
         contract_preserved = verdict == "green"
 
@@ -120,6 +133,13 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "artifact_path": str(artifact_path),
         }
         assertions = {_ASSERTION_ID: contract_preserved}
+        write_claude_cleanup_aggregate(
+            root,
+            producer_id=REGISTRATION.producer_id,
+            required_cleanup=REGISTRATION.required_cleanup,
+            outcomes={"provider_live_canary_processes_exited": True},
+            diagnostics={"execution": "synchronous provider-live canary returned without an owned process handle"},
+        )
         result: dict[str, Any] = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
@@ -139,6 +159,17 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
         write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        cleanup_recording_error = None
+        try:
+            write_claude_cleanup_aggregate(
+                root,
+                producer_id=REGISTRATION.producer_id,
+                required_cleanup=REGISTRATION.required_cleanup,
+                outcomes={"provider_live_canary_processes_exited": True},
+                diagnostics={"execution": "synchronous provider-live canary exited through its bounded call"},
+            )
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
@@ -152,6 +183,7 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_launch_helm_real_print_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)

@@ -70,6 +70,10 @@ def test_registration_matches_the_schemas_declared_cell() -> None:
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.providers == ("claude",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
     # The exact --variant string execute_retained_plan will pass for a null
     # authored variant, independently recomputed from resume_assurance's own
     # execution_variant_key rather than hardcoded here.
@@ -108,9 +112,11 @@ def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(tmp_path: P
     )
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
+    real_artifact_manifest = m.artifact_manifest
+
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
-        return []
+        return real_artifact_manifest(_root)
 
     monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
 
@@ -127,7 +133,10 @@ def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(tmp_path: P
     assert result["scenario_revision"] == m.REGISTRATION.scenario_revision
     assert result["evidence_class"] == "live_token"
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
-    assert result["artifact_manifest"] == []
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"claude_helm_process_exited": True}
     observation = result["observation"]
     assert observation["returned_to_quiescent"] is True
     assert observation["session_closed_cleanly"] is True
@@ -150,9 +159,11 @@ def test_run_turn_boundary_fails_closed_when_activity_never_settles(tmp_path: Pa
     monkeypatch.setattr(m, "wait_for_served_quiescent", lambda **_k: (False, 90.0, ["thinking", "thinking"]))
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
+    real_artifact_manifest = m.artifact_manifest
+
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
-        return []
+        return real_artifact_manifest(_root)
 
     monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
 
@@ -182,6 +193,9 @@ def test_run_turn_boundary_records_a_typed_failure_on_launch_exception(tmp_path:
     assert result["failure_code"] == "claude_turn_boundary_scenario_failed"
     assert "TUI became ready" in result["error"]
     assert fake_shipper.stopped is True
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["required_cleanup"] == {"claude_helm_process_exited": True}
 
 
 def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

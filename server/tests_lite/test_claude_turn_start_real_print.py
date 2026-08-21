@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -36,6 +37,10 @@ def test_registration_matches_the_schemas_declared_cell() -> None:
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.providers == ("claude",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_cleanup == ("real_print_process_exited",)
     assert m._EXECUTION_VARIANT == execution_variant_key(
         provider="claude",
         assertion_id=m._ASSERTION_ID,
@@ -51,14 +56,29 @@ def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureF
     assert payload["assertion_cells"] == [{"assertion_id": m._ASSERTION_ID, "variant": None}]
 
 
-def test_run_turn_start_passes_when_the_real_print_marker_comes_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_turn_start_passes_when_the_real_print_marker_comes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     secret = "sk-test-credential-value"
 
-    def fake_execute(_binary: Path, _evidence_root: Path):
-        observation = {"status": "pass", "real_print_canary": {"status": "pass", "credential_used": secret}}
+    def fake_execute(_binary: Path, evidence_root: Path):
+        no_token_artifact = evidence_root / "no-token" / "provider-live-canary.json"
+        stdout_artifact = evidence_root / "live" / "claude-print-stdout.jsonl"
+        stderr_artifact = evidence_root / "live" / "claude-print-stderr.log"
+        no_token_artifact.parent.mkdir(parents=True)
+        stdout_artifact.parent.mkdir(parents=True)
+        no_token_artifact.write_text('{"verdict":"green"}\n', encoding="utf-8")
+        stdout_artifact.write_text('{"result":"marker"}\n', encoding="utf-8")
+        stderr_artifact.write_text("", encoding="utf-8")
+        observation = {
+            "status": "pass",
+            "no_token_canary": {"verdict": "green", "artifact_path": str(no_token_artifact)},
+            "real_print_canary": {
+                "status": "pass",
+                "credential_used": secret,
+                "stdout_path": str(stdout_artifact),
+                "stderr_path": str(stderr_artifact),
+            },
+        }
         assertions = (
             _Assertion("claude_cli_channel_contract_preserved", AssertionOutcome.PASS, EvidenceClass.LIVE_NO_TOKEN),
             _Assertion("real_print_marker_returned", AssertionOutcome.PASS, EvidenceClass.LIVE_TOKEN),
@@ -83,6 +103,25 @@ def test_run_turn_start_passes_when_the_real_print_marker_comes_back(
     # _execute() does not redact secrets itself (run_semantic_profile normally
     # does that); this producer owns that step when it bypasses that caller.
     assert secret not in json.dumps(result["observation"])
+    manifest_paths = {row["path"] for row in result["artifact_manifest"]}
+    assert "cleanup-receipt.json" in manifest_paths
+    assert "no-token-gate-canary.json" in manifest_paths
+    assert "real-print-canary-evidence.json" in manifest_paths
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"real_print_process_exited": True}
+    no_token_receipt = json.loads((args.evidence_root / "no-token-gate-canary.json").read_text(encoding="utf-8"))
+    no_token_source = args.evidence_root / "semantic-evidence" / "no-token" / "provider-live-canary.json"
+    assert no_token_receipt["source_artifact"] == {
+        "path": "semantic-evidence/no-token/provider-live-canary.json",
+        "size": no_token_source.stat().st_size,
+        "sha256": f"sha256:{hashlib.sha256(no_token_source.read_bytes()).hexdigest()}",
+    }
+    real_print_receipt = json.loads((args.evidence_root / "real-print-canary-evidence.json").read_text(encoding="utf-8"))
+    assert [row["path"] for row in real_print_receipt["source_artifacts"]] == [
+        "semantic-evidence/live/claude-print-stdout.jsonl",
+        "semantic-evidence/live/claude-print-stderr.log",
+    ]
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
@@ -120,11 +159,12 @@ def test_run_turn_start_records_a_typed_failure_on_exception(tmp_path: Path, mon
     assert result["status"] == "fail"
     assert result["failure_code"] == "claude_turn_start_real_print_failed"
     assert "timed out" in result["error"]
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["required_cleanup"] == {"real_print_process_exited": True}
 
 
-def test_main_serializes_result_and_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     provider = tmp_path / "claude"
     provider.write_text("#!/bin/sh\n")
     provider.chmod(0o755)

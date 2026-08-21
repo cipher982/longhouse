@@ -37,6 +37,7 @@ from zerg.qa.claude_live_session_support import api_json
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
+from zerg.qa.claude_live_session_support import failed_session_close_receipt
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import local_managed_control_fact
@@ -45,6 +46,7 @@ from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import read_coordination_token
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
+from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
@@ -70,9 +72,9 @@ _CELL_BY_VARIANT: dict[str, str] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_directed_input.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=(
         (_ASSERTION_SEND, None),
         (_ASSERTION_RECEIVE, None),
@@ -100,6 +102,7 @@ REGISTRATION = ProducerRegistration(
         "receiver_live_control_receipt",
         "directed_input_create_receipt",
         "directed_input_inbox_receipt",
+        "cleanup_receipt",
     ),
     required_cleanup=("claude_helm_processes_exited",),
     implementation="server/zerg/qa/claude_coordination_directed_input.py",
@@ -123,6 +126,10 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
     shipper = None
     sender = None
     receiver = None
+    close_receipts: dict[str, dict[str, Any]] = {
+        "sender": {"not_started": True, "alive_after_close": False},
+        "receiver": {"not_started": True, "alive_after_close": False},
+    }
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -283,13 +290,24 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         write_json(root / "directed-input-inbox-receipt.json", inbox_record or {"visible": False})
 
         sender_close = close_session(sender)
+        close_receipts["sender"] = sender_close
         sender = None
         receiver_close = close_session(receiver)
+        close_receipts["receiver"] = receiver_close
         receiver = None
         write_json(root / "session-close-receipts.json", {"sender": sender_close, "receiver": receiver_close})
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             shipper = None
+        write_claude_cleanup_aggregate(
+            root,
+            producer_id=REGISTRATION.producer_id,
+            required_cleanup=REGISTRATION.required_cleanup,
+            outcomes={
+                "claude_helm_processes_exited": all(receipt.get("alive_after_close") is False for receipt in close_receipts.values())
+            },
+            diagnostics={"sessions": close_receipts},
+        )
 
         observation = {
             "sender_session_id": sender_session_id,
@@ -328,15 +346,33 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             diagnostic = local_managed_control_snapshot(longhouse_home, receiver_session_id)
             if diagnostic is not None:
                 write_json(root / "receiver-live-control-diagnostic.json", diagnostic)
-        for session in (sender, receiver):
+        for role, session in (("sender", sender), ("receiver", receiver)):
             if session is not None:
                 try:
-                    close_session(session)
-                except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
-                    pass
+                    close_receipts[role] = close_session(session)
+                except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+                    close_receipts[role] = failed_session_close_receipt(session, cleanup_exc)
         if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+                close_receipts["shipper"] = {"error": f"{type(cleanup_exc).__name__}: {cleanup_exc}"}
             shipper = None
+        cleanup_recording_error = None
+        try:
+            write_claude_cleanup_aggregate(
+                root,
+                producer_id=REGISTRATION.producer_id,
+                required_cleanup=REGISTRATION.required_cleanup,
+                outcomes={
+                    "claude_helm_processes_exited": all(
+                        close_receipts[role].get("alive_after_close") is False for role in ("sender", "receiver")
+                    )
+                },
+                diagnostics={"sessions": close_receipts},
+            )
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         error_detail = f"{type(exc).__name__}: {exc}"
         if isinstance(exc, RuntimeHostHTTPError):
             error_detail = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"
@@ -353,6 +389,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_coordination_directed_input_failed",
             "error": error_detail,
+            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "assertions": {requested_assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
@@ -360,7 +397,10 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         return failure
     finally:
         if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception:  # noqa: BLE001 - result already retains the causal failure
+                pass
         shutil.rmtree(isolation_root, ignore_errors=True)
 
 

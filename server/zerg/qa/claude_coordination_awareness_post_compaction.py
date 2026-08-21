@@ -38,6 +38,7 @@ from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import await_assistant_marker
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
+from zerg.qa.claude_live_session_support import failed_session_close_receipt
 from zerg.qa.claude_live_session_support import find_compaction_boundary
 from zerg.qa.claude_live_session_support import find_tool_invocation
 from zerg.qa.claude_live_session_support import isolation_paths
@@ -46,6 +47,7 @@ from zerg.qa.claude_live_session_support import mcp_bootstrap_config_paths
 from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
+from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.managed_claude_live import transcript_line_counts
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
@@ -76,9 +78,9 @@ _CELL_BY_VARIANT: dict[str, str] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_post_compaction.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=(
         (_ASSERTION_VISIBLE, None),
         (_ASSERTION_NO_DUP_BOOTSTRAP, None),
@@ -105,6 +107,7 @@ REGISTRATION = ProducerRegistration(
         "compaction_boundary_receipt",
         "post_compaction_tool_invocation_evidence",
         "mcp_bootstrap_config_manifest",
+        "cleanup_receipt",
     ),
     required_cleanup=("claude_helm_process_exited",),
     implementation="server/zerg/qa/claude_coordination_awareness_post_compaction.py",
@@ -136,6 +139,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
 
     shipper = None
     session = None
+    close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -186,7 +190,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             provider_session_id=provider_session_id,
         )
         pre_invocation = find_tool_invocation(transcript_id, "peers", home=Path(environment["HOME"]))
-        write_json(root / "pre-compaction-tool-invocation.json", pre_invocation or {"found": False})
+        write_json(root / "pre-compaction-tool-invocation-evidence.json", pre_invocation or {"found": False})
 
         bootstrap_configs_before = mcp_bootstrap_config_paths(longhouse_home, session_id)
 
@@ -215,7 +219,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         post_invocation = find_tool_invocation(
             transcript_id, "peers", after_line_counts=pre_compaction_line_counts, home=Path(environment["HOME"])
         )
-        write_json(root / "post-compaction-tool-invocation.json", post_invocation or {"found": False})
+        write_json(root / "post-compaction-tool-invocation-evidence.json", post_invocation or {"found": False})
 
         bootstrap_configs_after = mcp_bootstrap_config_paths(longhouse_home, session_id)
         write_json(
@@ -232,6 +236,13 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             shipper = None
+        write_claude_cleanup_aggregate(
+            root,
+            producer_id=REGISTRATION.producer_id,
+            required_cleanup=REGISTRATION.required_cleanup,
+            outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
+            diagnostics={"session": close_receipt},
+        )
 
         pre_ok = (
             pre_invocation is not None and pre_invocation.get("tool_result_line") is not None and pre_invocation.get("is_error") is not True
@@ -292,12 +303,26 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         if session is not None:
             try:
-                close_session(session)
-            except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
-                pass
+                close_receipt = close_session(session)
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+                close_receipt = failed_session_close_receipt(session, cleanup_exc)
         if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+                close_receipt["shipper_stop_error"] = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
             shipper = None
+        cleanup_recording_error = None
+        try:
+            write_claude_cleanup_aggregate(
+                root,
+                producer_id=REGISTRATION.producer_id,
+                required_cleanup=REGISTRATION.required_cleanup,
+                outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
+                diagnostics={"session": close_receipt},
+            )
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
@@ -311,6 +336,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             "status": "fail",
             "failure_code": "claude_coordination_awareness_post_compaction_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "assertions": {requested_assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
@@ -318,7 +344,10 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         return failure
     finally:
         if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception:  # noqa: BLE001 - result already retains the causal failure
+                pass
         shutil.rmtree(isolation_root, ignore_errors=True)
 
 

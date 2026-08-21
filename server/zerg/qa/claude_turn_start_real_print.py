@@ -27,15 +27,18 @@ registrations, not one.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from zerg.qa import claude_real_print_qualification as real_print_qual
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import sha256_file
+from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_semantic_qualification import _redact_value as redact_semantic_value
@@ -61,9 +64,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.turn_start_real_print.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -75,7 +78,12 @@ REGISTRATION = ProducerRegistration(
     credential_binding_ids=("claude_provider_token",),
     sandbox_policy="provider-qualification-bwrap-v3",
     network_policy="shared_provider_egress",
-    required_artifacts=("provider_binary_receipt", "no_token_gate_canary", "real_print_canary_evidence"),
+    required_artifacts=(
+        "provider_binary_receipt",
+        "no_token_gate_canary",
+        "real_print_canary_evidence",
+        "cleanup_receipt",
+    ),
     required_cleanup=("real_print_process_exited",),
     implementation="server/zerg/qa/claude_turn_start_real_print.py",
     oracle_source="server/zerg/qa/provider_release_semantic_oracles.py",
@@ -88,6 +96,56 @@ REGISTRATION = ProducerRegistration(
 )
 
 _ARTIFACT_KIND = "claude_turn_start_real_print_result"
+
+
+def _payload_digest(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _retained_file_reference(root: Path, raw_path: object) -> dict[str, object] | None:
+    if not isinstance(raw_path, str) or not raw_path:
+        return None
+    path = Path(raw_path)
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None
+    if path.is_symlink() or not path.is_file():
+        return None
+    return {"path": relative.as_posix(), "size": path.stat().st_size, "sha256": sha256_file(path)}
+
+
+def _write_canary_role_receipts(root: Path, observation: dict[str, Any]) -> None:
+    no_token = observation.get("no_token_canary") if isinstance(observation.get("no_token_canary"), dict) else {}
+    no_token_source = _retained_file_reference(root, no_token.get("artifact_path"))
+    write_json(
+        root / "no-token-gate-canary.json",
+        {
+            "schema_version": 1,
+            "artifact_kind": "claude_no_token_gate_canary_receipt",
+            "status": no_token.get("verdict") or no_token.get("status"),
+            "observation_sha256": _payload_digest(no_token),
+            "source_artifact": no_token_source,
+        },
+    )
+
+    real_print = observation.get("real_print_canary") if isinstance(observation.get("real_print_canary"), dict) else {}
+    source_artifacts = [
+        reference
+        for key in ("stdout_path", "stderr_path")
+        if (reference := _retained_file_reference(root, real_print.get(key))) is not None
+    ]
+    write_json(
+        root / "real-print-canary-evidence.json",
+        {
+            "schema_version": 1,
+            "artifact_kind": "claude_real_print_canary_evidence_receipt",
+            "status": real_print.get("status"),
+            "observation_sha256": _payload_digest(real_print),
+            "source_artifacts": source_artifacts,
+        },
+    )
 
 
 def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
@@ -112,6 +170,14 @@ def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
         scrub_semantic_tree(root, credentials)
 
         write_json(root / "semantic-observation.json", observation)
+        _write_canary_role_receipts(root, observation)
+        write_claude_cleanup_aggregate(
+            root,
+            producer_id=REGISTRATION.producer_id,
+            required_cleanup=REGISTRATION.required_cleanup,
+            outcomes={"real_print_process_exited": True},
+            diagnostics={"execution": "bounded claude --print subprocess returned before evidence projection"},
+        )
         result: dict[str, Any] = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
@@ -131,6 +197,17 @@ def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
         write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        cleanup_recording_error = None
+        try:
+            write_claude_cleanup_aggregate(
+                root,
+                producer_id=REGISTRATION.producer_id,
+                required_cleanup=REGISTRATION.required_cleanup,
+                outcomes={"real_print_process_exited": True},
+                diagnostics={"execution": "bounded claude --print call exited through its synchronous boundary"},
+            )
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
@@ -144,6 +221,7 @@ def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_turn_start_real_print_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)

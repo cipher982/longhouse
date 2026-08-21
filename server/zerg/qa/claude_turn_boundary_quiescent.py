@@ -32,11 +32,13 @@ from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import await_assistant_marker
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
+from zerg.qa.claude_live_session_support import failed_session_close_receipt
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_for_served_quiescent
+from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
@@ -63,9 +65,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.turn_boundary_quiescent.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -89,6 +91,7 @@ REGISTRATION = ProducerRegistration(
         "session_launch_receipt",
         "activity_state_samples",
         "session_close_receipt",
+        "cleanup_receipt",
     ),
     required_cleanup=("claude_helm_process_exited",),
     implementation="server/zerg/qa/claude_turn_boundary_quiescent.py",
@@ -121,6 +124,7 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
 
     shipper = None
     session = None
+    close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -192,6 +196,13 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             shipper = None
+        write_claude_cleanup_aggregate(
+            root,
+            producer_id=REGISTRATION.producer_id,
+            required_cleanup=REGISTRATION.required_cleanup,
+            outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
+            diagnostics={"session": close_receipt},
+        )
 
         observation = {
             "session_id": session_id,
@@ -226,12 +237,26 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         if session is not None:
             try:
-                close_session(session)
-            except Exception:  # noqa: BLE001 - never let cleanup mask the causal error
-                pass
+                close_receipt = close_session(session)
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+                close_receipt = failed_session_close_receipt(session, cleanup_exc)
         if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+                close_receipt["shipper_stop_error"] = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
             shipper = None
+        cleanup_recording_error = None
+        try:
+            write_claude_cleanup_aggregate(
+                root,
+                producer_id=REGISTRATION.producer_id,
+                required_cleanup=REGISTRATION.required_cleanup,
+                outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
+                diagnostics={"session": close_receipt},
+            )
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
+            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
@@ -245,13 +270,17 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_turn_boundary_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)
         return failure
     finally:
         if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception:  # noqa: BLE001 - result already retains the causal failure
+                pass
         shutil.rmtree(isolation_root, ignore_errors=True)
 
 

@@ -202,3 +202,44 @@ def test_wait_for_served_quiescent_reads_the_canonical_session_diagnostics(
         f"sessions/{session_id}/state-diagnostics",
         f"sessions/{session_id}/state-diagnostics",
     ]
+
+
+def test_cleanup_aggregate_requires_every_declared_role_to_be_true(tmp_path: Path) -> None:
+    receipt = m.write_claude_cleanup_aggregate(
+        tmp_path,
+        producer_id="claude.test.v1",
+        required_cleanup=("process_exited", "shipper_exited"),
+        outcomes={"process_exited": True},
+    )
+
+    assert receipt["status"] == "fail"
+    assert receipt["cleanup_complete"] is False
+    assert receipt["orphan_count"] is None
+    assert receipt["required_cleanup"] == {"process_exited": True, "shipper_exited": False}
+    assert json.loads((tmp_path / "cleanup-receipt.json").read_text(encoding="utf-8")) == receipt
+
+
+def test_cleanup_aggregate_records_zero_orphans_only_for_complete_cleanup(tmp_path: Path) -> None:
+    receipt = m.write_claude_cleanup_aggregate(
+        tmp_path,
+        producer_id="claude.test.v1",
+        required_cleanup=("process_exited",),
+        outcomes={"process_exited": True},
+    )
+
+    assert receipt["status"] == "pass"
+    assert receipt["cleanup_complete"] is True
+    assert receipt["orphan_count"] == 0
+    assert receipt["required_cleanup"] == {"process_exited": True}
+
+
+def test_failed_close_diagnostics_cannot_mask_the_close_error() -> None:
+    class BrokenSession:
+        def alive(self) -> bool:
+            raise RuntimeError("secondary liveness probe failed")
+
+    receipt = m.failed_session_close_receipt(BrokenSession(), ValueError("causal close failure"))  # type: ignore[arg-type]
+
+    assert receipt["error"] == "ValueError: causal close failure"
+    assert receipt["alive_after_close"] is None
+    assert receipt["alive_probe_error"] == "RuntimeError: secondary liveness probe failed"

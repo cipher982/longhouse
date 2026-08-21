@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -28,6 +29,10 @@ def test_registration_matches_the_schemas_declared_cell() -> None:
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
     assert m.REGISTRATION.evidence_classes == ("live_no_token",)
     assert m.REGISTRATION.providers == ("claude",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_cleanup == ("provider_live_canary_processes_exited",)
     assert m._EXECUTION_VARIANT == execution_variant_key(
         provider="claude",
         assertion_id=m._ASSERTION_ID,
@@ -45,18 +50,21 @@ def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureF
 
 def test_run_launch_helm_passes_on_a_green_no_token_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
-    monkeypatch.setattr(
-        m,
-        "run_provider_live_canary",
-        lambda _request: {
+
+    def fake_canary(request: dict[str, object]) -> dict[str, object]:
+        artifact = Path(str(request["artifact"]))
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text('{"verdict":"green"}\n', encoding="utf-8")
+        return {
             "verdict": "green",
             "failure_code": None,
             "recommendation": None,
             "provider_version": "1.2.3",
             "canaries": {"binary_identity": {"status": "pass"}},
             "operation_evidence": {},
-        },
-    )
+        }
+
+    monkeypatch.setattr(m, "run_provider_live_canary", fake_canary)
 
     result = m.run_launch_helm_scenario(args)
 
@@ -70,6 +78,19 @@ def test_run_launch_helm_passes_on_a_green_no_token_verdict(tmp_path: Path, monk
     assert result["evidence_class"] == "live_no_token"
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
     assert isinstance(result["artifact_manifest"], list) and result["artifact_manifest"]
+    manifest_paths = {row["path"] for row in result["artifact_manifest"]}
+    assert "cleanup-receipt.json" in manifest_paths
+    assert "provider-live-canary-artifact.json" in manifest_paths
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"provider_live_canary_processes_exited": True}
+    live_canary = args.evidence_root / "no-token-canary" / "provider-live-canary.json"
+    role_receipt = json.loads((args.evidence_root / "provider-live-canary-artifact.json").read_text(encoding="utf-8"))
+    assert role_receipt["source_artifact"] == {
+        "path": "no-token-canary/provider-live-canary.json",
+        "size": live_canary.stat().st_size,
+        "sha256": f"sha256:{hashlib.sha256(live_canary.read_bytes()).hexdigest()}",
+    }
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
@@ -77,17 +98,20 @@ def test_run_launch_helm_passes_on_a_green_no_token_verdict(tmp_path: Path, monk
 
 def test_run_launch_helm_fails_on_a_red_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
-    monkeypatch.setattr(
-        m,
-        "run_provider_live_canary",
-        lambda _request: {
+
+    def fake_canary(request: dict[str, object]) -> dict[str, object]:
+        artifact = Path(str(request["artifact"]))
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text('{"verdict":"red"}\n', encoding="utf-8")
+        return {
             "verdict": "red",
             "failure_code": "claude_binary_identity_failed",
             "recommendation": "reinstall claude",
             "provider_version": None,
             "canaries": {"binary_identity": {"status": "fail"}},
-        },
-    )
+        }
+
+    monkeypatch.setattr(m, "run_provider_live_canary", fake_canary)
 
     result = m.run_launch_helm_scenario(args)
 
@@ -108,11 +132,12 @@ def test_run_launch_helm_records_a_typed_failure_on_exception(tmp_path: Path, mo
     assert result["status"] == "fail"
     assert result["failure_code"] == "claude_launch_helm_real_print_failed"
     assert "timed out" in result["error"]
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["required_cleanup"] == {"provider_live_canary_processes_exited": True}
 
 
-def test_main_serializes_result_and_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     provider = tmp_path / "claude"
     provider.write_text("#!/bin/sh\n")
     provider.chmod(0o755)

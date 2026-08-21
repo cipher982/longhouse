@@ -68,6 +68,10 @@ def test_registration_matches_the_schemas_declared_cell() -> None:
     assert m.REGISTRATION.scenario_id == "claude_coordination_awareness_create"
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
+    assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
     assert m._EXECUTION_VARIANT == execution_variant_key(
         provider="claude",
         assertion_id=m._ASSERTION_ID,
@@ -93,9 +97,11 @@ def _install_session_fakes(monkeypatch: pytest.MonkeyPatch, *, tool_invocation: 
     monkeypatch.setattr(m, "find_tool_invocation", lambda *_a, **_k: tool_invocation)
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
+    real_artifact_manifest = m.artifact_manifest
+
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
-        return []
+        return real_artifact_manifest(_root)
 
     monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
     return fake_shipper, fake_session
@@ -125,6 +131,10 @@ def test_run_awareness_create_passes_when_the_model_actually_calls_peers(tmp_pat
     assert result["evidence_class"] == "live_token"
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
     assert result["observation"]["coordination_instructions_model_visible"] is True
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"claude_helm_process_exited": True}
     assert len(fake_session.submitted) == 1
     assert "Call your peers tool now" in fake_session.submitted[0]
 
@@ -159,6 +169,30 @@ def test_run_awareness_create_fails_when_the_tool_call_errors(tmp_path: Path, mo
 
     assert result["status"] == "fail"
     assert result["assertions"] == {m._ASSERTION_ID: False}
+
+
+def test_run_awareness_create_preserves_the_causal_error_when_cleanup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = _args(tmp_path)
+    _install_session_fakes(monkeypatch, tool_invocation=None)
+
+    def fail_during_observation(**_kwargs: object) -> object:
+        raise RuntimeError("causal transcript failure")
+
+    def fail_during_cleanup(_session: object) -> object:
+        raise RuntimeError("secondary close failure")
+
+    monkeypatch.setattr(m, "await_assistant_marker", fail_during_observation)
+    monkeypatch.setattr(m, "close_session", fail_during_cleanup)
+
+    result = m.run_awareness_create_scenario(args)
+
+    assert result["status"] == "fail"
+    assert result["error"] == "RuntimeError: causal transcript failure"
+    assert "secondary close failure" not in result["error"]
+    assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "fail"
+    assert cleanup["required_cleanup"] == {"claude_helm_process_exited": False}
 
 
 def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
