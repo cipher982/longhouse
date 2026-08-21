@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import tempfile
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,7 @@ ASSERTION_ID = "console_lifecycle_state_machine_preserved"
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.product_console_lifecycle.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=SCENARIO_ID,
     scenario_revision=1,
     assertion_cells=((ASSERTION_ID, None),),
@@ -106,17 +107,27 @@ def run_product_console_lifecycle(root: Path) -> dict[str, object]:
 
     root = root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
-    isolated_config = {
-        "AUTH_DISABLED": "1",
-        "DATABASE_URL": f"sqlite:///{root / 'runtime.db'}",
-        "SINGLE_TENANT": "1",
-        "TESTING": "1",
-    }
-    with patch.dict(os.environ, isolated_config, clear=False):
-        return _run_product_console_lifecycle(root)
+    raw_runtime_home = os.environ.get("LONGHOUSE_QUALIFICATION_HOME", "").strip()
+    runtime_home = Path(raw_runtime_home).resolve() if raw_runtime_home else None
+    # Catalog/runtime databases are reconstructable execution scratch, not
+    # proof evidence. Keep them in the sandbox's ephemeral runtime mount so
+    # the retained evidence tree contains only bounded semantic receipts.
+    with tempfile.TemporaryDirectory(
+        prefix="product-console-lifecycle-",
+        dir=runtime_home,
+    ) as temporary_runtime:
+        runtime_root = Path(temporary_runtime)
+        isolated_config = {
+            "AUTH_DISABLED": "1",
+            "DATABASE_URL": f"sqlite:///{runtime_root / 'runtime.db'}",
+            "SINGLE_TENANT": "1",
+            "TESTING": "1",
+        }
+        with patch.dict(os.environ, isolated_config, clear=False):
+            return _run_product_console_lifecycle(root, runtime_root=runtime_root)
 
 
-def _run_product_console_lifecycle(root: Path) -> dict[str, object]:
+def _run_product_console_lifecycle(root: Path, *, runtime_root: Path) -> dict[str, object]:
     """Run after establishing explicit test-safe process configuration."""
 
     from sqlalchemy.orm import Session
@@ -129,7 +140,7 @@ def _run_product_console_lifecycle(root: Path) -> dict[str, object]:
     from zerg.models.live_store import LiveUser
     from zerg.services.session_runtime import RuntimeEventIngest
 
-    engine = create_catalog_engine(root / "catalog.db")
+    engine = create_catalog_engine(runtime_root / "catalog.db")
     store = CatalogStore(engine)
     session_id = uuid4()
     thread_id = uuid4()
