@@ -789,7 +789,7 @@ def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path
     assert [row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]] == [human_id]
 
 
-def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
+def test_hidden_factory_assurance_projection_preserves_launch_tuple(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'empty-shell.db'}")
     initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
@@ -799,17 +799,19 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
         db.add(
             LiveSessionCatalog(
                 session_id=str(session_id),
-                provider="codex",
-                environment="production",
-                project="longhouse",
+                provider="claude",
+                environment="local",
+                project="longhouse-title-assurance",
+                device_id="provider-factory-resume",
+                cwd="/factory/title-assurance",
                 started_at=now - timedelta(days=3),
                 last_activity_at=now,
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
                 hidden_from_default_timeline=1,
-                launch_actor="human_ui",
-                launch_surface="ios",
+                launch_actor="automation",
+                launch_surface="factory_assurance",
                 created_at=now,
                 updated_at=now,
             )
@@ -817,9 +819,11 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
         db.add(
             LiveTimelineCard(
                 session_id=str(session_id),
-                provider="codex",
-                environment="production",
-                project="longhouse",
+                provider="claude",
+                environment="local",
+                project="longhouse-title-assurance",
+                device_id="provider-factory-resume",
+                cwd="/factory/title-assurance",
                 started_at=now - timedelta(days=3),
                 last_activity_at=now,
                 user_messages=0,
@@ -827,8 +831,8 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
                 tool_calls=0,
                 hidden_from_default_timeline=1,
                 archive_state="legacy_hot",
-                launch_actor="human_ui",
-                launch_surface="ios",
+                launch_actor="automation",
+                launch_surface="factory_assurance",
                 derived_state="current",
                 parser_revision="test",
                 updated_at=now,
@@ -841,9 +845,12 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
     assert response.total == 0
     facts = CatalogStore(engine).read_session(session_id=str(session_id), owner_id=None)["facts"]
     session = project_catalog_session_facts(facts, observed_at=now)
-    assert session.timeline_title == "longhouse · Empty session"
+    assert session.timeline_title == "longhouse-title-assurance · Empty session"
     assert session.title_state == "awaiting_input"
     assert session.title_source == "project"
+    assert session.hidden_from_default_timeline is True
+    assert session.launch_actor == "automation"
+    assert session.launch_surface == "factory_assurance"
 
 
 def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path):

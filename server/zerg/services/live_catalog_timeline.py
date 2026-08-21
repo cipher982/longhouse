@@ -443,6 +443,9 @@ def _pending_response_from_catalog(
             "title_source": _title_source(session, card)
             if card.first_user_message_preview or session.first_user_message_preview
             else "project",
+            "hidden_from_default_timeline": bool(session.hidden_from_default_timeline),
+            "launch_actor": session.launch_actor,
+            "launch_surface": session.launch_surface,
             "summary_status": "ready" if session.summary else "unavailable",
             "first_user_message": card.first_user_message_preview or session.first_user_message_preview,
             "thread_root_session_id": str(session.session_id),
@@ -568,6 +571,9 @@ def _response_from_catalog(
         timeline_title=title,
         title_state=_title_state(session, card),
         title_source=_title_source(session, card) if card.first_user_message_preview or session.first_user_message_preview else "project",
+        hidden_from_default_timeline=bool(session.hidden_from_default_timeline),
+        launch_actor=session.launch_actor,
+        launch_surface=session.launch_surface,
         summary_status="ready" if session.summary else "unavailable",
         first_user_message=card.first_user_message_preview or session.first_user_message_preview,
         thread_root_session_id=str(session.session_id),
