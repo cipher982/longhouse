@@ -91,15 +91,12 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
                 assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_server_live_contract"
                 assert payload["operation_evidence"]["steer_active_turn"]["status"] == "unsupported"
             if provider == "antigravity":
-                # Antigravity is Shadow-only. 2d4dc0335 recorded that in the
-                # contract -- session.input.send is policy_disabled, because the
-                # engine advertised the control whenever `agy` was on PATH and
-                # then refused it before dispatch. So the profile routes the
-                # operation away rather than leaving it pending a live canary
-                # that was never going to run. Asserting "not_run" here outlived
-                # the seven engine-side tests that commit already corrected.
-                assert payload["operation_evidence"]["send_input"]["status"] == "unsupported"
-                assert payload["operation_evidence"]["send_input"]["canary"] == "contract_profile"
+                # Maintenance tier withdraws Console turns without erasing the
+                # already-declared Helm hook-inbox send path. With no live flag
+                # this profile must therefore retain that proof as pending,
+                # owned by the real agy send canary.
+                assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
+                assert payload["operation_evidence"]["send_input"]["canary"] == "antigravity_real_agy_send"
 
 
 def test_profile_canary_can_use_release_version_without_local_binary() -> None:

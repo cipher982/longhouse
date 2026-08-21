@@ -430,7 +430,11 @@ def test_claude_channel_canary_uses_native_channel_module() -> None:
         assert claude["status"] == "pass"
         assert claude["send_meta"]["injected_by"] == "longhouse"
         assert claude["steer_meta"]["intent"] == "steer"
-        assert Path(claude["interrupt_marker"]).read_text().strip() == "sigint"
+        # The canary verifies the marker before deliberately deleting its
+        # scratch work root. The retained artifact records that proof outcome,
+        # not a promise that an ephemeral marker path remains readable.
+        assert Path(claude["interrupt_marker"]).name == "claude-interrupted.txt"
+        assert payload["work_root_retained"] is False
 
 
 def test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker() -> None:
