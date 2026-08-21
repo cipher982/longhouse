@@ -982,6 +982,9 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
             and session.get("cwd") == FACTORY_TITLE_ASSURANCE_CWD
             and session.get("device_id") == PROVIDER_FACTORY_MACHINE_ID
             and session.get("origin_kind") == "console"
+            and session.get("hidden_from_default_timeline") is True
+            and session.get("launch_actor") == "automation"
+            and session.get("launch_surface") == FACTORY_TITLE_ASSURANCE_SURFACE
             and session.get("anchor_title")
             and session.get("title_state") == "ready"
             and session.get("title_source") == "ai"
@@ -1004,6 +1007,9 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
             and session.get("cwd") == FACTORY_TITLE_ASSURANCE_CWD
             and session.get("device_id") == PROVIDER_FACTORY_MACHINE_ID
             and session.get("origin_kind") == "console"
+            and session.get("hidden_from_default_timeline") is True
+            and session.get("launch_actor") == "automation"
+            and session.get("launch_surface") == FACTORY_TITLE_ASSURANCE_SURFACE
         ),
         "obligation_session_id": session_id,
         "obligation_titled": bool(session.get("anchor_title")),

@@ -15,9 +15,9 @@ from zerg.qa.title_dependency_oracles import run_live_title_dependency_oracle
 ASSERTION_ID = "dependency_health"
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.title_dependency_health.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id="title_dependency_live_health",
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
     providers=(),
     platforms=("linux",),
@@ -29,6 +29,7 @@ REGISTRATION = ProducerRegistration(
         "factory_machine_identity_verified",
         "claude_semantic_path_consumed",
         "runtime_host_session_projection",
+        "runtime_host_title_provenance",
         "runtime_host_dependency_health",
         "runtime_host_title_backlog_health",
     ),

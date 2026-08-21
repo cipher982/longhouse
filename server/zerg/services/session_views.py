@@ -978,6 +978,12 @@ class SessionResponse(UTCBaseModel):
         None,
         description="Title provenance: ai|prompt|project. Non-ai sources are fallback context.",
     )
+    hidden_from_default_timeline: bool = Field(
+        False,
+        description="True when canonical launch provenance excludes the session from the default timeline.",
+    )
+    launch_actor: Optional[str] = Field(None, description="Canonical actor that launched the session")
+    launch_surface: Optional[str] = Field(None, description="Canonical surface that launched the session")
     summary_status: Optional[str] = Field(
         None,
         description=(
@@ -1102,6 +1108,15 @@ class MachineSessionResponse(UTCBaseModel):
     assistant_messages: int = Field(..., description="Assistant message count")
     tool_calls: int = Field(..., description="Tool call count")
     title: Optional[str] = Field(None, description="Resolved headline for this session")
+    anchor_title: Optional[str] = Field(None, description="Frozen AI-generated headline when one exists")
+    title_state: Optional[str] = Field(None, description="AI-title lifecycle: awaiting_input|pending|degraded|ready")
+    title_source: Optional[str] = Field(None, description="Title provenance: ai|prompt|project")
+    hidden_from_default_timeline: bool = Field(
+        False,
+        description="True when canonical launch provenance excludes the session from the default timeline.",
+    )
+    launch_actor: Optional[str] = Field(None, description="Canonical actor that launched the session")
+    launch_surface: Optional[str] = Field(None, description="Canonical surface that launched the session")
     summary: Optional[str] = Field(None, description="Session summary when one exists")
     first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
     is_sidechain: bool = Field(False, description="True when session is a sub-agent, not human-initiated")
@@ -1136,6 +1151,12 @@ def project_machine_session(session: SessionResponse) -> MachineSessionResponse:
         assistant_messages=session.assistant_messages,
         tool_calls=session.tool_calls,
         title=session.timeline_title or session.anchor_title or session.summary_title,
+        anchor_title=session.anchor_title,
+        title_state=session.title_state,
+        title_source=session.title_source,
+        hidden_from_default_timeline=session.hidden_from_default_timeline,
+        launch_actor=session.launch_actor,
+        launch_surface=session.launch_surface,
         summary=session.summary,
         first_user_message=session.first_user_message,
         is_sidechain=session.is_sidechain,
@@ -2331,6 +2352,9 @@ def build_session_response(
         ),
         title_state=title_state,
         title_source=title_source,
+        hidden_from_default_timeline=bool(getattr(session, "hidden_from_default_timeline", False)),
+        launch_actor=str(getattr(session, "launch_actor", "") or "").strip() or None,
+        launch_surface=str(getattr(session, "launch_surface", "") or "").strip() or None,
         summary_status=summary_status,
         first_user_message=first_user_message,
         match_event_id=match_event_id,

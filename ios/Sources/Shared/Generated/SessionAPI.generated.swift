@@ -366,6 +366,9 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let timelineTitle: String?
     let titleState: String?
     let titleSource: String?
+    let hiddenFromDefaultTimeline: Bool?
+    let launchActor: String?
+    let launchSurface: String?
     let summaryStatus: String?
     let firstUserMessage: String?
     let matchEventId: Int?

@@ -39,7 +39,7 @@ assertions:
     assertion_id: dependency_health
     variant: null
     scenario_id: title_dependency_live_health
-    minimum_scenario_revision: 5
+    minimum_scenario_revision: 6
     oracle_source: server/zerg/qa/title_dependency_oracles.py
     acceptable_evidence:
       - live_token

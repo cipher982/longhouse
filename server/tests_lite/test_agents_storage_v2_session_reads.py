@@ -97,6 +97,12 @@ def _session_response(session_id):
         assistant_messages=178,
         tool_calls=526,
         timeline_title="Session UX and Reattach Logic",
+        anchor_title="Session UX and Reattach Logic",
+        title_state="ready",
+        title_source="ai",
+        hidden_from_default_timeline=True,
+        launch_actor="automation",
+        launch_surface="factory_assurance",
         thread_root_session_id=str(session_id),
         thread_head_session_id=str(session_id),
         thread_continuation_count=1,
@@ -188,6 +194,12 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
     served = result.model_dump()
     assert served["provider_session_id"] == "0ea239d0-e6b9-43d1-bb07-e4c9f03ee67f"
     assert served["title"] == "Session UX and Reattach Logic"
+    assert served["anchor_title"] == "Session UX and Reattach Logic"
+    assert served["title_state"] == "ready"
+    assert served["title_source"] == "ai"
+    assert served["hidden_from_default_timeline"] is True
+    assert served["launch_actor"] == "automation"
+    assert served["launch_surface"] == "factory_assurance"
     assert served["searchable"] is True
     assert not {"capabilities", "session_state", "runtime_display", "timeline_card", "control"} & set(served)
     assert "composer_placeholder" not in repr(served)

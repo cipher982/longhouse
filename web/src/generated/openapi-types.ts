@@ -6501,6 +6501,37 @@ export interface components {
              */
             title?: string | null;
             /**
+             * Anchor Title
+             * @description Frozen AI-generated headline when one exists
+             */
+            anchor_title?: string | null;
+            /**
+             * Title State
+             * @description AI-title lifecycle: awaiting_input|pending|degraded|ready
+             */
+            title_state?: string | null;
+            /**
+             * Title Source
+             * @description Title provenance: ai|prompt|project
+             */
+            title_source?: string | null;
+            /**
+             * Hidden From Default Timeline
+             * @description True when canonical launch provenance excludes the session from the default timeline.
+             * @default false
+             */
+            hidden_from_default_timeline: boolean;
+            /**
+             * Launch Actor
+             * @description Canonical actor that launched the session
+             */
+            launch_actor?: string | null;
+            /**
+             * Launch Surface
+             * @description Canonical surface that launched the session
+             */
+            launch_surface?: string | null;
+            /**
              * Summary
              * @description Session summary when one exists
              */
@@ -9987,6 +10018,22 @@ export interface components {
              * @description Title provenance: ai|prompt|project. Non-ai sources are fallback context.
              */
             title_source?: string | null;
+            /**
+             * Hidden From Default Timeline
+             * @description True when canonical launch provenance excludes the session from the default timeline.
+             * @default false
+             */
+            hidden_from_default_timeline: boolean;
+            /**
+             * Launch Actor
+             * @description Canonical actor that launched the session
+             */
+            launch_actor?: string | null;
+            /**
+             * Launch Surface
+             * @description Canonical surface that launched the session
+             */
+            launch_surface?: string | null;
             /**
              * Summary Status
              * @description Honest summarization state: ready (summary present), pending (task queued/running), failed (terminal — won't auto-retry), unavailable (no task / too little content). Tiebreaker: ready > pending > failed > unavailable.
