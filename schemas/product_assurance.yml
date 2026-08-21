@@ -1,6 +1,17 @@
 schema_version: 1
 assertions:
   - subject_kind: longhouse_product
+    capability: launch.workspace_suggestions
+    disposition: implemented
+    assertion_id: responsive_human_only_projection
+    variant: null
+    scenario_id: workspace_suggestions_live
+    minimum_scenario_revision: 1
+    oracle_source: server/zerg/qa/workspace_suggestions_live_producer.py
+    acceptable_evidence:
+      - live_token
+    max_age_seconds: 3600
+  - subject_kind: longhouse_product
     capability: console.session_lifecycle
     disposition: implemented
     assertion_id: console_lifecycle_state_machine_preserved

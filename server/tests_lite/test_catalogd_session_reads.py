@@ -633,6 +633,31 @@ def test_catalog_gateway_gives_timeline_snapshot_its_measured_bounded_budget(mon
     assert attempts == [1.5, 1.5]
 
 
+def test_catalog_gateway_gives_workspace_ranking_its_measured_bounded_budget(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "machine.workspace.list.v2"
+        assert params == {"owner_id": 1, "device_id": "cinder", "limit": 50, "days_back": 180}
+        attempts.append(timeout_seconds)
+        if len(attempts) == 1:
+            raise catalog_read_gateway.CatalogUnavailable("transient")
+        return {"workspaces": []}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    result = catalog_read_gateway.machine_workspaces(
+        owner_id=1,
+        device_id="cinder",
+        limit=50,
+        days_back=180,
+    )
+
+    assert result == {"workspaces": []}
+    assert attempts == [1.0, 1.0]
+
+
 def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
     attempts: list[float] = []
 

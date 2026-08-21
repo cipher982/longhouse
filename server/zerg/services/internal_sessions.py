@@ -46,8 +46,11 @@ def is_internal_canary_provider_filter(provider: str | None) -> bool:
 
 
 def is_provider_live_canary_cwd(cwd: str | None) -> bool:
-    normalized = str(cwd or "").replace("\\", "/")
-    return PROVIDER_LIVE_CANARY_CWD_SEGMENT in normalized and normalized.endswith("/workspace")
+    normalized = str(cwd or "").replace("\\", "/").lower()
+    # The entire provider-live namespace is Longhouse-owned proof scratch.
+    # Historical launchers sometimes registered the qualification root rather
+    # than its `/workspace` child, but neither is a human workspace.
+    return PROVIDER_LIVE_CANARY_CWD_SEGMENT in normalized
 
 
 def is_provider_live_proof_worktree_cwd(cwd: str | None) -> bool:
@@ -186,7 +189,7 @@ def provider_proof_session_clause(model):
     if machine_id_column is not None:
         metadata_markers.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)
     return or_(
-        cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
+        cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%"),
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
         cwd.like(f"%{PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT}%"),
         cwd.like("/tmp/provider-factory-%"),

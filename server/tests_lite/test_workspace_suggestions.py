@@ -301,6 +301,13 @@ def test_only_typed_human_visible_root_sessions_contribute_to_rank(tmp_path):
     _seed_session(
         SessionLocal,
         device_id="cinder",
+        cwd="/Users/d/.longhouse/canaries/provider-live/claude/qualification-r5",
+        days_ago=0.1,
+        launch_actor="human_shell",
+    )
+    _seed_session(
+        SessionLocal,
+        device_id="cinder",
         cwd="/Users/d/marker-proof",
         days_ago=0.1,
         launch_actor="human_shell",

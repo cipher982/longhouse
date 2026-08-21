@@ -24,6 +24,17 @@ _DEFAULT_ATTEMPT_SECONDS = 0.35
 # heavier snapshot bounded separately without weakening fast auth/machine reads.
 _TIMELINE_DEADLINE_SECONDS = 3.25
 _TIMELINE_ATTEMPT_SECONDS = 1.5
+# Workspace ranking scans bounded provenance pages rather than one lookup. On
+# the 48 GB dogfood catalog it measures 0.24-0.56s, so the generic 0.35s budget
+# converts healthy work into a retry storm. Keep its budget explicit and below
+# the launch sheet's human-perception threshold.
+_WORKSPACE_DEADLINE_SECONDS = 2.25
+_WORKSPACE_ATTEMPT_SECONDS = 1.0
+
+_READ_BUDGETS = {
+    "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
+    "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
+}
 
 
 class CatalogReadError(RuntimeError):
@@ -160,12 +171,10 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
         _database_path, socket_path = catalogd_paths()
     except RuntimeError as exc:
         raise CatalogReadError("catalog_unavailable", "The live catalog is temporarily unavailable.") from exc
-    if method == "session.timeline.list.v2":
-        deadline_seconds = _TIMELINE_DEADLINE_SECONDS
-        attempt_seconds = _TIMELINE_ATTEMPT_SECONDS
-    else:
-        deadline_seconds = _DEFAULT_DEADLINE_SECONDS
-        attempt_seconds = _DEFAULT_ATTEMPT_SECONDS
+    deadline_seconds, attempt_seconds = _READ_BUDGETS.get(
+        method,
+        (_DEFAULT_DEADLINE_SECONDS, _DEFAULT_ATTEMPT_SECONDS),
+    )
     deadline = time.monotonic() + deadline_seconds
     last_unavailable: CatalogUnavailable | None = None
     for _attempt in range(2):
