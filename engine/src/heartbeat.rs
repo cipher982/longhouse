@@ -1207,6 +1207,38 @@ pub(crate) fn machine_evidence_from_observations(
         .iter()
         .map(|observation| antigravity_readiness_evidence(observation, now))
         .collect::<Vec<_>>();
+    // Control facts only for sessions Longhouse launched. The identity is
+    // seeded by the Helm launcher, so its presence *is* the ownership claim; a
+    // Shadow `agy` the user started has none and stays observe-only.
+    for observation in antigravity_observations {
+        let (Some(connection_id), Some(lease_generation)) = (
+            observation.connection_id.as_ref(),
+            observation.lease_generation.as_ref(),
+        ) else {
+            continue;
+        };
+        let attached = antigravity_hook_is_live(observation, now);
+        control.push(ControlEvidence {
+            authority_class: "provider_control".to_string(),
+            provider: "antigravity".to_string(),
+            // A hook is not a terminal, so Longhouse cannot observe whether one
+            // is attached. None says that; false would claim otherwise.
+            terminal_attached: None,
+            session_id: observation.session_id.clone(),
+            provider_session_id: observation.provider_session_id.clone(),
+            connection_id: Some(connection_id.clone()),
+            lease_generation: Some(lease_generation.clone()),
+            run_id: observation.run_id.clone(),
+            granted_operations: granted_control_operations("antigravity", attached),
+            ownership: "managed".to_string(),
+            state: if attached { "attached" } else { "detached" }.to_string(),
+            bridge_status: Some(if attached { "ready" } else { "unavailable" }.to_string()),
+            thread_subscription_status: None,
+            lease_ttl_ms: 15 * 60 * 1000,
+            source: "antigravity_hook_scan".to_string(),
+            observed_at: envelope_observed_at.clone(),
+        });
+    }
     let scanned_continuation;
     let continuation_observations = if let Some(observations) = continuation_observations {
         observations
@@ -2150,6 +2182,22 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// Whether the hook has been seen firing recently enough to own control.
+///
+/// This is the whole liveness question for Antigravity: there is no bridge
+/// process to be up or down, only a hook that either runs or silently does not
+/// -- which is what happens under `GEMINI_API_KEY` auth. Readiness evidence and
+/// the control fact must agree, so they share this definition.
+pub(crate) fn antigravity_hook_is_live(
+    observation: &AntigravityHookObservation,
+    now: DateTime<Utc>,
+) -> bool {
+    let as_of = parse_utc(Some(&observation.updated_at)).unwrap_or(now);
+    parse_utc(observation.last_hook_observed_at.as_deref()).is_some_and(|at| {
+        as_of >= at && as_of - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
+    })
+}
+
 fn antigravity_readiness_evidence(
     observation: &AntigravityHookObservation,
     now: DateTime<Utc>,
@@ -2163,7 +2211,7 @@ fn antigravity_readiness_evidence(
             as_of >= at && as_of - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
         })
     };
-    let recent_hook_observed = is_fresh(hook_time);
+    let recent_hook_observed = antigravity_hook_is_live(observation, now);
     let claim_observed = is_fresh(claim_time);
     let response_matches_claim =
         observation
@@ -4974,6 +5022,9 @@ mod tests {
             state_file: PathBuf::from("/tmp/antigravity-session.json"),
             schema_version: 2,
             session_id: "antigravity-session".to_string(),
+            connection_id: None,
+            lease_generation: None,
+            run_id: None,
             provider_session_id: Some("antigravity-provider-session".to_string()),
             cwd: Some("/tmp/antigravity".to_string()),
             transcript_path: Some("/tmp/antigravity.jsonl".to_string()),
@@ -5042,6 +5093,12 @@ mod tests {
                         .starts_with(&format!("connection:connection-{provider}-session:"))
             }));
         }
+        // The Antigravity observation above carries no launcher-seeded
+        // identity, so it is a Shadow session and must produce no control fact.
+        assert!(!evidence
+            .control
+            .iter()
+            .any(|fact| fact.provider == "antigravity"));
         assert!(evidence
             .identities
             .iter()
@@ -5325,6 +5382,82 @@ mod tests {
         .is_none());
     }
 
+    fn antigravity_observation(live_at: Option<&str>, owned: bool) -> AntigravityHookObservation {
+        AntigravityHookObservation {
+            state_file: PathBuf::from("/tmp/agy-session.json"),
+            schema_version: 3,
+            session_id: "agy-session".to_string(),
+            connection_id: owned.then(|| "conn-agy".to_string()),
+            lease_generation: owned.then(|| "gen-agy".to_string()),
+            run_id: owned.then(|| "run-agy".to_string()),
+            provider_session_id: Some("agy-conversation".to_string()),
+            cwd: Some("/tmp/agy".to_string()),
+            transcript_path: Some("/tmp/agy.jsonl".to_string()),
+            state: Some("thinking".to_string()),
+            updated_at: "2026-05-08T12:00:10Z".to_string(),
+            last_hook_event: Some("PreInvocation".to_string()),
+            last_hook_observed_at: live_at.map(str::to_string),
+            last_claimed_message_id: None,
+            last_claimed_at: None,
+            last_claim_event: None,
+            last_response_event: None,
+            last_response_at: None,
+            last_response_status: None,
+            last_response_claimed_message_ids: Vec::new(),
+            last_continuation_requested: false,
+        }
+    }
+
+    fn antigravity_control(observations: &[AntigravityHookObservation]) -> Vec<ControlEvidence> {
+        let now = parse_utc(Some("2026-05-08T12:00:10Z")).unwrap();
+        machine_evidence_from_observations(
+            "cinder",
+            &[],
+            observations,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &RunWindowIndex::default(),
+            true,
+            now,
+            Some(&[]),
+        )
+        .control
+        .into_iter()
+        .filter(|fact| fact.provider == "antigravity")
+        .collect()
+    }
+
+    #[test]
+    fn a_launcher_owned_antigravity_session_grants_send_while_its_hook_is_live() {
+        let control = antigravity_control(&[antigravity_observation(Some("2026-05-08T12:00:08Z"), true)]);
+        assert_eq!(control.len(), 1);
+        assert_eq!(control[0].connection_id.as_deref(), Some("conn-agy"));
+        assert_eq!(control[0].lease_generation.as_deref(), Some("gen-agy"));
+        assert_eq!(control[0].state, "attached");
+        assert_eq!(control[0].granted_operations, vec!["send_input".to_string()]);
+    }
+
+    #[test]
+    fn a_quiet_hook_grants_nothing_even_though_the_session_is_owned() {
+        // The GEMINI_API_KEY case: hooks load and never fire, so the session is
+        // healthy and uncontrollable. Granting send here is the failure the
+        // whole readiness notion exists to prevent.
+        let control = antigravity_control(&[antigravity_observation(None, true)]);
+        assert_eq!(control.len(), 1);
+        assert_eq!(control[0].state, "detached");
+        assert!(control[0].granted_operations.is_empty());
+    }
+
+    #[test]
+    fn a_shadow_antigravity_session_produces_no_control_fact_at_all() {
+        // No launcher, no identity, nothing to authorize against. Observe-only
+        // by construction rather than by a provider-name special case.
+        assert!(antigravity_control(&[antigravity_observation(Some("2026-05-08T12:00:08Z"), false)]).is_empty());
+    }
+
     #[test]
     fn antigravity_readiness_without_proofs_is_stable_across_heartbeats() {
         let now = DateTime::parse_from_rfc3339("2026-05-08T12:05:00Z")
@@ -5334,6 +5467,9 @@ mod tests {
             state_file: PathBuf::from("/tmp/antigravity-stale.json"),
             schema_version: 1,
             session_id: "antigravity-stale".to_string(),
+            connection_id: None,
+            lease_generation: None,
+            run_id: None,
             provider_session_id: None,
             cwd: None,
             transcript_path: None,

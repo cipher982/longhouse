@@ -22,11 +22,14 @@ providers:
     allow_failure: false
     max_build_age_seconds: 3888000
   - provider: antigravity
-    release_cadence: maintenance_manual
-    release_executor: manual
-    weekly_unconditional: false
-    allow_failure: true
-    max_build_age_seconds: null
+    # Promoted off manual/allow-failure on 2026-08-20 with the tier. A lane
+    # whose failures are allowed cannot gate anything, which is the opposite of
+    # what a launch-tier provider's release lane is for.
+    release_cadence: release_event
+    release_executor: private_factory
+    weekly_unconditional: true
+    allow_failure: false
+    max_build_age_seconds: 3888000
   - provider: cursor
     release_cadence: pinned_observed_install
     release_executor: private_factory

@@ -2570,6 +2570,12 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
         args,
         {
             "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+            # The hook only trusts an inherited session id when the provider
+            # agrees, so an `agy` started from inside another managed session
+            # cannot bind its transcripts to that session. Both real launch
+            # paths set this; the canary must too or it exercises a shape no
+            # caller actually produces.
+            "LONGHOUSE_MANAGED_PROVIDER": "antigravity",
             "LONGHOUSE_HOME": str(longhouse_home),
             "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
             "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),

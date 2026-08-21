@@ -14,6 +14,14 @@ pub struct AntigravityHookObservation {
     pub state_file: PathBuf,
     pub schema_version: u32,
     pub session_id: String,
+    /// Control identity, seeded by the Helm launcher and preserved by the hook.
+    ///
+    /// Absent for Shadow sessions, which is the point: a session Longhouse did
+    /// not launch has no owned control path, so it must not be able to produce
+    /// a control fact that would authorize commands against it.
+    pub connection_id: Option<String>,
+    pub lease_generation: Option<String>,
+    pub run_id: Option<String>,
     pub provider_session_id: Option<String>,
     pub cwd: Option<String>,
     pub transcript_path: Option<String>,
@@ -36,6 +44,9 @@ struct AntigravityStateFile {
     #[serde(default)]
     schema_version: u32,
     session_id: Option<String>,
+    connection_id: Option<String>,
+    lease_generation: Option<String>,
+    run_id: Option<String>,
     provider_session_id: Option<String>,
     cwd: Option<String>,
     transcript_path: Option<String>,
@@ -97,6 +108,9 @@ pub(crate) fn collect_observations_from_paths(
             state_file: path.clone(),
             schema_version: state.schema_version,
             session_id,
+            connection_id: normalize(state.connection_id),
+            lease_generation: normalize(state.lease_generation),
+            run_id: normalize(state.run_id),
             provider_session_id: normalize(state.provider_session_id),
             cwd: normalize(state.cwd),
             transcript_path: normalize(state.transcript_path),

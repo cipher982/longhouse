@@ -1585,7 +1585,7 @@
       "launch_local": true,
       "run_once": true,
       "reattach": false,
-      "send_input": false,
+      "send_input": true,
       "interrupt": false,
       "steer_active_turn": false,
       "answer_pause": false,
@@ -1677,7 +1677,7 @@
           ]
         },
         "session.input.send": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
           "policy_key": "provider.antigravity.send_input",
           "action_gate": "strict",
@@ -1729,12 +1729,11 @@
           "owner_action": "antigravity --conversation reattach path and canary"
         },
         "send_input": {
-          "level": "none",
-          "source": "provider surface proven; Longhouse-side control identity missing",
-          "disposition": "not_implemented",
-          "reason": "The provider surface is proven: scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send shows a queued message claimed at PreInvocation and replacing the model-visible turn, and the engine routes session.send_text to it. What is missing is Longhouse-side. Served authorization requires a bound control identity plus a matching control fact head (live_control_catalog.get_live_control_grant), and a hook has neither because there is no bridge process to own a connection_id or lease_generation. Advertising send before that exists produces identity_unbound at the API while every schema layer agrees it should work.",
-          "observed_provider_version": "1.1.17",
-          "owner_action": "hook-derived control identity and control fact for the antigravity_hook_inbox control plane"
+          "level": "live_token",
+          "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
+          "disposition": "implemented",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release, because hooks do not fire under GEMINI_API_KEY auth -- the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing.",
+          "observed_provider_version": "1.1.17"
         },
         "interrupt": {
           "level": "none",
@@ -1796,9 +1795,10 @@
         }
       },
       "machine_control_supports": [
+        "antigravity.send",
         "antigravity.turn_start"
       ],
-      "adapter_digest": "331c2bd00409db548d13cbc47c7da8d3873fba1f223bd515e157669f769ef000"
+      "adapter_digest": "244c12a9053f3c08453a522e3b11047ad6652bebc5a2b1bc91f5ce187c657019"
     },
     {
       "provider": "cursor",

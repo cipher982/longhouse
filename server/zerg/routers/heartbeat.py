@@ -214,9 +214,11 @@ class ActivityEvidenceIn(UTCBaseModel):
 
 class ControlEvidenceIn(UTCBaseModel):
     authority_class: Literal["provider_control"] | None = None
-    # Antigravity has transcript/process observation but no managed control
-    # scanner in schema v1. Do not retain claims the Machine Agent cannot make.
-    provider: Literal["codex", "claude", "opencode", "cursor"]
+    # Antigravity joined on 2026-08-20: its Helm launcher seeds a control
+    # identity into the hook state file, so the hook scanner can now make a
+    # claim it previously could not. Shadow sessions have no launcher, so they
+    # carry no identity and produce no control fact.
+    provider: Literal["codex", "claude", "opencode", "cursor", "antigravity"]
     session_id: str = Field(..., max_length=255)
     connection_id: str | None = Field(None, min_length=1, max_length=255)
     lease_generation: str | None = Field(None, min_length=1, max_length=255)
@@ -976,11 +978,6 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
-                        machine_evidence=(
-                            payload.machine_evidence.model_dump(mode="json", exclude_none=True)
-                            if payload.machine_evidence is not None
-                            else None
-                        ),
                     )
                     upsert_live_sessions_from_managed_leases(
                         write_db,
@@ -1025,11 +1022,6 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
-                        machine_evidence=(
-                            payload.machine_evidence.model_dump(mode="json", exclude_none=True)
-                            if payload.machine_evidence is not None
-                            else None
-                        ),
                     )
                     seen_ids = _managed_lease_session_ids(_managed_leases)
                     if not seen_ids or seen_ids.issubset(managed_snapshot_refreshed_ids):
@@ -1050,11 +1042,6 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
-                        machine_evidence=(
-                            payload.machine_evidence.model_dump(mode="json", exclude_none=True)
-                            if payload.machine_evidence is not None
-                            else None
-                        ),
                     ):
                         publish_sessions.setdefault(
                             session_id,

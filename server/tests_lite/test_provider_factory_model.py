@@ -65,7 +65,9 @@ def test_push_harness_scenarios_is_the_smaller_ci_set(facts) -> None:
 
 
 def test_weekly_cron_providers_from_schedule_config(facts) -> None:
-    assert set(facts.weekly_cron_providers) == set(ALL_PROVIDERS) - {"antigravity"}
+    # Antigravity joined the weekly lane on 2026-08-20 with its tier promotion:
+    # a provider whose release lane never runs cannot notice a release break.
+    assert set(facts.weekly_cron_providers) == set(ALL_PROVIDERS)
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "opencode"])
@@ -157,11 +159,13 @@ def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
     assert cell.credential_requirement == ("OPENROUTER_API_KEY",)
 
 
-def test_antigravity_release_poll_is_manual_maintenance_only(facts) -> None:
+def test_antigravity_release_poll_runs_like_every_other_launch_provider(facts) -> None:
+    # It was manual-only while maintenance tier. A release lane that only runs
+    # when someone remembers to run it cannot gate a release, which is the
+    # whole point of polling upstream.
     cell = plan_run(facts, "antigravity", "staged_release", "release_poll")
 
-    assert cell.status == "never_run"
-    assert "maintenance-tier" in cell.reason
+    assert cell.status == "runs"
 
 
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
@@ -225,10 +229,12 @@ def test_weekly_cron_runs_the_full_default_scenario_set_for_scheduled_providers(
     assert all(status.satisfiable for status in resume_statuses if status.assertion_id != "native_provider_resume_proven")
 
 
-def test_weekly_cron_does_not_run_antigravity_maintenance_lane(facts) -> None:
-    cell = plan_run(facts, "antigravity", "generated_fake", "weekly_cron")
-    assert cell.status == "never_run"
-    assert "not weekly_unconditional" in cell.reason
+def test_weekly_cron_runs_every_provider_release_lane(facts) -> None:
+    # Every provider is weekly_unconditional now, so none is skipped for the
+    # reason antigravity used to be.
+    for provider in ALL_PROVIDERS:
+        cell = plan_run(facts, provider, "generated_fake", "weekly_cron")
+        assert "not weekly_unconditional" not in (cell.reason or ""), provider
 
 
 def test_weekly_cron_never_runs_against_staged_release_provenance(facts) -> None:

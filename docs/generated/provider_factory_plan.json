@@ -19,8 +19,8 @@
     "weekly_cron",
     "manual"
   ],
-  "never_run_count": 55,
-  "runs_count": 17,
+  "never_run_count": 53,
+  "runs_count": 19,
   "cells": [
     {
       "provider": "antigravity",
@@ -58,7 +58,7 @@
       "build_provenance": "generated_fake",
       "trigger": "release_poll",
       "status": "never_run",
-      "reason": "Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
+      "reason": "the release lane only runs against staged upstream releases",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -70,14 +70,61 @@
       "provider": "antigravity",
       "build_provenance": "generated_fake",
       "trigger": "weekly_cron",
-      "status": "never_run",
-      "reason": "antigravity is not weekly_unconditional in config/provider-release-schedule.yml",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
-      "harness_scenarios": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "interaction_semantics",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
+      ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "unsupported_resume_is_typed_and_side_effect_free",
+          "variant": "policy_disabled",
+          "scenario_id": "resume_unsupported",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "antigravity",
@@ -136,7 +183,7 @@
       "build_provenance": "observed_install",
       "trigger": "release_poll",
       "status": "never_run",
-      "reason": "Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
+      "reason": "the release lane only runs against staged upstream releases",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -187,14 +234,89 @@
       "provider": "antigravity",
       "build_provenance": "staged_release",
       "trigger": "release_poll",
-      "status": "never_run",
-      "reason": "Antigravity is maintenance-tier and is only qualified by an explicit manual invocation",
-      "qualification_profile": null,
-      "qualification_profiles": [],
-      "scenario_ids": [],
-      "harness_scenarios": [],
+      "status": "runs",
+      "reason": "deployed release-lane profiles for antigravity",
+      "qualification_profile": "antigravity_hook_inbox_v1",
+      "qualification_profiles": [
+        "antigravity_hook_inbox_v1"
+      ],
+      "scenario_ids": [
+        "antigravity_hook_inbox"
+      ],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "interaction_semantics",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
+      ],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "unsupported_resume_is_typed_and_side_effect_free",
+          "variant": "policy_disabled",
+          "scenario_id": "resume_unsupported",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "hermetic"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "hook_inbox_contract_preserved",
+          "variant": null,
+          "scenario_id": "antigravity_hook_inbox",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_no_token"
+          ],
+          "producible_evidence": [
+            "live_no_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "real_print_injection_observed",
+          "variant": null,
+          "scenario_id": "antigravity_hook_inbox",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "antigravity",

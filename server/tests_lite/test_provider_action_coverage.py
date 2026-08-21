@@ -82,7 +82,7 @@ def test_antigravity_send_prompt_follows_executable_contract_not_old_orchestrati
 
     coverage = derive_provider_action_coverage("antigravity")
 
-    assert coverage["send_prompt"].state == ActionCoverageState.UNSUPPORTED
+    assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
 
 
 def test_opencode_subagent_support_is_derived_from_required_harness_assertions():

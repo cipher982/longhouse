@@ -1069,6 +1069,12 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
             .to_string()
         });
 
+    // Identity must exist before the provider does: the hook can fire on the
+    // first invocation, and a state file without identity would publish an
+    // observation the reducer cannot bind.
+    let (connection_id, lease_generation) =
+        seed_antigravity_control_identity(&session_id, &run_id, &cwd)?;
+
     let mut command = Command::new(&binary);
     command
         .arg("--dangerously-skip-permissions")
@@ -1104,6 +1110,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     let confirm_agent_dir = managed_launch_agent_dir();
     let confirm_notices = deferred_notices.clone();
 
+    let _ = (&connection_id, &lease_generation);
     println!(
         "Managed Antigravity session launched\n\u{2192} {}/s/{}",
         url.trim_end_matches('/'),
@@ -1126,6 +1133,44 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         eprintln!("{notice}");
     }
     std::process::exit(run_result?);
+}
+
+/// Seed the control identity the hook cannot mint for itself.
+///
+/// The hook maintains this file but has no way to know whether Longhouse owns
+/// the session: it fires identically for a Shadow `agy` the user started. So
+/// the launcher writes the identity, and the hook's own updates merge over it.
+/// A session with no launcher therefore has no identity, no control fact, and
+/// no authorization -- which is exactly the Shadow contract.
+fn seed_antigravity_control_identity(
+    session_id: &str,
+    run_id: &str,
+    cwd: &Path,
+) -> anyhow::Result<(String, String)> {
+    let connection_id = Uuid::new_v4().to_string();
+    let lease_generation = Uuid::new_v4().to_string();
+    let path = longhouse_home()?
+        .join("managed-local")
+        .join("antigravity")
+        .join("sessions")
+        .join(format!("{session_id}.json"));
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut state = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    state.insert("schema_version".into(), json!(3));
+    state.insert("session_id".into(), json!(session_id));
+    state.insert("connection_id".into(), json!(connection_id));
+    state.insert("lease_generation".into(), json!(lease_generation));
+    state.insert("run_id".into(), json!(run_id));
+    state.insert("provider".into(), json!("antigravity"));
+    state.insert("control_plane".into(), json!("antigravity_hook_inbox"));
+    state.insert("cwd".into(), json!(cwd.to_string_lossy()));
+    state.insert("updated_at".into(), json!(now));
+    write_private_json(&path, &serde_json::Value::Object(state))?;
+    Ok((connection_id, lease_generation))
 }
 
 fn native_machine_name() -> String {

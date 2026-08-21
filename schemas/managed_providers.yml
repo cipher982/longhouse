@@ -916,7 +916,7 @@ providers:
   launch_local: true
   run_once: true
   reattach: false
-  send_input: false
+  send_input: true
   interrupt: false
   steer_active_turn: false
   answer_pause: false
@@ -978,10 +978,7 @@ providers:
         acceptable_evidence: [live_no_token]
         max_age_seconds: 604800
     session.input.send:
-      # Not policy_disabled: policy_disabled means Longhouse routes the
-      # operation elsewhere, and it does not -- it intends to route here and
-      # cannot yet, for want of a hook-derived control identity.
-      disposition: not_implemented
+      disposition: implemented
       reason_code: semantic_proof_missing
       policy_key: provider.antigravity.send_input
       action_gate: strict
@@ -1027,24 +1024,18 @@ providers:
       observed_provider_version: "1.1.16"
       owner_action: "antigravity --conversation reattach path and canary"
     send_input:
-      # The provider-side proof is real and recorded in `reason`; the level is
-      # none because the schema reserves evidence levels for operations
-      # Longhouse actually serves, and this one is not served yet.
-      level: none
-      source: provider surface proven; Longhouse-side control identity missing
-      disposition: "not_implemented"
-      reason: "The provider surface is proven: scripts/qa/provider-control-e2e-canary.py
-        --antigravity-real-agy-send shows a queued message claimed at
-        PreInvocation and replacing the model-visible turn, and the engine
-        routes session.send_text to it. What is missing is Longhouse-side.
-        Served authorization requires a bound control identity plus a matching
-        control fact head (live_control_catalog.get_live_control_grant), and a
-        hook has neither because there is no bridge process to own a
-        connection_id or lease_generation. Advertising send before that exists
-        produces identity_unbound at the API while every schema layer agrees it
-        should work."
+      level: live_token
+      source: real agy --print PreInvocation hook-inbox injection changed the model-visible turn
+      disposition: "implemented"
+      reason: "Proven live by scripts/qa/provider-control-e2e-canary.py
+        --antigravity-real-agy-send: a queued message is claimed at
+        PreInvocation, the inbox drains, and the injected text replaces the
+        model-visible turn. Availability follows the hook rather than the
+        release, because hooks do not fire under GEMINI_API_KEY auth -- the
+        control fact's granted_operations is empty whenever the hook has not
+        been seen recently, so a healthy but uncontrollable session offers
+        nothing."
       observed_provider_version: "1.1.17"
-      owner_action: "hook-derived control identity and control fact for the antigravity_hook_inbox control plane"
     interrupt:
       level: none
       source: no native cancel; reconstructable as kill plus resume
@@ -1118,17 +1109,16 @@ providers:
         control surface that works under either credential authority."
       observed_provider_version: "1.1.16"
       owner_action: "real agy Console turn canary"
-  # antigravity.send is withheld again as of 2026-08-20. The hook-inbox
-  # injection is real and the engine routes it, but served authorization needs
-  # a bound control identity (connection_id + lease_generation) and a matching
-  # control fact head, and a hook has neither -- there is no bridge to own one.
-  # Until that identity exists, a browser send returns identity_unbound, so
-  # advertising it would repeat exactly the failure this file already corrected once.
+  # Servable as of 2026-08-20. The identity a hook cannot mint for itself is
+  # seeded by the Helm launcher into the state file the hook maintains, so the
+  # hook scanner emits a real control fact and authorization has something to
+  # bind. Shadow sessions have no launcher, therefore no identity, therefore no
+  # control fact -- observe-only by construction rather than by special case.
   # antigravity.turn_interrupt is deliberately absent: the schema ties it to
   # the session-level interrupt capability, which is not built. The console
   # adapter can cancel its own one-shot turn, and that code stays reachable for
   # when interrupt lands, but it is not advertised before it is whole.
-  machine_control_supports: ["antigravity.turn_start"]
+  machine_control_supports: ["antigravity.send", "antigravity.turn_start"]
 - provider: cursor
   display_name: Cursor
   marketing_name: Cursor Agent

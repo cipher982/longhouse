@@ -270,12 +270,12 @@ def test_select_managed_control_transport_supports_opencode_interrupt_engine_cha
     asyncio.run(_run())
 
 
-def test_select_managed_control_transport_refuses_antigravity_send():
-    """Refuse locally rather than offer a control the API cannot authorize.
+def test_select_managed_control_transport_routes_antigravity_send_to_the_engine():
+    """Antigravity send resolves to the engine channel.
 
-    The hook-inbox path is real and the engine would route it, but served
-    authorization needs a bound control identity a hook cannot provide, so no
-    capability resolves and the dispatcher declines.
+    The hook-inbox path is routed and the Helm launcher seeds the control
+    identity authorization binds against, so the capability resolves and the
+    dispatcher hands the command to the engine like any other provider.
     """
 
     async def _run():
@@ -292,7 +292,7 @@ def test_select_managed_control_transport_refuses_antigravity_send():
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 )
-                is None
+                == "engine_channel"
             )
         finally:
             await _clear_machine_registry()
@@ -762,8 +762,8 @@ def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine():
-    """No frame may be sent for a control the served path will not authorize."""
+def test_dispatch_managed_control_command_sends_antigravity_to_the_engine():
+    """The send must reach the engine as a real frame."""
 
     async def _run():
         await _clear_machine_registry()
@@ -774,6 +774,21 @@ def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine(
                 managed_transport="antigravity_hook_inbox",
                 source_runner_id=None,
             )
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {
+                            "exit_code": 0,
+                            "stdout": "",
+                            "stderr": "",
+                            "provider": "antigravity",
+                            "transport": "antigravity_hook_inbox",
+                        },
+                    },
+                )
+            )
             result = await dispatch_managed_control_command(
                 db=object(),
                 owner_id=42,
@@ -783,9 +798,12 @@ def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine(
                 payload={"text": "continue"},
                 request_id="req-agy",
             )
+            await completer
 
-            assert result.ok is False
-            assert not websocket.sent, "no frame may be sent for an unauthorizable provider"
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert websocket.sent, "the send must reach the engine as a real frame"
+            assert result.data["transport"] == "antigravity_hook_inbox"
         finally:
             await _clear_machine_registry()
 

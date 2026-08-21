@@ -1,47 +1,54 @@
 """An advertised control must be reachable through the served grant.
 
-`test_connection_capability_dispatchability` already forces the schema to agree
-with itself: an advertised `can_send_input` must have a contract flag, a
+`test_connection_capability_dispatchability` forces the schema to agree with
+itself: an advertised `can_send_input` must have a contract flag, a
 `machine_control_supports` entry, and an engine dispatch path. Antigravity
 satisfied every one of those and send still did not work, because nothing
-guarded the layer underneath -- whether the runtime path that *writes*
-`LiveSessionConnection.can_send_input = 1` can ever actually fire.
+guarded the layer underneath -- whether a provider can actually produce the
+bound control identity and control fact that `get_live_control_grant` requires.
 
-It could not. The engine emitted no Antigravity lease, so the server-side
-reconciliation that promotes control capability iterated a list the provider
-never appeared in, and `live_catalog_launch` re-stamped send as 0 on every
-heartbeat. The declaration was consistent at four layers and dead at the fifth.
-A human reading the diff caught it; no test did.
+It could not: the engine emitted no Antigravity control fact at all, so the
+declaration was consistent at four layers and dead at the fifth. A human
+reading the diff caught it; no test did.
 
-So this drives the real ingestion path with the evidence a provider's engine
-actually emits and asserts the served grant appears -- the same grant
-`catalogd.prepare_control_command` requires before it will accept a queued
-input. It is provider-generic on purpose: any provider that advertises a
-remote control and cannot reach the grant fails here.
+So this drives the authorization path itself. For every provider that
+advertises a remote control, it binds the identity that provider's engine
+supplies and reduces the control fact that engine emits, then asserts the grant
+appears -- the same grant `catalogd.prepare_control_command` demands before it
+will accept a queued input.
 """
 
 from __future__ import annotations
 
 from datetime import UTC
 from datetime import datetime
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import canonical_evidence_hash
+from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
-from zerg.services.live_control_catalog import get_live_control_grant
-from zerg.services.managed_control_state import upsert_live_control_leases
-from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
+from zerg.services.live_control_catalog import canonical_command_authorization_providers
+from zerg.services.live_control_catalog import get_canonical_live_control_grant
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.managed_provider_contracts import contract_for_provider
 
 DEVICE_ID = "cinder"
+
+# Contract capability column -> (engine-granted operation, grant capability name)
+_REMOTE_CONTROLS = {
+    "can_send_input": ("send_input", "send"),
+    "can_interrupt": ("interrupt", "interrupt"),
+    "can_terminate": ("terminate", "terminate"),
+}
 
 
 @pytest.fixture
@@ -52,154 +59,274 @@ def live_engine(tmp_path):
     engine.dispose()
 
 
-def _providers_advertising_send() -> list[str]:
+def _advertised_controls() -> list[tuple[str, str, str]]:
+    canonical = set(canonical_command_authorization_providers())
     return sorted(
-        contract.provider
+        (contract.provider, operation, capability)
         for contract in all_managed_provider_contracts()
-        if contract.connection_capabilities.get("can_send_input")
+        for column, (operation, capability) in _REMOTE_CONTROLS.items()
+        if contract.connection_capabilities.get(column) and contract.provider in canonical
     )
 
 
-def _seed_live_session(db: Session, provider: str):
-    now = datetime.now(UTC).replace(microsecond=0)
-    session_id, thread_id, run_id = uuid4(), uuid4(), uuid4()
-    db.add(
-        LiveSessionCatalog(
-            session_id=str(session_id),
-            provider=provider,
-            environment="production",
-            device_id=DEVICE_ID,
-            started_at=now,
-            primary_thread_id=str(thread_id),
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    db.add(
-        LiveSessionThread(
-            id=str(thread_id),
-            session_id=str(session_id),
-            provider=provider,
-            branch_kind="root",
-            is_primary=1,
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    db.add(
-        LiveSessionRun(
-            id=str(run_id),
-            thread_id=str(thread_id),
-            provider=provider,
-            host_id=DEVICE_ID,
-            launch_origin="longhouse_spawned",
-            started_at=now,
-        )
-    )
-    db.commit()
-    return session_id
+def test_every_provider_advertising_a_remote_control_is_canonically_authorized() -> None:
+    """A provider outside canonical authorization cannot serve the controls it advertises.
 
+    `get_canonical_live_control_grant` refuses anything outside this set with
+    `unsupported`, so advertising `can_send_input` from outside it is the same
+    class of dead declaration Antigravity had: consistent in the schema, refused
+    at the API.
 
-def _lease(session_id, provider: str):
-    """The lease shape the engine publishes in `managed_sessions`."""
-
-    return SimpleNamespace(
-        session_id=session_id,
-        provider=provider,
-        machine_id=DEVICE_ID,
-        sequence=1,
-        state="attached",
-        phase=None,
-        tool_name=None,
-        bridge_status="ready",
-        thread_subscription_status=None,
-        observed_at=datetime.now(UTC),
-        lease_ttl_ms=900_000,
-    )
-
-
-def _readiness_evidence(session_id, provider: str, *, hook_live: bool):
-    """The readiness family the engine ships for hook-delivered providers."""
-
-    if not managed_provider_requires_readiness_proof(provider):
-        return None
-    return {
-        "readiness": [
-            {
-                "provider": provider,
-                "session_id": str(session_id),
-                "operation": "send_input",
-                "hook_installed": True,
-                "recent_hook_observed": hook_live,
-            }
-        ]
-    }
-
-
-@pytest.mark.parametrize("provider", _providers_advertising_send())
-def test_advertised_send_reaches_the_served_grant(provider: str, live_engine) -> None:
-    """Feed the provider's own evidence in; the grant must come out."""
-
-    with Session(live_engine) as db:
-        session_id = _seed_live_session(db, provider)
-        upsert_live_control_leases(
-            db,
-            [_lease(session_id, provider)],
-            device_id=DEVICE_ID,
-            received_at=datetime.now(UTC),
-            machine_evidence=_readiness_evidence(session_id, provider, hook_live=True),
-        )
-        db.commit()
-
-        grant = get_live_control_grant(db, session_id=session_id, capability="send")
-        assert grant is not None, (
-            f"{provider} advertises can_send_input, but feeding the runtime the evidence its "
-            f"engine emits produces no served send grant. A client would offer the control and "
-            f"catalogd would refuse the input as control_unavailable."
-        )
-
-
-def test_hook_delivered_send_is_withheld_until_the_hook_is_observed(live_engine) -> None:
-    """The gate has to bite in the other direction or it is not a gate.
-
-    Antigravity control is hook-delivered and hooks do not fire under every
-    credential authority, so a launched, healthy session can be uncontrollable.
-    Advertising send there is the failure this whole guard exists to prevent.
+    Pi is a known live exclusion, not an accepted one. It advertises send,
+    interrupt and terminate while sitting outside canonical authorization, and
+    whether that is a real gap or a contract that over-advertises a one-shot
+    adapter is an open question -- pinned here so it stays visible instead of
+    being discovered the way Antigravity's was.
     """
 
-    provider = "antigravity"
-    assert managed_provider_requires_readiness_proof(provider)
-    with Session(live_engine) as db:
-        session_id = _seed_live_session(db, provider)
-        upsert_live_control_leases(
-            db,
-            [_lease(session_id, provider)],
-            device_id=DEVICE_ID,
-            received_at=datetime.now(UTC),
-            machine_evidence=_readiness_evidence(session_id, provider, hook_live=False),
+    canonical = set(canonical_command_authorization_providers())
+    advertising = {
+        contract.provider
+        for contract in all_managed_provider_contracts()
+        for column in _REMOTE_CONTROLS
+        if contract.connection_capabilities.get(column)
+    }
+    assert advertising - canonical == {"pi"}, (
+        "a provider started advertising remote controls it cannot have authorized; "
+        "either add it to canonical authorization or stop advertising the control"
+    )
+
+
+def _seed_bound_session(engine, provider: str):
+    """A live session carrying the control identity its engine would supply."""
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id, thread_id, run_id = uuid4(), uuid4(), uuid4()
+    connection_id, lease_generation = str(uuid4()), str(uuid4())
+    caps = contract_for_provider(provider).connection_capabilities
+    control_plane = contract_for_provider(provider).control_plane
+    with Session(engine) as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider=provider,
+                environment="production",
+                device_id=DEVICE_ID,
+                started_at=now,
+                primary_thread_id=str(thread_id),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionThread(
+                id=str(thread_id),
+                session_id=str(session_id),
+                provider=provider,
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionRun(
+                id=str(run_id),
+                thread_id=str(thread_id),
+                provider=provider,
+                host_id=DEVICE_ID,
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+        db.add(
+            LiveSessionConnection(
+                run_id=str(run_id),
+                adapter_connection_id=connection_id,
+                lease_generation=lease_generation,
+                control_plane=control_plane,
+                acquisition_kind="spawned_control",
+                state="attached",
+                device_id=DEVICE_ID,
+                can_send_input=caps["can_send_input"],
+                can_interrupt=caps["can_interrupt"],
+                can_terminate=caps["can_terminate"],
+                can_tail_output=caps["can_tail_output"],
+                can_resume=caps["can_resume"],
+                acquired_at=now,
+                last_health_at=now,
+            )
         )
         db.commit()
-        assert get_live_control_grant(db, session_id=session_id, capability="send") is None
+    return session_id, run_id, connection_id, lease_generation
 
 
-def test_send_is_revoked_when_the_hook_goes_quiet(live_engine) -> None:
-    """A capability that latches on is a stale promise, not an observation."""
+def _reduce_control_fact(engine, *, provider, session_id, run_id, connection_id, lease_generation, grants):
+    observed_at = datetime.now(UTC).replace(microsecond=0)
+    value = {
+        "authority_class": "provider_control",
+        "provider": provider,
+        "session_id": str(session_id),
+        "run_id": str(run_id),
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "granted_operations": list(grants),
+        "state": "attached" if grants else "detached",
+        "lease_ttl_ms": 900_000,
+        "source": f"{provider}_control_scan",
+        "observed_at": observed_at.isoformat(),
+    }
+    fact = ReducerFact(
+        family="control",
+        subject_key=f"connection:{connection_id}:{lease_generation}",
+        source=f"{provider}_control_scan",
+        source_epoch=lease_generation,
+        source_seq=None,
+        dedupe_key=canonical_evidence_hash({**value, "dedupe": observed_at.isoformat()}),
+        evidence_hash=canonical_evidence_hash(value),
+        value=value,
+        observed_at=observed_at,
+        session_id=str(session_id),
+    )
+    with engine.begin() as connection:
+        reduce_fact_batch(connection, [fact], received_at=observed_at)
 
-    provider = "antigravity"
+
+@pytest.mark.parametrize(("provider", "operation", "capability"), _advertised_controls())
+def test_advertised_control_reaches_the_served_grant(
+    provider: str, operation: str, capability: str, live_engine
+) -> None:
+    """Bind the identity, reduce the fact, and the grant must come out."""
+
+    session_id, run_id, connection_id, lease_generation = _seed_bound_session(live_engine, provider)
+    _reduce_control_fact(
+        live_engine,
+        provider=provider,
+        session_id=session_id,
+        run_id=run_id,
+        connection_id=connection_id,
+        lease_generation=lease_generation,
+        grants=[operation],
+    )
     with Session(live_engine) as db:
-        session_id = _seed_live_session(db, provider)
-        for hook_live in (True, False):
-            upsert_live_control_leases(
-                db,
-                [_lease(session_id, provider)],
+        grant, reason = get_canonical_live_control_grant(
+            db,
+            session_id=session_id,
+            provider=provider,
+            device_id=DEVICE_ID,
+            capability=capability,
+            now=datetime.now(UTC),
+        )
+    assert grant is not None, (
+        f"{provider} advertises {operation}, but binding the identity its engine supplies and "
+        f"reducing the control fact its engine emits produces no served grant ({reason}). A "
+        f"client would offer this control and catalogd would refuse the command."
+    )
+
+
+def test_a_control_the_engine_does_not_grant_is_not_served(live_engine) -> None:
+    """The gate has to bite in the other direction or it is not a gate.
+
+    Antigravity is the case this matters for: control is hook-delivered, and
+    hooks do not fire under every credential authority, so a launched, healthy
+    session can be uncontrollable. Its engine reports that by granting nothing,
+    and the served surface has to follow rather than trust the contract.
+    """
+
+    session_id, run_id, connection_id, lease_generation = _seed_bound_session(live_engine, "antigravity")
+    _reduce_control_fact(
+        live_engine,
+        provider="antigravity",
+        session_id=session_id,
+        run_id=run_id,
+        connection_id=connection_id,
+        lease_generation=lease_generation,
+        grants=[],
+    )
+    with Session(live_engine) as db:
+        grant, reason = get_canonical_live_control_grant(
+            db,
+            session_id=session_id,
+            provider="antigravity",
+            device_id=DEVICE_ID,
+            capability="send",
+            now=datetime.now(UTC),
+        )
+    assert grant is None
+    assert reason == "not_granted"
+
+
+def test_an_unbound_session_is_never_granted(live_engine) -> None:
+    """No identity, no authorization.
+
+    A Shadow session has no launcher to seed control identity, so it can never
+    reach a grant however healthy it looks -- even with the capability columns
+    set. That is the whole reason the identity requirement exists, so it earns
+    a test of its own rather than riding on the cases above.
+    """
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id, thread_id, run_id = uuid4(), uuid4(), uuid4()
+    with Session(live_engine) as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="antigravity",
+                environment="production",
                 device_id=DEVICE_ID,
-                received_at=datetime.now(UTC),
-                machine_evidence=_readiness_evidence(session_id, provider, hook_live=hook_live),
+                started_at=now,
+                primary_thread_id=str(thread_id),
+                created_at=now,
+                updated_at=now,
             )
-            db.commit()
-            grant = get_live_control_grant(db, session_id=session_id, capability="send")
-            assert (grant is not None) is hook_live, (
-                "send must follow the hook: granted while it is observed, withdrawn when it stops"
+        )
+        db.add(
+            LiveSessionThread(
+                id=str(thread_id),
+                session_id=str(session_id),
+                provider="antigravity",
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
             )
-        connection = db.query(LiveSessionConnection).one()
-        assert connection.can_send_input == 0
+        )
+        db.add(
+            LiveSessionRun(
+                id=str(run_id),
+                thread_id=str(thread_id),
+                provider="antigravity",
+                host_id=DEVICE_ID,
+                launch_origin="user_spawned",
+                started_at=now,
+            )
+        )
+        db.add(
+            LiveSessionConnection(
+                run_id=str(run_id),
+                adapter_connection_id=None,
+                lease_generation=None,
+                control_plane="antigravity_hook_inbox",
+                acquisition_kind="observed",
+                state="attached",
+                device_id=DEVICE_ID,
+                can_send_input=1,
+                can_interrupt=0,
+                can_terminate=0,
+                can_tail_output=1,
+                can_resume=0,
+                acquired_at=now,
+                last_health_at=now,
+            )
+        )
+        db.commit()
+        grant, reason = get_canonical_live_control_grant(
+            db,
+            session_id=session_id,
+            provider="antigravity",
+            device_id=DEVICE_ID,
+            capability="send",
+            now=datetime.now(UTC),
+        )
+    assert grant is None
+    assert reason == "identity_unbound"

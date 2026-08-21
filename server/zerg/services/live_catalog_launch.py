@@ -263,11 +263,7 @@ def attach_live_catalog_control(
         )
         db.add(connection)
     caps = contract.connection_capabilities
-    # Antigravity send is hook-delivered, and a freshly spawned session has
-    # not yet proven its hook fires -- whether it ever does depends on how
-    # the user authenticated agy. Start unavailable and let observed hook
-    # readiness promote it rather than advertising a control on faith.
-    default_send_input = 0 if provider == "antigravity" else caps["can_send_input"]
+    default_send_input = caps["can_send_input"]
     connection.state = state
     connection.external_name = external_name
     connection.device_id = device_id

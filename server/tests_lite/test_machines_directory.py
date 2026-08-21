@@ -253,7 +253,7 @@ def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
     assert len(entries) == 1
 
 
-def test_directory_does_not_report_antigravity_send_control(tmp_path):
+def test_directory_reports_antigravity_send_control(tmp_path):
     """A machine advertising antigravity.send surfaces it as a control.
 
     This asserted the opposite between 2026-07-31 and 2026-08-20, for a good
@@ -272,7 +272,7 @@ def test_directory_does_not_report_antigravity_send_control(tmp_path):
     entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
-    assert entries[0].control_operations_by_provider == {}
+    assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
     assert entries[0].launch.blocked_by == "no_launch_support"
 
 

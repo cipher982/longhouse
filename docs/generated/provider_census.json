@@ -636,6 +636,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_advertised_control_reaches_the_served_grant.py",
+      "providers": [
+        "antigravity",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_agents_duplicate_sqlite.py",
       "providers": [
         "antigravity",
@@ -980,6 +987,7 @@
     {
       "path": "server/tests_lite/test_machines_directory.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor"
@@ -992,13 +1000,6 @@
         "claude",
         "codex",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_managed_control_state_antigravity_readiness.py",
-      "providers": [
-        "antigravity",
-        "claude"
       ]
     },
     {
@@ -1258,6 +1259,7 @@
     {
       "path": "server/tests_lite/test_render_provider_factory_status.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",

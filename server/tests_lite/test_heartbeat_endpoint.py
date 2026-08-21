@@ -316,11 +316,12 @@ def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(tmp_pat
         process[0]["pid"] = 0
         invalid_evidence.append(invalid_pid)
 
-        antigravity_control = _machine_evidence_payload()
-        control = antigravity_control["control"]
-        assert isinstance(control, list)
-        control[0]["provider"] = "antigravity"
-        invalid_evidence.append(antigravity_control)
+        # An Antigravity control claim used to be rejected here because the
+        # Machine Agent had no scanner that could make one. It has since
+        # 2026-08-20: the Helm launcher seeds a control identity and the hook
+        # scanner emits the fact. What must still never happen is a Shadow
+        # session producing one, and that is guarded where it belongs -- in the
+        # engine, by a_shadow_antigravity_session_produces_no_control_fact_at_all.
 
         oversized = _machine_evidence_payload()
         oversized["process"] = [process[1]] * 2_049

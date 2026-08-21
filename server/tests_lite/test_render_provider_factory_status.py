@@ -15,11 +15,14 @@ def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
 
 
 def test_harness_backed_profiles_fill_the_staged_release_diagonal() -> None:
+    # Antigravity joined the harness-backed set on 2026-08-20 with its tier
+    # promotion; cursor and pi still sit outside it on observed-install lanes.
+    harness_backed = {"codex", "claude", "opencode", "antigravity"}
     diagonal = render_diagonal_status(load_facts())
-    for provider in {"codex", "claude", "opencode"}:
+    for provider in harness_backed:
         line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
         assert "runs — 32 scenarios" in line
-    for provider in set(ALL_PROVIDERS) - {"codex", "claude", "opencode"}:
+    for provider in set(ALL_PROVIDERS) - harness_backed:
         line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
         assert "never runs" in line
 

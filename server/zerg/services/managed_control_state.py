@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -72,59 +71,11 @@ def _kernel_control_plane_for_provider(provider: str) -> str:
     return control_plane_for_provider(provider)
 
 
-def antigravity_send_ready_session_ids(evidence: Any) -> set[str]:
-    """Sessions whose Antigravity hook is observably live right now.
-
-    Antigravity control is hook-delivered, and whether hooks fire is not a
-    property of the release -- it depends on how the user authenticated agy.
-    Under GEMINI_API_KEY auth the hooks load and are never called, so a session
-    can be healthy, current and completely uncontrollable. The contract cannot
-    express that; only observation can. This reads the engine's own readiness
-    evidence so send is advertised exactly when the hook has been seen working.
-    """
-
-    if not isinstance(evidence, Mapping):
-        return set()
-    facts = evidence.get("readiness")
-    if not isinstance(facts, (list, tuple)):
-        return set()
-    ready: set[str] = set()
-    for fact in facts:
-        if not isinstance(fact, Mapping):
-            continue
-        if str(fact.get("provider") or "").strip().lower() != "antigravity":
-            continue
-        if str(fact.get("operation") or "").strip() != "send_input":
-            continue
-        if not (bool(fact.get("hook_installed")) and bool(fact.get("recent_hook_observed"))):
-            continue
-        session_id = fact.get("session_id")
-        if isinstance(session_id, str) and session_id.strip():
-            ready.add(session_id.strip())
-    return ready
-
-
-def _connection_capabilities_for_provider(
-    provider: str,
-    control_plane: str,
-    *,
-    send_ready: bool = False,
-) -> dict[str, int]:
+def _connection_capabilities_for_provider(provider: str, control_plane: str) -> dict[str, int]:
     contract = contract_for_provider(provider)
     if contract is None or control_plane not in contract.control_planes:
         return {}
-    # Lazy import: managed_local_launcher imports this module, so a top-level
-    # import here closes the cycle.
-    from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
-
-    capabilities = contract.connection_capabilities
-    if managed_provider_requires_readiness_proof(provider):
-        # Hook-delivered send is advertised only while the hook is observably
-        # firing. Absent readiness this is 0 -- not because the provider lacks
-        # the capability, but because an advertised control that silently does
-        # nothing is worse than one that is honestly unavailable.
-        return {**capabilities, "can_send_input": 1 if send_ready else 0}
-    return capabilities
+    return contract.connection_capabilities
 
 
 def _apply_connection_capabilities(conn: SessionConnection, capabilities: dict[str, int]) -> None:
@@ -141,7 +92,6 @@ def _mirror_connection_state(
     control_state: str,
     external_name: str | None,
     device_id: str | None,
-    send_ready: bool = False,
 ) -> None:
     """Materialize a kernel ``SessionConnection`` reflecting control state.
 
@@ -157,7 +107,7 @@ def _mirror_connection_state(
 
     kernel_state = _kernel_connection_state(control_state)
     control_plane = _kernel_control_plane_for_provider(provider)
-    connection_capabilities = _connection_capabilities_for_provider(provider, control_plane, send_ready=send_ready)
+    connection_capabilities = _connection_capabilities_for_provider(provider, control_plane)
 
     if kernel_state in {"detached", "released", "ended"}:
         existing = (
@@ -364,20 +314,9 @@ def upsert_live_control_leases(
     *,
     device_id: str,
     received_at: datetime,
-    machine_evidence: Any = None,
 ) -> set[UUID]:
-    """Materialize managed lease snapshots into the Live Store hot lane.
+    """Materialize managed lease snapshots into the Live Store hot lane."""
 
-    This is the served lane, not the compatibility one: the projector reads
-    LiveSessionConnection to decide whether send_input is available, and
-    catalogd refuses a queued input with ``control_unavailable`` when it is
-    not. Antigravity's hook-readiness promotion therefore has to happen here
-    or the capability is advertised everywhere except where it is enforced.
-    """
-
-    from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
-
-    send_ready_session_ids = antigravity_send_ready_session_ids(machine_evidence)
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
     normalized_device_id = _normalized(device_id) or device_id
@@ -429,12 +368,6 @@ def upsert_live_control_leases(
                 device_id=normalized_device_id,
                 state={"online": "attached", "degraded": "degraded"}.get(control_state, "detached"),
                 external_name=row.machine_id,
-                # None keeps every other provider on its contract default.
-                # Antigravity is explicit in both directions so the capability
-                # is withdrawn again when the hook stops being observed.
-                can_send_input=(
-                    (1 if str(session_id) in send_ready_session_ids else 0) if managed_provider_requires_readiness_proof(provider) else None
-                ),
                 observed_at=seen_at,
             )
             if control_state in {"online", "degraded"}:
@@ -562,11 +495,9 @@ def upsert_managed_control_leases(
     *,
     device_id: str,
     received_at: datetime,
-    machine_evidence: Any = None,
 ) -> set[UUID]:
     """Materialize managed lease snapshots into kernel ``SessionConnection`` rows."""
 
-    send_ready_session_ids = antigravity_send_ready_session_ids(machine_evidence)
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
     normalized_device_id = _normalized(device_id) or device_id
@@ -591,7 +522,6 @@ def upsert_managed_control_leases(
             control_state=control_state,
             external_name=machine_id,
             device_id=normalized_device_id,
-            send_ready=str(session_id) in send_ready_session_ids,
         )
         touched.add(session_id)
     # Update last_health_at on the affected connections so freshness reflects
@@ -619,11 +549,8 @@ def refresh_managed_control_lease_health(
     *,
     device_id: str,
     received_at: datetime,
-    machine_evidence: Any = None,
 ) -> set[UUID]:
     """Refresh health timestamps for an unchanged managed lease snapshot."""
-
-    send_ready_session_ids = antigravity_send_ready_session_ids(machine_evidence)
 
     seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
     seen_session_ids.discard(None)
@@ -662,7 +589,6 @@ def refresh_managed_control_lease_health(
             capabilities = _connection_capabilities_for_provider(
                 provider_by_session_id.get(session_id, "unknown"),
                 _normalized(conn.control_plane),
-                send_ready=str(session_id) in send_ready_session_ids,
             )
             _apply_connection_capabilities(conn, capabilities)
         touched.add(session_id)

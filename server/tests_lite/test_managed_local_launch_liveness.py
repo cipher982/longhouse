@@ -130,8 +130,16 @@ def test_i1_launch_is_not_live_until_observer_promotes_same_row(tmp_path):
         assert db.query(SessionConnection).filter(SessionConnection.run_id == born_run_id).count() == 1
 
 
-def test_antigravity_launch_does_not_grant_send_before_hook_proof(tmp_path):
-    """Dispatching the Antigravity binary is not hook-inbox readiness proof."""
+def test_antigravity_launch_is_born_detached_pending_hook_observation(tmp_path):
+    """Dispatching the Antigravity binary is not hook-inbox readiness proof.
+
+    The kernel capability follows the contract, which does implement send. What
+    dispatching the binary cannot do is make the session controllable: hooks do
+    not fire under every credential authority, so the served grant additionally
+    requires a control fact whose granted_operations names send. That gate is
+    covered by test_advertised_control_reaches_the_served_grant; here the point
+    is only that launch alone leaves the session detached.
+    """
 
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
@@ -149,8 +157,9 @@ def test_antigravity_launch_does_not_grant_send_before_hook_proof(tmp_path):
         assert caps.can_send_input is False
         assert caps.control_label == "reattach"
 
-        # A legacy attached lease is process/control evidence, not hook-inbox
-        # readiness. It may make the connection live, but cannot grant send.
+        # An attached lease makes the connection live and restores the
+        # contract capability. It is still not authorization: the served path
+        # needs the control fact the hook scanner emits.
         upsert_managed_control_leases(
             db,
             [
@@ -169,7 +178,7 @@ def test_antigravity_launch_does_not_grant_send_before_hook_proof(tmp_path):
         db.commit()
         legacy_lease_caps = project_session_capabilities(db, session_id=session.id)
         assert legacy_lease_caps.live_control_available is True
-        assert legacy_lease_caps.can_send_input is False
+        assert legacy_lease_caps.can_send_input is True
 
 
 def test_opencode_is_born_detached_pending_lease_observation(tmp_path):

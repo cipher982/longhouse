@@ -2649,6 +2649,7 @@ mod tests {
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
+        ("antigravity", "send", COMMAND_SEND_TEXT),
         ("antigravity", "turn_start", COMMAND_TURN_START),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
@@ -3118,11 +3119,11 @@ mod tests {
             granted_control_operations("cursor", true),
             ["interrupt", "send_input", "terminate"]
         );
-        // Antigravity grants nothing at session level. The hook-inbox send is
-        // routed in the engine but not served: authorization needs a bound
-        // control identity a hook cannot provide, so advertising it here would
-        // put a control in the machines API that the API refuses.
-        assert!(granted_control_operations("antigravity", true).is_empty());
+        // Antigravity grants send and nothing else: the hook inbox delivers a
+        // user turn and has no interrupt or active-turn steer to deliver.
+        assert_eq!(granted_control_operations("antigravity", true), ["send_input"]);
+        // Detached means the hook has not been seen; the grant goes with it.
+        assert!(granted_control_operations("antigravity", false).is_empty());
         assert!(granted_control_operations("antigravity", false).is_empty());
         assert!(granted_control_operations("cursor", false).is_empty());
         assert!(granted_control_operations("unknown", true).is_empty());
@@ -3296,8 +3297,7 @@ mod tests {
         assert!(!supports.contains(&"opencode.launch".to_string()));
         assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"opencode.turn_start".to_string()));
-        // Withheld until served authorization can actually grant it.
-        assert!(!supports.contains(&"antigravity.send".to_string()));
+        assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
         assert!(!supports.contains(&"antigravity.live_proof".to_string()));

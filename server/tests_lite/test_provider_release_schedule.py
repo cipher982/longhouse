@@ -19,7 +19,7 @@ def test_schedule_covers_the_contract_and_declares_private_live_token_ownership(
     schedule = load_provider_release_schedule()
 
     assert {row.provider for row in schedule.providers} == managed_provider_names()
-    assert {entry["provider"] for entry in schedule.matrix()["include"]} == managed_provider_names() - {"antigravity"}
+    assert {entry["provider"] for entry in schedule.matrix()["include"]} == set(managed_provider_names())
     assert schedule.scheduled_evidence == "generated_fake_unconditional_full_column"
 
 
@@ -80,7 +80,9 @@ def test_build_store_staleness_alerts_on_old_and_missing_builds(tmp_path: Path) 
     assert report["providers"]["codex"]["status"] == "stale"
     assert report["providers"]["claude"]["status"] == "stale"
     assert report["providers"]["claude"]["reason"] == "no_build_observed"
-    assert report["providers"]["antigravity"]["status"] == "not_monitored"
+    # Monitored since the tier promotion: an unmonitored build store cannot
+    # report a stale binary, which is the alert this lane exists to raise.
+    assert report["providers"]["antigravity"]["status"] == "stale"
 
 
 def test_missing_builds_collect_during_the_initial_measurement_window(tmp_path: Path) -> None:
