@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import http.server
 import json
+import threading
 import time
+import urllib.request
 
 import zerg.qa.codex_helm_launch_visibility as launch
 
@@ -47,6 +50,43 @@ def test_recording_proxy_retains_registration_identity_without_authority_tokens(
         assert "must-not-survive" not in json.dumps(record)
     finally:
         proxy.server.server_close()
+
+
+def test_recording_proxy_forwards_the_managed_launch_user_agent_unchanged():
+    observed = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - stdlib callback name
+            observed["user_agent"] = self.headers.get("User-Agent")
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    host, port = upstream.server_address[:2]
+    proxy = launch.RuntimeHostRecordingProxy(f"http://{host}:{port}")
+    proxy.start()
+    try:
+        request = urllib.request.Request(
+            f"{proxy.url}/probe",
+            headers={"User-Agent": "longhouse-engine/test-version"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+        assert observed["user_agent"] == "longhouse-engine/test-version"
+    finally:
+        proxy.close()
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
 
 
 def test_wait_canonical_launch_requires_exact_run_open_and_default_visibility(monkeypatch):

@@ -123,8 +123,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 fn runtime_host_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
+        .user_agent(concat!("longhouse-engine/", env!("CARGO_PKG_VERSION")))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("static managed-launch Runtime Host client configuration must be valid")
 }
 
 /// Why a registration attempt failed, in the terms the user needs.
@@ -1060,6 +1061,54 @@ mod tests {
         assert!(
             validate_launch_identity(response("expected", "run"), "Cursor", Some("expected"))
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn managed_launch_runtime_client_sends_owned_user_agent() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            sender
+                .send(String::from_utf8_lossy(&buffer[..size]).to_string())
+                .unwrap();
+            let body = r#"{"session_id":"session-user-agent","run_id":"run-user-agent"}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        });
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        register_managed_launch(
+            &runtime,
+            &format!("http://{address}"),
+            "device-token",
+            "Codex",
+            &json!({"session_id": "session-user-agent"}),
+            Some("session-user-agent"),
+        )
+        .unwrap();
+
+        let request = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            request.to_ascii_lowercase().contains(&format!(
+                "user-agent: longhouse-engine/{}",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "managed launch request omitted its owned client identity: {request}"
         );
     }
 
