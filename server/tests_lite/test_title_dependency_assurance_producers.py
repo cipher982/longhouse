@@ -67,8 +67,12 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
         oracles,
         "_product_health",
         lambda *_args, **_kwargs: (
-            {"check": "session_titles", "verdict": "ok"},
-            {"check": "session_titles", "verdict": "ok"},
+            {"check": "session_titles", "verdict": "ok", "signals": {}},
+            {
+                "check": "session_titles",
+                "verdict": "ok",
+                "signals": {"open_dependencies": 0, "terminal_sessions": 0, "overdue_sessions": 0},
+            },
         ),
     )
 
@@ -80,8 +84,8 @@ def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatc
     assert result["observation"]["direct_provider_probe_count"] == 0
     assert result["observation"]["credential_rotation_count"] == 0
     request_receipt = (tmp_path / "evidence" / "runtime-request-receipt.json").read_text()
-    assert "direct_provider_paths\": []" in request_receipt
-    assert "credential_mutations\": []" in request_receipt
+    assert 'direct_provider_paths": []' in request_receipt
+    assert 'credential_mutations": []' in request_receipt
 
 
 def test_live_title_envelope_exercises_native_claude_semantic_projection():
@@ -92,8 +96,8 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert payload["session"]["origin_kind"] == "console"
     raw = payload["records"][0]["data_b64"]
     assert raw
-    assert LIVE_REGISTRATION.producer_revision == 2
-    assert LIVE_REGISTRATION.scenario_revision == 2
+    assert LIVE_REGISTRATION.producer_revision == 3
+    assert LIVE_REGISTRATION.scenario_revision == 3
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
 
 
@@ -107,9 +111,15 @@ def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path):
 
     assert result["passed"] is True, result
     observation = result["observation"]
-    assert observation["concurrent_hidden_obligation_count"] == 3
+    assert observation["concurrent_hidden_obligation_count"] == 8
     assert observation["one_shared_incident"] is True
     assert observation["incident_survived_restart"] is True
-    assert observation["zero_row_attempt_consumption"] is True
+    assert observation["zero_new_row_attempt_consumption"] is True
+    assert observation["legacy_terminal_timeout_reentered"] is True
+    assert observation["unrelated_terminal_debt_preserved"] is True
+    assert observation["provider_shaped_503_observed"] is True
+    assert observation["model_concurrency_bounded"] is True
+    assert observation["scheduled_worker_creation_bounded"] is True
+    assert observation["aged_backlog_degrades_with_healthy_dependency"] is True
     assert observation["same_rows_recovered"] is True
     assert observation["storage_v2_read_count"] == 0

@@ -7370,6 +7370,10 @@ export interface components {
             generated_at: string;
             /** Headline */
             headline: string;
+            /** Signals */
+            signals?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ProductHealthCheckThresholdsResponse */
         ProductHealthCheckThresholdsResponse: {

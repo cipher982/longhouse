@@ -248,16 +248,16 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
 # rows contain escape-heavy content that doubles during outer JSON encoding.
 _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
 
-# Storage-v2 AI title retry budget. A title that keeps failing (LLM timeout,
-# empty response, ...) must not retry forever at a fixed cadence on a hotspot
-# like a large synthetic backlog. We allow a small bounded number of attempts
-# with exponential backoff, then freeze the session's deterministic non-AI
-# fallback title and stop. The terminal state lives in the database
-# (anchor_title set, title_retry_at cleared) so it survives a restart instead of
-# resuming the loop on every boot.
+# Storage-v2 per-row title retry budget. Shared provider failures (auth,
+# timeout, rate limit, or service outage) belong to the
+# dependency circuit and do not spend this budget. The cap remains for
+# row-specific malformed input or programming errors so one pathological
+# session cannot retry forever.
 MAX_TITLE_ATTEMPTS = 5
 TITLE_DEPENDENCY_USE_CASE = "session_title"
 TITLE_DEPENDENCY_PROBE_DELAY = timedelta(seconds=60)
+TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION = 2
+TITLE_BACKLOG_DEGRADED_AFTER = timedelta(minutes=5)
 
 
 def _title_auth_failure_clause(table):
@@ -272,6 +272,49 @@ def _title_auth_failure_clause(table):
         error.like("%authentication%"),
         error.like("%api key%"),
         error.like("%user not found%"),
+    )
+
+
+def _title_availability_failure_clause(table):
+    """Match legacy shared-provider failures written before the circuit grew."""
+
+    error = func.lower(func.coalesce(table.c.title_last_error, ""))
+    return or_(
+        error.like("%timeout%"),
+        error.like("%timed out%"),
+        error.like("%rate limit%"),
+        error.like("%429%"),
+        error.like("%500%"),
+        error.like("%502%"),
+        error.like("%503%"),
+        error.like("%504%"),
+        error.like("%temporarily unavailable%"),
+        error.like("%connection%"),
+    )
+
+
+def _legacy_title_dependency_failure_clause(table):
+    """Terminal debt attributable to a pre-circuit shared provider failure."""
+
+    return and_(
+        table.c.title_attempt_count >= MAX_TITLE_ATTEMPTS,
+        or_(_title_auth_failure_clause(table), _title_availability_failure_clause(table)),
+    )
+
+
+def _storage_title_obligation_clause(table):
+    """Rows that should eventually receive an AI title."""
+
+    return and_(
+        table.c.user_messages > 0,
+        or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
+        or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
+        table.c.first_user_message_preview.is_not(None),
+        func.length(func.trim(table.c.first_user_message_preview)) > 0,
+        or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
+        table.c.environment.notin_(("test", "e2e")),
+        ~provider_proof_session_clause(table),
+        ~hatch_automation_session_clause(table),
     )
 
 
@@ -7803,24 +7846,21 @@ class CatalogStore:
                 connection.execute(
                     select(table)
                     .where(
-                        table.c.user_messages > 0,
-                        # Claude's native control records remain semantically
-                        # raw until repair. Keep them out of the title model
-                        # until the semantic projection identifies the real
-                        # conversational first prompt.
-                        or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
-                        or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
-                        or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
+                        _storage_title_obligation_clause(table),
                         or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
-                        table.c.environment.notin_(("test", "e2e")),
-                        ~provider_proof_session_clause(table),
-                        ~hatch_automation_session_clause(table),
                         or_(
                             table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
                             table.c.title_dependency_incident_id.is_not(None),
                         ),
                     )
-                    .order_by(table.c.last_activity_at.desc(), table.c.session_id)
+                    # Durable debt drains oldest-first. New activity must not
+                    # continually push an older eligible obligation beyond a
+                    # bounded worker pool.
+                    .order_by(
+                        func.coalesce(table.c.title_retry_at, table.c.created_at).asc(),
+                        table.c.last_activity_at.asc(),
+                        table.c.session_id,
+                    )
                     .limit(limit)
                 )
                 .mappings()
@@ -7852,7 +7892,7 @@ class CatalogStore:
         credential_generation: str,
         observed_at: datetime,
     ) -> dict[str, Any]:
-        """Create dependency state and adopt pre-circuit authentication debt."""
+        """Create dependency state and adopt pre-circuit shared-provider debt."""
 
         dependency = RuntimeDependencyState.__table__
         sessions = StorageSession.__table__
@@ -7863,13 +7903,37 @@ class CatalogStore:
             dependency.c.model == model,
             dependency.c.credential_binding == credential_binding,
         )
-        legacy_auth = and_(
-            or_(sessions.c.anchor_title.is_(None), sessions.c.anchor_title == ""),
-            _title_auth_failure_clause(sessions),
-        )
+        untitled = or_(sessions.c.anchor_title.is_(None), sessions.c.anchor_title == "")
+        legacy_clause = and_(untitled, _legacy_title_dependency_failure_clause(sessions))
         with _write_transaction(self.engine) as connection:
             row = connection.execute(select(dependency).where(*identity)).mappings().first()
-            legacy_count = int(connection.execute(select(func.count()).select_from(sessions).where(legacy_auth)).scalar_one())
+            needs_legacy_repair = row is None or int(row["legacy_repair_version"] or 0) < TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION
+            legacy_count = (
+                int(connection.execute(select(func.count()).select_from(sessions).where(legacy_clause)).scalar_one())
+                if needs_legacy_repair
+                else 0
+            )
+            has_legacy_auth = bool(
+                legacy_count
+                and connection.execute(
+                    select(sessions.c.session_id)
+                    .where(
+                        untitled,
+                        sessions.c.title_attempt_count >= MAX_TITLE_ATTEMPTS,
+                        _title_auth_failure_clause(sessions),
+                    )
+                    .limit(1)
+                ).first()
+            )
+            selected_failure_class = (
+                str(row["failure_class"] or "availability")
+                if row is not None and str(row["state"]) != "healthy"
+                else "authentication"
+                if has_legacy_auth
+                else "availability"
+                if legacy_count
+                else None
+            )
             commit_seq = _current_commit_seq(connection)
             incident_id: str | None = str(row["incident_id"]) if row is not None and row["incident_id"] else None
             changed = False
@@ -7885,12 +7949,13 @@ class CatalogStore:
                         credential_binding=credential_binding,
                         state=state,
                         incident_id=incident_id,
-                        failure_class="authentication" if incident_id else None,
+                        failure_class=selected_failure_class if incident_id else None,
                         first_failure_at=observed_at if incident_id else None,
                         last_failure_at=observed_at if incident_id else None,
                         next_probe_at=observed_at if incident_id else None,
                         credential_generation=credential_generation,
-                        last_error="adopted_legacy_authentication_debt" if incident_id else None,
+                        last_error=(f"adopted_legacy_{selected_failure_class}_debt" if incident_id else None),
+                        legacy_repair_version=TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION,
                         commit_seq=commit_seq,
                         created_at=observed_at,
                         updated_at=observed_at,
@@ -7906,12 +7971,13 @@ class CatalogStore:
                     .values(
                         state="open",
                         incident_id=incident_id,
-                        failure_class="authentication",
+                        failure_class=selected_failure_class,
                         first_failure_at=observed_at,
                         last_failure_at=observed_at,
                         next_probe_at=observed_at,
                         credential_generation=credential_generation,
-                        last_error="adopted_legacy_authentication_debt",
+                        last_error=f"adopted_legacy_{selected_failure_class}_debt",
+                        legacy_repair_version=TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION,
                         commit_seq=commit_seq,
                         updated_at=observed_at,
                     )
@@ -7953,16 +8019,29 @@ class CatalogStore:
                     )
                 changed = True
 
-            bound = 0
-            unbound_legacy_count = int(
+            if row is not None and needs_legacy_repair:
+                if not changed:
+                    commit_seq = _advance_commit_seq(connection, observed_at)
                 connection.execute(
-                    select(func.count())
-                    .select_from(sessions)
-                    .where(
-                        legacy_auth,
-                        sessions.c.title_dependency_incident_id.is_(None),
+                    update(dependency)
+                    .where(*identity)
+                    .values(
+                        legacy_repair_version=TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION,
+                        commit_seq=commit_seq,
+                        updated_at=observed_at,
                     )
-                ).scalar_one()
+                )
+                changed = True
+
+            bound = 0
+            unbound_legacy_count = (
+                int(
+                    connection.execute(
+                        select(func.count()).select_from(sessions).where(legacy_clause, sessions.c.title_dependency_incident_id.is_(None))
+                    ).scalar_one()
+                )
+                if needs_legacy_repair
+                else 0
             )
             if incident_id is not None and unbound_legacy_count:
                 dep_row = connection.execute(select(dependency).where(*identity)).mappings().one()
@@ -7972,7 +8051,7 @@ class CatalogStore:
                 bound = int(
                     connection.execute(
                         update(sessions)
-                        .where(legacy_auth, sessions.c.title_dependency_incident_id.is_(None))
+                        .where(legacy_clause, sessions.c.title_dependency_incident_id.is_(None))
                         .values(
                             title_dependency_incident_id=incident_id,
                             title_retry_at=retry_at,
@@ -8097,10 +8176,14 @@ class CatalogStore:
         credential_binding: str,
         credential_generation: str,
         probe_token: UUID,
+        failure_class: str,
         reason: str,
         failed_at: datetime,
     ) -> dict[str, Any]:
-        """Open or coalesce one authentication incident without spending row retries."""
+        """Open or coalesce one shared dependency incident without spending row retries."""
+
+        if failure_class not in {"authentication", "availability"}:
+            raise ValueError(f"unsupported title dependency failure class: {failure_class}")
 
         dependency = RuntimeDependencyState.__table__
         sessions = StorageSession.__table__
@@ -8135,6 +8218,7 @@ class CatalogStore:
                 }
             newly_opened = str(dep["state"]) == "healthy" or not dep["incident_id"]
             incident_id = str(uuid4()) if newly_opened else str(dep["incident_id"])
+            effective_failure_class = failure_class if newly_opened else str(dep["failure_class"] or failure_class)
             next_probe_at = failed_at + TITLE_DEPENDENCY_PROBE_DELAY
             commit_seq = _advance_commit_seq(connection, failed_at)
             connection.execute(
@@ -8143,7 +8227,7 @@ class CatalogStore:
                 .values(
                     state="open",
                     incident_id=incident_id,
-                    failure_class="authentication",
+                    failure_class=effective_failure_class,
                     first_failure_at=failed_at if newly_opened else dep["first_failure_at"],
                     last_failure_at=failed_at,
                     next_probe_at=next_probe_at,
@@ -8157,12 +8241,11 @@ class CatalogStore:
                     updated_at=failed_at,
                 )
             )
-            debt_clause = or_(sessions.c.session_id == str(session_id), _title_auth_failure_clause(sessions))
             affected_ids = [
                 str(value)
                 for value in connection.execute(
                     select(sessions.c.session_id).where(
-                        debt_clause,
+                        sessions.c.session_id == str(session_id),
                         or_(sessions.c.anchor_title.is_(None), sessions.c.anchor_title == ""),
                     )
                 ).scalars()
@@ -8306,10 +8389,54 @@ class CatalogStore:
                 item["blocked_sessions"] = int(blocked.get(row["incident_id"], 0)) if row["incident_id"] else 0
                 dependencies.append(item)
             open_count = sum(1 for row in rows if str(row["state"]) != "healthy")
+            obligation = _storage_title_obligation_clause(sessions)
+            pending = and_(
+                obligation,
+                or_(
+                    sessions.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
+                    sessions.c.title_dependency_incident_id.is_not(None),
+                ),
+            )
+            overdue = and_(
+                pending,
+                or_(sessions.c.title_retry_at.is_(None), sessions.c.title_retry_at <= observed_at),
+            )
+            terminal = and_(
+                obligation,
+                sessions.c.title_attempt_count >= MAX_TITLE_ATTEMPTS,
+                sessions.c.title_dependency_incident_id.is_(None),
+            )
+            counts = connection.execute(
+                select(
+                    func.count().filter(pending).label("pending"),
+                    func.count().filter(overdue).label("overdue"),
+                    func.count().filter(terminal).label("terminal"),
+                    func.count().filter(and_(terminal, _legacy_title_dependency_failure_clause(sessions))).label("terminal_shared"),
+                    func.min(sessions.c.last_activity_at).filter(overdue).label("oldest_overdue_at"),
+                ).select_from(sessions)
+            ).one()
+            oldest_overdue_at = _as_aware_utc(counts.oldest_overdue_at)
+            oldest_overdue_age_seconds = (
+                max(0, int((observed_at - oldest_overdue_at).total_seconds())) if oldest_overdue_at is not None else None
+            )
+            backlog_degraded = bool(
+                int(counts.terminal or 0)
+                or (
+                    oldest_overdue_age_seconds is not None
+                    and oldest_overdue_age_seconds >= int(TITLE_BACKLOG_DEGRADED_AFTER.total_seconds())
+                )
+            )
             return {
-                "status": "degraded" if open_count else "healthy",
+                "status": "degraded" if open_count or backlog_degraded else "healthy",
                 "open_dependencies": open_count,
                 "blocked_sessions": sum(item["blocked_sessions"] for item in dependencies),
+                "pending_sessions": int(counts.pending or 0),
+                "overdue_sessions": int(counts.overdue or 0),
+                "terminal_sessions": int(counts.terminal or 0),
+                "terminal_shared_failure_sessions": int(counts.terminal_shared or 0),
+                "oldest_overdue_at": _encode_datetime(oldest_overdue_at),
+                "oldest_overdue_age_seconds": oldest_overdue_age_seconds,
+                "backlog_degraded_after_seconds": int(TITLE_BACKLOG_DEGRADED_AFTER.total_seconds()),
                 "dependencies": dependencies,
                 "observed_at": observed_at.isoformat(),
                 "commit_seq": str(_current_commit_seq(connection)),
@@ -12101,6 +12228,7 @@ def _runtime_dependency_dto(row) -> dict[str, Any]:
         "probe_expires_at": _encode_datetime(row["probe_expires_at"]),
         "last_error": row["last_error"],
         "recovered_at": _encode_datetime(row["recovered_at"]),
+        "legacy_repair_version": int(row["legacy_repair_version"] or 0),
         "updated_at": _encode_datetime(row["updated_at"]),
     }
 

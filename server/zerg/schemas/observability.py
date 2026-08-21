@@ -220,6 +220,7 @@ class ProductHealthCheckSummaryResponse(UTCBaseModel):
     window: str
     generated_at: datetime
     headline: str
+    signals: dict[str, Any] | None = None
 
 
 class ProductHealthCheckListResponse(UTCBaseModel):

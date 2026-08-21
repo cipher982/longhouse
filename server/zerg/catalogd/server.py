@@ -2462,6 +2462,7 @@ class CatalogDaemon:
             "credential_binding",
             "credential_generation",
             "probe_token",
+            "failure_class",
             "reason",
             "failed_at",
         }
@@ -2471,6 +2472,10 @@ class CatalogDaemon:
             params = self._storage_title_dependency_identity(request.params)
             params["session_id"] = _canonical_uuid(request.params["session_id"], "session_id")
             params["probe_token"] = _canonical_uuid(request.params["probe_token"], "probe_token")
+            failure_class = _bounded_text(request.params["failure_class"], "failure_class", 64)
+            if failure_class not in {"authentication", "availability"}:
+                raise ValueError("failure_class must be authentication or availability")
+            params["failure_class"] = failure_class
             params["reason"] = _bounded_text(request.params["reason"], "reason", 255)
             params["failed_at"] = _parse_datetime(request.params["failed_at"], "failed_at")
         except ValueError as exc:

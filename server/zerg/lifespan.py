@@ -57,6 +57,17 @@ async def _stop_local_embedding_initializer(app: FastAPI) -> None:
     app.state.embedding_initializer_task = None
 
 
+async def _stop_storage_title_services(app: FastAPI) -> None:
+    task = getattr(app.state, "storage_title_reconciler_task", None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        app.state.storage_title_reconciler_task = None
+    from zerg.services.storage_session_titles import stop_storage_title_workers
+
+    await stop_storage_title_workers()
+
+
 @contextmanager
 def _timed_startup_step(name: str):
     started = time.monotonic()
@@ -384,7 +395,7 @@ async def lifespan(app: FastAPI):
                 try:
                     from zerg.services.storage_session_titles import run_storage_title_reconciler
 
-                    asyncio.create_task(run_storage_title_reconciler())
+                    app.state.storage_title_reconciler_task = asyncio.create_task(run_storage_title_reconciler())
                     logger.info("Storage-v2 AI title reconciler started")
                 except Exception:
                     logger.exception("Failed to start storage-v2 AI title reconciler")
@@ -431,6 +442,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         if catalog_mode and (not _settings.testing or factory_title_assurance):
+            await _stop_storage_title_services(app)
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
@@ -513,6 +525,7 @@ async def lifespan(app: FastAPI):
         await topic_manager.shutdown()
 
         if catalog_mode and (not _settings.testing or factory_title_assurance):
+            await _stop_storage_title_services(app)
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:

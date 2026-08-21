@@ -516,6 +516,10 @@ class RuntimeDependencyState(CatalogBase):
     last_failure_token = Column(String(36), nullable=True)
     last_error = Column(String(255), nullable=True)
     recovered_at = Column(DateTime(timezone=True), nullable=True)
+    # One-time repair generation for durable title debt written before the
+    # provider-wide dependency circuit existed. Keeping this marker beside
+    # the circuit identity prevents legacy LIKE scans on every hot reconcile.
+    legacy_repair_version = Column(Integer, nullable=False, server_default=text("0"))
     commit_seq = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)

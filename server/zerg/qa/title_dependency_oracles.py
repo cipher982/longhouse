@@ -22,6 +22,7 @@ import threading
 import time
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -67,30 +68,52 @@ def _free_port() -> int:
 
 
 class _StubState:
-    def __init__(self, accepted_token: str) -> None:
-        self.accepted_token = accepted_token
+    def __init__(self, unavailable_token: str, healthy_token: str) -> None:
+        self.unavailable_token = unavailable_token
+        self.healthy_token = healthy_token
         self.lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
+        self.active_requests = 0
+        self.max_active_requests = 0
+        self.healthy_requests_started = 0
+        self.healthy_wave_release = threading.Event()
 
-    def observe(self, *, path: str, authorized: bool) -> None:
+    def begin(self, *, path: str, token: str) -> tuple[int, bool]:
         with self.lock:
-            self.requests.append({"path": path, "status": 200 if authorized else 401})
+            status = 503 if token == self.unavailable_token else 200 if token == self.healthy_token else 401
+            if status == 200:
+                self.healthy_requests_started += 1
+            self.active_requests += 1
+            self.max_active_requests = max(self.max_active_requests, self.active_requests)
+            self.requests.append({"path": path, "status": status})
+            return status, status == 200 and self.healthy_requests_started > 1
+
+    def finish(self) -> None:
+        with self.lock:
+            self.active_requests -= 1
 
     def receipt(self) -> dict[str, Any]:
         with self.lock:
             requests = list(self.requests)
+            active_requests = self.active_requests
+            max_active_requests = self.max_active_requests
+            healthy_requests_started = self.healthy_requests_started
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "artifact_kind": "title_loopback_stub_receipt",
             "requests": requests,
             "unauthorized_count": sum(item["status"] == 401 for item in requests),
+            "unavailable_count": sum(item["status"] == 503 for item in requests),
             "healthy_count": sum(item["status"] == 200 for item in requests),
+            "active_requests": active_requests,
+            "max_active_requests": max_active_requests,
+            "healthy_requests_started": healthy_requests_started,
         }
 
 
 class _TitleStub:
-    def __init__(self, accepted_token: str) -> None:
-        self.state = _StubState(accepted_token)
+    def __init__(self, unavailable_token: str, healthy_token: str) -> None:
+        self.state = _StubState(unavailable_token, healthy_token)
         state = self.state
 
         class Handler(BaseHTTPRequestHandler):
@@ -98,32 +121,41 @@ class _TitleStub:
                 length = int(self.headers.get("content-length") or 0)
                 if length:
                     self.rfile.read(length)
-                authorized = self.headers.get("authorization") == f"Bearer {state.accepted_token}"
-                state.observe(path=self.path, authorized=authorized)
-                if not authorized:
-                    self.send_response(401)
-                    payload = {"error": {"message": "provider-shaped unauthorized", "type": "authentication_error"}}
-                else:
-                    self.send_response(200)
-                    payload = {
-                        "id": "factory-title-assurance",
-                        "object": "chat.completion",
-                        "created": int(time.time()),
-                        "model": "factory-title-stub",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "finish_reason": "stop",
-                                "message": {"role": "assistant", "content": '{"title":"Recovered Hidden Obligation"}'},
-                            }
-                        ],
-                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-                    }
-                body = json.dumps(payload).encode()
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                token = str(self.headers.get("authorization") or "").removeprefix("Bearer ")
+                status, block_healthy_wave = state.begin(path=self.path, token=token)
+                try:
+                    if block_healthy_wave:
+                        state.healthy_wave_release.wait(timeout=30)
+                    # Hold requests long enough for the oracle to observe the
+                    # Runtime Host's actual provider concurrency ceiling.
+                    time.sleep(0.1)
+                    self.send_response(status)
+                    if status == 401:
+                        payload = {"error": {"message": "provider-shaped unauthorized", "type": "authentication_error"}}
+                    elif status == 503:
+                        payload = {"error": {"message": "provider-shaped temporarily unavailable", "type": "server_error"}}
+                    else:
+                        payload = {
+                            "id": "factory-title-assurance",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": "factory-title-stub",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "finish_reason": "stop",
+                                    "message": {"role": "assistant", "content": '{"title":"Recovered Hidden Obligation"}'},
+                                }
+                            ],
+                            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                        }
+                    body = json.dumps(payload).encode()
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                finally:
+                    state.finish()
 
             def log_message(self, _format: str, *_args: object) -> None:
                 return
@@ -409,7 +441,7 @@ def _catalog_snapshot(database_path: Path, session_ids: list[str]) -> dict[str, 
     }
 
 
-def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> list[str]:
+def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[list[str], str]:
     """Author isolated fixture facts before catalogd becomes their sole owner."""
 
     from sqlalchemy import insert
@@ -421,7 +453,9 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> list[s
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     observed = datetime.now(UTC).replace(microsecond=0)
+    obligation_started = observed - timedelta(minutes=10)
     session_ids = [str(uuid4()) for _ in range(count)]
+    unrelated_terminal_id = str(uuid4())
     with engine.begin() as connection:
         for index, session_id in enumerate(session_ids):
             connection.execute(
@@ -436,22 +470,53 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> list[s
                     cwd="/factory/title-assurance",
                     git_repo="cipher982/longhouse",
                     git_branch="assurance",
-                    started_at=observed,
-                    last_activity_at=observed,
+                    started_at=obligation_started,
+                    last_activity_at=obligation_started,
                     user_messages=1,
                     first_user_message_preview=f"Explain the title assurance recovery obligation number {index}",
                     semantic_projection_version=1,
+                    title_attempt_count=5 if index == 0 else 0,
+                    title_last_attempt_at=observed - timedelta(minutes=10) if index == 0 else None,
+                    title_retry_at=observed - timedelta(minutes=10) if index == 0 else None,
+                    title_last_error="TimeoutError" if index == 0 else None,
                     origin_kind="console",
                     hidden_from_default_timeline=True,
                     launch_actor="automation",
                     launch_surface="factory_assurance",
                     commit_seq=index + 1,
-                    created_at=observed,
+                    created_at=obligation_started,
                     updated_at=observed,
                 )
             )
+        # A row-scoped terminal failure is a negative control: dependency
+        # recovery must not re-arm it. Test environment keeps it outside the
+        # user-facing health backlog while preserving the repair distinction.
+        connection.execute(
+            insert(StorageSession).values(
+                session_id=unrelated_terminal_id,
+                tenant_id="factory-title-assurance",
+                owner_id="factory",
+                provider="opencode",
+                environment="test",
+                machine_id="factory-title-machine",
+                project="longhouse-title-assurance",
+                started_at=observed,
+                last_activity_at=observed,
+                user_messages=1,
+                first_user_message_preview="Malformed title output negative control",
+                semantic_projection_version=1,
+                title_attempt_count=5,
+                title_last_attempt_at=observed,
+                title_retry_at=observed,
+                title_last_error="invalid_title_payload",
+                hidden_from_default_timeline=True,
+                commit_seq=count + 1,
+                created_at=observed,
+                updated_at=observed,
+            )
+        )
     engine.dispose()
-    return session_ids
+    return session_ids, unrelated_terminal_id
 
 
 def _wait_for(predicate, *, timeout: float, description: str):
@@ -470,37 +535,53 @@ def _wait_for(predicate, *, timeout: float, description: str):
 
 def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
-    invalid_token = "factory-title-generation-a"
+    unavailable_token = "factory-title-generation-a"
     healthy_token = "factory-title-generation-b"
-    stub = _TitleStub(healthy_token)
+    stub = _TitleStub(unavailable_token, healthy_token)
     stub.start()
     runtime: _RuntimeHost | None = None
     runtime_exit_codes: list[int | None] = []
     session_ids: list[str] = []
+    unrelated_terminal_id = ""
     snapshots: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="title-assurance-", dir=evidence_root.parent) as temporary:
         root = Path(temporary)
         token_file = root / "title-token"
-        token_file.write_text(invalid_token, encoding="utf-8")
+        token_file.write_text(unavailable_token, encoding="utf-8")
         token_file.chmod(0o600)
         runtime = _RuntimeHost(repo_root=repo_root, root=root, base_url=stub.base_url, token_file=token_file)
-        session_ids = _seed_hidden_title_obligations(runtime.database_path, count=3)
+        session_ids, unrelated_terminal_id = _seed_hidden_title_obligations(runtime.database_path, count=8)
+        all_fixture_ids = [*session_ids, unrelated_terminal_id]
+
+        def fixture_rows(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+            by_id = {str(row["session_id"]): row for row in snapshot["sessions"]}
+            return [by_id[session_id] for session_id in session_ids if session_id in by_id], by_id.get(unrelated_terminal_id, {})
+
         try:
             runtime.start()
 
             def failed_snapshot():
-                snapshot = _catalog_snapshot(runtime.database_path, session_ids)
-                rows = snapshot["sessions"]
+                snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
+                rows, unrelated = fixture_rows(snapshot)
                 incidents = {row["title_dependency_incident_id"] for row in rows}
-                return snapshot if len(rows) == 3 and None not in incidents and len(incidents) == 1 else None
+                dependencies = snapshot["dependencies"]
+                failed = (
+                    len(rows) == 8
+                    and None not in incidents
+                    and len(incidents) == 1
+                    and dependencies
+                    and dependencies[0]["failure_class"] == "availability"
+                    and unrelated.get("title_dependency_incident_id") is None
+                )
+                return snapshot if failed else None
 
             try:
                 snapshots["failed"] = _wait_for(failed_snapshot, timeout=30, description="one shared title incident")
             except TimeoutError as exc:
-                current = _catalog_snapshot(runtime.database_path, session_ids)
+                current = _catalog_snapshot(runtime.database_path, all_fixture_ids)
                 runtime.stop()
                 tail = runtime.log_path.read_text(encoding="utf-8", errors="replace")[-8_000:]
-                tail = tail.replace(invalid_token, "<redacted-generation-a>").replace(healthy_token, "<redacted-generation-b>")
+                tail = tail.replace(unavailable_token, "<redacted-generation-a>").replace(healthy_token, "<redacted-generation-b>")
                 raise RuntimeError(f"{exc}; catalog={current!r}; stub={stub.state.receipt()!r}; Runtime Host tail:\n{tail}") from exc
             runtime_exit_codes.append(runtime.stop())
 
@@ -508,68 +589,139 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
             # incident survives process loss. No model request or read path is
             # used to repair it.
             runtime.start()
-            snapshots["after_restart"] = _catalog_snapshot(runtime.database_path, session_ids)
+            snapshots["after_restart"] = _catalog_snapshot(runtime.database_path, all_fixture_ids)
             token_file.write_text(healthy_token, encoding="utf-8")
             token_file.chmod(0o600)
 
+            def bounded_scheduler_snapshot():
+                receipt = stub.state.receipt()
+                if receipt["active_requests"] < 4:
+                    return None
+                health_payload, check = _product_health(runtime.api_url, None)
+                signals = check.get("signals") if isinstance(check.get("signals"), dict) else {}
+                bounded = (
+                    check.get("verdict") == "degraded"
+                    and signals.get("open_dependencies") == 0
+                    and int(signals.get("overdue_sessions") or 0) >= 1
+                    and int(signals.get("oldest_overdue_age_seconds") or 0) >= 300
+                    and signals.get("scheduled_workers") == 4
+                    and signals.get("scheduled_workers_peak") == 4
+                    and signals.get("worker_limit") == 4
+                )
+                return {"health": health_payload, "stub": receipt} if bounded else None
+
+            try:
+                snapshots["bounded_scheduler_health"] = _wait_for(
+                    bounded_scheduler_snapshot,
+                    timeout=15,
+                    description="bounded title workers and degraded aged backlog",
+                )
+            finally:
+                stub.state.healthy_wave_release.set()
+
             def recovered_snapshot():
-                snapshot = _catalog_snapshot(runtime.database_path, session_ids)
-                rows = snapshot["sessions"]
+                snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
+                rows, unrelated = fixture_rows(snapshot)
                 dependency_rows = snapshot["dependencies"]
                 recovered = (
-                    len(rows) == 3
+                    len(rows) == 8
                     and all(row["anchor_title"] for row in rows)
                     and all(row["title_attempt_count"] == 0 for row in rows)
                     and all(row["title_dependency_incident_id"] is None for row in rows)
                     and dependency_rows
                     and dependency_rows[0]["state"] == "healthy"
+                    and unrelated.get("anchor_title") is None
+                    and unrelated.get("title_attempt_count") == 5
+                    and unrelated.get("title_last_error") == "invalid_title_payload"
                 )
                 return snapshot if recovered else None
 
             try:
                 snapshots["recovered"] = _wait_for(recovered_snapshot, timeout=15, description="title debt recovery")
             except TimeoutError as exc:
-                current = _catalog_snapshot(runtime.database_path, session_ids)
+                current = _catalog_snapshot(runtime.database_path, all_fixture_ids)
                 runtime.stop()
                 tail = runtime.log_path.read_text(encoding="utf-8", errors="replace")[-12_000:]
-                tail = tail.replace(invalid_token, "<redacted-generation-a>").replace(healthy_token, "<redacted-generation-b>")
+                tail = tail.replace(unavailable_token, "<redacted-generation-a>").replace(healthy_token, "<redacted-generation-b>")
                 raise RuntimeError(f"{exc}; catalog={current!r}; stub={stub.state.receipt()!r}; Runtime Host tail:\n{tail}") from exc
             health_payload, title_health = _product_health(runtime.api_url, None)
             snapshots["product_health"] = health_payload
             runtime_exit_codes.append(runtime.stop())
             runtime = None
         finally:
+            stub.state.healthy_wave_release.set()
             if runtime is not None:
                 runtime_exit_codes.append(runtime.stop())
             stub.close()
             if (root / "runtime.log").is_file():
                 runtime_log = (root / "runtime.log").read_text(encoding="utf-8", errors="replace")[-32_000:]
-                runtime_log = runtime_log.replace(invalid_token, "<redacted-generation-a>").replace(
+                runtime_log = runtime_log.replace(unavailable_token, "<redacted-generation-a>").replace(
                     healthy_token, "<redacted-generation-b>"
                 )
                 (evidence_root / "runtime-log-tail.txt").write_text(runtime_log, encoding="utf-8")
 
-    failed_rows = snapshots["failed"]["sessions"]
-    restarted_rows = snapshots["after_restart"]["sessions"]
-    recovered_rows = snapshots["recovered"]["sessions"]
+    failed_rows, failed_unrelated = fixture_rows(snapshots["failed"])
+    restarted_rows, _restarted_unrelated = fixture_rows(snapshots["after_restart"])
+    recovered_rows, recovered_unrelated = fixture_rows(snapshots["recovered"])
     incident_ids = {row["title_dependency_incident_id"] for row in failed_rows}
+    failed_by_id = {str(row["session_id"]): row for row in failed_rows}
+    recovered_by_id = {str(row["session_id"]): row for row in recovered_rows}
+    stub_receipt = stub.state.receipt()
+    health_signals = title_health.get("signals") if isinstance(title_health.get("signals"), dict) else {}
+    bounded_health = snapshots["bounded_scheduler_health"]["health"]
+    bounded_signals = bounded_health.get("signals") if isinstance(bounded_health.get("signals"), dict) else {}
+    bounded_stub = snapshots["bounded_scheduler_health"]["stub"]
     observation = {
         "concurrent_hidden_obligation_count": len(session_ids),
         "all_obligations_hidden": all(row["hidden_from_default_timeline"] == 1 for row in recovered_rows),
         "one_shared_incident": len(incident_ids) == 1 and None not in incident_ids,
         "incident_survived_restart": [row["title_dependency_incident_id"] for row in restarted_rows]
         == [row["title_dependency_incident_id"] for row in failed_rows],
-        "zero_row_attempt_consumption": all(row["title_attempt_count"] == 0 for row in failed_rows + recovered_rows),
+        "zero_new_row_attempt_consumption": (
+            failed_by_id[session_ids[0]]["title_attempt_count"] == 5
+            and all(failed_by_id[session_id]["title_attempt_count"] == 0 for session_id in session_ids[1:])
+            and all(row["title_attempt_count"] == 0 for row in recovered_rows)
+        ),
+        "legacy_terminal_timeout_reentered": (
+            failed_by_id[session_ids[0]]["title_dependency_incident_id"] in incident_ids
+            and recovered_by_id[session_ids[0]]["title_attempt_count"] == 0
+            and bool(recovered_by_id[session_ids[0]]["anchor_title"])
+        ),
+        "unrelated_terminal_debt_preserved": (
+            failed_unrelated.get("title_attempt_count") == 5
+            and recovered_unrelated.get("title_attempt_count") == 5
+            and recovered_unrelated.get("title_last_error") == "invalid_title_payload"
+            and recovered_unrelated.get("title_dependency_incident_id") is None
+        ),
         "same_rows_recovered": {row["session_id"] for row in recovered_rows} == set(session_ids),
         "all_rows_titled": all(row["anchor_title"] for row in recovered_rows),
-        "provider_shaped_401_observed": stub.state.receipt()["unauthorized_count"] >= 1,
-        "healthy_stub_observed": stub.state.receipt()["healthy_count"] >= 1,
+        "provider_shaped_503_observed": stub_receipt["unavailable_count"] >= 1,
+        "healthy_stub_observed": stub_receipt["healthy_count"] >= 1,
+        "model_concurrency_bounded": 1 <= stub_receipt["max_active_requests"] <= 4,
+        "model_concurrency_peak": stub_receipt["max_active_requests"],
+        "scheduled_worker_creation_bounded": (
+            bounded_signals.get("scheduled_workers") == 4
+            and bounded_signals.get("scheduled_workers_peak") == 4
+            and bounded_signals.get("worker_limit") == 4
+            and bounded_stub.get("active_requests") == 4
+        ),
+        "aged_backlog_degrades_with_healthy_dependency": (
+            bounded_health.get("verdict") == "degraded"
+            and bounded_signals.get("open_dependencies") == 0
+            and int(bounded_signals.get("overdue_sessions") or 0) >= 1
+            and int(bounded_signals.get("oldest_overdue_age_seconds") or 0) >= 300
+        ),
         "product_health_healthy": title_health.get("verdict") == "ok",
+        "product_health_backlog_clear": (
+            health_signals.get("terminal_sessions") == 0
+            and health_signals.get("overdue_sessions") == 0
+            and health_signals.get("open_dependencies") == 0
+        ),
         "storage_v2_read_count": 0,
         "runtime_restart_count": 1,
     }
     passed = (
-        observation["concurrent_hidden_obligation_count"] >= 3
+        observation["concurrent_hidden_obligation_count"] > 4
         and observation["storage_v2_read_count"] == 0
         and all(
             observation[key] is True
@@ -577,21 +729,28 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 "all_obligations_hidden",
                 "one_shared_incident",
                 "incident_survived_restart",
-                "zero_row_attempt_consumption",
+                "zero_new_row_attempt_consumption",
+                "legacy_terminal_timeout_reentered",
+                "unrelated_terminal_debt_preserved",
                 "same_rows_recovered",
                 "all_rows_titled",
-                "provider_shaped_401_observed",
+                "provider_shaped_503_observed",
                 "healthy_stub_observed",
+                "model_concurrency_bounded",
+                "scheduled_worker_creation_bounded",
+                "aged_backlog_degrades_with_healthy_dependency",
                 "product_health_healthy",
+                "product_health_backlog_clear",
             )
         )
     )
     _write_json(evidence_root / "catalog-observation.json", snapshots)
-    _write_json(evidence_root / "loopback-stub-receipt.json", stub.state.receipt())
+    _write_json(evidence_root / "loopback-stub-receipt.json", stub_receipt)
     _write_json(
         evidence_root / "runtime-request-receipt.json",
         {
             "fixture_obligations": session_ids,
+            "unrelated_terminal_negative_control": unrelated_terminal_id,
             "fixture_authored_before_catalogd_ownership": True,
             "storage_v2_writes": [],
             "storage_v2_reads": [],
@@ -630,7 +789,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
         session = _session_projection(api_url, token, session_id)
         _health, check = _product_health(api_url, token)
         if check.get("verdict") == "degraded":
-            return {"session": session, "title_health": check, "degraded": True}
+            return None
         if (
             session
             and session.get("anchor_title")
@@ -641,9 +800,10 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
             return {"session": session, "title_health": check, "degraded": False}
         return None
 
-    completed = _wait_for(completed_obligation, timeout=60, description="live title obligation")
+    completed = _wait_for(completed_obligation, timeout=120, description="live title obligation and clear backlog")
     session = completed.get("session") or {}
     title_health = completed["title_health"]
+    health_signals = title_health.get("signals") if isinstance(title_health.get("signals"), dict) else {}
     observation = {
         "ordinary_hidden_obligation_created": write_receipt["status_code"] == 200,
         "obligation_session_id": session_id,
@@ -655,6 +815,11 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
             and bool(session.get("anchor_title"))
         ),
         "dependency_health_verdict": title_health.get("verdict"),
+        "dependency_backlog_clear": (
+            health_signals.get("open_dependencies") == 0
+            and health_signals.get("terminal_sessions") == 0
+            and health_signals.get("overdue_sessions") == 0
+        ),
         "dependency_health_consumed": True,
         "direct_provider_probe_count": 0,
         "credential_rotation_count": 0,
@@ -664,6 +829,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
         and observation["obligation_titled"]
         and observation["claude_semantic_path_consumed"]
         and observation["dependency_health_verdict"] == "ok"
+        and observation["dependency_backlog_clear"]
     )
     _write_json(
         evidence_root / "live-runtime-observation.json",

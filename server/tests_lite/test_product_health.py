@@ -67,7 +67,7 @@ def _seed_session(db, *, provider: str = "codex", device_id: str = "cinder") -> 
         environment="test",
         project="zerg",
         device_id=device_id,
-                        started_at=PINNED_NOW - timedelta(minutes=30),
+        started_at=PINNED_NOW - timedelta(minutes=30),
         user_messages=1,
         assistant_messages=1,
         tool_calls=0,
@@ -208,6 +208,36 @@ def test_product_health_exposes_durable_session_title_dependency_incident(tmp_pa
     assert check.verdict == "degraded"
     assert check.coverage == "full"
     assert "4 sessions blocked" in check.headline
+
+
+def test_product_health_degrades_on_aged_title_backlog_with_healthy_dependency(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(product_health, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        catalog_read_gateway,
+        "title_dependency_health",
+        lambda: {
+            "status": "degraded",
+            "open_dependencies": 0,
+            "blocked_sessions": 0,
+            "pending_sessions": 3,
+            "overdue_sessions": 3,
+            "terminal_sessions": 0,
+            "terminal_shared_failure_sessions": 0,
+            "oldest_overdue_age_seconds": 600,
+            "backlog_degraded_after_seconds": 300,
+            "dependencies": [{"state": "healthy", "incident_id": None}],
+        },
+    )
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "session_titles")
+    assert check.verdict == "degraded"
+    assert "3 obligations overdue" in check.headline
+    assert check.signals["oldest_overdue_age_seconds"] == 600
 
 
 def test_machine_connected_unknown_without_recent_heartbeats(tmp_path, monkeypatch):

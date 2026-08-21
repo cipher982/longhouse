@@ -98,6 +98,7 @@ def build_product_health_checks(
 def _build_session_titles_summary(*, window: _Window, generated_at: datetime) -> ProductHealthCheckSummaryResponse:
     from zerg.services.catalog_read_gateway import CatalogReadError
     from zerg.services.catalog_read_gateway import title_dependency_health
+    from zerg.services.storage_session_titles import storage_title_scheduler_snapshot
 
     try:
         health = title_dependency_health()
@@ -122,9 +123,20 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
         )
     blocked = int(health.get("blocked_sessions") or 0)
     opened = int(health.get("open_dependencies") or 0)
+    terminal = int(health.get("terminal_sessions") or 0)
+    overdue = int(health.get("overdue_sessions") or 0)
+    oldest_age = health.get("oldest_overdue_age_seconds")
+    scheduler = storage_title_scheduler_snapshot()
+    degraded = health.get("status") == "degraded"
     if opened:
         verdict = "degraded"
         headline = f"Session title generation is degraded; {blocked} session{'' if blocked == 1 else 's'} blocked."
+    elif terminal:
+        verdict = "degraded"
+        headline = f"Session title generation has {terminal} terminal obligation{'' if terminal == 1 else 's'}."
+    elif degraded:
+        verdict = "degraded"
+        headline = f"Session title generation is behind; {overdue} obligation{'' if overdue == 1 else 's'} overdue."
     else:
         verdict = "ok"
         headline = "Session title generation dependency is healthy."
@@ -135,6 +147,17 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
         window=window.label,
         generated_at=generated_at,
         headline=headline,
+        signals={
+            "open_dependencies": opened,
+            "blocked_sessions": blocked,
+            "pending_sessions": int(health.get("pending_sessions") or 0),
+            "overdue_sessions": overdue,
+            "terminal_sessions": terminal,
+            "terminal_shared_failure_sessions": int(health.get("terminal_shared_failure_sessions") or 0),
+            "oldest_overdue_age_seconds": int(oldest_age) if oldest_age is not None else None,
+            "backlog_degraded_after_seconds": int(health.get("backlog_degraded_after_seconds") or 0),
+            **scheduler,
+        },
     )
 
 

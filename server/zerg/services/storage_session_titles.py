@@ -19,11 +19,19 @@ from zerg.services.session_title import sanitize_title
 
 logger = logging.getLogger(__name__)
 
-_in_flight: set[str] = set()
-_lock = asyncio.Lock()
+STORAGE_TITLE_MAX_CONCURRENCY = 4
+STORAGE_TITLE_CANDIDATE_LOOKAHEAD = STORAGE_TITLE_MAX_CONCURRENCY * 2
 STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS = 10.0
 STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 15.0
 STORAGE_TITLE_DEPENDENCY_PROBE_LEASE_SECONDS = 60
+STORAGE_TITLE_CLIENT_CLOSE_TIMEOUT_SECONDS = 2.0
+
+_in_flight: set[str] = set()
+_lock = asyncio.Lock()
+_model_slots = asyncio.Semaphore(STORAGE_TITLE_MAX_CONCURRENCY)
+_scheduled_tasks: dict[str, asyncio.Task[bool]] = {}
+_client_close_tasks: set[asyncio.Task[None]] = set()
+_scheduled_workers_peak = 0
 
 
 def _dependency_identity() -> dict[str, str]:
@@ -65,6 +73,29 @@ def _is_dependency_auth_failure(exc: Exception) -> bool:
     )
 
 
+def _dependency_failure_class(exc: Exception) -> str | None:
+    """Classify failures shared by every title obligation using this binding."""
+
+    if _is_dependency_auth_failure(exc):
+        return "authentication"
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429 or (isinstance(status_code, int) and status_code >= 500):
+        return "availability"
+    class_name = type(exc).__name__.lower()
+    message = str(exc).strip().lower()
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)) or class_name in {
+        "apiconnectionerror",
+        "apitimeouterror",
+        "internalservererror",
+        "ratelimiterror",
+        "serviceunavailableerror",
+    }:
+        return "availability"
+    if any(marker in message for marker in ("rate limit", "timed out", "timeout", "temporarily unavailable")):
+        return "availability"
+    return None
+
+
 async def _reconcile_dependency(identity: dict[str, str]) -> dict[str, Any]:
     return await _catalog_call(
         "storage.session.title.dependency.reconcile.v2",
@@ -95,7 +126,12 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
     dependency: dict[str, str] | None = None
     dependency_claim: dict[str, Any] | None = None
     probe_token = str(uuid4())
+    slot_acquired = False
+    failure_scope = "row"
+    dependency_failure_class: str | None = None
     try:
+        await _model_slots.acquire()
+        slot_acquired = True
         if get_settings().llm_disabled:
             return False
         first_user_message = str(candidate.get("first_user_message") or "")
@@ -127,6 +163,7 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         from zerg.services.title_generator import generate_initial_session_title
 
         dependency = _dependency_identity()
+        failure_scope = "catalog"
         await _reconcile_dependency(dependency)
         dependency_claim = await _catalog_call(
             "storage.session.title.dependency.acquire.v2",
@@ -140,21 +177,27 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         )
         if dependency_claim.get("allowed") is not True:
             return False
-        client, model, _provider = get_llm_client_for_use_case("session_title")
-        started = datetime.now(UTC)
-        raw_title = await generate_initial_session_title(
-            first_user_message=first_user_message,
-            client=client,
-            model=model,
-            metadata={
-                "project": candidate.get("project"),
-                "provider": candidate.get("provider"),
-                "git_branch": candidate.get("git_branch"),
-            },
-            # Match the title generator's default. Four seconds caused large
-            # but valid first prompts to fail just before the provider replied.
-            timeout_seconds=STORAGE_TITLE_MODEL_TIMEOUT_SECONDS,
-        )
+        failure_scope = "provider"
+        try:
+            client, model, _provider = get_llm_client_for_use_case("session_title")
+            started = datetime.now(UTC)
+            raw_title = await generate_initial_session_title(
+                first_user_message=first_user_message,
+                client=client,
+                model=model,
+                metadata={
+                    "project": candidate.get("project"),
+                    "provider": candidate.get("provider"),
+                    "git_branch": candidate.get("git_branch"),
+                },
+                # Match the title generator's default. Four seconds caused large
+                # but valid first prompts to fail just before the provider replied.
+                timeout_seconds=STORAGE_TITLE_MODEL_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve provider failure ownership
+            dependency_failure_class = _dependency_failure_class(exc)
+            raise
+        failure_scope = "catalog"
         incident_id = dependency_claim.get("incident_id")
         if incident_id:
             await _catalog_call(
@@ -166,9 +209,11 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
                     "recovered_at": datetime.now(UTC).isoformat(),
                 },
             )
+        failure_scope = "row"
         title = sanitize_timeline_title(raw_title, max_words=6)
         if not title:
             raise ValueError("empty_model_response")
+        failure_scope = "catalog"
         result = await _catalog_call(
             "storage.session.title.complete.v2",
             {"session_id": session_id, "title": title, "completed_at": datetime.now(UTC).isoformat()},
@@ -193,39 +238,116 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         reason = type(exc).__name__ if str(exc) == "" else str(exc)[:128]
         logger.warning("Storage-v2 AI title failed session=%s reason=%s", session_id, reason)
         try:
-            if dependency is not None and _is_dependency_auth_failure(exc):
+            if failure_scope == "provider" and dependency is not None and dependency_failure_class is not None:
                 await _catalog_call(
                     "storage.session.title.dependency.fail.v2",
                     {
                         "session_id": session_id,
                         **dependency,
                         "probe_token": probe_token,
+                        "failure_class": dependency_failure_class,
                         "reason": reason,
                         "failed_at": datetime.now(UTC).isoformat(),
                     },
                 )
-            else:
+            elif failure_scope in {"provider", "row"}:
                 await _catalog_call(
                     "storage.session.title.fail.v2",
                     {"session_id": session_id, "reason": reason, "failed_at": datetime.now(UTC).isoformat()},
                 )
+            else:
+                logger.warning("Leaving durable title obligation uncharged after catalog failure session=%s", session_id)
         except Exception:  # noqa: BLE001
             logger.exception("Failed to persist storage-v2 title retry session=%s", session_id)
         return False
     finally:
-        if client is not None:
-            await client.close()
-        async with _lock:
-            _in_flight.discard(session_id)
+        try:
+            if client is not None:
+                await _close_client_bounded(client, session_id=session_id)
+        finally:
+            if slot_acquired:
+                _model_slots.release()
+            async with _lock:
+                _in_flight.discard(session_id)
 
 
-def schedule_storage_session_title(candidate: dict[str, Any]) -> None:
+async def _run_scheduled_title(candidate: dict[str, Any]) -> bool:
+    session_id = str(candidate["session_id"])
+    try:
+        return await generate_storage_session_title(candidate)
+    finally:
+        current = asyncio.current_task()
+        if _scheduled_tasks.get(session_id) is current:
+            _scheduled_tasks.pop(session_id, None)
+
+
+def schedule_storage_session_title(candidate: dict[str, Any]) -> bool:
+    global _scheduled_workers_peak
+
     if not str(candidate.get("first_user_message") or "").strip():
+        return False
+    session_id = str(candidate.get("session_id") or "").strip()
+    if not session_id or session_id in _scheduled_tasks or len(_scheduled_tasks) >= STORAGE_TITLE_MAX_CONCURRENCY:
+        return False
+    task = asyncio.create_task(_run_scheduled_title(candidate))
+    _scheduled_tasks[session_id] = task
+    _scheduled_workers_peak = max(_scheduled_workers_peak, len(_scheduled_tasks))
+    return True
+
+
+def storage_title_scheduler_snapshot() -> dict[str, int]:
+    return {
+        "scheduled_workers": len(_scheduled_tasks),
+        "scheduled_workers_peak": _scheduled_workers_peak,
+        "closing_clients": len(_client_close_tasks),
+        "worker_limit": STORAGE_TITLE_MAX_CONCURRENCY,
+    }
+
+
+def _consume_close_task(task: asyncio.Task[None]) -> None:
+    _client_close_tasks.discard(task)
+    if task.cancelled():
         return
-    asyncio.create_task(generate_storage_session_title(candidate))
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        return
 
 
-async def run_storage_title_reconciler(*, interval_seconds: float = 0.5, batch_size: int = 16) -> None:
+async def _close_client_bounded(client: Any, *, session_id: str) -> None:
+    close_task = asyncio.create_task(client.close())
+    _client_close_tasks.add(close_task)
+    close_task.add_done_callback(_consume_close_task)
+    done, _pending = await asyncio.wait({close_task}, timeout=STORAGE_TITLE_CLIENT_CLOSE_TIMEOUT_SECONDS)
+    if close_task not in done:
+        logger.error("Timed out closing storage-v2 title client session=%s", session_id)
+        close_task.cancel()
+        return
+    try:
+        close_task.result()
+    except Exception:  # noqa: BLE001 - cleanup must never leak capacity
+        logger.exception("Failed to close storage-v2 title client session=%s", session_id)
+
+
+async def stop_storage_title_workers() -> None:
+    tasks = list(_scheduled_tasks.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _scheduled_tasks.clear()
+    close_tasks = list(_client_close_tasks)
+    for task in close_tasks:
+        task.cancel()
+    if close_tasks:
+        await asyncio.wait(close_tasks, timeout=STORAGE_TITLE_CLIENT_CLOSE_TIMEOUT_SECONDS)
+
+
+async def run_storage_title_reconciler(
+    *,
+    interval_seconds: float = 0.5,
+    batch_size: int = STORAGE_TITLE_CANDIDATE_LOOKAHEAD,
+) -> None:
     if get_settings().llm_disabled:
         return
     while True:
