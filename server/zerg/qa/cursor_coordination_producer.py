@@ -99,9 +99,9 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=1,
+    scenario_revision=2,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -811,7 +811,7 @@ def _parser() -> argparse.ArgumentParser:
     # --provider-bin. Do not rename these to --cursor-bin.
     parser.add_argument("--longhouse-cli", required=True, type=Path)
     parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--live-timeout-secs", dest="live_timeout_secs", type=float, default=90.0)
+    parser.add_argument("--live-timeout-secs", dest="live_timeout_secs", type=float, default=180.0)
     parser.add_argument("--registration", action="store_true")
     return parser
 

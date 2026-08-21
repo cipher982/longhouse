@@ -207,6 +207,7 @@ class ConsoleSessionCreate(UTCBaseModel):
     cwd: str
     project: str | None = None
     display_name: str | None = None
+    model: str | None = None
     launch_surface: str = "api"
 
 
@@ -1309,6 +1310,10 @@ async def create_console_session(
             cwd=body.cwd,
             project=body.project,
             display_name=body.display_name,
+            provider_config={
+                "permission_mode": "bypass",
+                **({"model": body.model.strip()} if body.model and body.model.strip() else {}),
+            },
             launch_surface=body.launch_surface,
         )
     except ValueError as exc:

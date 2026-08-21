@@ -83,6 +83,7 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
         return {
             "status": "passed",
             "session_id": "session-123",
+            "cursor_pid": 4242,
             "run_lifecycle_after_teardown": "ended",
             "activity_after_teardown": "quiescent",
             "run_id_stable_across_session": True,
@@ -91,6 +92,8 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
         }
 
     monkeypatch.setattr(cursor_turn_boundary_producer.cursor_helm_product_e2e, "run_product_e2e", fake_run_product_e2e)
+    monkeypatch.setattr(cursor_turn_boundary_producer, "_wait_pid_dead", lambda pid: pid == 4242)
+    monkeypatch.setattr(cursor_turn_boundary_producer, "_wait_process_group_dead", lambda pgid: pgid == 4242)
     monkeypatch.setattr(
         cursor_turn_boundary_producer.subprocess,
         "run",
@@ -113,6 +116,14 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
     assert result["producer"]["producer_id"] == REGISTRATION.producer_id
     assert result["session_id"] == "session-123"
     assert fake_shipper.stop_calls >= 1
+
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
+    assert cleanup["required_cleanup"] == {
+        "session_stopped": True,
+        "no_orphan_provider_processes": True,
+    }
+    assert cleanup["diagnostics"]["cursor_pid"] == 4242
+    assert cleanup["diagnostics"]["cursor_pgid"] == 4242
 
     written = json.loads((args.evidence_root / "result.json").read_text())
     assert written == result

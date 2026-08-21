@@ -98,9 +98,9 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=2,
+    scenario_revision=3,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -149,6 +149,7 @@ REGISTRATION = ProducerRegistration(
     # field for "one of several" -- flagged in the accompanying report.
     oracle_entrypoint="awareness_create_assertions",
     executable_module="zerg.qa.codex_coordination_native",
+    observation_scope="scenario",
 )
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
@@ -270,38 +271,6 @@ def _issue_coordination_token(args: argparse.Namespace, session_id: str) -> str:
     return token
 
 
-def _wait_target_send_readiness(args: argparse.Namespace, session_id: str) -> dict[str, Any]:
-    deadline = time.monotonic() + args.live_send_timeout_secs
-    last: dict[str, Any] = {}
-    transient_errors: list[dict[str, object]] = []
-    while time.monotonic() < deadline:
-        try:
-            last = _api_call(
-                args.api_url,
-                args.agents_token,
-                f"sessions/{session_id}/state-diagnostics",
-            )
-        except _RuntimeHostHTTPError as exc:
-            if exc.status not in {404, 429, 503}:
-                raise
-            transient_errors.append({"status": exc.status, "detail": exc.detail[:240]})
-            time.sleep(0.25)
-            continue
-        shadow = last.get("shadow") if isinstance(last.get("shadow"), dict) else {}
-        control = shadow.get("control") if isinstance(shadow.get("control"), dict) else {}
-        actions = control.get("actions") if isinstance(control.get("actions"), dict) else {}
-        send_input = actions.get("send_input") if isinstance(actions.get("send_input"), dict) else {}
-        if send_input.get("state") == "available":
-            return {
-                "session_id": session_id,
-                "send_input_state": "available",
-                "catalog_commit_seq": last.get("catalog_commit_seq"),
-                "transient_poll_errors": transient_errors[-5:],
-            }
-        time.sleep(0.25)
-    raise RuntimeError(f"directed-input target never became send-ready: {session_id}")
-
-
 def _last_assistant_message(thread_path: Path) -> str:
     try:
         lines = thread_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -384,6 +353,24 @@ def _typed_compact_thread(ws_url: str, thread_id: str, *, timeout: float) -> dic
             json.dumps(
                 {
                     "id": 2,
+                    "method": "thread/resume",
+                    "params": {"threadId": thread_id, "excludeTurns": True},
+                }
+            )
+        )
+        while True:
+            message = _recv_app_server_message(socket, deadline=deadline)
+            if message.get("id") == 2:
+                if message.get("error") is not None:
+                    raise RuntimeError(f"Codex thread/resume failed: {message['error']}")
+                break
+            if message.get("id") is not None and message.get("method") is not None:
+                raise RuntimeError("Codex app-server requested client action during thread subscription")
+
+        socket.send(
+            json.dumps(
+                {
+                    "id": 3,
                     "method": "thread/compact/start",
                     "params": {"threadId": thread_id},
                 }
@@ -394,7 +381,7 @@ def _typed_compact_thread(ws_url: str, thread_id: str, *, timeout: float) -> dic
         completed_turn_id: str | None = None
         while not response_observed or completed_item is None:
             message = _recv_app_server_message(socket, deadline=deadline)
-            if message.get("id") == 2:
+            if message.get("id") == 3:
                 if message.get("error") is not None:
                     raise RuntimeError(f"Codex thread/compact/start failed: {message['error']}")
                 response_observed = True
@@ -413,6 +400,8 @@ def _typed_compact_thread(ws_url: str, thread_id: str, *, timeout: float) -> dic
             completed_turn_id = str(params.get("turnId") or "") or None
 
     return {
+        "subscription_method": "thread/resume",
+        "subscription_completed": True,
         "request_method": "thread/compact/start",
         "request_completed": response_observed,
         "completion_method": "item/completed",
@@ -421,6 +410,26 @@ def _typed_compact_thread(ws_url: str, thread_id: str, *, timeout: float) -> dic
         "turn_id": completed_turn_id,
         "item_id": str((completed_item or {}).get("id") or "") or None,
         "item_type": (completed_item or {}).get("type"),
+    }
+
+
+def _aggregate_cleanup_receipt(receipts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    verifications = [receipt.get("verification") for receipt in receipts.values()]
+    complete = bool(verifications) and all(isinstance(value, dict) for value in verifications)
+    bridge_stopped = complete and all(value.get("verified") is True for value in verifications)
+    sockets_absent = complete and all(value.get("socket_absent") is True for value in verifications)
+    processes_dead = complete and all(value.get("owned_processes_dead") is True for value in verifications)
+    required_cleanup = {
+        "final_bridge_stopped": bridge_stopped,
+        "final_socket_absent": sockets_absent,
+        "no_orphan_provider_processes": processes_dead,
+    }
+    return {
+        "schema_version": 1,
+        "artifact_kind": "codex_coordination_cleanup_receipt",
+        "status": "pass" if all(required_cleanup.values()) else "fail",
+        "required_cleanup": required_cleanup,
+        "sessions": receipts,
     }
 
 
@@ -512,6 +521,7 @@ def _live_send_and_wait(
 def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], dict[str, bool]]:
     isolation_root = Path(tempfile.mkdtemp(prefix="lcc-", dir="/tmp"))
     session_id = ""
+    observation: dict[str, Any] | None = None
     try:
         summary, _start_result, isolation_root = bridge_canary._start_bridge(
             args,
@@ -558,9 +568,13 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
         }
         return observation, awareness_create_assertions(observation)
     finally:
+        receipts: dict[str, dict[str, Any]] = {}
         if session_id:
-            cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
-            _write_json(root / "cleanup-receipt.json", cleanup)
+            receipts["session"] = bridge_canary._stop_bridge(args, session_id, isolation_root)
+        cleanup = _aggregate_cleanup_receipt(receipts)
+        _write_json(root / "cleanup-receipt.json", cleanup)
+        if observation is not None:
+            observation.update(cleanup["required_cleanup"])
 
 
 def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], dict[str, bool]]:
@@ -569,6 +583,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
 
     isolation_root = Path(tempfile.mkdtemp(prefix="lcp-", dir="/tmp"))
     session_id = ""
+    cleanup: dict[str, Any] = _aggregate_cleanup_receipt({})
     compaction_signal_observed = False
     answered_after_compact_attempt = False
     try:
@@ -629,9 +644,11 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             marker,
         )
     finally:
+        receipts: dict[str, dict[str, Any]] = {}
         if session_id:
-            cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
-            _write_json(root / "cleanup-receipt.json", cleanup)
+            receipts["session"] = bridge_canary._stop_bridge(args, session_id, isolation_root)
+        cleanup = _aggregate_cleanup_receipt(receipts)
+        _write_json(root / "cleanup-receipt.json", cleanup)
 
     observation = {
         "visible_bootstrap_count": bootstrap_observation.get("visible_bootstrap_count"),
@@ -640,6 +657,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         "assistant_evidence_source": "native_rollout_assistant_event",
         "coordination_instructions_model_visible_after_compaction": bool(compaction_signal_observed and answered_after_compact_attempt),
     }
+    observation.update(cleanup["required_cleanup"])
     return observation, awareness_post_compaction_assertions(observation)
 
 
@@ -653,6 +671,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
     source_session_id = ""
     target_session_id = ""
     minted_secrets: list[str] = []
+    observation: dict[str, Any] | None = None
     try:
         source_summary, _sr, source_isolation = bridge_canary._start_bridge(
             args,
@@ -678,12 +697,10 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
         source_token = _issue_coordination_token(args, source_session_id)
         target_token = _issue_coordination_token(args, target_session_id)
         minted_secrets.extend((source_token, target_token))
-        readiness = _wait_target_send_readiness(args, target_session_id)
-        _write_json(root / "target-send-readiness.json", readiness)
-
         text = f"LONGHOUSE_DIRECTED_INPUT_{uuid.uuid4().hex}: please note you received this from a peer session."
         client_request_id = str(uuid.uuid4())
         created: dict[str, Any] = {}
+        create_attempts = 0
         directed_input_id: object = None
         input_persisted = False
         input_receipt_linked = False
@@ -692,6 +709,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
         deadline = time.monotonic() + args.live_send_timeout_secs
         while time.monotonic() < deadline and (not input_receipt_linked or not input_visible):
             if not input_receipt_linked:
+                create_attempts += 1
                 created = _api_call(
                     args.api_url,
                     source_token,
@@ -733,6 +751,14 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
             if not input_receipt_linked or not input_visible:
                 time.sleep(0.5)
         _write_json(
+            root / "target-send-readiness.json",
+            {
+                "session_id": target_session_id,
+                "delivery_receipt_observed": input_receipt_linked,
+                "create_attempts": create_attempts,
+            },
+        )
+        _write_json(
             root / "directed-input-create-receipt.json",
             {"id": directed_input_id, "has_immediate_receipt": created.get("input_receipt") is not None},
         )
@@ -760,7 +786,10 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
             cleanup_receipts["source"] = bridge_canary._stop_bridge(args, source_session_id, source_isolation)
         if target_session_id:
             cleanup_receipts["target"] = bridge_canary._stop_bridge(args, target_session_id, target_isolation)
-        _write_json(root / "cleanup-receipt.json", cleanup_receipts)
+        cleanup = _aggregate_cleanup_receipt(cleanup_receipts)
+        _write_json(root / "cleanup-receipt.json", cleanup)
+        if observation is not None:
+            observation.update(cleanup["required_cleanup"])
 
 
 def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
@@ -791,7 +820,8 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "generated_at": _now(),
-            "status": "pass" if assertions.get(assertion_id) is True else "fail",
+            "status": "pass",
+            "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,
             "provider_binary": provider_receipt,
@@ -811,6 +841,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": _now(),
             "status": "fail",
+            "observation_scope": "scenario",
             "failure_code": "codex_coordination_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "assertions": {assertion_id: False},

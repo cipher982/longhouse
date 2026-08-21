@@ -291,6 +291,7 @@ pub struct CodexExecRunSummary {
     pub session_id: String,
     pub run_id: String,
     pub pid: Option<u32>,
+    pub process_group_id: Option<i32>,
     pub argv: Vec<String>,
 }
 
@@ -600,6 +601,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
     }
     let pid = worker.pid;
+    let process_group_id = worker.pgid;
     let argv = worker.argv.clone();
     let leased_at = std::time::Instant::now();
     eprintln!(
@@ -723,6 +725,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         session_id: config.session_id,
         run_id: config.run_id,
         pid,
+        process_group_id,
         argv,
     })
 }

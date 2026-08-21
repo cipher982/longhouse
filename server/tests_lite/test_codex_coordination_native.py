@@ -34,6 +34,10 @@ def _fake_run_version(_argv: list[object], **_kwargs: object) -> subprocess.Comp
     return subprocess.CompletedProcess(["codex", "--version"], 0, "0.1.0-test\n", "")
 
 
+def _stopped_cleanup() -> dict[str, object]:
+    return {"verification": {"verified": True, "socket_absent": True, "owned_processes_dead": True}}
+
+
 def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     assert m.REGISTRATION.producer_id == "codex.coordination_awareness.v1"
     assert m.REGISTRATION.scenario_ids == (
@@ -50,8 +54,9 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.required_executables == ("jq",)
-    assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 2
+    assert m.REGISTRATION.producer_revision == 5
+    assert m.REGISTRATION.scenario_revision == 3
+    assert m.REGISTRATION.observation_scope == "scenario"
     assert "typed_compaction_receipt" not in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_artifacts_by_scenario == {
         "codex_coordination_awareness_post_compaction": ("typed_compaction_receipt",),
@@ -119,7 +124,7 @@ def test_run_awareness_create_pass_path(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", fake_run)
-    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True, "socket_absent": True}})
+    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
 
     root = tmp_path / "evidence"
     root.mkdir()
@@ -128,7 +133,12 @@ def test_run_awareness_create_pass_path(tmp_path: Path, monkeypatch: pytest.Monk
     assert assertions == {"coordination_instructions_model_visible": True}
     assert observation["coordination_instructions_model_visible"] is True
     assert observation["coordination_mcp_tool_invoked"] is True
-    assert (root / "cleanup-receipt.json").is_file()
+    cleanup = json.loads((root / "cleanup-receipt.json").read_text())
+    assert cleanup["required_cleanup"] == {
+        "final_bridge_stopped": True,
+        "final_socket_absent": True,
+        "no_orphan_provider_processes": True,
+    }
 
 
 def test_run_awareness_create_fails_when_the_reply_does_not_show_visibility(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,7 +176,7 @@ def test_run_awareness_create_fails_when_the_reply_does_not_show_visibility(tmp_
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", fake_run)
-    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
 
     root = tmp_path / "evidence"
     root.mkdir()
@@ -201,6 +211,7 @@ def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: p
     socket = _FakeAppServerSocket(
         [
             {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "thread-1"}}},
             {
                 "method": "item/completed",
                 "params": {
@@ -209,7 +220,7 @@ def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: p
                     "item": {"id": "item-compact", "type": "contextCompaction"},
                 },
             },
-            {"id": 2, "result": {}},
+            {"id": 3, "result": {}},
         ]
     )
     monkeypatch.setattr(m, "websocket_connect", lambda *_a, **_k: socket)
@@ -217,6 +228,8 @@ def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: p
     receipt = m._typed_compact_thread("ws://127.0.0.1:1234", "thread-1", timeout=1)
 
     assert receipt == {
+        "subscription_method": "thread/resume",
+        "subscription_completed": True,
         "request_method": "thread/compact/start",
         "request_completed": True,
         "completion_method": "item/completed",
@@ -229,6 +242,7 @@ def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: p
     assert [message.get("method") for message in socket.sent] == [
         "initialize",
         "initialized",
+        "thread/resume",
         "thread/compact/start",
     ]
 
@@ -272,7 +286,7 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
-    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
     monkeypatch.setattr(m, "_live_send_and_wait", fake_send)
     monkeypatch.setattr(
         m,
@@ -349,7 +363,7 @@ def test_run_awareness_post_compaction_rejects_user_prompt_echo(tmp_path: Path, 
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
-    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
     monkeypatch.setattr(m, "_live_send_and_wait", fake_send)
     monkeypatch.setattr(
         m,
@@ -398,10 +412,6 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
         json_body: dict[str, object] | None = None,
         extra_headers: dict[str, str] | None = None,
     ):
-        if path.endswith("/state-diagnostics"):
-            assert token == args.agents_token
-            assert extra_headers is None
-            return {"catalog_commit_seq": 7, "shadow": {"control": {"actions": {"send_input": {"state": "available"}}}}}
         expected_session = "source-session-1" if token.endswith("source-session-1") else "target-session-1"
         assert extra_headers == {m._SESSION_HEADER: expected_session}
         if path == "directed-inputs" and method == "POST":
@@ -423,7 +433,7 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
-    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
     monkeypatch.setattr(m, "_issue_coordination_token", fake_issue_token)
     monkeypatch.setattr(m, "_api_call", fake_api_call)
 
@@ -437,33 +447,11 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
         "attributed_input_visible": True,
     }
     assert observation["source_session_id"] == "source-session-1"
-    assert (root / "cleanup-receipt.json").is_file()
-
-
-def test_target_send_readiness_retries_transient_runtime_projection(monkeypatch: pytest.MonkeyPatch) -> None:
-    args = argparse.Namespace(
-        api_url="https://runtime.example",
-        agents_token="token",
-        live_send_timeout_secs=1,
-    )
-    responses: list[object] = [
-        m._RuntimeHostHTTPError(503, "warming"),
-        {"catalog_commit_seq": 8, "shadow": {"control": {"actions": {"send_input": {"state": "available"}}}}},
-    ]
-
-    def api_call(*_args, **_kwargs):
-        value = responses.pop(0)
-        if isinstance(value, Exception):
-            raise value
-        return value
-
-    monkeypatch.setattr(m, "_api_call", api_call)
-    monkeypatch.setattr(m.time, "sleep", lambda _seconds: None)
-
-    receipt = m._wait_target_send_readiness(args, "target-session")
-
-    assert receipt["send_input_state"] == "available"
-    assert receipt["transient_poll_errors"] == [{"status": 503, "detail": "warming"}]
+    cleanup = json.loads((root / "cleanup-receipt.json").read_text())
+    assert cleanup["status"] == "pass"
+    assert set(cleanup["sessions"]) == {"source", "target"}
+    readiness = json.loads((root / "target-send-readiness.json").read_text())
+    assert readiness["delivery_receipt_observed"] is True
 
 
 def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -488,10 +476,6 @@ def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path
         json_body: dict[str, object] | None = None,
         extra_headers: dict[str, str] | None = None,
     ):
-        if path.endswith("/state-diagnostics"):
-            assert token == args.agents_token
-            assert extra_headers is None
-            return {"catalog_commit_seq": 7, "shadow": {"control": {"actions": {"send_input": {"state": "available"}}}}}
         expected_session = "source-session-1" if token.endswith("source-session-1") else "target-session-1"
         assert extra_headers == {m._SESSION_HEADER: expected_session}
         if path == "directed-inputs" and method == "POST":
@@ -513,7 +497,7 @@ def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
-    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
     monkeypatch.setattr(m, "_issue_coordination_token", lambda _args, session_id: f"token-for-{session_id}")
     monkeypatch.setattr(m, "_api_call", fake_api_call)
 
@@ -547,6 +531,7 @@ def test_run_coordination_dispatches_by_variant_and_uses_pass_not_passed(tmp_pat
     result = m.run_coordination(args)
 
     assert result["status"] == "pass"
+    assert result["observation_scope"] == "scenario"
     assert result["assertions"] == {"coordination_instructions_model_visible": True}
     assert result["scenario_id"] == "codex_coordination_awareness_create"
     assert result["variant"] is None

@@ -56,6 +56,8 @@ _STORAGE_LANE_BUSY_MAX_SLEEP_SECS = 10.0
 _STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 repair lane busy; retry after (?P<milliseconds>\d+)ms")
 _SAFE_DIAGNOSTIC_DETAIL_RE = re.compile(r"^[a-z0-9][a-z0-9_.:+-]{0,127}$")
 _CURSOR_DIAGNOSTIC_PAYLOAD_KEYS = frozenset({"generation_id", "status", "phase", "is_interrupt", "text"})
+_MAX_RETAINED_TERMINAL_BYTES = 64 * 1024
+_TERMINAL_RECORDINGS = ("initial.tty", "native-resume.tty", "concurrent-resume-attempt.tty", "claude-onboarding.tty")
 
 
 def _qualification_secrets(environment: dict[str, str], agents_token: str) -> tuple[str, ...]:
@@ -420,7 +422,7 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=1,
+        producer_revision=2,
         scenario_id="helm_cold_resume",
         scenario_revision=4,
         assertion_cells=(
@@ -452,7 +454,7 @@ def registration_for(provider: str) -> ProducerRegistration:
             "initial_seed_send",
             "initial_transcript",
             "initial_transcript_ship_receipt",
-            "native_resume_terminal_recording",
+            "native_resume_terminal_checkpoint",
             *(
                 (
                     "initial_hook_correlation",
@@ -950,6 +952,65 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
     ]
+
+
+def _bound_terminal_recordings(root: Path, *, provider: str, states: list[dict[str, Any]]) -> None:
+    """Retain diagnostic PTY head/tail while keeping proof bytes bounded.
+
+    Runtime Host transcripts and bridge receipts are the Resume authority; raw
+    full-screen redraws are diagnostics. Keeping an unbounded TTY copy inside
+    every v3 proof duplicates terminal noise and can crowd out the actual
+    evidence. The receipt binds both the observed source and retained slice.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for name in _TERMINAL_RECORDINGS:
+        path = root / name
+        if not path.is_file() or path.is_symlink():
+            continue
+        original_size = path.stat().st_size
+        original_digest = _sha256(path)
+        truncated = original_size > _MAX_RETAINED_TERMINAL_BYTES
+        if truncated:
+            half = _MAX_RETAINED_TERMINAL_BYTES // 2
+            with path.open("rb") as stream:
+                head = stream.read(half)
+                stream.seek(-half, os.SEEK_END)
+                tail = stream.read(half)
+            omitted = original_size - len(head) - len(tail)
+            marker = f"\n[longhouse: {omitted} terminal bytes omitted]\n".encode()
+            retained = head + marker + tail
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.bounded")
+            temporary.write_bytes(retained)
+            temporary.replace(path)
+        rows.append(
+            {
+                "path": name,
+                "truncated": truncated,
+                "original_size": original_size,
+                "original_sha256": original_digest,
+                "retained_size": path.stat().st_size,
+                "retained_sha256": _sha256(path),
+            }
+        )
+    if rows:
+        initial_state = states[0] if states else {}
+        resumed_state = states[-1] if len(states) > 1 else {}
+        _write_json(
+            root / "native-resume-terminal-checkpoint.json",
+            {
+                "policy": "head_tail_v1",
+                "maximum_source_bytes_retained": _MAX_RETAINED_TERMINAL_BYTES,
+                "provider": provider,
+                "session_id": resumed_state.get("session_id"),
+                "initial_run_id": initial_state.get("run_id"),
+                "resumed_run_id": resumed_state.get("run_id"),
+                "same_session": bool(initial_state) and initial_state.get("session_id") == resumed_state.get("session_id"),
+                "new_run": bool(initial_state) and initial_state.get("run_id") != resumed_state.get("run_id"),
+                "native_resume_ready": any(row["path"] == "native-resume.tty" for row in rows),
+                "recordings": rows,
+            },
+        )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -4175,6 +4236,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             _close_recordings((concurrent, resumed, initial))
         except Exception as exc:  # noqa: BLE001 - preserve the causal result
             finalization_errors.append(f"recording close: {type(exc).__name__}: {exc}")
+        try:
+            _bound_terminal_recordings(root, provider=provider, states=states)
+        except Exception as exc:  # noqa: BLE001 - a would-be pass needs bounded, sealed diagnostics
+            finalization_errors.append(f"terminal evidence bounding: {type(exc).__name__}: {exc}")
         try:
             # Teardown can write receipts and flush terminal recordings. Scan
             # those final bytes before pinning their manifest digests.

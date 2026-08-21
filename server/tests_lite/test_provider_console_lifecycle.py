@@ -151,6 +151,40 @@ def test_codex_model_argument_controls_spawned_machine_agent_environment(monkeyp
     assert environment["XDG_CONFIG_HOME"] == str(tmp_path / "home" / ".config")
 
 
+def test_claude_console_configures_the_real_staged_lifecycle_hook(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    args = argparse.Namespace(longhouse_cli=tmp_path / "longhouse")
+    environment = {
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+        "LONGHOUSE_ENGINE_BIN": str(tmp_path / "longhouse-engine"),
+    }
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", run)
+
+    lifecycle._configure_claude_hook(args, environment)
+
+    assert calls == [
+        (
+            [str(args.longhouse_cli), "claude", "configure", "--claude-dir", environment["CLAUDE_CONFIG_DIR"]],
+            {
+                "cwd": home,
+                "env": environment,
+                "capture_output": True,
+                "text": True,
+                "timeout": 30,
+                "check": False,
+            },
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("provider", "raw", "normalized"),
     [
@@ -251,12 +285,14 @@ def test_codex_local_output_evidence_ignores_prompt_echo(tmp_path):
     assert marker in str(with_marker["provider_response_excerpt"])
 
 
-def test_start_turn_retries_only_adapter_readiness_with_stable_request(monkeypatch):
+def test_start_turn_retries_transient_admission_with_stable_request(monkeypatch):
     calls = []
 
     def request(*args, **kwargs):
         calls.append((args, kwargs))
         if len(calls) == 1:
+            raise RuntimeError('POST /turns returned HTTP 503: {"detail":"Request timed out"}')
+        if len(calls) == 2:
             raise RuntimeError("adapter_unavailable")
         return {"state": "queued", "run_id": "run-1"}
 
@@ -272,14 +308,14 @@ def test_start_turn_retries_only_adapter_readiness_with_stable_request(monkeypat
     )
 
     assert result["run_id"] == "run-1"
-    assert len(calls) == 2
-    assert (
-        calls[0][0][-1]
-        == calls[1][0][-1]
+    assert len(calls) == 3
+    assert all(
+        call[0][-1]
         == {
             "message": "hello",
             "client_request_id": "stable-request",
         }
+        for call in calls
     )
 
 

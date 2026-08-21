@@ -165,13 +165,18 @@ impl TurnClaimRegistry {
         &self,
         run_id: &str,
         pid: Option<u32>,
+        process_group_id: Option<i32>,
         process_start_time: Option<String>,
+        adapter: &str,
         result: Value,
     ) -> Result<TurnClaim> {
         let mut claim = self.read(run_id)?;
         claim.state = "spawned".to_string();
         claim.pid = pid;
+        claim.process_group_id = process_group_id;
+        claim.boot_id = crate::heartbeat::machine_boot_id();
         claim.process_start_time = process_start_time;
+        claim.adapter = Some(adapter.to_string());
         claim.result = Some(result);
         claim.error = None;
         claim.updated_at = Utc::now().to_rfc3339();
@@ -552,7 +557,9 @@ mod tests {
             .mark_spawned(
                 &run_id,
                 Some(42),
+                Some(42),
                 Some("start".to_string()),
+                "codex_exec",
                 serde_json::json!({"pid": 42}),
             )
             .unwrap();
@@ -563,6 +570,8 @@ mod tests {
         let reopened = TurnClaimRegistry::new(temp.path().to_path_buf());
         let claim = reopened.read(&run_id).unwrap();
         assert_eq!(claim.state, "terminal");
+        assert_eq!(claim.process_group_id, Some(42));
+        assert_eq!(claim.adapter.as_deref(), Some("codex_exec"));
         assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
     }
 

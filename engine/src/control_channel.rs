@@ -1082,6 +1082,7 @@ async fn execute_command(
                 "provider": "codex",
                 "transport": "codex_app_server",
                 "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
                 "argv": summary.argv,
             }))
         }
@@ -1780,6 +1781,7 @@ async fn execute_turn_start(
                     "provider": "codex",
                     "transport": "codex_app_server",
                     "pid": summary.pid,
+                    "process_group_id": summary.process_group_id,
                     "argv": summary.argv,
                 })
             }),
@@ -1806,11 +1808,17 @@ async fn execute_turn_start(
                 .get("pid")
                 .and_then(Value::as_u64)
                 .map(|value| value as u32);
+            let process_group_id = result
+                .get("process_group_id")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok());
             registry
                 .mark_spawned(
                     &run_id,
                     pid,
+                    process_group_id,
                     process_start_time_for_pid(pid),
+                    "codex_exec",
                     result.clone(),
                 )
                 .map_err(|err| CommandError {

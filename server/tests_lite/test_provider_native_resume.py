@@ -24,6 +24,7 @@ from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
 from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
+from zerg.qa.provider_native_resume import _bound_terminal_recordings
 from zerg.qa.provider_native_resume import _claude_input_prompt_visible
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
@@ -142,9 +143,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
 
 def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
     assert _cursor_bootstrap_prompt() == "Reply with exactly READY"
-    assert _cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == (
-        "Reply with exactly LH_CURSOR_BOOTSTRAP_abc123"
-    )
+    assert _cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == ("Reply with exactly LH_CURSOR_BOOTSTRAP_abc123")
 
 
 def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
@@ -547,10 +546,7 @@ def test_transcript_shipper_prefers_backpressure_when_stderr_has_both_signals(
             SimpleNamespace(
                 returncode=1,
                 stdout="",
-                stderr=(
-                    "Error: storage-v2 repair lane busy; retry after 5000ms; "
-                    "source_epoch_conflict_unresolved"
-                ),
+                stderr=("Error: storage-v2 repair lane busy; retry after 5000ms; source_epoch_conflict_unresolved"),
             ),
             SimpleNamespace(returncode=0, stdout=json.dumps({"events_shipped": 1}), stderr=""),
         ]
@@ -1130,12 +1126,12 @@ def test_cursor_hook_observation_bounds_unicode_and_starts_at_baseline(tmp_path:
     ).encode()
     after = b"\n".join(
         json.dumps(
-                {
-                    "event": "afterAgentResponse",
-                    "session_id": "session-1",
-                    "conversation_id": "cursor-thread-1",
-                    "launch_id": "launch-1",
-                    "observed_at": "2026-08-11T16:00:02Z",
+            {
+                "event": "afterAgentResponse",
+                "session_id": "session-1",
+                "conversation_id": "cursor-thread-1",
+                "launch_id": "launch-1",
+                "observed_at": "2026-08-11T16:00:02Z",
                 "payload": {"generation_id": f"new-{index}", "text": "x" * 80},
             }
         ).encode()
@@ -1305,10 +1301,7 @@ def test_cursor_projection_diagnostics_hashes_untrusted_block_detail(tmp_path: P
     db_path = tmp_path / "shipper.db"
     connection = sqlite3.connect(db_path)
     try:
-        connection.execute(
-            "CREATE TABLE pending_source_envelope "
-            "(source_epoch TEXT, block_kind TEXT, block_detail TEXT)"
-        )
+        connection.execute("CREATE TABLE pending_source_envelope (source_epoch TEXT, block_kind TEXT, block_detail TEXT)")
         block_detail = "Authorization: Bearer sk-live-XXX " + ("x" * 2048)
         connection.execute(
             "INSERT INTO pending_source_envelope VALUES (?, ?, ?)",
@@ -2295,9 +2288,7 @@ def test_cursor_initial_idle_uses_qualification_live_send_budget(tmp_path: Path,
     ]
 
 
-def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[bool] = []
 
     def fake_control_send(*_args: object, **kwargs: object) -> dict[str, object]:
@@ -2312,9 +2303,7 @@ def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(
     assert calls == [True, True]
 
 
-def test_cursor_initial_seed_flush_waits_for_ordered_hook_and_idle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cursor_initial_seed_flush_waits_for_ordered_hook_and_idle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, object]] = []
 
     def fake_hook_sequence(*_args: object, **kwargs: object) -> dict[str, str]:
@@ -2347,9 +2336,7 @@ def test_cursor_initial_seed_flush_waits_for_ordered_hook_and_idle(
     assert json.loads((tmp_path / "initial-hook-correlation.json").read_text()) == hook_sequence
 
 
-def test_cursor_initial_seed_retains_hook_evidence_when_idle_settlement_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cursor_initial_seed_retains_hook_evidence_when_idle_settlement_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hook_sequence = {"generation_id": "generation-1", "hook_response_correlated": True}
     monkeypatch.setattr(provider_native_resume, "_wait_cursor_hook_sequence", lambda *_args, **_kwargs: hook_sequence)
 
@@ -2513,8 +2500,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
     monkeypatch.setattr(
         provider_native_resume,
         "_control_send",
-        lambda spec, args, state, process, text: calls.append(("send", text))
-        or {"returncode": 0},
+        lambda spec, args, state, process, text: calls.append(("send", text)) or {"returncode": 0},
     )
     monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
     monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
@@ -2571,8 +2557,7 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
     monkeypatch.setattr(
         provider_native_resume,
         "_control_send",
-        lambda spec, args, state, process, text: calls.append(("send", text))
-        or {"returncode": 0},
+        lambda spec, args, state, process, text: calls.append(("send", text)) or {"returncode": 0},
     )
     monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
     monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
@@ -2597,11 +2582,11 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
         },
     )
     assert calls[1] == (
-            "interrupt",
-            {
-                "timeout": 17.0,
-                "diagnostic_path": args.evidence_root / "cursor-idle-timeout-clean-stop-initial-recovery.json",
-            },
+        "interrupt",
+        {
+            "timeout": 17.0,
+            "diagnostic_path": args.evidence_root / "cursor-idle-timeout-clean-stop-initial-recovery.json",
+        },
     )
     assert calls[0][1]["diagnostic_path"] != calls[1][1]["diagnostic_path"]
     assert calls[2] == ("send", "/exit")
@@ -2777,7 +2762,7 @@ def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
                         "conversation_id": "conversation-1",
                         "launch_id": "launch-1",
                         "payload": {"generation_id": "generation-1", "status": "error"},
-                    }
+                    },
                 ]
                 if late_response:
                     events.append(
@@ -2858,9 +2843,7 @@ def test_cursor_interrupt_recovery_retains_stop_hook_timeout_diagnostic(tmp_path
             diagnostic_path=diagnostic,
         )
 
-    payload = json.loads(
-        (tmp_path / "cursor-clean-stop-recovery-stop-hook-timeout.json").read_text(encoding="utf-8")
-    )
+    payload = json.loads((tmp_path / "cursor-clean-stop-recovery-stop-hook-timeout.json").read_text(encoding="utf-8"))
     assert payload["schema"] == "cursor_stop_timeout_observation.v1"
     assert payload["stop"]["stop_hook_observed"] is False
     assert payload["phase_file"]["generation_id"] == "generation-1"
@@ -3152,6 +3135,35 @@ def test_failure_manifest_is_refreshed_after_final_cleanup(tmp_path: Path) -> No
     assert manifest["cleanup-receipt.json"]["sha256"].startswith("sha256:")
 
 
+def test_terminal_recordings_keep_bounded_head_and_tail_with_receipt(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    source = b"head-marker" + (b"x" * (128 * 1024)) + b"tail-marker"
+    recording = evidence / "native-resume.tty"
+    recording.write_bytes(source)
+
+    _bound_terminal_recordings(
+        evidence,
+        provider="opencode",
+        states=[
+            {"session_id": "session-1", "run_id": "run-1"},
+            {"session_id": "session-1", "run_id": "run-2"},
+        ],
+    )
+
+    retained = recording.read_bytes()
+    receipt = json.loads((evidence / "native-resume-terminal-checkpoint.json").read_text())
+    assert b"head-marker" in retained
+    assert b"tail-marker" in retained
+    assert len(retained) < len(source)
+    assert receipt["recordings"][0]["original_size"] == len(source)
+    assert receipt["recordings"][0]["retained_sha256"] == ("sha256:" + hashlib.sha256(retained).hexdigest())
+    assert receipt["provider"] == "opencode"
+    assert receipt["same_session"] is True
+    assert receipt["new_run"] is True
+    assert receipt["native_resume_ready"] is True
+
+
 def test_finalized_secret_scan_downgrades_pass_and_refreshes_manifest(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -3179,9 +3191,7 @@ def test_finalized_secret_scan_downgrades_pass_and_refreshes_manifest(tmp_path: 
     assert written["failure_code"] == "finalized_artifact_secret_scan_failed"
     assert written["observation"]["artifact_secret_scan_passed"] is False
     assert written["assertions"]["native_provider_resume_proven"] is False
-    assert manifest["cleanup-receipt.json"]["sha256"] == (
-        "sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest()
-    )
+    assert manifest["cleanup-receipt.json"]["sha256"] == ("sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest())
 
 
 @pytest.mark.parametrize(
@@ -3343,14 +3353,10 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
     receipt = args.evidence_root / "cleanup-receipt.json"
     assert json.loads(receipt.read_text())["cleanup_generation"] == 2
     assert manifest["cleanup-receipt.json"]["size"] == receipt.stat().st_size
-    assert manifest["cleanup-receipt.json"]["sha256"] == (
-        "sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest()
-    )
+    assert manifest["cleanup-receipt.json"]["sha256"] == ("sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest())
     ship_receipt = args.evidence_root / "transcript-shipper-receipt.json"
     assert json.loads(ship_receipt.read_text())["stop_generation"] == 2
-    assert manifest["transcript-shipper-receipt.json"]["sha256"] == (
-        "sha256:" + hashlib.sha256(ship_receipt.read_bytes()).hexdigest()
-    )
+    assert manifest["transcript-shipper-receipt.json"]["sha256"] == ("sha256:" + hashlib.sha256(ship_receipt.read_bytes()).hexdigest())
     assert result == written
 
 

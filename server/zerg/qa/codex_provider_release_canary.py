@@ -1142,6 +1142,22 @@ def _managed_bridge_credentials_gap(args: argparse.Namespace) -> dict[str, Any] 
     )
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        fields = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8").split()
+        if len(fields) > 2 and fields[2] == "Z":
+            return False
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _verify_bridge_stopped(state_file: Path, *, timeout_secs: float = 5.0) -> dict[str, Any]:
     socket_file = state_file.with_suffix(".sock")
     deadline = time.monotonic() + timeout_secs
@@ -1156,11 +1172,22 @@ def _verify_bridge_stopped(state_file: Path, *, timeout_secs: float = 5.0) -> di
             error = f"{type(exc).__name__}: {exc}"
         terminal_state = bool(state and state.get("status") == "stopped" and not state.get("active_turn_id"))
         socket_absent = not socket_file.exists()
-        if terminal_state and socket_absent:
+        owned_pid_values = ((state or {}).get("pid"), (state or {}).get("app_server_pid"))
+        owned_processes_known = all(isinstance(value, int) and not isinstance(value, bool) and value > 1 for value in owned_pid_values)
+        owned_pids = sorted(
+            {int(value) for value in owned_pid_values if isinstance(value, int) and not isinstance(value, bool) and value > 1}
+        )
+        alive_pids = [pid for pid in owned_pids if _pid_alive(pid)]
+        owned_processes_dead = owned_processes_known and not alive_pids
+        if terminal_state and socket_absent and owned_processes_dead:
             return {
                 "verified": True,
                 "terminal_state": True,
                 "socket_absent": True,
+                "owned_processes_dead": True,
+                "owned_processes_known": True,
+                "owned_pids": owned_pids,
+                "alive_pids": [],
                 "state": state,
             }
         if time.monotonic() >= deadline:
@@ -1168,6 +1195,10 @@ def _verify_bridge_stopped(state_file: Path, *, timeout_secs: float = 5.0) -> di
                 "verified": False,
                 "terminal_state": terminal_state,
                 "socket_absent": socket_absent,
+                "owned_processes_dead": owned_processes_dead,
+                "owned_processes_known": owned_processes_known,
+                "owned_pids": owned_pids,
+                "alive_pids": alive_pids,
                 "state": state,
                 "error": error,
             }

@@ -57,9 +57,7 @@ class _CatalogClient:
                 owner_id=int(params["owner_id"]),
             )
         if method == "session.runtime.apply.v2":
-            return self.store.apply_session_runtime(
-                events=[RuntimeEventIngest.model_validate(event) for event in params["events"]]
-            )
+            return self.store.apply_session_runtime(events=[RuntimeEventIngest.model_validate(event) for event in params["events"]])
         raise AssertionError(f"unexpected catalog RPC: {method}")
 
 
@@ -137,7 +135,12 @@ def test_catalog_mode_http_console_lifecycle_survives_ambiguous_start_and_crash_
         with TestClient(api_app, raise_server_exceptions=False) as client:
             created = client.post(
                 "/agents/sessions",
-                json={"provider": "claude", "device_id": "cinder", "cwd": "/tmp/longhouse"},
+                json={
+                    "provider": "claude",
+                    "device_id": "cinder",
+                    "cwd": "/tmp/longhouse",
+                    "model": "claude-haiku-4-5-20251001",
+                },
                 headers={"X-Agents-Token": "dev"},
             )
             assert created.status_code == 201, created.text
@@ -166,6 +169,7 @@ def test_catalog_mode_http_console_lifecycle_survives_ambiguous_start_and_crash_
             )
             assert first.status_code == 202, first.text
             assert first.json()["state"] == "active"
+            assert registry.commands[-1]["payload"]["model"] == "claude-haiku-4-5-20251001"
             first_run_id = first.json()["run_id"]
             working = client.get(f"/timeline/sessions/{session_id}")
             assert working.status_code == 200, working.text

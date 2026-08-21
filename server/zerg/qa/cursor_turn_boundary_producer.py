@@ -55,6 +55,8 @@ from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _secret_scan
 from zerg.qa.provider_native_resume import _sha256
 from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.provider_native_resume import _wait_pid_dead
+from zerg.qa.provider_native_resume import _wait_process_group_dead
 from zerg.qa.provider_native_resume import _write_json
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -66,7 +68,7 @@ _DEFAULT_CURSOR_MODEL = "gpt-5.3-codex-low"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.turn_boundary.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id="cursor_turn_boundary_quiescent",
     scenario_revision=1,
     # This assertion has no authored `variant:` in schemas/managed_providers.yml,
@@ -179,7 +181,19 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             if isinstance(report, dict):
                 _write_json(root / "product-e2e-report.json", report)
 
-        native_ok = report.get("status") == "passed"
+        raw_cursor_pid = report.get("cursor_pid")
+        cursor_pid = (
+            raw_cursor_pid if isinstance(raw_cursor_pid, int) and not isinstance(raw_cursor_pid, bool) and raw_cursor_pid > 1 else None
+        )
+        provider_process_dead = cursor_pid is not None and _wait_pid_dead(cursor_pid)
+        provider_process_group_dead = cursor_pid is not None and _wait_process_group_dead(cursor_pid)
+        session_stopped = report.get("run_lifecycle_after_teardown") == "ended"
+        no_orphans = provider_process_dead and provider_process_group_dead
+        required_cleanup = {
+            "session_stopped": session_stopped,
+            "no_orphan_provider_processes": no_orphans,
+        }
+        native_ok = report.get("status") == "passed" and all(required_cleanup.values())
         observation = {
             "product_e2e_status": report.get("status"),
             "run_lifecycle_after_teardown": report.get("run_lifecycle_after_teardown"),
@@ -188,6 +202,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             "process_alive_after_cancel": report.get("process_alive_after_cancel"),
             "archive_lag_seconds": report.get("archive_lag_seconds"),
             "machine_agent_restart": report.get("machine_agent_restart"),
+            **required_cleanup,
             # run_product_e2e's own settled() is the postcondition: it raises
             # before returning if served activity fails to reach "quiescent"
             # at any of the first/remote/post-interrupt-recovery turn
@@ -201,12 +216,17 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "schema_version": 1,
                 "artifact_kind": "cursor_turn_boundary_cleanup_receipt",
-                # run_product_e2e's own finally block stops the session
-                # (`cursor-helm stop`) and closes the PTY, which SIGTERM/
-                # SIGKILLs the launcher's process group -- see its _PtyProcess
-                # .close(). This producer does not duplicate that teardown.
                 "delegated_to": "cursor_helm_product_e2e.run_product_e2e finally block",
                 "session_id": report.get("session_id"),
+                "status": "pass" if all(required_cleanup.values()) else "fail",
+                "orphan_count": 0 if no_orphans else None,
+                "required_cleanup": required_cleanup,
+                "diagnostics": {
+                    "cursor_pid": cursor_pid,
+                    "cursor_pgid": cursor_pid,
+                    "provider_process_dead": provider_process_dead,
+                    "provider_process_group_dead": provider_process_group_dead,
+                },
             },
         )
         if shipper is not None:

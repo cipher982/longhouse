@@ -85,10 +85,10 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=5,
+    producer_revision=7,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=(
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (ASSERTION_ID, UNSUPPORTED_VARIANT),
@@ -240,7 +240,15 @@ def _request(
     return value
 
 
-def _create_session(*, api_url: str, token: str, provider: str, device_id: str, cwd: Path) -> dict[str, Any]:
+def _create_session(
+    *,
+    api_url: str,
+    token: str,
+    provider: str,
+    device_id: str,
+    cwd: Path,
+    model: str | None,
+) -> dict[str, Any]:
     payload = {
         "provider": provider,
         "device_id": device_id,
@@ -249,6 +257,8 @@ def _create_session(*, api_url: str, token: str, provider: str, device_id: str, 
         "display_name": f"{provider} Console release qualification",
         "launch_surface": "test",
     }
+    if model:
+        payload["model"] = f"openrouter/{model}" if provider == "opencode" and not model.startswith("openrouter/") else model
     deadline = time.monotonic() + 45
     last_error: Exception | None = None
     while time.monotonic() < deadline:
@@ -275,7 +285,14 @@ def _start_turn(*, api_url: str, token: str, session_id: str, message: str, requ
             )
             break
         except RuntimeError as exc:
-            if "adapter_unavailable" not in str(exc) or time.monotonic() >= deadline:
+            detail = str(exc)
+            transient = (
+                "adapter_unavailable" in detail
+                or "returned HTTP 429" in detail
+                or "returned HTTP 503" in detail
+                or "Request timed out" in detail
+            )
+            if not transient or time.monotonic() >= deadline:
                 raise
             time.sleep(0.25)
     if result.get("state") not in {"queued", "starting", "active", "completed"}:
@@ -499,31 +516,19 @@ def _force_cleanup(claims: list[dict[str, Any]]) -> None:
         time.sleep(1)
 
 
-def _prepare_claude_hook(home: Path, environment: dict[str, str]) -> None:
-    provider_home = Path(environment.get("CLAUDE_CONFIG_DIR") or home / ".claude")
-    hook_dir = provider_home / "hooks"
-    hook_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    hook = hook_dir / "longhouse-hook.sh"
-    hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    hook.chmod(0o700)
-    settings_path = provider_home / "settings.json"
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        settings = {}
-    if not isinstance(settings, dict):
-        settings = {}
-    hooks = settings.setdefault("hooks", {})
-    if not isinstance(hooks, dict):
-        hooks = {}
-        settings["hooks"] = hooks
-    entries = hooks.setdefault("SessionStart", [])
-    if not isinstance(entries, list):
-        entries = []
-        hooks["SessionStart"] = entries
-    entries.append({"hooks": [{"type": "command", "command": str(hook)}]})
-    _write_json(settings_path, settings)
-    environment["CLAUDE_CONFIG_DIR"] = str(provider_home)
+def _configure_claude_hook(args: argparse.Namespace, environment: dict[str, str]) -> None:
+    provider_home = Path(environment["CLAUDE_CONFIG_DIR"])
+    completed = subprocess.run(
+        [str(args.longhouse_cli), "claude", "configure", "--claude-dir", str(provider_home)],
+        cwd=Path(environment["HOME"]),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"staged Longhouse could not configure the isolated Claude profile: {completed.stderr[-1000:]}")
 
 
 def _turn_identity_ok(claim: Mapping[str, object], *, provider: str, session_id: str, thread_id: str, run_id: str) -> bool:
@@ -620,7 +625,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         environment.pop("OPENAI_API_KEY", None)
         _write_json(root / "provider-auth-receipt.json", auth_receipt)
     if provider == "claude":
-        _prepare_claude_hook(home, environment)
+        _configure_claude_hook(args, environment)
 
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip().rstrip("/")
     token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
@@ -680,6 +685,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             provider=provider,
             device_id=device_id,
             cwd=workspace,
+            model=args.model,
         )
         session_id = str(created["session_id"])
         thread_id = str(created["thread_id"])
@@ -929,7 +935,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "provider": provider,
             "variant": variant,
             "scenario_id": _scenario_id(provider),
-            "scenario_revision": 1,
+            "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "generated_at": _now(),
             "status": "pass" if assertion else "fail",
@@ -1005,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
             "provider": args.provider,
             "variant": args.variant,
             "scenario_id": _scenario_id(args.provider),
-            "scenario_revision": 1,
+            "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "generated_at": _now(),
             "status": "fail",

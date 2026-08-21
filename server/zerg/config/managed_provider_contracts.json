@@ -130,7 +130,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "69b6e9e6fd86c649df2e99c25fc1c51d9170f843eedcc10f5c95896815eee6e1"
+              "oracle_digest": "903a4bc547761419473d9993929dea2d2fa722cde0d66c63c08a8e10ebcb8038"
             }
           ]
         },
@@ -158,7 +158,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "99ddda51233d1db0627815e7b70d081542f56fc09fd8230e54db4c187d051be6"
+              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
             }
           ]
         },
@@ -538,7 +538,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "c324160f869f3e987849db372737ba3d0e756d02d2acce26788761490f20a6da"
+      "adapter_digest": "9c6570f6840ef5333dd51aee76a931da3ec1974dacdbd7765f2a73e47a315847"
     },
     {
       "provider": "claude",
@@ -905,7 +905,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "99ddda51233d1db0627815e7b70d081542f56fc09fd8230e54db4c187d051be6"
+              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
             },
             {
               "id": "real_print_marker_returned",
@@ -1312,7 +1312,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "99ddda51233d1db0627815e7b70d081542f56fc09fd8230e54db4c187d051be6"
+              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
             }
           ]
         },
@@ -2037,7 +2037,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "99ddda51233d1db0627815e7b70d081542f56fc09fd8230e54db4c187d051be6"
+              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
             }
           ]
         },

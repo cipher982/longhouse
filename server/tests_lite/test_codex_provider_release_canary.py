@@ -219,13 +219,14 @@ def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(t
         commands.append(argv)
         environments.append(kwargs.get("env"))
         state_file.write_text(
-            json.dumps({"status": "stopped", "active_turn_id": None}),
+            json.dumps({"status": "stopped", "active_turn_id": None, "pid": 101, "app_server_pid": 202}),
             encoding="utf-8",
         )
         socket_file.unlink()
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(canary, "_run", fake_run)
+    monkeypatch.setattr(canary, "_pid_alive", lambda _pid: False)
     result = canary._stop_bridge(args, "session-1", isolation_root)
 
     assert commands == [
@@ -264,13 +265,14 @@ def test_stop_bridge_accepts_closed_ack_only_when_strict_cleanup_is_verified(tmp
 
     def fake_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         state_file.write_text(
-            json.dumps({"status": "stopped", "active_turn_id": None}),
+            json.dumps({"status": "stopped", "active_turn_id": None, "pid": 101, "app_server_pid": 202}),
             encoding="utf-8",
         )
         socket_file.unlink()
         return subprocess.CompletedProcess(argv, 1, "", "bridge IPC stop closed without acknowledgement")
 
     monkeypatch.setattr(canary, "_run", fake_run)
+    monkeypatch.setattr(canary, "_pid_alive", lambda _pid: False)
     result = canary._stop_bridge(args, "session-1", isolation_root)
 
     assert result["evidence"]["returncode"] == 1
@@ -292,6 +294,21 @@ def test_stop_verification_rejects_zero_exit_shape_without_terminal_cleanup(tmp_
     assert result["verified"] is False
     assert result["terminal_state"] is False
     assert result["socket_absent"] is False
+
+
+def test_stop_verification_rejects_terminal_state_while_an_owned_process_is_alive(tmp_path: Path, monkeypatch) -> None:
+    state_file = tmp_path / "session-1.json"
+    state_file.write_text(
+        json.dumps({"status": "stopped", "active_turn_id": None, "pid": 101, "app_server_pid": 202}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(canary, "_pid_alive", lambda pid: pid == 202)
+
+    result = canary._verify_bridge_stopped(state_file, timeout_secs=0)
+
+    assert result["verified"] is False
+    assert result["owned_processes_dead"] is False
+    assert result["alive_pids"] == [202]
 
 
 def test_pty_recorder_times_out_captures_output_and_reaps_process_group(tmp_path: Path) -> None:

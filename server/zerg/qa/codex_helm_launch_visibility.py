@@ -56,9 +56,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -166,16 +166,20 @@ class RuntimeHostRecordingProxy:
                     response_body = response.read()
                     status = int(response.status)
                     response_headers = dict(response.headers.items())
+                if self.command == "POST" and self.path.split("?", 1)[0].endswith("/api/sessions/managed-local/this-device"):
+                    # The upstream registration is authoritative even if the
+                    # TUI client disconnects before the proxy relays it.
+                    owner._capture_registration(body, response_body, status)
                 self.send_response(status)
                 for key, value in response_headers.items():
                     if key.lower() not in {"connection", "transfer-encoding", "content-length", "content-encoding"}:
                         self.send_header(key, value)
                 self.send_header("Content-Length", str(len(response_body)))
                 self.end_headers()
-                self.wfile.write(response_body)
-
-                if self.command == "POST" and self.path.split("?", 1)[0].endswith("/api/sessions/managed-local/this-device"):
-                    owner._capture_registration(body, response_body, status)
+                try:
+                    self.wfile.write(response_body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="runtime-host-recording-proxy")

@@ -24,8 +24,8 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
     assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 2
-    assert registration["scenario_revision"] == 2
+    assert registration["producer_revision"] == 3
+    assert registration["scenario_revision"] == 3
 
 
 def test_helm_launch_bridge_socket_fits_linux_unix_path_budget():
@@ -90,13 +90,13 @@ def test_recording_proxy_retains_registration_identity_without_authority_tokens(
         proxy.server.server_close()
 
 
-def test_recording_proxy_forwards_the_managed_launch_user_agent_unchanged():
+def test_recording_proxy_forwards_and_retains_managed_launch_identity():
     observed = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802 - stdlib callback name
+        def do_POST(self):  # noqa: N802 - stdlib callback name
             observed["user_agent"] = self.headers.get("User-Agent")
-            body = b"{}"
+            body = json.dumps({"session_id": "session-1", "run_id": "run-1"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -114,12 +114,17 @@ def test_recording_proxy_forwards_the_managed_launch_user_agent_unchanged():
     proxy.start()
     try:
         request = urllib.request.Request(
-            f"{proxy.url}/probe",
+            f"{proxy.url}/api/sessions/managed-local/this-device",
             headers={"User-Agent": "longhouse-engine/test-version"},
+            data=json.dumps({"provider": "codex", "session_id": "session-1"}).encode(),
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             assert response.status == 200
         assert observed["user_agent"] == "longhouse-engine/test-version"
+        assert proxy.wait_registration(after=0, timeout=0.1)["response"] == {
+            "session_id": "session-1",
+            "run_id": "run-1",
+        }
     finally:
         proxy.close()
         upstream.shutdown()
