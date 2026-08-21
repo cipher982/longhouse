@@ -55,9 +55,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -94,6 +94,15 @@ REGISTRATION = ProducerRegistration(
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _cleanup_evidence(cleanups: list[dict[str, Any]]) -> tuple[str, dict[str, bool]]:
+    status = "pass" if all(item.get("status") == "pass" for item in cleanups) else "fail"
+    owned_processes_dead = all(isinstance(item.get("axes"), dict) and item["axes"].get("owned_processes_dead") is True for item in cleanups)
+    return status, {
+        "runtime_host_canary_isolated": status == "pass",
+        "owned_processes_dead": owned_processes_dead,
+    }
 
 
 def _pid_dead(pid: int) -> bool:
@@ -696,9 +705,24 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 "automation": automation["canonical"],
             },
         )
-        write_json(root / "provenance-free-rejection.json", {"rejected": provenance_free_rejected})
-        cleanup_status = "pass" if all(item.get("status") == "pass" for item in observation["cleanup"]) else "fail"
-        write_json(root / "cleanup-receipt.json", {"status": cleanup_status, "sessions": observation["cleanup"]})
+        cleanup_status, cleanup_requirements = _cleanup_evidence(observation["cleanup"])
+        write_json(
+            root / "canary-isolation-receipt.json",
+            {
+                "status": cleanup_status,
+                "sessions": observation["cleanup"],
+                "requirements": cleanup_requirements,
+                "provenance_free_observation_rejected": provenance_free_rejected,
+            },
+        )
+        write_json(
+            root / "cleanup-receipt.json",
+            {
+                "status": cleanup_status,
+                "sessions": observation["cleanup"],
+                "requirements": cleanup_requirements,
+            },
+        )
         status = "pass" if assertions.get(ASSERTION_ID) is True else "fail"
         result = {
             "schema_version": 1,

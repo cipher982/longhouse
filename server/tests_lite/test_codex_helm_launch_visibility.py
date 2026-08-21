@@ -17,10 +17,25 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["provider_artifact_required"] is True
     assert registration["providers"] == ["codex"]
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
-    assert registration["assertion_cells"] == [
-        {"assertion_id": "helm_launch_visibility_preserved", "variant": None}
-    ]
+    assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
+    assert registration["producer_revision"] == 2
+    assert registration["scenario_revision"] == 2
+
+
+def test_cleanup_evidence_binds_both_registered_cleanup_requirements():
+    cleanups = [
+        {"status": "pass", "axes": {"owned_processes_dead": True}},
+        {"status": "pass", "axes": {"owned_processes_dead": True}},
+    ]
+
+    status, requirements = launch._cleanup_evidence(cleanups)  # noqa: SLF001
+
+    assert status == "pass"
+    assert requirements == {
+        "runtime_host_canary_isolated": True,
+        "owned_processes_dead": True,
+    }
 
 
 def test_recording_proxy_retains_registration_identity_without_authority_tokens():
