@@ -97,6 +97,7 @@ from zerg.services.codex_launch_visibility_repair import CodexLaunchVisibilityRe
 from zerg.services.codex_launch_visibility_repair import codex_launch_visibility_repair_fingerprint
 from zerg.services.codex_launch_visibility_repair import codex_launch_visibility_repair_refusals
 from zerg.services.codex_launch_visibility_repair import plan_codex_launch_visibility_repair
+from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import hatch_automation_session_clause
 from zerg.services.internal_sessions import is_hatch_execution_contract
@@ -257,6 +258,7 @@ _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
 MAX_TITLE_ATTEMPTS = 5
 TITLE_DEPENDENCY_USE_CASE = "session_title"
 TITLE_DEPENDENCY_PROBE_DELAY = timedelta(seconds=60)
+TITLE_DEPENDENCY_AVAILABILITY_PROBE_DELAY = timedelta(seconds=5)
 TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION = 2
 TITLE_BACKLOG_DEGRADED_AFTER = timedelta(minutes=5)
 
@@ -313,6 +315,7 @@ def _storage_title_obligation_clause(table):
         table.c.first_user_message_preview.is_not(None),
         func.length(func.trim(table.c.first_user_message_preview)) > 0,
         ~table.c.first_user_message_preview.contains(RESUME_SEED_TOKEN, autoescape=True),
+        ~func.lower(func.coalesce(table.c.project, "")).in_(SYNTHETIC_BENCH_PROJECTS),
         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
         table.c.environment.notin_(("test", "e2e")),
         ~provider_proof_session_clause(table),
@@ -8221,7 +8224,10 @@ class CatalogStore:
             newly_opened = str(dep["state"]) == "healthy" or not dep["incident_id"]
             incident_id = str(uuid4()) if newly_opened else str(dep["incident_id"])
             effective_failure_class = failure_class if newly_opened else str(dep["failure_class"] or failure_class)
-            next_probe_at = failed_at + TITLE_DEPENDENCY_PROBE_DELAY
+            probe_delay = (
+                TITLE_DEPENDENCY_AVAILABILITY_PROBE_DELAY if effective_failure_class == "availability" else TITLE_DEPENDENCY_PROBE_DELAY
+            )
+            next_probe_at = failed_at + probe_delay
             commit_seq = _advance_commit_seq(connection, failed_at)
             connection.execute(
                 update(dependency)

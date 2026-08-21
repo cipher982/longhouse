@@ -39,6 +39,7 @@ HATCH_EXECUTION_CONTRACT_RE = re.compile(
 )
 HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single bounded, non-interactive run%"
 SQL_LIKE_ESCAPE = "\\"
+SYNTHETIC_BENCH_PROJECTS = frozenset({"longhouse-bench"})
 
 
 def is_internal_canary_provider_filter(provider: str | None) -> bool:

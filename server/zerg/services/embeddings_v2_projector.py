@@ -15,6 +15,7 @@ from uuid import uuid4
 from zerg.catalogd.client import CatalogClient
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.runtime_boot import RUNTIME_BOOT_ID
+from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.local_embedder import get_local_embedder
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
@@ -42,7 +43,6 @@ PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_
 # the session record would be; it is what the bench harness actually distinguishes
 # itself by today (it writes under /tmp/longhouse-bench), and a stray real project
 # with this name would only lose semantic recall, not correctness.
-SYNTHETIC_PROJECTS = frozenset({"longhouse-bench"})
 
 
 class EmbeddingPublicationPending(RuntimeError):
@@ -192,7 +192,7 @@ class EmbeddingsV2Projector:
         snapshot_session = snapshot.get("session")
         if not isinstance(snapshot_session, dict) or not isinstance(snapshot_session.get("owner_id"), str):
             raise ValueError("catalog omitted embedding session owner")
-        if snapshot_session.get("project") in SYNTHETIC_PROJECTS:
+        if snapshot_session.get("project") in SYNTHETIC_BENCH_PROJECTS:
             # Load-test payloads are byte-identical across thousands of sessions,
             # so they cluster in the vector space and occupy top-k slots against
             # real queries. They also ran under ordinary environments (`local`,

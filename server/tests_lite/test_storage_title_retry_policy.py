@@ -42,7 +42,7 @@ async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
         return {"changed": True}
 
     async def _fake_generate_initial_session_title(**kwargs):
-        assert kwargs["timeout_seconds"] == 15.0
+        assert kwargs["timeout_seconds"] == 30.0
         return "Provider Factory Audit"
 
     monkeypatch.setattr(storage_titles, "get_settings", lambda: settings)
@@ -296,7 +296,7 @@ async def test_worker_shutdown_releases_capacity_even_when_client_close_fails(mo
     assert slots._value == storage_titles.STORAGE_TITLE_MAX_CONCURRENCY
 
 
-def _insert_session(engine, *, session_id, first_message, environment="local", provider="opencode"):
+def _insert_session(engine, *, session_id, first_message, environment="local", provider="opencode", project="zerg"):
     now = datetime.now(UTC).replace(microsecond=0)
     with engine.begin() as connection:
         connection.execute(
@@ -307,7 +307,7 @@ def _insert_session(engine, *, session_id, first_message, environment="local", p
                 provider=provider,
                 environment=environment,
                 machine_id="cinder",
-                project="zerg",
+                project=project,
                 started_at=now,
                 last_activity_at=now,
                 user_messages=1,
@@ -466,6 +466,24 @@ def test_old_seed_markers_cannot_consume_bounded_candidate_page(tmp_path):
     assert [row["session_id"] for row in result["sessions"]] == [str(normal_id)]
 
 
+def test_synthetic_benchmark_project_is_not_a_title_obligation(tmp_path):
+    engine = _build_engine(tmp_path)
+    synthetic_id = uuid4()
+    normal_id = uuid4()
+    _insert_session(
+        engine,
+        session_id=synthetic_id,
+        first_message="synthetic bench file=0 event=0 payload",
+        project="longhouse-bench",
+    )
+    _insert_session(engine, session_id=normal_id, first_message="real human title request")
+
+    candidates = _candidate_ids(engine)
+
+    assert str(synthetic_id) not in candidates
+    assert str(normal_id) in candidates
+
+
 def test_candidate_listing_keeps_visible_claude_raw_until_semantic_repair(tmp_path):
     engine = _build_engine(tmp_path)
     session_id = uuid4()
@@ -565,6 +583,7 @@ def test_dependency_401_coalesces_multi_row_incident_without_spending_attempts(t
     assert _title_row(engine, second_id)["title_attempt_count"] == 0
     assert _title_row(engine, first_id)["title_dependency_incident_id"] == first["incident_id"]
     assert _title_row(engine, second_id)["title_dependency_incident_id"] == first["incident_id"]
+    assert datetime.fromisoformat(first["next_probe_at"]) == now + timedelta(seconds=60)
     health = store.read_storage_title_dependency_health()
     assert health["open_dependencies"] == 1
     assert health["blocked_sessions"] == 2
@@ -605,6 +624,7 @@ def test_dependency_timeout_coalesces_without_spending_row_attempts(tmp_path):
     assert _title_row(engine, second_id)["title_attempt_count"] == 0
     assert _title_row(engine, first_id)["title_dependency_incident_id"] == first["incident_id"]
     assert _title_row(engine, second_id)["title_dependency_incident_id"] == first["incident_id"]
+    assert datetime.fromisoformat(first["next_probe_at"]) == now + timedelta(seconds=5)
 
 
 def test_dependency_incident_survives_restart_and_exact_replay(tmp_path):

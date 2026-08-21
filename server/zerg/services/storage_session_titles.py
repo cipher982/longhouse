@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 STORAGE_TITLE_MAX_CONCURRENCY = 4
 STORAGE_TITLE_CANDIDATE_LOOKAHEAD = STORAGE_TITLE_MAX_CONCURRENCY * 2
 STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS = 10.0
-STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 15.0
+# Hosted title responses normally complete in 5-12 seconds. A 15-second edge
+# converted ordinary tail latency into a provider-wide outage during backlog
+# recovery; background titles can safely allow the full 30-second budget.
+STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 30.0
 STORAGE_TITLE_DEPENDENCY_PROBE_LEASE_SECONDS = 60
 STORAGE_TITLE_CLIENT_CLOSE_TIMEOUT_SECONDS = 2.0
 
