@@ -19,9 +19,6 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::antigravity_print::{
-    start_antigravity_print_turn, AntigravityPrintRunConfig, ANTIGRAVITY_PRINT_ADAPTER,
-};
 use crate::build_identity;
 use crate::claude_channel_control::{
     interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
@@ -449,6 +446,35 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
                 ));
             }
         }
+        let turn_start = provider
+            .get("turn_start")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if turn_start != console_turn_provider_supported(provider_name) {
+            return Err(format!(
+                "{provider_name}.turn_start: manifest support and real Console admission diverge"
+            ));
+        }
+        if provider.get("support_tier").and_then(Value::as_str) == Some("maintenance") {
+            let console_adapter = provider
+                .get("console_adapter")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty());
+            let console_support = provider
+                .get("machine_control_supports")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|support| {
+                    support.ends_with(".turn_start") || support.ends_with(".turn_interrupt")
+                });
+            if console_adapter || turn_start || console_support {
+                return Err(format!(
+                    "{provider_name}: maintenance providers cannot advertise Console control"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -602,20 +628,6 @@ pub fn spawn_control_channel(
             }
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile Pi Console turn claims"),
-        }
-        match crate::antigravity_print::recover_antigravity_print_turns(
-            &config.machine_name,
-            config.db_path.clone(),
-        )
-        .await
-        {
-            Ok(count) if count > 0 => {
-                tracing::info!(count, "Recovered Antigravity Console turn monitors")
-            }
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(%error, "Failed to reconcile Antigravity Console turn claims")
-            }
         }
         run_reconnect_loop(config, status).await;
     }))
@@ -967,14 +979,6 @@ async fn execute_command(
                     crate::pi_print::interrupt_pi_print_turn(&run_id, &session_id)
                         .map_err(CommandError::command_failed)?;
                     PI_PRINT_ADAPTER
-                }
-                "antigravity" => {
-                    crate::antigravity_print::interrupt_antigravity_print_turn(
-                        &run_id,
-                        &session_id,
-                    )
-                    .map_err(CommandError::command_failed)?;
-                    ANTIGRAVITY_PRINT_ADAPTER
                 }
                 _ => {
                     return Err(CommandError {
@@ -1722,45 +1726,6 @@ async fn execute_turn_start(
                 "stdout_path": summary.stdout_path,
                 "stderr_path": summary.stderr_path,
                 "session_dir": summary.session_dir,
-                "argv": summary.argv,
-            })
-        })
-    } else if provider == "antigravity" {
-        // The Console path does not go through hooks, which is the point: agy
-        // loads its hooks and never fires them under GEMINI_API_KEY auth, so a
-        // hook-delivered turn is not universally available and a one-shot
-        // print turn is.
-        start_antigravity_print_turn(AntigravityPrintRunConfig {
-            session_id: session_id.to_string(),
-            thread_id: thread_id.clone(),
-            turn_id: turn_id.clone(),
-            run_id: run_id.clone(),
-            client_request_id: client_request_id.clone(),
-            cwd,
-            antigravity_bin: std::env::var("LONGHOUSE_ANTIGRAVITY_BIN")
-                .unwrap_or_else(|_| crate::antigravity_print::DEFAULT_ANTIGRAVITY_BIN.to_string()),
-            prompt: message,
-            model: payload_optional_string(payload, "model"),
-            conversation_id: resume_provider_thread_id,
-            print_timeout_secs: payload.get("print_timeout_secs").and_then(Value::as_u64),
-            permission_mode,
-            machine_name: config.machine_name.clone(),
-            local_db_path,
-        })
-        .await
-        .map(|summary| {
-            json!({
-                "session_id": summary.session_id,
-                "thread_id": thread_id,
-                "run_id": summary.run_id,
-                "provider": "antigravity",
-                "transport": ANTIGRAVITY_PRINT_ADAPTER,
-                "provider_thread_id": summary.provider_thread_id,
-                "launch_id": summary.launch_id,
-                "pid": summary.pid,
-                "process_group_id": summary.process_group_id,
-                "stdout_path": summary.stdout_path,
-                "stderr_path": summary.stderr_path,
                 "argv": summary.argv,
             })
         })
@@ -2651,7 +2616,6 @@ mod tests {
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
         ("antigravity", "send", COMMAND_SEND_TEXT),
-        ("antigravity", "turn_start", COMMAND_TURN_START),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
         ("cursor", "terminate", COMMAND_TERMINATE),
@@ -3121,6 +3085,37 @@ mod tests {
 
         let error = validate_managed_provider_contract_manifest(&payload).unwrap_err();
         assert!(error.contains("unknown operation_evidence key made_up"));
+    }
+
+    #[test]
+    fn managed_provider_contract_manifest_rejects_unadmitted_console_support() {
+        let mut payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
+        let antigravity = payload["providers"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|provider| provider["provider"] == "antigravity")
+            .unwrap();
+        antigravity["turn_start"] = json!(true);
+        antigravity["operation_evidence"]["turn_start"]["level"] = json!("hermetic");
+
+        let error = validate_managed_provider_contract_manifest(&payload).unwrap_err();
+        assert!(error.contains("manifest support and real Console admission diverge"));
+    }
+
+    #[test]
+    fn managed_provider_contract_manifest_rejects_console_control_for_maintenance_tier() {
+        let mut payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
+        let codex = payload["providers"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|provider| provider["provider"] == "codex")
+            .unwrap();
+        codex["support_tier"] = json!("maintenance");
+
+        let error = validate_managed_provider_contract_manifest(&payload).unwrap_err();
+        assert!(error.contains("maintenance providers cannot advertise Console control"));
     }
 
     #[test]

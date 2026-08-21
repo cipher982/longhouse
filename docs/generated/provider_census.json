@@ -940,6 +940,7 @@
     {
       "path": "server/tests_lite/test_internal_sessions.py",
       "providers": [
+        "claude",
         "codex",
         "cursor"
       ]
@@ -1531,6 +1532,7 @@
       "path": "server/tests_lite/test_storage_title_retry_policy.py",
       "providers": [
         "claude",
+        "codex",
         "opencode"
       ]
     },

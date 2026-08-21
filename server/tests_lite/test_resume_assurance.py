@@ -205,6 +205,12 @@ def test_compiler_selects_provider_specific_producer_credentials() -> None:
             "eligible_producer_missing",
         ),
         (
+            lambda value: value["worker_census"]["producers"][0].update(
+                oracle_digest="sha256:" + "0" * 64
+            ),
+            "producer_census_mismatch",
+        ),
+        (
             lambda value: value["protected_inputs"].update({"server/zerg/qa/codex_native_resume.py": "sha256:" + "0" * 64}),
             "protected_input_digest_mismatch",
         ),

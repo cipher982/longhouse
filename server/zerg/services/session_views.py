@@ -965,8 +965,8 @@ class SessionResponse(UTCBaseModel):
     timeline_title: Optional[str] = Field(
         None,
         description=(
-            "Resolved headline a client should render: frozen anchor_title, else ready "
-            "summary_title, else sanitized first message, else 'Summarizing…'/structured fallback. "
+            "Resolved headline a client should render: trusted frozen anchor_title, else "
+            "sanitized first message, else an explicit empty-session/structured fallback. "
             "Always non-empty. Clients render this verbatim — no client-side fallback ladder."
         ),
     )

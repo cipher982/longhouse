@@ -332,6 +332,7 @@ def _storage_title_obligation_clause(table):
             factory_assurance,
             and_(
                 table.c.environment.notin_(("test", "e2e")),
+                func.lower(func.coalesce(table.c.launch_actor, "")) != "automation",
                 ~provider_proof_session_clause(table),
             ),
         ),

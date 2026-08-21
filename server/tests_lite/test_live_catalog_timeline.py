@@ -667,9 +667,9 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     [card] = response.sessions
     assert card.thread_id == str(thread_id)
     assert card.head.id == str(session_id)
-    assert card.head.timeline_title == "Storage isolation"
-    assert card.head.title_state == "ready"
-    assert card.head.title_source == "ai"
+    assert card.head.timeline_title == "Fix the database"
+    assert card.head.title_state == "degraded"
+    assert card.head.title_source == "prompt"
     assert card.head.runtime_phase is None
     assert card.head.runtime_display.state is None
     assert card.head.timeline_card.status.label == "Activity unknown"
@@ -703,8 +703,67 @@ def test_failed_matching_anchor_and_summary_fall_back_to_project_title():
     )
 
     assert live_catalog_timeline._title(session, card) == "cursor-workspace-di-source · Empty session"
-    assert live_catalog_timeline._title_state(session, card) == "degraded"
+    assert live_catalog_timeline._title_state(session, card) == "awaiting_input"
     assert live_catalog_timeline._title_source(session, card) == "project"
+
+
+def test_summary_never_establishes_title_readiness_or_provenance():
+    now = datetime.now(timezone.utc)
+    session = LiveSessionCatalog(
+        session_id=str(uuid4()),
+        provider="codex",
+        environment="development",
+        project="longhouse",
+        started_at=now,
+        summary_title="Drifting summary",
+        first_user_message_preview="Fix the title authority",
+        user_messages=1,
+    )
+    card = LiveTimelineCard(
+        session_id=session.session_id,
+        provider=session.provider,
+        environment=session.environment,
+        project=session.project,
+        started_at=now,
+        summary_title=session.summary_title,
+        first_user_message_preview=session.first_user_message_preview,
+        user_messages=1,
+    )
+
+    assert live_catalog_timeline._title_projection(session, card) == (
+        "Fix the title authority",
+        "pending",
+        "prompt",
+    )
+
+
+def test_trusted_anchor_is_ready_even_without_first_message_preview():
+    now = datetime.now(timezone.utc)
+    session = LiveSessionCatalog(
+        session_id=str(uuid4()),
+        provider="claude",
+        environment="development",
+        project="longhouse",
+        started_at=now,
+        summary_title="New drifting summary",
+        anchor_title="Stable generated title",
+        user_messages=1,
+    )
+    card = LiveTimelineCard(
+        session_id=session.session_id,
+        provider=session.provider,
+        environment=session.environment,
+        project=session.project,
+        started_at=now,
+        summary_title=session.summary_title,
+        user_messages=1,
+    )
+
+    assert live_catalog_timeline._title_projection(session, card) == (
+        "Stable generated title",
+        "ready",
+        "ai",
+    )
 
 
 def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path):
@@ -809,6 +868,7 @@ def test_hidden_factory_assurance_projection_preserves_launch_tuple(tmp_path):
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
+                summary_title="Synthetic factory summary",
                 hidden_from_default_timeline=1,
                 launch_actor="automation",
                 launch_surface="factory_assurance",
@@ -826,6 +886,7 @@ def test_hidden_factory_assurance_projection_preserves_launch_tuple(tmp_path):
                 cwd="/factory/title-assurance",
                 started_at=now - timedelta(days=3),
                 last_activity_at=now,
+                summary_title="Synthetic factory summary",
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
@@ -1239,6 +1300,7 @@ def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_pa
                     user_messages=1,
                     assistant_messages=1,
                     summary_title=title,
+                    anchor_title=title,
                     primary_thread_id=str(thread_id),
                     created_at=now,
                     updated_at=now,

@@ -1602,7 +1602,7 @@
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
       "requires_longhouse_cli": false,
       "managed_transport": "antigravity_hook_inbox",
-      "console_adapter": "antigravity_print",
+      "console_adapter": null,
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "adapter_sources": [
@@ -1624,7 +1624,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
-      "support_tier": "launch",
+      "support_tier": "maintenance",
       "interaction_probes": [
         {
           "probe_id": "antigravity_shadow_control_absence",
@@ -1798,7 +1798,7 @@
         }
       },
       "can_resume": false,
-      "turn_start": true,
+      "turn_start": false,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -1810,7 +1810,7 @@
           "level": "live_token",
           "source": "real agy --print returned a structured single-turn result carrying the requested marker",
           "disposition": "implemented",
-          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-run-once, which drives the exact argv antigravity_print builds. A pass therefore covers the Console adapter's argv, its structured-result parse and its transcript resolution against the installed release, not only the run-once operation.",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-run-once. This is upstream provider-release evidence for the bounded `agy --print` surface; it does not advertise or qualify a Longhouse Console adapter.",
           "observed_provider_version": "1.1.17"
         },
         "reattach": {
@@ -1879,17 +1879,15 @@
           "owner_action": "real agy transcript assertion"
         },
         "turn_start": {
-          "level": "hermetic",
-          "source": "antigravity_print one-shot Console adapter argv and result-binding tests",
-          "disposition": "implemented",
-          "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority.",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "real agy Console turn canary"
+          "level": "none",
+          "source": "Antigravity is maintenance-tier and has no product Console adapter",
+          "disposition": "policy_disabled",
+          "reason": "Antigravity remains an ingest, archive, and transcript maintenance provider. A provider release probe for `agy --print` does not authorize a user-facing Console control path.",
+          "routed_to": "shadow_archive_only"
         }
       },
       "machine_control_supports": [
-        "antigravity.send",
-        "antigravity.turn_start"
+        "antigravity.send"
       ],
       "adapter_digest": "1f12612715d34b9c11b1861961adfdbb06f6a6f040691045869c32773c2eed7a"
     },

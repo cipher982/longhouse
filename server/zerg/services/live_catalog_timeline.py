@@ -248,16 +248,22 @@ def project_catalog_session_facts(
     )
 
 
-def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
+def _title_projection(session: LiveSessionCatalog, card: LiveTimelineCard) -> tuple[str, str, str]:
+    """Project one headline and its lifecycle from the same trusted facts.
+
+    ``anchor_title`` is the sole AI-title authority. ``summary_title`` remains
+    useful summary/search data, but it may drift and must not make title debt
+    look complete. Keeping display, state, and source in one projection avoids
+    the three fields silently choosing different authorities.
+    """
+
     user_messages, assistant_messages, tool_calls = _message_counts(session, card)
     raw_first_user_message = card.first_user_message_preview or session.first_user_message_preview
     first_user_message = sanitize_timeline_title(raw_first_user_message, max_words=6)
-    # ``summary_title`` is a drifting artifact and failed title attempts may
-    # have copied the prompt into ``anchor_title``. Resolve one server-owned
-    # headline instead of letting either fallback masquerade as an AI title.
-    effective_anchor = _effective_ai_title(session, card, raw_first_user_message)
-    return resolve_timeline_title(
-        anchor_title=effective_anchor,
+    title_error = str(session.title_last_error or "").strip()
+    trusted_anchor = None if title_error else sanitize_timeline_title(session.anchor_title, max_words=6)
+    title = resolve_timeline_title(
+        anchor_title=trusted_anchor,
         summary_title=None,
         summary_status="ready" if session.summary else "unavailable",
         first_user_message=first_user_message,
@@ -268,6 +274,18 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
         assistant_messages=assistant_messages,
         tool_calls=tool_calls,
     )
+    title_state, title_source = resolve_title_provenance(
+        anchor_title=trusted_anchor,
+        first_user_message=raw_first_user_message,
+        user_messages=user_messages,
+        title_retry_at=session.title_retry_at,
+        title_last_error=session.title_last_error,
+    )
+    return title, title_state, title_source
+
+
+def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
+    return _title_projection(session, card)[0]
 
 
 def _message_counts(session: LiveSessionCatalog, card: LiveTimelineCard) -> tuple[int, int, int]:
@@ -278,56 +296,12 @@ def _message_counts(session: LiveSessionCatalog, card: LiveTimelineCard) -> tupl
     )
 
 
-def _effective_ai_title(session: LiveSessionCatalog, card: LiveTimelineCard, first_user_message: str | None) -> str | None:
-    """Return a title that is safe to present as generated in the timeline."""
-
-    title_error = str(session.title_last_error or "").strip()
-    raw_anchor = sanitize_timeline_title(session.anchor_title, max_words=6)
-    anchor = None if title_error else raw_anchor
-    if anchor:
-        return anchor
-    summary = sanitize_timeline_title(card.summary_title or session.summary_title, max_words=6)
-    prompt_fallback = sanitize_timeline_title(first_user_message, max_words=6)
-    if title_error and title_error != "no_meaningful_user_text":
-        # When the failed anchor and summary are identical, the old retry
-        # path most likely copied the prompt into both columns. Without a
-        # first-message preview there is no evidence that it is generated.
-        # Preserve a distinct summary, which is the safe compatibility case.
-        if summary and raw_anchor and summary != raw_anchor:
-            return summary
-        if first_user_message is None or summary == prompt_fallback:
-            return None
-    # Storage-v2 used to copy the prompt into summary_title before AI title
-    # reconciliation. It is not a generated title when it is equivalent to
-    # that fallback.
-    return summary if summary and summary != prompt_fallback else None
-
-
 def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
-    user_messages, _assistant_messages, _tool_calls = _message_counts(session, card)
-    first_user_message = card.first_user_message_preview or session.first_user_message_preview
-    effective_title = _effective_ai_title(session, card, first_user_message)
-    return resolve_title_provenance(
-        anchor_title=effective_title,
-        first_user_message=first_user_message,
-        user_messages=user_messages,
-        title_retry_at=session.title_retry_at,
-        # A surviving summary is a valid generated title even if a later
-        # anchor attempt failed. Only the failed anchor itself is degraded.
-        title_last_error=None if effective_title else session.title_last_error,
-    )[1]
+    return _title_projection(session, card)[2]
 
 
 def _title_state(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
-    if _effective_ai_title(session, card, card.first_user_message_preview or session.first_user_message_preview):
-        return "ready"
-    if session.title_last_error == "no_meaningful_user_text":
-        return "exempt"
-    if session.title_retry_at is not None or str(session.title_last_error or "").strip():
-        return "degraded"
-    if card.first_user_message_preview or session.first_user_message_preview:
-        return "pending"
-    return "awaiting_input"
+    return _title_projection(session, card)[1]
 
 
 def _project_session_state(
@@ -380,7 +354,7 @@ def _pending_response_from_catalog(
     commit_seq: int | None,
 ):
     response = build_live_launch_placeholder_response(readiness)
-    title = _title(session, card)
+    title, title_state, title_source = _title_projection(session, card)
     ended_at = normalize_utc(session.ended_at)
     last_activity_at = normalize_utc(card.last_activity_at) or normalize_utc(session.last_activity_at) or response.started_at
     capabilities = response.capabilities
@@ -439,10 +413,8 @@ def _pending_response_from_catalog(
             "summary_title": card.summary_title or session.summary_title,
             "anchor_title": session.anchor_title,
             "timeline_title": title,
-            "title_state": _title_state(session, card),
-            "title_source": _title_source(session, card)
-            if card.first_user_message_preview or session.first_user_message_preview
-            else "project",
+            "title_state": title_state,
+            "title_source": title_source,
             "hidden_from_default_timeline": bool(session.hidden_from_default_timeline),
             "launch_actor": session.launch_actor,
             "launch_surface": session.launch_surface,
@@ -533,7 +505,7 @@ def _response_from_catalog(
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
-    title = _title(session, card)
+    title, title_state, title_source = _title_projection(session, card)
     return SessionResponse(
         id=str(session.session_id),
         origin_kind=session.origin_kind,
@@ -569,8 +541,8 @@ def _response_from_catalog(
         summary_title=card.summary_title or session.summary_title,
         anchor_title=session.anchor_title,
         timeline_title=title,
-        title_state=_title_state(session, card),
-        title_source=_title_source(session, card) if card.first_user_message_preview or session.first_user_message_preview else "project",
+        title_state=title_state,
+        title_source=title_source,
         hidden_from_default_timeline=bool(session.hidden_from_default_timeline),
         launch_actor=session.launch_actor,
         launch_surface=session.launch_surface,

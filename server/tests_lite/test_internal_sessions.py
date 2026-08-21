@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import is_hatch_execution_contract
+from zerg.services.internal_sessions import is_factory_title_assurance_session
 from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
 from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_factory_cwd
@@ -110,6 +111,35 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
         machine_id="provider-factory-resume",
         first_user_text="Review the deployment plan",
     ) == "test"
+
+
+def test_factory_title_assurance_requires_every_typed_identity_field():
+    exact = {
+        "provider": "claude",
+        "environment": "local",
+        "project": "longhouse-title-assurance",
+        "cwd": "/factory/title-assurance",
+        "machine_id": "provider-factory-resume",
+        "origin_kind": "console",
+        "hidden_from_default_timeline": True,
+        "launch_actor": "automation",
+        "launch_surface": "factory_assurance",
+    }
+    near_misses = {
+        "provider": "codex",
+        "environment": "test",
+        "project": "longhouse-title-assurance-near-miss",
+        "cwd": "/factory/title-assurance-near-miss",
+        "machine_id": "provider-factory-other",
+        "origin_kind": "test_or_canary",
+        "hidden_from_default_timeline": False,
+        "launch_actor": "human_ui",
+        "launch_surface": "test",
+    }
+
+    assert is_factory_title_assurance_session(**exact)
+    for field, value in near_misses.items():
+        assert not is_factory_title_assurance_session(**{**exact, field: value}), field
 
 
 def test_temporary_raw_provider_evidence_workspace_is_automation_classified():

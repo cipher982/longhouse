@@ -10005,7 +10005,7 @@ export interface components {
             anchor_title?: string | null;
             /**
              * Timeline Title
-             * @description Resolved headline a client should render: frozen anchor_title, else ready summary_title, else sanitized first message, else 'Summarizing…'/structured fallback. Always non-empty. Clients render this verbatim — no client-side fallback ladder.
+             * @description Resolved headline a client should render: trusted frozen anchor_title, else sanitized first message, else an explicit empty-session/structured fallback. Always non-empty. Clients render this verbatim — no client-side fallback ladder.
              */
             timeline_title?: string | null;
             /**

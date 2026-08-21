@@ -488,7 +488,6 @@ def test_typed_factory_title_assurance_is_the_only_factory_machine_title_obligat
     engine = _build_engine(tmp_path)
     now = datetime.now(UTC).replace(microsecond=0)
     assurance_id = uuid4()
-    ordinary_factory_id = uuid4()
     common = {
         "tenant_id": "tenant-a",
         "owner_id": "42",
@@ -508,19 +507,33 @@ def test_typed_factory_title_assurance_is_the_only_factory_machine_title_obligat
         "commit_seq": 1,
         "created_at": now,
         "updated_at": now,
+        "launch_surface": "factory_assurance",
+    }
+    near_misses = {
+        "provider": "codex",
+        "environment": "test",
+        "project": "longhouse-title-assurance-near-miss",
+        "cwd": "/factory/title-assurance-near-miss",
+        "machine_id": "provider-factory-other",
+        "origin_kind": "test_or_canary",
+        "hidden_from_default_timeline": 0,
+        "launch_actor": "human_ui",
+        "launch_surface": "test",
+    }
+    near_miss_rows = {
+        field: {**common, "session_id": str(uuid4()), field: value}
+        for field, value in near_misses.items()
     }
     with engine.begin() as connection:
         connection.execute(
             StorageSession.__table__.insert(),
-            [
-                {**common, "session_id": str(assurance_id), "launch_surface": "factory_assurance"},
-                {**common, "session_id": str(ordinary_factory_id), "launch_surface": "test"},
-            ],
+            [{**common, "session_id": str(assurance_id)}, *near_miss_rows.values()],
         )
 
     candidates = _candidate_ids(engine)
     assert str(assurance_id) in candidates
-    assert str(ordinary_factory_id) not in candidates
+    for field, row in near_miss_rows.items():
+        assert row["session_id"] not in candidates, field
     health = CatalogStore(engine).read_storage_title_dependency_health()
     assert health["pending_sessions"] == 1
 
