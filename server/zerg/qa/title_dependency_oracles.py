@@ -653,6 +653,8 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
     stub.start()
     runtime: _RuntimeHost | None = None
     runtime_exit_codes: list[int | None] = []
+    runtime_host_stopped = False
+    loopback_stub_stopped = False
     session_ids: list[str] = []
     unrelated_terminal_id = ""
     row_local_empty_id = ""
@@ -826,6 +828,8 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
             if runtime is not None:
                 runtime_exit_codes.append(runtime.stop())
             stub.close()
+            runtime_host_stopped = runtime is None or runtime.process is None
+            loopback_stub_stopped = not stub.thread.is_alive()
             if (root / "runtime.log").is_file():
                 runtime_log = (root / "runtime.log").read_text(encoding="utf-8", errors="replace")[-32_000:]
                 runtime_log = runtime_log.replace(unavailable_token, "<redacted-generation-a>").replace(
@@ -968,14 +972,17 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
             "session_ids": session_ids,
         },
     )
+    temporary_runtime_removed = not root.exists()
+    cleanup_passed = runtime_host_stopped and loopback_stub_stopped and temporary_runtime_removed
     _write_json(
         evidence_root / "cleanup-receipt.json",
         {
-            "status": "pass" if all(code in (0, None) for code in runtime_exit_codes) else "fail",
+            "status": "pass" if cleanup_passed else "fail",
             "orphan_count": 0,
             "runtime_exit_codes": runtime_exit_codes,
-            "loopback_stub_stopped": True,
-            "temporary_runtime_removed": True,
+            "runtime_host_stopped": runtime_host_stopped,
+            "loopback_stub_stopped": loopback_stub_stopped,
+            "temporary_runtime_removed": temporary_runtime_removed,
         },
     )
     return {"passed": passed, "observation": observation}

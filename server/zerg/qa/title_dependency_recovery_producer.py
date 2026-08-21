@@ -17,9 +17,9 @@ from zerg.qa.title_dependency_oracles import run_hermetic_title_dependency_oracl
 ASSERTION_ID = "dependency_incident_recovery"
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.title_dependency_recovery.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id="title_dependency_recovery",
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=((ASSERTION_ID, None),),
     providers=(),
     platforms=("linux",),
@@ -90,7 +90,14 @@ def run(evidence_root: Path) -> dict[str, Any]:
         if not (evidence_root / "cleanup-receipt.json").exists():
             _write_json(
                 evidence_root / "cleanup-receipt.json",
-                {"status": "fail", "orphan_count": 0, "error_type": type(exc).__name__},
+                {
+                    "status": "fail",
+                    "orphan_count": 0,
+                    "runtime_host_stopped": False,
+                    "loopback_stub_stopped": False,
+                    "temporary_runtime_removed": False,
+                    "error_type": type(exc).__name__,
+                },
             )
         result = {
             "schema_version": 1,

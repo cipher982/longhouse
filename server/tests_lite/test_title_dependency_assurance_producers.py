@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -143,8 +144,8 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
     assert "runtime_host_title_provenance" in LIVE_REGISTRATION.observed_activity
-    assert RECOVERY_REGISTRATION.producer_revision == 7
-    assert RECOVERY_REGISTRATION.scenario_revision == 7
+    assert RECOVERY_REGISTRATION.producer_revision == 8
+    assert RECOVERY_REGISTRATION.scenario_revision == 8
     assert "legacy_exact_provider_proof_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
 
 
@@ -193,6 +194,11 @@ def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path, mo
     assert observation["aged_backlog_degrades_with_healthy_dependency"] is True
     assert observation["same_rows_recovered"] is True
     assert observation["storage_v2_read_count"] == 0
+    cleanup = json.loads((evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert cleanup["status"] == "pass"
+    assert cleanup["runtime_host_stopped"] is True
+    assert cleanup["loopback_stub_stopped"] is True
+    assert cleanup["temporary_runtime_removed"] is True
     for artifact in evidence_root.rglob("*"):
         if artifact.is_file():
             retained = artifact.read_text(encoding="utf-8", errors="replace")
