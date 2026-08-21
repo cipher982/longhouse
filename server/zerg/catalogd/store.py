@@ -6779,53 +6779,66 @@ class CatalogStore:
                 and live_console_session is None
                 and not (existing_session is not None and existing_session["origin_kind"] == "console")
             )
-            if provider_automation or (live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary"):
-                # A managed canary's provider transcript has no authority to
-                # overwrite launch provenance. Its PTY looks human, and Cursor
-                # storage rows historically reported local/cursor_store.
-                if live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary":
-                    session_values.update(
-                        environment=live_catalog_session["environment"],
-                        project=live_catalog_session["project"],
-                        cwd=live_catalog_session["cwd"],
-                        git_repo=live_catalog_session["git_repo"],
-                        git_branch=live_catalog_session["git_branch"],
-                        origin_kind=live_catalog_session["origin_kind"],
-                        hidden_from_default_timeline=int(live_catalog_session["hidden_from_default_timeline"] or 0),
-                        launch_actor=live_catalog_session["launch_actor"],
-                        launch_surface=live_catalog_session["launch_surface"],
+            retained_launch_provenance = bool(
+                live_catalog_session is not None and live_catalog_session["launch_actor"] and live_catalog_session["launch_surface"]
+            )
+            retained_test_policy = bool(live_catalog_session is not None and live_catalog_session["origin_kind"] == "test_or_canary")
+            if retained_launch_provenance:
+                # Registration owns managed launch provenance. A later provider
+                # transcript may look like factory automation from its cwd or
+                # prompt, but it cannot turn a human Helm launch into an
+                # automation launch (or vice versa) before Resume validates it.
+                session_values.update(
+                    origin_kind=live_catalog_session["origin_kind"],
+                    hidden_from_default_timeline=int(live_catalog_session["hidden_from_default_timeline"] or 0),
+                    launch_actor=live_catalog_session["launch_actor"],
+                    launch_surface=live_catalog_session["launch_surface"],
+                )
+            elif retained_test_policy:
+                # Older canaries may predate launch provenance. Preserve their
+                # already-retained policy even when a later transcript no
+                # longer carries the prompt/cwd heuristic that found them.
+                session_values.update(
+                    environment=live_catalog_session["environment"],
+                    project=live_catalog_session["project"],
+                    cwd=live_catalog_session["cwd"],
+                    git_repo=live_catalog_session["git_repo"],
+                    git_branch=live_catalog_session["git_branch"],
+                    origin_kind=live_catalog_session["origin_kind"],
+                    hidden_from_default_timeline=int(live_catalog_session["hidden_from_default_timeline"] or 0),
+                    launch_actor=live_catalog_session["launch_actor"],
+                    launch_surface=live_catalog_session["launch_surface"],
+                )
+            elif provider_automation:
+                session_values.update(
+                    environment="test",
+                    origin_kind="test_or_canary",
+                    hidden_from_default_timeline=1,
+                    launch_actor="automation",
+                    launch_surface="test",
+                )
+                for table in (live_session_catalog, live_timeline_card):
+                    connection.execute(
+                        update(table)
+                        .where(table.c.session_id == session_key)
+                        .values(
+                            environment="test",
+                            origin_kind="test_or_canary",
+                            hidden_from_default_timeline=1,
+                            launch_actor="automation",
+                            launch_surface="test",
+                            updated_at=commit_time,
+                        )
                     )
-                else:
-                    session_values.update(
-                        environment="test",
+                connection.execute(
+                    update(live_session_thread)
+                    .where(live_session_thread.c.session_id == session_key)
+                    .values(
                         origin_kind="test_or_canary",
                         hidden_from_default_timeline=1,
-                        launch_actor="automation",
-                        launch_surface="test",
+                        updated_at=commit_time,
                     )
-                    if provider_automation:
-                        for table in (live_session_catalog, live_timeline_card):
-                            connection.execute(
-                                update(table)
-                                .where(table.c.session_id == session_key)
-                                .values(
-                                    environment="test",
-                                    origin_kind="test_or_canary",
-                                    hidden_from_default_timeline=1,
-                                    launch_actor="automation",
-                                    launch_surface="test",
-                                    updated_at=commit_time,
-                                )
-                            )
-                        connection.execute(
-                            update(live_session_thread)
-                            .where(live_session_thread.c.session_id == session_key)
-                            .values(
-                                origin_kind="test_or_canary",
-                                hidden_from_default_timeline=1,
-                                updated_at=commit_time,
-                            )
-                        )
+                )
             if live_console_session is not None:
                 # A Console session outlives each bounded provider process. The
                 # provider transcript does not carry the Console launch
@@ -6899,7 +6912,7 @@ class CatalogStore:
                     )
                     .values(hidden_from_default_timeline=0, updated_at=commit_time)
                 )
-            if hatch_automation:
+            if hatch_automation and not retained_launch_provenance:
                 session_values.update(
                     origin_kind="hatch_automation",
                     hidden_from_default_timeline=1,

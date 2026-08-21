@@ -326,26 +326,35 @@ fn wake_transcript(
     generation_id: Option<&Value>,
     transcript_path: Option<&str>,
 ) {
+    let home_root = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let cursor_home = std::env::var_os("CURSOR_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cursor")
-        });
+        .unwrap_or_else(|| home_root.join(".cursor"));
+    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_root.join(".config"));
     let transcript_hint = transcript_path
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("LONGHOUSE_CURSOR_TRANSCRIPT_PATH").map(PathBuf::from))
         .filter(|path| path.is_file());
     let transcript = transcript_hint.or_else(|| {
-        let workspaces = std::fs::read_dir(cursor_home.join("chats")).ok()?;
-        let stores: Vec<PathBuf> = workspaces
-            .flatten()
-            .map(|entry| entry.path().join(conversation).join("store.db"))
-            .filter(|path| path.is_file())
-            .collect();
-        let [store] = stores.as_slice() else {
-            return None;
-        };
-        Some(store.clone())
+        [
+            xdg_config_home.join("cursor/chats"),
+            cursor_home.join("chats"),
+        ]
+        .into_iter()
+        .find_map(|root| {
+            let workspaces = std::fs::read_dir(root).ok()?;
+            let stores: Vec<PathBuf> = workspaces
+                .flatten()
+                .map(|entry| entry.path().join(conversation).join("store.db"))
+                .filter(|path| path.is_file())
+                .collect();
+            let [store] = stores.as_slice() else {
+                return None;
+            };
+            Some(store.clone())
+        })
     });
     let Some(transcript) = transcript else {
         return;

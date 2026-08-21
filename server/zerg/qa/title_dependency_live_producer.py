@@ -11,15 +11,16 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.title_dependency_oracles import TitleDependencyTemporarilyUnavailable
 from zerg.qa.title_dependency_oracles import artifact_manifest
 from zerg.qa.title_dependency_oracles import run_live_title_dependency_oracle
 
 ASSERTION_ID = "dependency_health"
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.title_dependency_health.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id="title_dependency_live_health",
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=((ASSERTION_ID, None),),
     providers=(),
     platforms=("linux",),
@@ -88,7 +89,11 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "status": "fail",
-            "failure_code": "title_dependency_health_failed",
+            "failure_code": (
+                "title_dependency_temporarily_unavailable"
+                if isinstance(exc, TitleDependencyTemporarilyUnavailable)
+                else "title_dependency_health_failed"
+            ),
             "error": f"{type(exc).__name__}: {exc}",
             "observation": {},
             "assertions": {ASSERTION_ID: False},

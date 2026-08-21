@@ -196,7 +196,7 @@ def test_product_health_exposes_durable_session_title_dependency_incident(tmp_pa
             "status": "degraded",
             "open_dependencies": 1,
             "blocked_sessions": 4,
-            "dependencies": [{"state": "open", "incident_id": str(uuid4())}],
+            "dependencies": [{"state": "open", "incident_id": str(uuid4()), "failure_class": "availability"}],
         },
     )
     SessionLocal = _make_db(tmp_path)
@@ -208,6 +208,9 @@ def test_product_health_exposes_durable_session_title_dependency_incident(tmp_pa
     assert check.verdict == "degraded"
     assert check.coverage == "full"
     assert "4 sessions blocked" in check.headline
+    assert check.signals["open_availability_dependencies"] == 1
+    assert check.signals["open_authentication_dependencies"] == 0
+    assert check.signals["open_unclassified_dependencies"] == 0
 
 
 def test_product_health_degrades_on_aged_title_backlog_with_healthy_dependency(tmp_path, monkeypatch):

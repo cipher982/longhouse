@@ -32,8 +32,12 @@ pub fn get_providers() -> Vec<ProviderConfig> {
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".claude"));
+    let xdg_config_root = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
 
-    provider_candidates(&home, &claude_root)
+    provider_candidates(&home, &claude_root, &xdg_config_root)
         .into_iter()
         .filter(|p| p.root.exists())
         .collect()
@@ -55,7 +59,11 @@ pub fn canonical_provider_name(provider: &str) -> Option<&'static str> {
     }
 }
 
-fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
+fn provider_candidates(
+    home: &Path,
+    claude_root: &Path,
+    xdg_config_root: &Path,
+) -> Vec<ProviderConfig> {
     vec![
         ProviderConfig {
             name: "claude",
@@ -86,6 +94,11 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             name: "pi",
             root: home.join(".longhouse").join("agent").join("pi-console"),
             extension: "jsonl",
+        },
+        ProviderConfig {
+            name: "cursor",
+            root: xdg_config_root.join("cursor").join("chats"),
+            extension: "db",
         },
         ProviderConfig {
             name: "cursor",
@@ -476,7 +489,8 @@ mod tests {
     #[test]
     fn cursor_agent_transcript_jsonl_is_discovered_beside_store_db() {
         let home = PathBuf::from("/tmp/home");
-        let providers = provider_candidates(&home, Path::new("/tmp/claude"));
+        let providers =
+            provider_candidates(&home, Path::new("/tmp/claude"), Path::new("/tmp/config"));
         let transcript = home
             .join(".cursor/projects/workspace/agent-transcripts")
             .join(
@@ -546,8 +560,9 @@ mod tests {
     fn provider_candidates_use_claude_config_dir_for_claude_root() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
+        let xdg_config_root = PathBuf::from("/tmp/custom-config");
 
-        let providers = provider_candidates(&home, &claude_root);
+        let providers = provider_candidates(&home, &claude_root, &xdg_config_root);
 
         assert_eq!(providers[0].name, "claude");
         assert_eq!(providers[0].root, claude_root.join("projects"));
@@ -568,15 +583,19 @@ mod tests {
             providers[5].root,
             home.join(".longhouse").join("agent").join("pi-console")
         );
-        assert_eq!(providers[6].root, home.join(".cursor").join("chats"));
-        assert_eq!(providers[7].root, home.join(".cursor").join("projects"));
         assert_eq!(
-            providers[8].root,
+            providers[6].root,
+            xdg_config_root.join("cursor").join("chats")
+        );
+        assert_eq!(providers[7].root, home.join(".cursor").join("chats"));
+        assert_eq!(providers[8].root, home.join(".cursor").join("projects"));
+        assert_eq!(
+            providers[9].root,
             home.join(".longhouse")
                 .join("agent")
                 .join("cursor-acp-source")
         );
-        assert_eq!(providers[9].root, home.join(".gemini").join("tmp"));
+        assert_eq!(providers[10].root, home.join(".gemini").join("tmp"));
         assert!(providers
             .iter()
             .all(|provider| canonical_provider_name(provider.name) == Some(provider.name)));
@@ -588,7 +607,7 @@ mod tests {
     fn antigravity_provider_ignores_full_transcript_mirror() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
-        let providers = provider_candidates(&home, &claude_root);
+        let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
         let transcript = home
             .join(".gemini")
             .join("antigravity-cli")
@@ -610,7 +629,7 @@ mod tests {
     fn opencode_provider_only_matches_canonical_database_file() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
-        let providers = provider_candidates(&home, &claude_root);
+        let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
         let db = home
             .join(".local")
             .join("share")
@@ -626,7 +645,7 @@ mod tests {
     fn opencode_watcher_maps_durable_files_but_ignores_shared_memory() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
-        let providers = provider_candidates(&home, &claude_root);
+        let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
         let db = home
             .join(".local")
             .join("share")
@@ -650,7 +669,7 @@ mod tests {
     fn cursor_provider_only_matches_the_canonical_store_database() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
-        let providers = provider_candidates(&home, &claude_root);
+        let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
         let db = home
             .join(".cursor")
             .join("chats")
@@ -666,7 +685,7 @@ mod tests {
     fn cursor_watcher_maps_durable_files_but_ignores_shared_memory() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
-        let providers = provider_candidates(&home, &claude_root);
+        let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
         let db = home
             .join(".cursor")
             .join("chats")

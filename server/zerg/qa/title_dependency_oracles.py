@@ -41,6 +41,10 @@ RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 _TITLE_CHECK = "session_titles"
 
 
+class TitleDependencyTemporarilyUnavailable(RuntimeError):
+    """The live product contract was blocked only by a typed availability incident."""
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -645,6 +649,20 @@ def _wait_for(predicate, *, timeout: float, description: str):
     raise TimeoutError(f"timed out waiting for {description}; last={last!r}")
 
 
+def _live_title_blocked_by_availability(snapshot: dict[str, Any]) -> bool:
+    conditions = snapshot.get("conditions") or {}
+    health = snapshot.get("title_health") or {}
+    signals = health.get("signals") if isinstance(health.get("signals"), dict) else {}
+    return bool(
+        conditions.get("typed_identity_persisted") is True
+        and health.get("verdict") == "degraded"
+        and int(signals.get("open_availability_dependencies") or 0) > 0
+        and int(signals.get("open_authentication_dependencies") or 0) == 0
+        and int(signals.get("open_unclassified_dependencies") or 0) == 0
+        and int(signals.get("terminal_sessions") or 0) == 0
+    )
+
+
 def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
     unavailable_token = "factory-title-generation-a"
@@ -1003,34 +1021,117 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
         message=f"Verify typed hidden title assurance health {uuid4().hex[:12]}",
     )
     write_receipt = _post_envelope(api_url, token, payload)
+    _write_json(
+        evidence_root / "runtime-request-receipt.json",
+        {
+            "runtime_host_paths": [
+                "/api/agents/storage/v2/capabilities",
+                "/api/agents/storage/v2/envelopes",
+                "/api/agents/sessions/{session_id}",
+                "/api/agents/observability/checks/session_titles",
+            ],
+            "direct_provider_paths": [],
+            "credential_mutations": [],
+            "obligation_session_id": session_id,
+            "write_receipt": write_receipt,
+        },
+    )
 
-    def completed_obligation():
-        session = _session_projection(api_url, token, session_id)
-        _health, check = _product_health(api_url, token)
-        if check.get("verdict") == "degraded":
-            return None
-        if (
-            session
-            and session.get("provider") == "claude"
-            and session.get("environment") == "local"
-            and session.get("project") == FACTORY_TITLE_ASSURANCE_PROJECT
-            and session.get("cwd") == FACTORY_TITLE_ASSURANCE_CWD
-            and session.get("device_id") == PROVIDER_FACTORY_MACHINE_ID
-            and session.get("origin_kind") == "console"
-            and session.get("hidden_from_default_timeline") is True
-            and session.get("launch_actor") == "automation"
-            and session.get("launch_surface") == FACTORY_TITLE_ASSURANCE_SURFACE
-            and session.get("anchor_title")
-            and session.get("title_state") == "ready"
-            and session.get("title_source") == "ai"
-            and check.get("verdict") == "ok"
-        ):
-            return {"session": session, "title_health": check, "degraded": False}
-        return None
+    timeout_seconds = 120
+    deadline = time.monotonic() + timeout_seconds
+    transitions: list[dict[str, Any]] = []
+    previous_transition: str | None = None
+    final_snapshot: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        try:
+            session = _session_projection(api_url, token, session_id) or {}
+            _health, title_health = _product_health(api_url, token)
+            health_signals = title_health.get("signals") if isinstance(title_health.get("signals"), dict) else {}
+            identity_persisted = (
+                session.get("provider") == "claude"
+                and session.get("environment") == "local"
+                and session.get("project") == FACTORY_TITLE_ASSURANCE_PROJECT
+                and session.get("cwd") == FACTORY_TITLE_ASSURANCE_CWD
+                and session.get("device_id") == PROVIDER_FACTORY_MACHINE_ID
+                and session.get("origin_kind") == "console"
+                and session.get("hidden_from_default_timeline") is True
+                and session.get("launch_actor") == "automation"
+                and session.get("launch_surface") == FACTORY_TITLE_ASSURANCE_SURFACE
+            )
+            title_ready = (
+                bool(session.get("anchor_title")) and session.get("title_state") == "ready" and session.get("title_source") == "ai"
+            )
+            backlog_clear = (
+                health_signals.get("open_dependencies") == 0
+                and health_signals.get("terminal_sessions") == 0
+                and health_signals.get("overdue_sessions") == 0
+            )
+            conditions = {
+                "session_visible": bool(session),
+                "typed_identity_persisted": identity_persisted,
+                "ai_title_ready": title_ready,
+                "dependency_health_ok": title_health.get("verdict") == "ok",
+                "dependency_backlog_clear": backlog_clear,
+            }
+            final_snapshot = {
+                "observed_at": _now(),
+                "session": session,
+                "title_health": title_health,
+                "conditions": conditions,
+            }
+        except (httpx.HTTPError, ValueError) as exc:
+            final_snapshot = {
+                "observed_at": _now(),
+                "error": f"{type(exc).__name__}: {exc}",
+                "conditions": {},
+            }
+        transition = {
+            "error": final_snapshot.get("error"),
+            "conditions": final_snapshot.get("conditions"),
+            "title_state": (final_snapshot.get("session") or {}).get("title_state"),
+            "health_verdict": (final_snapshot.get("title_health") or {}).get("verdict"),
+            "health_signals": (final_snapshot.get("title_health") or {}).get("signals"),
+        }
+        encoded_transition = json.dumps(transition, sort_keys=True, default=str)
+        if encoded_transition != previous_transition:
+            transitions.append({"observed_at": final_snapshot["observed_at"], **transition})
+            if len(transitions) > 32:
+                transitions = transitions[:1] + transitions[-31:]
+            previous_transition = encoded_transition
+        if final_snapshot.get("conditions") and all(final_snapshot["conditions"].values()):
+            break
+        time.sleep(0.2)
+    else:
+        _write_json(
+            evidence_root / "live-runtime-observation.json",
+            {
+                "status": "timeout",
+                "timeout_seconds": timeout_seconds,
+                "final": final_snapshot,
+                "transitions": transitions,
+                "write_receipt": write_receipt,
+            },
+        )
+        _write_json(
+            evidence_root / "cleanup-receipt.json",
+            {
+                "status": "pass",
+                "orphan_count": 0,
+                "persistent_hidden_obligation": session_id,
+                "owned_process_count": 0,
+            },
+        )
+        final_conditions = final_snapshot.get("conditions") or {}
+        if _live_title_blocked_by_availability(final_snapshot):
+            raise TitleDependencyTemporarilyUnavailable(
+                f"title availability incident outlived the {timeout_seconds}s live proof budget; session_id={session_id}"
+            )
+        raise TimeoutError(
+            f"timed out waiting for live title obligation and clear backlog; session_id={session_id}; final_conditions={final_conditions!r}"
+        )
 
-    completed = _wait_for(completed_obligation, timeout=120, description="live title obligation and clear backlog")
-    session = completed.get("session") or {}
-    title_health = completed["title_health"]
+    session = final_snapshot.get("session") or {}
+    title_health = final_snapshot["title_health"]
     health_signals = title_health.get("signals") if isinstance(title_health.get("signals"), dict) else {}
     observation = {
         "typed_hidden_title_assurance_obligation_created": write_receipt["status_code"] == 200,
@@ -1076,27 +1177,16 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     _write_json(
         evidence_root / "live-runtime-observation.json",
         {
+            "status": "pass" if passed else "fail",
             "session": session,
             "title_health": title_health,
             "write_receipt": write_receipt,
+            "transitions": transitions,
             "obligation_contract": {
                 "environment": payload["session"]["environment"],
                 "origin_kind": payload["session"]["origin_kind"],
                 "hidden_from_default_timeline": payload["session"]["hidden_from_default_timeline"],
             },
-        },
-    )
-    _write_json(
-        evidence_root / "runtime-request-receipt.json",
-        {
-            "runtime_host_paths": [
-                "/api/agents/storage/v2/capabilities",
-                "/api/agents/storage/v2/envelopes",
-                "/api/agents/sessions/{session_id}",
-                "/api/agents/observability/checks/session_titles",
-            ],
-            "direct_provider_paths": [],
-            "credential_mutations": [],
         },
     )
     _write_json(
@@ -1114,6 +1204,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
 __all__ = [
     "RUNTIME_AGENTS_TOKEN_ENV",
     "RUNTIME_API_URL_ENV",
+    "TitleDependencyTemporarilyUnavailable",
     "artifact_manifest",
     "run_hermetic_title_dependency_oracle",
     "run_live_title_dependency_oracle",

@@ -139,14 +139,32 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     raw = payload["records"][0]["data_b64"]
     assert raw
     assert oracles.RUNTIME_AGENTS_TOKEN_ENV == "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
-    assert LIVE_REGISTRATION.producer_revision == 7
-    assert LIVE_REGISTRATION.scenario_revision == 6
+    assert LIVE_REGISTRATION.producer_revision == 8
+    assert LIVE_REGISTRATION.scenario_revision == 7
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
     assert "runtime_host_title_provenance" in LIVE_REGISTRATION.observed_activity
     assert RECOVERY_REGISTRATION.producer_revision == 8
     assert RECOVERY_REGISTRATION.scenario_revision == 8
     assert "legacy_exact_provider_proof_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
+
+
+def test_live_title_availability_incident_is_the_only_typed_transient_failure():
+    snapshot = {
+        "conditions": {"typed_identity_persisted": True},
+        "title_health": {
+            "verdict": "degraded",
+            "signals": {
+                "open_availability_dependencies": 1,
+                "open_authentication_dependencies": 0,
+                "terminal_sessions": 0,
+            },
+        },
+    }
+
+    assert oracles._live_title_blocked_by_availability(snapshot) is True
+    snapshot["title_health"]["signals"]["open_authentication_dependencies"] = 1
+    assert oracles._live_title_blocked_by_availability(snapshot) is False
 
 
 def test_hermetic_runtime_owns_an_ephemeral_fernet_secret(tmp_path, monkeypatch):

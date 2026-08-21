@@ -100,9 +100,9 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=3,
+    scenario_revision=4,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -235,10 +235,7 @@ class _AggregateLaunchReceipt(TypedDict):
 def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root: Path, *, label: str, prompt: str) -> _CursorSession:
     home = isolation_root / f"home-{label}"
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    environment = os.environ.copy()
-    environment["HOME"] = str(home)
-    environment["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
-    environment["CURSOR_HOME"] = str(home / ".cursor")
+    environment = _cursor_profile_environment(home)
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
     # The Machine Agent snapshots advertised control capabilities when its
     # WebSocket starts. Bind the exact staged Cursor binary before starting
@@ -287,6 +284,23 @@ def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root:
         provider_cwd=provider_cwd,
         state=state,
     )
+
+
+def _cursor_profile_environment(home: Path) -> dict[str, str]:
+    """Return one coherent disposable profile for Cursor and its shipper."""
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(home),
+            "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+            "CURSOR_HOME": str(home / ".cursor"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+        }
+    )
+    return environment
 
 
 def _teardown_cursor_session(session: _CursorSession | None) -> dict[str, Any]:

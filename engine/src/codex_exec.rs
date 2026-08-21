@@ -366,6 +366,7 @@ pub async fn prewarm_codex_console_workers() {
         DEFAULT_CODEX_BIN,
         Some(DEFAULT_CONSOLE_APPROVAL_POLICY),
         Some(DEFAULT_CONSOLE_SANDBOX),
+        None,
         &neutral_cwd,
         None,
         None,
@@ -448,6 +449,7 @@ async fn spawn_initialized_codex_worker(
     codex_bin: &str,
     approval_policy: Option<&str>,
     sandbox: Option<&str>,
+    model: Option<&str>,
     process_cwd: &std::path::Path,
     session_id: Option<&str>,
     launch_actor: Option<&str>,
@@ -465,7 +467,7 @@ async fn spawn_initialized_codex_worker(
         codex_bin: codex_bin.to_string(),
         approval_policy: approval_policy.map(str::to_string),
         sandbox: sandbox.map(str::to_string),
-        model: None,
+        model: model.map(str::to_string),
         prompt: String::new(),
         launch_actor: launch_actor.map(str::to_string),
         launch_surface: launch_surface.map(str::to_string),
@@ -598,6 +600,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 &config.codex_bin,
                 normalized_optional(&config.approval_policy).as_deref(),
                 normalized_optional(&config.sandbox).as_deref(),
+                normalized_optional(&config.model).as_deref(),
                 &config.cwd,
                 Some(&config.session_id),
                 normalized_optional(&config.launch_actor).as_deref(),
@@ -1859,6 +1862,7 @@ for line in sys.stdin:
             fake_codex.to_str().unwrap(),
             Some("never"),
             Some("workspace-write"),
+            Some("gpt-5.3-codex-low"),
             temp.path(),
             None,
             None,
@@ -1866,6 +1870,13 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
+        assert!(
+            worker
+                .argv
+                .iter()
+                .any(|argument| argument == "model=\"gpt-5.3-codex-low\""),
+            "the selected Console model must reach the spawned provider process"
+        );
         worker.ready_at = std::time::Instant::now() - Duration::from_secs(5 * 60);
         assert!(
             warm_worker_is_alive(&mut worker),

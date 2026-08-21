@@ -494,7 +494,8 @@ fn concurrent_lifecycle_hooks_append_complete_ndjson_records() {
 fn terminal_hook_wakes_the_exact_cursor_store() {
     let root = tempdir().unwrap();
     let cursor = root.path().join("cursor");
-    let store = cursor.join("chats/workspace/cursor-id/store.db");
+    let xdg_config = root.path().join("config");
+    let store = xdg_config.join("cursor/chats/workspace/cursor-id/store.db");
     fs::create_dir_all(store.parent().unwrap()).unwrap();
     fs::write(&store, b"cursor-store").unwrap();
     let claim = pending_claim(root.path());
@@ -517,6 +518,7 @@ fn terminal_hook_wakes_the_exact_cursor_store() {
         .args(["cursor-lifecycle-hook", "stop"])
         .env("LONGHOUSE_HOME", root.path())
         .env("CURSOR_HOME", &cursor)
+        .env("XDG_CONFIG_HOME", &xdg_config)
         .env("LONGHOUSE_SESSION_ID", "managed-session")
         .env("LONGHOUSE_CURSOR_LAUNCH_ID", "launch-id")
         .stdin(Stdio::piped())

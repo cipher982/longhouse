@@ -24,8 +24,8 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
     assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 4
-    assert registration["scenario_revision"] == 4
+    assert registration["producer_revision"] == 5
+    assert registration["scenario_revision"] == 5
 
 
 def test_helm_launch_bridge_socket_fits_linux_unix_path_budget():

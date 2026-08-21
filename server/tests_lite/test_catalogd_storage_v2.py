@@ -557,7 +557,83 @@ async def test_typed_factory_title_assurance_preserves_hidden_console_provenance
 
 
 @pytest.mark.asyncio
-async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_shell(daemon_paths):
+@pytest.mark.parametrize(
+    (
+        "launch_actor",
+        "launch_surface",
+        "initial_origin",
+        "initial_hidden",
+        "machine_id",
+        "first_user_message_preview",
+        "expected_origin",
+        "expected_hidden",
+        "expected_actor",
+        "expected_surface",
+    ),
+    (
+        (
+            None,
+            None,
+            "cursor_store",
+            0,
+            "provider-factory-resume",
+            "Review the deployment plan",
+            "test_or_canary",
+            1,
+            "automation",
+            "test",
+        ),
+        (
+            "human_shell",
+            "terminal",
+            None,
+            0,
+            "provider-factory-resume",
+            "Review the deployment plan",
+            None,
+            0,
+            "human_shell",
+            "terminal",
+        ),
+        (
+            "human_shell",
+            "terminal",
+            None,
+            0,
+            "cinder",
+            "Hatch execution contract:\nThis is a single bounded, non-interactive run.",
+            None,
+            0,
+            "human_shell",
+            "terminal",
+        ),
+        (
+            None,
+            None,
+            "test_or_canary",
+            1,
+            "cinder",
+            "Review the deployment plan",
+            "test_or_canary",
+            1,
+            None,
+            None,
+        ),
+    ),
+)
+async def test_storage_commit_preserves_registered_launch_provenance_and_test_policy(
+    daemon_paths,
+    launch_actor,
+    launch_surface,
+    initial_origin,
+    initial_hidden,
+    machine_id,
+    first_user_message_preview,
+    expected_origin,
+    expected_hidden,
+    expected_actor,
+    expected_surface,
+):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
@@ -578,8 +654,10 @@ async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_she
                 cwd="/Users/davidrose/git/user-repo",
                 started_at=now,
                 last_activity_at=now,
-                origin_kind="cursor_store",
-                hidden_from_default_timeline=0,
+                origin_kind=initial_origin,
+                hidden_from_default_timeline=initial_hidden,
+                launch_actor=launch_actor,
+                launch_surface=launch_surface,
                 primary_thread_id=str(thread_id),
                 created_at=now,
                 updated_at=now,
@@ -595,8 +673,10 @@ async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_she
                 cwd="/Users/davidrose/git/user-repo",
                 started_at=now,
                 last_activity_at=now,
-                origin_kind="cursor_store",
-                hidden_from_default_timeline=0,
+                origin_kind=initial_origin,
+                hidden_from_default_timeline=initial_hidden,
+                launch_actor=launch_actor,
+                launch_surface=launch_surface,
                 parser_revision="test",
                 updated_at=now,
             )
@@ -615,7 +695,7 @@ async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_she
             end=6,
             records=(b"human-looking factory work\n",),
             sealed_at=now,
-            machine_id="provider-factory-resume",
+            machine_id=machine_id,
         )
         raw["session_facts"].update(
             cwd="/Users/davidrose/git/user-repo",
@@ -624,8 +704,8 @@ async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_she
         )
         manifest = _render_manifest(generation_id, source_epoch=epoch)
         manifest.update(
-            first_user_message_preview="Review the deployment plan",
-            last_visible_text_preview="Review the deployment plan",
+            first_user_message_preview=first_user_message_preview,
+            last_visible_text_preview=first_user_message_preview,
             user_messages=1,
         )
         raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
@@ -638,10 +718,17 @@ async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_she
     with Session(engine) as db:
         catalog = db.get(LiveSessionCatalog, str(session_id))
         card = db.get(LiveTimelineCard, str(session_id))
-        assert catalog.origin_kind == "test_or_canary"
-        assert catalog.hidden_from_default_timeline == 1
-        assert card.origin_kind == "test_or_canary"
-        assert card.hidden_from_default_timeline == 1
+        durable = db.get(StorageSession, str(session_id))
+        assert catalog.origin_kind == expected_origin
+        assert catalog.hidden_from_default_timeline == expected_hidden
+        assert catalog.launch_actor == expected_actor
+        assert catalog.launch_surface == expected_surface
+        assert card.origin_kind == expected_origin
+        assert card.hidden_from_default_timeline == expected_hidden
+        assert durable.origin_kind == expected_origin
+        assert durable.hidden_from_default_timeline == expected_hidden
+        assert durable.launch_actor == expected_actor
+        assert durable.launch_surface == expected_surface
     engine.dispose()
 
 

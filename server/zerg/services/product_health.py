@@ -123,6 +123,10 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
         )
     blocked = int(health.get("blocked_sessions") or 0)
     opened = int(health.get("open_dependencies") or 0)
+    open_dependencies = [item for item in dependencies if isinstance(item, dict) and str(item.get("state") or "") != "healthy"]
+    open_availability = sum(item.get("failure_class") == "availability" for item in open_dependencies)
+    open_authentication = sum(item.get("failure_class") == "authentication" for item in open_dependencies)
+    open_unclassified = len(open_dependencies) - open_availability - open_authentication
     terminal = int(health.get("terminal_sessions") or 0)
     pending = int(health.get("pending_sessions") or 0)
     overdue = int(health.get("overdue_sessions") or 0)
@@ -154,6 +158,9 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
         headline=headline,
         signals={
             "open_dependencies": opened,
+            "open_availability_dependencies": open_availability,
+            "open_authentication_dependencies": open_authentication,
+            "open_unclassified_dependencies": open_unclassified,
             "blocked_sessions": blocked,
             "pending_sessions": pending,
             "overdue_sessions": overdue,

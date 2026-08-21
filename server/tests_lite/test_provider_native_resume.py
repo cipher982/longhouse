@@ -156,6 +156,7 @@ def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> No
         ".codex/sessions",
         ".local/share/opencode",
         ".cursor/chats",
+        ".config/cursor/chats",
         ".longhouse/agent/cursor-acp-source",
     ):
         assert (home / relative).is_dir()

@@ -664,10 +664,12 @@ def _wait_pid_dead(pid: int, timeout: float = 5) -> bool:
 def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None:
     """Create the provider roots the real engine discovers at startup."""
 
+    xdg_config_home = Path(str(environment.get("XDG_CONFIG_HOME") or home / ".config"))
     roots = [
         home / ".codex" / "sessions",
         home / ".local" / "share" / "opencode",
         home / ".cursor" / "chats",
+        xdg_config_home / "cursor" / "chats",
         # Cursor's durable project store is the authoritative source for
         # resumed conversations.  Create the discovery root before the
         # Machine Agent starts so the initial launch and the resumed launch

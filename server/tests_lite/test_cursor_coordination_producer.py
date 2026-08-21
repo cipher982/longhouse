@@ -133,6 +133,19 @@ def test_registration_cli_flag_prints_registration(capsys) -> None:
     assert len(payload["assertion_cells"]) == 3
 
 
+def test_cursor_profile_environment_rebases_home_and_xdg_roots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/shared/config")
+    home = tmp_path / "home"
+
+    environment = m._cursor_profile_environment(home)
+
+    assert environment["HOME"] == str(home)
+    assert environment["CURSOR_HOME"] == str(home / ".cursor")
+    assert environment["XDG_CONFIG_HOME"] == str(home / ".config")
+    assert environment["XDG_DATA_HOME"] == str(home / ".local" / "share")
+    assert environment["XDG_CACHE_HOME"] == str(home / ".cache")
+
+
 def test_recites_untrusted_peer_guidance_matches_the_real_instructions_wording() -> None:
     # Verbatim tail of the real coordination MCP `instructions` field
     # (engine/src/claude_channel_server.rs, coordination branch).
