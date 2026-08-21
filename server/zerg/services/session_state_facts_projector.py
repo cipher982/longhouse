@@ -32,6 +32,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.services.console_control_projection import ConsoleControlProjection
 from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
 from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
@@ -316,9 +317,10 @@ def _served_control(
         return SessionActionAvailability(state="unavailable", reason=reason)
 
     console_control = _mapping(catalog_facts.get("console_control"))
+    console_projection = ConsoleControlProjection.from_catalog_facts(console_control)
     start_turn = availability(
-        mode == "console" and bool(console_control.get("can_start_turn")),
-        _text(console_control.get("start_turn_blocked_by")) or ("not_console" if mode != "console" else "start_turn_unavailable"),
+        mode == "console" and console_projection.can_start_turn,
+        console_projection.start_turn_blocked_by or ("not_console" if mode != "console" else "start_turn_unavailable"),
     )
     reattach_available, reattach_reason = _durable_action_availability(
         catalog_facts,
@@ -326,6 +328,23 @@ def _served_control(
         supported_operations=supported_operations,
         operation="reattach",
     )
+    if mode == "console":
+        return SessionControlFacts(
+            ownership="owned",
+            connection=console_projection.connection,
+            control_plane=_durable_control_plane(catalog_facts),
+            actions=SessionControlActions(
+                start_turn=start_turn,
+                send_input=availability(False, "use_start_turn"),
+                interrupt=availability(
+                    console_projection.can_interrupt_active_turn,
+                    console_projection.interrupt_unavailable_reason,
+                ),
+                terminate=availability(False, "unsupported"),
+                reattach=availability(False, "not_helm"),
+                resume=resume,
+            ),
+        )
     if observed is not None:
         reattach = availability(
             observed.connection != "connected" and reattach_available,
@@ -524,9 +543,19 @@ def _project_run(
         return None
     started_at = _optional_wire_datetime(run.get("started_at"), "latest_run.started_at")
     ended_at = _optional_wire_datetime(run.get("ended_at"), "latest_run.ended_at")
+    console_turn_state = _text(_mapping(catalog_facts.get("console_control")).get("turn_state"))
+    if ended_at is None and _project_mode(catalog_facts) == "console":
+        if console_turn_state in {"queued", "starting"}:
+            lifecycle = "starting"
+        elif console_turn_state in {"active", "draining"}:
+            lifecycle = "running"
+        else:
+            lifecycle = "running"
+    else:
+        lifecycle = "ended" if ended_at is not None else "running"
     return SessionRunFacts(
         id=run_id,
-        lifecycle="ended" if ended_at is not None else "running",
+        lifecycle=lifecycle,
         started_at=started_at,
         ended_at=ended_at,
         end_reason=_text(run.get("exit_status")) if ended_at is not None else None,

@@ -22,6 +22,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.console_control_projection import project_console_control
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import RUN_TERMINAL_STATES
@@ -44,6 +45,7 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "blocked",
     "idle",
     "ended",
+    "ready",
     "no_recent_activity",
     "activity_unknown",
 )
@@ -340,6 +342,7 @@ def _run(
     liveness: SessionLivenessFacts | None,
     activity: SessionActivityFacts,
     launch: SessionLaunchFacts | None,
+    mode: SessionMode,
 ) -> SessionRunFacts | None:
     if launch is not None and launch.state in {"pending", "dispatched"} and capabilities.run_id is None:
         return SessionRunFacts(lifecycle="starting", started_at=normalize_utc(getattr(session, "started_at", None)))
@@ -355,6 +358,18 @@ def _run(
             started_at=started_at,
             ended_at=ended_at,
             end_reason=terminal or _clean(capabilities.run_end_reason) or "process_ended",
+        )
+    if mode == "console" and capabilities.turn_state in {"queued", "starting"}:
+        return SessionRunFacts(
+            id=run_id,
+            lifecycle="starting",
+            started_at=started_at,
+        )
+    if mode == "console" and capabilities.turn_state in {"active", "draining"}:
+        return SessionRunFacts(
+            id=run_id,
+            lifecycle="running",
+            started_at=started_at,
         )
     if run_id is None and activity.state == "unknown" and liveness.process.status != "observed":
         return None
@@ -484,6 +499,45 @@ def _control(
     )
 
 
+def _console_control(capabilities: KernelSessionCapabilities) -> SessionControlFacts:
+    """Project Console reachability independently from per-turn actions."""
+
+    projection = capabilities.console_control or project_console_control(
+        closed=capabilities.start_turn_blocked_by == "session_closed",
+        execution_target_available=capabilities.start_turn_blocked_by != "execution_target_missing",
+        turn_state=capabilities.turn_state,
+        machine_online=capabilities.start_turn_blocked_by != "machine_offline",
+        adapter_available=capabilities.start_turn_blocked_by != "adapter_unavailable",
+        interrupt_adapter_available=capabilities.can_interrupt,
+    )
+    blocked_by = projection.start_turn_blocked_by
+    start_turn = (
+        SessionActionAvailability(state="available")
+        if projection.can_start_turn and blocked_by is None
+        else SessionActionAvailability(state="unavailable", reason=blocked_by or "start_turn_unavailable")
+    )
+    interrupt = (
+        SessionActionAvailability(state="available")
+        if projection.can_interrupt_active_turn
+        else SessionActionAvailability(
+            state="unavailable",
+            reason=projection.interrupt_unavailable_reason,
+        )
+    )
+    return SessionControlFacts(
+        ownership="owned",
+        connection=projection.connection,
+        actions=SessionControlActions(
+            start_turn=start_turn,
+            send_input=SessionActionAvailability(state="unavailable", reason="use_start_turn"),
+            interrupt=interrupt,
+            terminate=SessionActionAvailability(state="unavailable", reason="unsupported"),
+            reattach=SessionActionAvailability(state="unavailable", reason="not_helm"),
+            resume=SessionActionAvailability(state="unavailable", reason="not_helm"),
+        ),
+    )
+
+
 def _interaction(pause_request: dict[str, Any] | None) -> SessionPendingInteractionFacts | None:
     if not isinstance(pause_request, dict) or _clean(pause_request.get("status")) != "pending":
         return None
@@ -526,12 +580,32 @@ def _transcript(
 ) -> SessionTranscriptFacts:
     legacy_revision = int(getattr(session, "transcript_revision", 0) or 0)
     normalized_archive = _clean(archive_state)
+    revisions = tuple(value for value in (source_revision, durable_revision, render_revision) if value is not None)
+    has_expected_content = bool(
+        any(value > 0 for value in revisions)
+        or legacy_revision > 0
+        or user_messages > 0
+        or assistant_messages > 0
+        or has_pending_response_turn
+        or has_visible_transcript_preview
+    )
+    revision_lag = bool(
+        (source_revision is not None and durable_revision is not None and source_revision > durable_revision)
+        or (source_revision is not None and render_revision is not None and source_revision > render_revision)
+        or (durable_revision is not None and render_revision is not None and durable_revision > render_revision)
+    )
     lagging = bool(
-        normalized_archive == "pending"
+        revision_lag
+        or (normalized_archive == "pending" and has_expected_content)
         or (not has_visible_transcript_preview and (has_pending_response_turn or user_messages > assistant_messages))
     )
     if lagging:
         convergence: TranscriptConvergence = "lagging"
+    elif normalized_archive == "pending" and not has_expected_content:
+        # A newly-created control-only Console shell has no source revision to
+        # catch up to.  Calling it "syncing" turns ordinary empty state into a
+        # repair incident and can persist forever until the first message.
+        convergence = "current"
     elif normalized_archive in {"current", "legacy_hot"}:
         convergence = "current"
     else:
@@ -667,6 +741,7 @@ def assemble_session_state_facts(
     """Assemble orthogonal axes and apply the single presentation policy."""
 
     primary = _primary(
+        mode=mode,
         disposition=disposition,
         launch=launch,
         run=run,
@@ -696,6 +771,8 @@ def assemble_session_state_facts(
         transcript=transcript,
         host=host,
         working_set=_working_set(
+            mode=mode,
+            run=run,
             disposition=disposition,
             activity=activity,
             control=control,
@@ -731,6 +808,8 @@ def _working_set(
     activity: SessionActivityFacts,
     control: SessionControlFacts,
     interaction: SessionPendingInteractionFacts | None,
+    mode: SessionMode = "unknown",
+    run: SessionRunFacts | None = None,
 ) -> WorkingSet:
     """Is this session part of what the user is currently carrying?
 
@@ -759,6 +838,8 @@ def _working_set(
 
     if disposition.state == "closed":
         return "history"
+    if mode == "console" and run is not None and run.lifecycle in {"starting", "running"}:
+        return "open"
     if interaction is not None:
         return "open"
     if activity.state in {"thinking", "executing"}:
@@ -770,6 +851,7 @@ def _working_set(
 
 def _primary(
     *,
+    mode: SessionMode,
     disposition: SessionDispositionFacts,
     launch: SessionLaunchFacts | None,
     run: SessionRunFacts | None,
@@ -810,6 +892,16 @@ def _primary(
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
         return SessionPresentationLabel(key="ended", label="Ended", tone="closed", observed_at=run.ended_at)
+    if mode == "console" and run is not None and run.lifecycle == "running":
+        return SessionPresentationLabel(key="executing", label="Working", tone="running", observed_at=run.started_at)
+    if (
+        mode == "console"
+        and run is None
+        and control.ownership == "owned"
+        and control.connection == "connected"
+        and control.actions.start_turn.state == "available"
+    ):
+        return SessionPresentationLabel(key="ready", label="Ready", tone="idle")
     # Cross-axis composition: the activity axis is `unknown` (its evidence
     # expired), but we still hold the expired observation and the control lease
     # is live. Control does not create activity here; it only bounds how long an
@@ -840,7 +932,7 @@ def _access(*, control: SessionControlFacts, transcript: SessionTranscriptFacts)
         control.actions.interrupt,
         control.actions.terminate,
     )
-    if control.ownership == "owned" and any(action.state == "available" for action in live_actions):
+    if control.ownership == "owned" and (control.connection == "connected" or any(action.state == "available" for action in live_actions)):
         return SessionPresentationLabel(
             key="live_control",
             label="Live control",
@@ -923,6 +1015,11 @@ def build_session_state_facts(
         error_code=launch_error_code,
         error_message=launch_error_message,
     )
+    mode = _mode(
+        session=session,
+        execution_lifetime=execution_lifetime,
+        capabilities=capabilities,
+    )
     run = _run(
         session=session,
         runtime_view=runtime_view,
@@ -930,8 +1027,17 @@ def build_session_state_facts(
         liveness=liveness,
         activity=activity,
         launch=launch,
+        mode=mode,
     )
-    control = _control(capabilities=capabilities, liveness=liveness, now=current_now)
+    control = (
+        _console_control(capabilities)
+        if mode == "console"
+        else _control(
+            capabilities=capabilities,
+            liveness=liveness,
+            now=current_now,
+        )
+    )
     interaction = _interaction(pause_request)
     transcript = _transcript(
         session=session,
@@ -947,11 +1053,7 @@ def build_session_state_facts(
     if host_state not in {"online", "stale", "offline"}:
         host_state = "unknown"
     return assemble_session_state_facts(
-        mode=_mode(
-            session=session,
-            execution_lifetime=execution_lifetime,
-            capabilities=capabilities,
-        ),
+        mode=mode,
         disposition=disposition,
         launch=launch,
         run=run,

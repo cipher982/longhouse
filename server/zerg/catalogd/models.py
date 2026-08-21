@@ -180,6 +180,10 @@ class StorageSession(CatalogBase):
     title_last_attempt_at = Column(DateTime(timezone=True), nullable=True)
     title_retry_at = Column(DateTime(timezone=True), nullable=True, index=True)
     title_last_error = Column(String(128), nullable=True)
+    # Dependency incidents fence provider-wide title outages from ordinary
+    # per-session retry debt.  The incident id is the only authority allowed
+    # to re-arm terminal rows after the shared dependency recovers.
+    title_dependency_incident_id = Column(String(36), nullable=True, index=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
     transcript_revision = Column(BigInteger, nullable=False, server_default=text("0"))
@@ -489,6 +493,34 @@ class ProjectorState(CatalogBase):
     updated_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),)
+
+
+class RuntimeDependencyState(CatalogBase):
+    """Durable circuit state for one Runtime Host-owned external dependency."""
+
+    __tablename__ = "runtime_dependency_state"
+
+    use_case = Column(String(64), primary_key=True)
+    provider = Column(String(64), primary_key=True)
+    model = Column(String(255), primary_key=True)
+    credential_binding = Column(String(128), primary_key=True)
+    state = Column(String(16), nullable=False, server_default=text("'healthy'"), index=True)
+    incident_id = Column(String(36), nullable=True, index=True)
+    failure_class = Column(String(64), nullable=True)
+    first_failure_at = Column(DateTime(timezone=True), nullable=True)
+    last_failure_at = Column(DateTime(timezone=True), nullable=True)
+    next_probe_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    credential_generation = Column(String(64), nullable=False)
+    probe_token = Column(String(36), nullable=True)
+    probe_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_failure_token = Column(String(36), nullable=True)
+    last_error = Column(String(255), nullable=True)
+    recovered_at = Column(DateTime(timezone=True), nullable=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_runtime_dependency_incident", "use_case", "state", "incident_id"),)
 
 
 class ProjectorStoreBinding(CatalogBase):

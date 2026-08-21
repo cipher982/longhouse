@@ -5,10 +5,8 @@ import { getSessionOriginLabel } from "./formatters";
 
 function getManagedLaunchSuggestion(provider: string): ManagedLaunchSuggestion | null {
   const support = getLaunchProviderSupport(provider);
-  // Gate on the device entrypoint, not on the capability flags. Antigravity
-  // supports launch_local in the contract while its native entrypoint stays
-  // excluded, so suggesting `longhouse antigravity` would name a command the
-  // installed facade does not have.
+  // Gate on the device entrypoint as well as capability flags. A provider may
+  // support launch_local while its facade command remains excluded.
   if (!support?.launchAndSend || !support.nativeLaunchCommand) return null;
   return {
     title: `Start the next ${support.marketingName} session through Longhouse`,

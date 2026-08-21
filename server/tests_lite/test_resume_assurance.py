@@ -143,6 +143,34 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
     assert {command["module"] for command in first["plan"]["commands"]} == {"zerg.qa.codex_native_resume"}
 
 
+def test_compiler_selects_provider_specific_producer_credentials() -> None:
+    inputs = _inputs()
+    for producer in (
+        inputs["accepted_epoch"]["producers"][0],
+        inputs["worker_census"]["producers"][0],
+    ):
+        registration = producer["registration"]
+        registration["credential_binding_ids"] = []
+        registration["credential_binding_ids_by_provider"] = {
+            "codex": ["codex_provider_token", "runtime_host_control"],
+            "claude": ["claude_provider_token", "runtime_host_control"],
+        }
+    inputs["worker_census"]["census_digest"] = content_digest(
+        inputs["worker_census"], "census_digest"
+    )
+    inputs["accepted_epoch"]["epoch_digest"] = content_digest(
+        inputs["accepted_epoch"], "epoch_digest"
+    )
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["report"]["valid"] is True
+    assert {
+        tuple(command["credential_binding_ids"])
+        for command in compiled["plan"]["commands"]
+    } == {("codex_provider_token", "runtime_host_control")}
+
+
 @pytest.mark.parametrize(
     ("mutate", "expected_code"),
     (

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import UTC
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from zerg.config import get_settings
 from zerg.services.internal_sessions import classify_provider_proof_environment
@@ -21,6 +23,53 @@ _in_flight: set[str] = set()
 _lock = asyncio.Lock()
 STORAGE_TITLE_CATALOG_TIMEOUT_SECONDS = 10.0
 STORAGE_TITLE_MODEL_TIMEOUT_SECONDS = 15.0
+STORAGE_TITLE_DEPENDENCY_PROBE_LEASE_SECONDS = 60
+
+
+def _dependency_identity() -> dict[str, str]:
+    from zerg.models_config import MODELS_BY_ID
+    from zerg.models_config import resolve_use_case_runtime_identity
+
+    binding = resolve_use_case_runtime_identity("session_title")
+    model = binding.model_id
+    config = MODELS_BY_ID[model]
+    credential_binding = binding.credential_binding
+    credential_state = binding.credential.encode() if binding.credential is not None else b"<missing>"
+    generation = hashlib.sha256(b"longhouse-title-credential-v1\0" + credential_state).hexdigest()
+    return {
+        "provider": config.provider.value,
+        "model": model,
+        "credential_binding": credential_binding,
+        "credential_generation": generation,
+    }
+
+
+def _is_dependency_auth_failure(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {401, 403}:
+        return True
+    class_name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    return class_name in {"authenticationerror", "permissiondeniederror"} or any(
+        marker in message
+        for marker in (
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "authentication",
+            "api key",
+            "required for use case",
+            "user not found",
+        )
+    )
+
+
+async def _reconcile_dependency(identity: dict[str, str]) -> dict[str, Any]:
+    return await _catalog_call(
+        "storage.session.title.dependency.reconcile.v2",
+        {**identity, "observed_at": datetime.now(UTC).isoformat()},
+    )
 
 
 async def _catalog_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -43,6 +92,9 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
             return False
         _in_flight.add(session_id)
     client = None
+    dependency: dict[str, str] | None = None
+    dependency_claim: dict[str, Any] | None = None
+    probe_token = str(uuid4())
     try:
         if get_settings().llm_disabled:
             return False
@@ -74,6 +126,20 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         from zerg.models_config import get_llm_client_for_use_case
         from zerg.services.title_generator import generate_initial_session_title
 
+        dependency = _dependency_identity()
+        await _reconcile_dependency(dependency)
+        dependency_claim = await _catalog_call(
+            "storage.session.title.dependency.acquire.v2",
+            {
+                "session_id": session_id,
+                **dependency,
+                "probe_token": probe_token,
+                "observed_at": datetime.now(UTC).isoformat(),
+                "lease_seconds": STORAGE_TITLE_DEPENDENCY_PROBE_LEASE_SECONDS,
+            },
+        )
+        if dependency_claim.get("allowed") is not True:
+            return False
         client, model, _provider = get_llm_client_for_use_case("session_title")
         started = datetime.now(UTC)
         raw_title = await generate_initial_session_title(
@@ -89,6 +155,17 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
             # but valid first prompts to fail just before the provider replied.
             timeout_seconds=STORAGE_TITLE_MODEL_TIMEOUT_SECONDS,
         )
+        incident_id = dependency_claim.get("incident_id")
+        if incident_id:
+            await _catalog_call(
+                "storage.session.title.dependency.recover.v2",
+                {
+                    **dependency,
+                    "incident_id": incident_id,
+                    "probe_token": probe_token,
+                    "recovered_at": datetime.now(UTC).isoformat(),
+                },
+            )
         title = sanitize_timeline_title(raw_title, max_words=6)
         if not title:
             raise ValueError("empty_model_response")
@@ -116,10 +193,22 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         reason = type(exc).__name__ if str(exc) == "" else str(exc)[:128]
         logger.warning("Storage-v2 AI title failed session=%s reason=%s", session_id, reason)
         try:
-            await _catalog_call(
-                "storage.session.title.fail.v2",
-                {"session_id": session_id, "reason": reason, "failed_at": datetime.now(UTC).isoformat()},
-            )
+            if dependency is not None and _is_dependency_auth_failure(exc):
+                await _catalog_call(
+                    "storage.session.title.dependency.fail.v2",
+                    {
+                        "session_id": session_id,
+                        **dependency,
+                        "probe_token": probe_token,
+                        "reason": reason,
+                        "failed_at": datetime.now(UTC).isoformat(),
+                    },
+                )
+            else:
+                await _catalog_call(
+                    "storage.session.title.fail.v2",
+                    {"session_id": session_id, "reason": reason, "failed_at": datetime.now(UTC).isoformat()},
+                )
         except Exception:  # noqa: BLE001
             logger.exception("Failed to persist storage-v2 title retry session=%s", session_id)
         return False
@@ -141,6 +230,7 @@ async def run_storage_title_reconciler(*, interval_seconds: float = 0.5, batch_s
         return
     while True:
         try:
+            await _reconcile_dependency(_dependency_identity())
             result = await _catalog_call("storage.session.title.candidates.v2", {"limit": batch_size})
             candidates = result.get("sessions") if isinstance(result, dict) else None
             for candidate in candidates or []:

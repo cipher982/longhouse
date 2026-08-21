@@ -25,6 +25,7 @@ from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import canonical_timeline_snapshot
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
+from zerg.services.console_control_projection import project_console_control
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -138,25 +139,14 @@ def _console_control_facts(
             capability=f"{session.provider}.turn_interrupt",
         )
     )
-    turn_state = str((latest_console_turn or {}).get("state") or "idle").strip().lower()
-    if turn_state not in {"idle", "queued", "starting", "active", "draining"}:
-        turn_state = "idle"
-    execution_target_available = bool(device_id and cwd)
-    blocked_by = "session_closed" if session.closed_at is not None else None
-    if blocked_by is None and not execution_target_available:
-        blocked_by = "execution_target_missing"
-    if blocked_by is None and turn_state in {"queued", "starting", "active", "draining"}:
-        blocked_by = "turn_active"
-    if blocked_by is None and not machine_online:
-        blocked_by = "machine_offline"
-    if blocked_by is None and not adapter_available:
-        blocked_by = "adapter_unavailable"
-    return {
-        "turn_state": turn_state,
-        "can_start_turn": blocked_by is None,
-        "start_turn_blocked_by": blocked_by,
-        "can_interrupt_active_turn": turn_state in {"starting", "active", "draining"} and interrupt_adapter_available,
-    }
+    return project_console_control(
+        closed=session.closed_at is not None,
+        execution_target_available=bool(device_id and cwd),
+        turn_state=(latest_console_turn or {}).get("state"),
+        machine_online=machine_online,
+        adapter_available=adapter_available,
+        interrupt_adapter_available=interrupt_adapter_available,
+    ).as_catalog_facts()
 
 
 def _canonical_runtime_aliases(*, session_state, runtime_display) -> dict[str, Any]:
@@ -242,9 +232,9 @@ def project_catalog_session_facts(
             closed=session.closed_at is not None,
             execution_target_available=bool(thread is not None and str(thread.device_id or "").strip() and str(thread.cwd or "").strip()),
             turn_state=console_control["turn_state"],
-            machine_online=console_control["start_turn_blocked_by"] not in {"machine_offline"},
-            adapter_available=console_control["start_turn_blocked_by"] not in {"adapter_unavailable"},
-            interrupt_adapter_available=bool(console_control["can_interrupt_active_turn"]),
+            machine_online=bool(console_control["machine_online"]),
+            adapter_available=bool(console_control["adapter_available"]),
+            interrupt_adapter_available=bool(console_control["interrupt_adapter_available"]),
         )
     return _response_from_catalog(
         session,

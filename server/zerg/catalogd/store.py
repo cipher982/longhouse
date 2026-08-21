@@ -20,8 +20,10 @@ from uuid import uuid4
 from uuid import uuid5
 
 from sqlalchemy import Engine
+from sqlalchemy import Float
 from sqlalchemy import and_
 from sqlalchemy import case
+from sqlalchemy import cast
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
@@ -37,8 +39,10 @@ from sqlalchemy.orm import Session
 
 from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
+from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
+from zerg.catalogd.fact_reducer import read_session_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch_setwise
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
 from zerg.catalogd.models import FactConflict
@@ -53,6 +57,7 @@ from zerg.catalogd.models import ProjectorStoreBinding
 from zerg.catalogd.models import RawObject as LiveRawObject
 from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
+from zerg.catalogd.models import RuntimeDependencyState
 from zerg.catalogd.models import SessionMediaRef
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
@@ -60,6 +65,7 @@ from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
 from zerg.catalogd.schema import storage_telemetry_counters
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
@@ -87,6 +93,10 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
+from zerg.services.codex_launch_visibility_repair import CodexLaunchVisibilityRepairFacts
+from zerg.services.codex_launch_visibility_repair import codex_launch_visibility_repair_fingerprint
+from zerg.services.codex_launch_visibility_repair import codex_launch_visibility_repair_refusals
+from zerg.services.codex_launch_visibility_repair import plan_codex_launch_visibility_repair
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import hatch_automation_session_clause
 from zerg.services.internal_sessions import is_hatch_execution_contract
@@ -95,6 +105,10 @@ from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
+from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_MAX_PAGES
+from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE
+from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
+from zerg.services.workspace_suggestion_projection import rank_human_workspace_candidates
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
@@ -108,7 +122,6 @@ DEVICE_TOKEN_LIMIT_PER_OWNER = 1_000
 SESSION_READ_LIMIT = 100
 MACHINE_ENROLLMENT_LIMIT = 1_000
 MACHINE_HEALTH_LIMIT = 100
-WORKSPACE_CANDIDATE_LIMIT = 5_000
 # The capability projector consumes only its highest-ranked connection.  The
 # ordering below is deliberately identical to that projector, so returning the
 # winner preserves semantics while keeping a 100-row page bounded.
@@ -117,16 +130,76 @@ SHADOW_STATE_FACT_HEAD_LIMIT = 256
 SHADOW_STATE_HEALTH_SAMPLE_LIMIT = 100
 SHADOW_STATE_HEALTH_WINDOW = timedelta(minutes=15)
 _CONTROL_LEASE_TTL = timedelta(minutes=15)
-_EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _SHADOW_PARITY_ENV = "LONGHOUSE_SHADOW_PARITY_ENABLED"
 _MAX_PARITY_DELTAS = 2_048
-_RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
-    (1.0, 100),
-    (4.0, 70),
-    (14.0, 50),
-    (31.0, 30),
-)
+
+
+def _has_durable_timeline_content(row) -> Any:
+    """SQL predicate for content that may enter default history."""
+
+    return or_(
+        row.c.transcript_revision > 0,
+        row.c.user_messages > 0,
+        row.c.assistant_messages > 0,
+        row.c.tool_calls > 0,
+    )
+
+
+def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
+    """Admit an empty human Helm only on canonical current-work evidence.
+
+    Empty shells are not history. A human terminal launch enters the timeline
+    only while a run-bound activity head says it is executing or an exact,
+    fresh control head says its terminal is attached. The served projector
+    still owns the final working-set classification from these same heads.
+    """
+
+    run = LiveSessionRun.__table__.alias("timeline_empty_run")
+    control = LiveSessionConnection.__table__.alias("timeline_empty_control")
+    head = FactHead.__table__.alias("timeline_empty_head")
+    value = head.c.value_json
+
+    active_activity = (
+        select(1)
+        .select_from(run.join(head, head.c.session_id == session_id))
+        .where(
+            run.c.thread_id == thread_id,
+            run.c.ended_at.is_(None),
+            head.c.family == "activity",
+            head.c.valid_until > observed_at,
+            func.json_extract(value, "$.authority_class") == "provider_runtime",
+            func.json_extract(value, "$.session_id") == session_id,
+            func.json_extract(value, "$.run_id") == run.c.id,
+            func.json_extract(value, "$.kind").in_(("thinking", "running")),
+        )
+        .exists()
+    )
+    control_valid_until = func.julianday(head.c.observed_at) + (cast(func.json_extract(value, "$.lease_ttl_ms"), Float) / 86_400_000.0)
+    attached_terminal = (
+        select(1)
+        .select_from(run.join(control, control.c.run_id == run.c.id).join(head, head.c.session_id == session_id))
+        .where(
+            run.c.thread_id == thread_id,
+            run.c.ended_at.is_(None),
+            control.c.released_at.is_(None),
+            control.c.state.in_(("attached", "degraded")),
+            control.c.adapter_connection_id.is_not(None),
+            control.c.lease_generation.is_not(None),
+            head.c.family == "control",
+            head.c.observed_at.is_not(None),
+            control_valid_until > func.julianday(observed_at),
+            func.json_extract(value, "$.authority_class") == "provider_control",
+            func.json_extract(value, "$.session_id") == session_id,
+            func.json_extract(value, "$.run_id") == run.c.id,
+            func.json_extract(value, "$.connection_id") == control.c.adapter_connection_id,
+            func.json_extract(value, "$.lease_generation") == control.c.lease_generation,
+            func.json_extract(value, "$.terminal_attached") == 1,
+        )
+        .exists()
+    )
+    return or_(active_activity, attached_terminal)
+
 
 _MACHINE_HEALTH_HEARTBEAT_FIELDS = frozenset(
     {
@@ -183,6 +256,23 @@ _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
 # (anchor_title set, title_retry_at cleared) so it survives a restart instead of
 # resuming the loop on every boot.
 MAX_TITLE_ATTEMPTS = 5
+TITLE_DEPENDENCY_USE_CASE = "session_title"
+TITLE_DEPENDENCY_PROBE_DELAY = timedelta(seconds=60)
+
+
+def _title_auth_failure_clause(table):
+    """Match only legacy title errors that identify shared credential failure."""
+
+    error = func.lower(func.coalesce(table.c.title_last_error, ""))
+    return or_(
+        error.like("%401%"),
+        error.like("%403%"),
+        error.like("%unauthoriz%"),
+        error.like("%forbidden%"),
+        error.like("%authentication%"),
+        error.like("%api key%"),
+        error.like("%user not found%"),
+    )
 
 
 def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -465,14 +555,15 @@ def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
     }
 
 
-KNOWN_PROJECTORS = ("search-v2", EMBEDDING_PROJECTOR_ID)
+SEMANTIC_PROJECTOR_ID = "semantic-v2"
+KNOWN_PROJECTORS = (SEMANTIC_PROJECTOR_ID, "search-v2", EMBEDDING_PROJECTOR_ID)
 
 # Projector rows are only ever created for these names. Anything else in
 # projector_state is a retired generation: EMBEDDING_PROJECTOR_ID carries the
 # embedding revision and a partition suffix, so bumping either renames the
 # projector and strands every row under the old name where no worker will ever
 # poll them again. Those rows are derived and disposable; reap them.
-ACTIVE_PROJECTORS = ("render-v2", "search-v2", EMBEDDING_PROJECTOR_ID)
+ACTIVE_PROJECTORS = ("render-v2", SEMANTIC_PROJECTOR_ID, "search-v2", EMBEDDING_PROJECTOR_ID)
 
 # Backoff applied to a "permanent" projection failure, replacing the old
 # terminal quarantine. Long enough that a truly unprojectable row is cheap,
@@ -521,9 +612,12 @@ class CatalogStore:
             missing: dict[tuple[str, str], int] = {}
             for session_id, session_revision in eligible:
                 session_key = str(session_id)
+                semantic_key = (SEMANTIC_PROJECTOR_ID, session_key)
                 search_key = ("search-v2", session_key)
                 embedding_key = (EMBEDDING_PROJECTOR_ID, session_key)
                 search_revision = existing.get(search_key, int(session_revision))
+                if semantic_key not in existing:
+                    missing[semantic_key] = int(session_revision)
                 if search_key not in existing:
                     missing[search_key] = search_revision
                 if embedding_key not in existing:
@@ -2036,9 +2130,26 @@ class CatalogStore:
             finally:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, observed_at)
+            activity_facts = _runtime_activity_facts(
+                connection,
+                events=events,
+                updated_runtime_keys=set(result.updated_runtime_keys),
+            )
+            reduced = reduce_fact_batch_setwise(
+                connection,
+                activity_facts,
+                received_at=observed_at,
+                commit_seq_override=commit_seq,
+            )
             return {
                 **result.model_dump(mode="json"),
                 "commit_seq": str(commit_seq),
+                "activity_facts": {
+                    "changed_heads": reduced.changed_heads,
+                    "duplicates": reduced.duplicates,
+                    "stale": reduced.stale,
+                    "conflicts": reduced.conflicts,
+                },
             }
 
     def register_interaction(self, *, interaction: dict[str, Any]) -> dict[str, Any]:
@@ -2256,6 +2367,205 @@ class CatalogStore:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, now)
             return {"repaired": True, "reason": reason, "interaction": repaired, "commit_seq": str(commit_seq)}
+
+    def repair_codex_launch_visibility(
+        self,
+        *,
+        session_id: str,
+        dry_run: bool,
+        expected_fingerprint: str | None,
+    ) -> dict[str, Any]:
+        """Dry-run or CAS-apply one exact legacy Codex launch repair."""
+
+        from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
+
+        observed_at = datetime.now(UTC)
+        catalog_table = LiveSessionCatalog.__table__
+        card_table = LiveTimelineCard.__table__
+        thread_table = LiveSessionThread.__table__
+        with _write_transaction(self.engine) as connection:
+            catalog_row = connection.execute(select(catalog_table).where(catalog_table.c.session_id == session_id)).mappings().first()
+            card_row = connection.execute(select(card_table).where(card_table.c.session_id == session_id)).mappings().first()
+            if catalog_row is None or card_row is None:
+                return {
+                    "eligible": False,
+                    "applied": False,
+                    "dry_run": dry_run,
+                    "refusals": ["session_not_found" if catalog_row is None else "timeline_card_missing"],
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+
+            snapshots = _assemble_session_facts(
+                connection,
+                session_ids=[session_id],
+                observed_at=observed_at,
+                compact=True,
+            )
+            if not snapshots:
+                return {
+                    "eligible": False,
+                    "applied": False,
+                    "dry_run": dry_run,
+                    "refusals": ["canonical_snapshot_missing"],
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            snapshot = snapshots[0]
+            primary_thread = snapshot.get("primary_thread") or {}
+            latest_run = snapshot.get("latest_run") or {}
+            connections = snapshot.get("connections") or []
+            current_run_id = str(latest_run.get("id") or "")
+            owned_connection = any(
+                str(item.get("run_id") or "") == current_run_id
+                and item.get("released_at") is None
+                and item.get("state") in {"attached", "degraded"}
+                and item.get("acquisition_kind") in {"spawned_control", "adopted_control"}
+                for item in connections
+                if isinstance(item, dict)
+            )
+            managed_local = (
+                bool(current_run_id)
+                and latest_run.get("ended_at") is None
+                and latest_run.get("launch_origin") in {"longhouse_spawned", "longhouse_continued"}
+                and owned_connection
+            )
+            fact_commit_seq, heads = read_session_fact_heads(connection, session_id=session_id)
+            projected = project_shadow_session_state_facts(
+                session_id=session_id,
+                commit_seq=fact_commit_seq,
+                catalog_facts=snapshot,
+                heads=heads,
+                supported_operations=(),
+                now=observed_at,
+            )
+            catalog_origin = str(catalog_row["origin_kind"] or "").strip() or None
+            thread_origin = str(primary_thread.get("origin_kind") or "").strip() or None
+            facts = CodexLaunchVisibilityRepairFacts(
+                session_id=session_id,
+                provider=str(catalog_row["provider"] or "").strip() or None,
+                mode=projected.mode,
+                execution_home="managed_local" if managed_local else None,
+                control_ownership=(
+                    "owned" if owned_connection and projected.control is not None and projected.control.ownership == "owned" else "unowned"
+                ),
+                fresh_exact_terminal_attached=bool(
+                    projected.control is not None
+                    and projected.control.terminal_attached is True
+                    and projected.control_run_id == current_run_id
+                ),
+                fresh_exact_active_run=bool(
+                    projected.run is not None
+                    and projected.run.lifecycle == "running"
+                    and projected.activity.state in {"thinking", "executing"}
+                ),
+                launch_actor=str(catalog_row["launch_actor"] or "").strip() or None,
+                launch_surface=str(catalog_row["launch_surface"] or "").strip() or None,
+                origin_kind=catalog_origin or thread_origin,
+                is_sidechain=primary_thread.get("branch_kind") == "subagent",
+                environment=str(catalog_row["environment"] or "").strip() or None,
+                hidden_from_default_timeline=bool(catalog_row["hidden_from_default_timeline"]),
+                user_hidden_from_timeline=bool(catalog_row["user_hidden_from_timeline"]),
+            )
+            refusals = list(codex_launch_visibility_repair_refusals(facts))
+            if card_row["provider"] != catalog_row["provider"]:
+                refusals.append("timeline_card_provider_mismatch")
+            if card_row["environment"] != catalog_row["environment"]:
+                refusals.append("timeline_card_environment_mismatch")
+            for field in ("origin_kind", "launch_actor", "launch_surface"):
+                if card_row[field] is not None:
+                    refusals.append(f"timeline_card_{field}_already_set")
+            if not bool(card_row["hidden_from_default_timeline"]):
+                refusals.append("timeline_card_not_policy_hidden")
+            if bool(card_row["user_hidden_from_timeline"]):
+                refusals.append("timeline_card_user_hidden")
+            if primary_thread.get("hidden_from_default_timeline") != 1:
+                refusals.append("primary_thread_not_policy_hidden")
+            plan = plan_codex_launch_visibility_repair(facts)
+            if plan is None or refusals:
+                return {
+                    "eligible": False,
+                    "applied": False,
+                    "dry_run": dry_run,
+                    "refusals": refusals,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+
+            fingerprint = codex_launch_visibility_repair_fingerprint(plan)
+            response = {
+                "eligible": True,
+                "applied": False,
+                "dry_run": dry_run,
+                "expected_fingerprint": fingerprint,
+                "compare_and_set": plan.compare_and_set,
+                "updates": plan.updates,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+            if dry_run:
+                return response
+            if expected_fingerprint != fingerprint:
+                return {
+                    **response,
+                    "eligible": False,
+                    "refusals": ["compare_and_set_failed"],
+                }
+
+            catalog_updated = connection.execute(
+                update(catalog_table)
+                .where(
+                    catalog_table.c.session_id == session_id,
+                    catalog_table.c.provider == "codex",
+                    catalog_table.c.environment == facts.environment,
+                    catalog_table.c.origin_kind.is_(None),
+                    catalog_table.c.launch_actor.is_(None),
+                    catalog_table.c.launch_surface.is_(None),
+                    catalog_table.c.hidden_from_default_timeline == 1,
+                    catalog_table.c.user_hidden_from_timeline == 0,
+                )
+                .values(
+                    launch_actor="human_shell",
+                    launch_surface="terminal",
+                    hidden_from_default_timeline=0,
+                    updated_at=observed_at,
+                )
+            ).rowcount
+            card_updated = connection.execute(
+                update(card_table)
+                .where(
+                    card_table.c.session_id == session_id,
+                    card_table.c.provider == "codex",
+                    card_table.c.environment == facts.environment,
+                    card_table.c.origin_kind.is_(None),
+                    card_table.c.launch_actor.is_(None),
+                    card_table.c.launch_surface.is_(None),
+                    card_table.c.hidden_from_default_timeline == 1,
+                    card_table.c.user_hidden_from_timeline == 0,
+                )
+                .values(
+                    launch_actor="human_shell",
+                    launch_surface="terminal",
+                    hidden_from_default_timeline=0,
+                    updated_at=observed_at,
+                )
+            ).rowcount
+            thread_updated = connection.execute(
+                update(thread_table)
+                .where(
+                    thread_table.c.id == primary_thread.get("id"),
+                    thread_table.c.session_id == session_id,
+                    thread_table.c.branch_kind == "root",
+                    thread_table.c.origin_kind.is_(None),
+                    thread_table.c.hidden_from_default_timeline == 1,
+                )
+                .values(hidden_from_default_timeline=0, updated_at=observed_at)
+            ).rowcount
+            if (catalog_updated, card_updated, thread_updated) != (1, 1, 1):
+                raise RuntimeError("Codex launch visibility CAS changed during its write transaction")
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                **response,
+                "applied": True,
+                "dry_run": False,
+                "commit_seq": str(commit_seq),
+            }
 
     def resolve_interaction(
         self,
@@ -3084,7 +3394,19 @@ class CatalogStore:
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
-                turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.run_id == data["run_id"]).one_or_none()
+                turn = (
+                    orm.query(LiveConsoleTurn)
+                    .join(LiveSessionInputReceipt, LiveSessionInputReceipt.id == LiveConsoleTurn.receipt_id)
+                    .filter(
+                        LiveConsoleTurn.run_id == data["run_id"],
+                        LiveConsoleTurn.session_id == data["session_id"],
+                        LiveConsoleTurn.thread_id == data["thread_id"],
+                        LiveConsoleTurn.provider == data["provider"],
+                        LiveConsoleTurn.device_id == data["device_id"],
+                        LiveSessionInputReceipt.owner_id == data["owner_id"],
+                    )
+                    .one_or_none()
+                )
                 if turn is None or (data.get("turn_id") and turn.id != data["turn_id"]):
                     orm.rollback()
                     return {"found": False}
@@ -3108,6 +3430,60 @@ class CatalogStore:
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
                 next_state = data["state"]
+                terminal_states = {"completed", "failed", "cancelled"}
+                if turn.state in terminal_states:
+                    if next_state != turn.state:
+                        result = _live_console_turn_dto(
+                            turn,
+                            client_request_id=receipt.client_request_id if receipt is not None else None,
+                        )
+                        orm.rollback()
+                        return {
+                            "found": True,
+                            "applied": False,
+                            "stale": True,
+                            "exact_replay": False,
+                            "turn": result,
+                            "next_turn": None,
+                            "commit_seq": str(_current_commit_seq(connection)),
+                        }
+                    # A process can die after the terminal transition claimed
+                    # the next turn but before its machine command was sent.
+                    # Return that durable starting owner on exact replay; its
+                    # run_id is also the idempotent machine command_id.
+                    starting = (
+                        orm.query(LiveConsoleTurn)
+                        .filter(
+                            LiveConsoleTurn.thread_id == turn.thread_id,
+                            LiveConsoleTurn.state == "starting",
+                        )
+                        .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+                        .first()
+                    )
+                    next_turn_result = None
+                    if starting is not None:
+                        next_receipt = orm.get(LiveSessionInputReceipt, starting.receipt_id)
+                        thread = orm.get(LiveSessionThread, starting.thread_id)
+                        next_turn_result = _live_console_turn_dto(
+                            starting,
+                            message=next_receipt.text if next_receipt is not None else None,
+                            client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
+                            provider_config=thread.provider_config_json if thread is not None else None,
+                        )
+                    result = _live_console_turn_dto(
+                        turn,
+                        client_request_id=receipt.client_request_id if receipt is not None else None,
+                    )
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "applied": False,
+                        "stale": False,
+                        "exact_replay": True,
+                        "turn": result,
+                        "next_turn": next_turn_result,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
                 turn.state = next_state
                 turn.updated_at = now
                 turn.error = data.get("error")
@@ -3130,7 +3506,7 @@ class CatalogStore:
                     )
                     receipt.updated_at = now
                 next_turn_result = None
-                if next_state in {"completed", "failed", "cancelled"}:
+                if next_state in terminal_states:
                     turn.terminal_at = now
                     # Console unread acknowledgement: denormalize the terminal
                     # result onto the catalog row so unread derives from two
@@ -3208,6 +3584,7 @@ class CatalogStore:
                 "found": True,
                 "applied": True,
                 "stale": False,
+                "exact_replay": False,
                 "turn": result,
                 "next_turn": next_turn_result,
                 "commit_seq": str(commit_seq),
@@ -3401,7 +3778,16 @@ class CatalogStore:
                     provider_config=plan.provider_config,
                     environment=getattr(plan, "environment", "development"),
                     origin_kind=getattr(plan, "origin_kind", None),
-                    hidden_from_default_timeline=1,
+                    hidden_from_default_timeline=int(
+                        getattr(
+                            plan,
+                            "hidden_from_default_timeline",
+                            int(
+                                getattr(plan, "origin_kind", None) in {"hatch_automation", "test_or_canary"}
+                                or getattr(plan, "launch_actor", None) == "automation"
+                            ),
+                        )
+                    ),
                 )
                 requires_readiness_proof = managed_provider_requires_readiness_proof(plan.provider)
                 attach_live_catalog_control(
@@ -3550,6 +3936,14 @@ class CatalogStore:
                     orm.rollback()
                     return {"conflict": "managed session is not present in the live catalog"}
                 thread_id = str(catalog.primary_thread_id)
+                incoming_actor = str(resume.get("launch_actor") or "").strip() or None
+                incoming_surface = str(resume.get("launch_surface") or "").strip() or None
+                if incoming_actor is not None and catalog.launch_actor not in (None, incoming_actor):
+                    orm.rollback()
+                    return {"conflict": "managed resume launch actor conflicts with retained provenance"}
+                if incoming_surface is not None and catalog.launch_surface not in (None, incoming_surface):
+                    orm.rollback()
+                    return {"conflict": "managed resume launch surface conflicts with retained provenance"}
                 identity_matches = (
                     str(catalog.provider) == str(resume["provider"])
                     and str(catalog.device_id or "") == str(resume["device_id"])
@@ -3572,6 +3966,25 @@ class CatalogStore:
                 if provider_alias is None:
                     orm.rollback()
                     return {"conflict": "provider thread does not match the session primary thread"}
+
+                # Resume may be the first upgraded wrapper observation for a
+                # legacy Codex row. Fill only missing provenance; never rewrite
+                # a retained classification. Policy hiding remains independent
+                # from the empty/content gate used by timeline reads.
+                catalog.launch_actor = catalog.launch_actor or incoming_actor
+                catalog.launch_surface = catalog.launch_surface or incoming_surface
+                hidden_origin = str(catalog.origin_kind or resume.get("origin_kind") or "") in {
+                    "hatch_automation",
+                    "test_or_canary",
+                }
+                policy_hidden = bool(resume.get("hidden_from_default_timeline")) or hidden_origin or catalog.launch_actor == "automation"
+                catalog.hidden_from_default_timeline = int(policy_hidden)
+                card = orm.get(LiveTimelineCard, session_id)
+                if card is not None:
+                    card.launch_actor = card.launch_actor or catalog.launch_actor
+                    card.launch_surface = card.launch_surface or catalog.launch_surface
+                    card.hidden_from_default_timeline = int(policy_hidden)
+                    card.updated_at = observed_at
                 open_run = (
                     orm.query(LiveSessionRun).filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None)).first()
                 )
@@ -4318,6 +4731,29 @@ class CatalogStore:
             storage_device = func.coalesce(catalog.c.device_id, storage.c.machine_id)
             storage_launch_actor = func.coalesce(catalog.c.launch_actor, storage.c.launch_actor)
             storage_launch_surface = func.coalesce(catalog.c.launch_surface, storage.c.launch_surface)
+            legacy_empty_open = and_(
+                catalog.c.launch_actor == "human_shell",
+                catalog.c.launch_surface == "terminal",
+                _empty_human_helm_is_open(
+                    session_id=card.c.session_id,
+                    thread_id=catalog.c.primary_thread_id,
+                    observed_at=observed_at,
+                ),
+            )
+            storage_empty_open = and_(
+                storage_launch_actor == "human_shell",
+                storage_launch_surface == "terminal",
+                _empty_human_helm_is_open(
+                    session_id=storage.c.session_id,
+                    thread_id=catalog.c.primary_thread_id,
+                    observed_at=observed_at,
+                ),
+            )
+            # Policy visibility is independent from shell readiness. Content
+            # may enter history; a zero-content human Helm is admitted only
+            # while the canonical heads would place it in Open.
+            legacy_where.append(or_(_has_durable_timeline_content(card), legacy_empty_open))
+            storage_where.append(or_(_has_durable_timeline_content(storage), storage_empty_open))
             if project is not None:
                 legacy_where.append(card.c.project == project)
                 storage_where.append(storage_project == project)
@@ -4340,6 +4776,7 @@ class CatalogStore:
                         card.c.archive_state == "pending",
                         card.c.launch_actor == "human_ui",
                         card.c.launch_surface.in_(("web", "ios", "api")),
+                        legacy_empty_open,
                     )
                 )
                 storage_where.append(
@@ -4347,6 +4784,7 @@ class CatalogStore:
                         storage.c.user_messages > 0,
                         storage_launch_actor == "human_ui",
                         storage_launch_surface.in_(("web", "ios", "api")),
+                        storage_empty_open,
                     )
                 )
             if not include_automation:
@@ -5395,6 +5833,7 @@ class CatalogStore:
         since = observed_at - timedelta(days=days_back)
         token = LiveDeviceToken.__table__
         catalog = LiveSessionCatalog.__table__
+        thread = LiveSessionThread.__table__
         with _read_snapshot(self.engine) as connection:
             enrolled = connection.execute(
                 select(token.c.id)
@@ -5405,61 +5844,83 @@ class CatalogStore:
                 )
                 .limit(1)
             ).first()
-            rows = []
+            candidates: list[WorkspaceSessionFacts] = []
+            limit_exceeded = False
             if enrolled is not None:
-                rows = connection.execute(
+                stmt = (
                     select(
+                        catalog.c.device_id,
+                        catalog.c.provider,
+                        catalog.c.environment,
+                        catalog.c.project,
                         catalog.c.cwd,
                         catalog.c.git_repo,
                         catalog.c.git_branch,
                         catalog.c.last_activity_at,
                         catalog.c.started_at,
+                        catalog.c.first_user_message_preview,
+                        catalog.c.origin_kind,
+                        catalog.c.hidden_from_default_timeline,
+                        catalog.c.user_hidden_from_timeline,
+                        catalog.c.launch_actor,
+                        thread.c.branch_kind,
+                    )
+                    .select_from(
+                        catalog.outerjoin(
+                            thread,
+                            and_(thread.c.session_id == catalog.c.session_id, thread.c.is_primary == 1),
+                        )
                     )
                     .where(
                         catalog.c.device_id == device_id,
-                        catalog.c.cwd.is_not(None),
-                        catalog.c.cwd.like("/%"),
-                        catalog.c.environment.notin_(_EXCLUDED_WORKSPACE_ENVIRONMENTS),
                         func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
                     )
-                    .order_by(func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc())
-                    .limit(WORKSPACE_CANDIDATE_LIMIT + 1)
-                ).all()
-            limit_exceeded = len(rows) > WORKSPACE_CANDIDATE_LIMIT
-            if limit_exceeded:
-                rows = rows[:WORKSPACE_CANDIDATE_LIMIT]
-            groups: dict[str, dict[str, Any]] = {}
-            for cwd, git_repo, git_branch, last_activity_at, started_at in rows:
-                used_at = _as_aware_utc(last_activity_at or started_at)
-                path = str(cwd or "")
-                if used_at is None or not path:
-                    continue
-                group = groups.setdefault(
-                    path,
-                    {"score": 0.0, "session_count": 0, "last_used_at": None, "git_repo": None, "git_branch": None},
+                    .order_by(
+                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
+                        catalog.c.session_id.desc(),
+                    )
                 )
-                group["score"] += _recency_weight(max(0.0, (observed_at - used_at).total_seconds() / 86400.0))
-                group["session_count"] += 1
-                if group["last_used_at"] is None or used_at > group["last_used_at"]:
-                    group.update(last_used_at=used_at, git_repo=git_repo, git_branch=git_branch)
-            workspaces = [
-                {
-                    "path": path,
-                    "label": _workspace_label(path, group["git_repo"], group["git_branch"]),
-                    "git_repo": group["git_repo"],
-                    "git_branch": group["git_branch"],
-                    "score": group["score"],
-                    "last_used_at": _encode_datetime(group["last_used_at"]),
-                    "session_count": group["session_count"],
-                }
-                for path, group in groups.items()
-            ]
-            workspaces.sort(key=lambda item: (item["score"], item["last_used_at"] or ""), reverse=True)
+                for page in range(WORKSPACE_CANDIDATE_MAX_PAGES):
+                    rows = connection.execute(
+                        stmt.offset(page * WORKSPACE_CANDIDATE_PAGE_SIZE).limit(WORKSPACE_CANDIDATE_PAGE_SIZE + 1)
+                    ).all()
+                    has_more = len(rows) > WORKSPACE_CANDIDATE_PAGE_SIZE
+                    page_facts = [
+                        WorkspaceSessionFacts(
+                            device_id=row.device_id,
+                            provider=row.provider,
+                            environment=row.environment,
+                            project=row.project,
+                            cwd=row.cwd,
+                            git_repo=row.git_repo,
+                            git_branch=row.git_branch,
+                            last_activity_at=_as_aware_utc(row.last_activity_at),
+                            started_at=_as_aware_utc(row.started_at),
+                            first_user_message_preview=row.first_user_message_preview,
+                            origin_kind=row.origin_kind,
+                            hidden_from_default_timeline=bool(row.hidden_from_default_timeline),
+                            user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
+                            launch_actor=row.launch_actor,
+                            is_sidechain=row.branch_kind == "subagent",
+                        )
+                        for row in rows[:WORKSPACE_CANDIDATE_PAGE_SIZE]
+                    ]
+                    candidates.extend(page_facts)
+                    limit_exceeded = has_more
+                    if not has_more:
+                        break
+            workspaces = rank_human_workspace_candidates(
+                candidates,
+                device_id=device_id,
+                now=observed_at,
+                days_back=days_back,
+                limit=limit,
+            )
             return {
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
                 "device_id": device_id,
-                "workspaces": workspaces[:limit],
+                "workspaces": [entry.to_response() for entry in workspaces],
                 "limit_exceeded": limit_exceeded,
             }
 
@@ -5626,6 +6087,7 @@ class CatalogStore:
         live_session_catalog = LiveSessionCatalog.__table__
         live_timeline_card = LiveTimelineCard.__table__
         live_session_thread = LiveSessionThread.__table__
+        live_session_preview = LiveSessionLivePreview.__table__
         render_generation = RenderGeneration.__table__
         render_object = RenderObject.__table__
         media_object = MediaObject.__table__
@@ -6256,6 +6718,28 @@ class CatalogStore:
                 render_manifest is not None
                 and any(int(render_manifest[field] or 0) > 0 for field in ("user_messages", "assistant_messages", "tool_calls"))
             )
+            if render_manifest is not None and int(render_manifest["assistant_messages"] or 0) > 0:
+                # The live bridge preview and storage-v2 render are two views
+                # of the same provider output. Once a render at least as new as
+                # the preview is durable, retire the provisional row in this
+                # same catalog commit. Historical repair envelopes must not
+                # erase a newer live turn.
+                durable_at = _as_aware_utc(session_facts["last_activity_at"])
+                if durable_at is not None:
+                    connection.execute(
+                        update(live_session_preview)
+                        .where(
+                            live_session_preview.c.session_id == session_key,
+                            live_session_preview.c.superseded_at.is_(None),
+                            live_session_preview.c.preview_observed_at <= durable_at,
+                        )
+                        .values(
+                            superseded_at=durable_at,
+                            superseded_by_event_id=None,
+                            superseded_reason="superseded_by_storage_v2",
+                            preview_updated_at=commit_time,
+                        )
+                    )
             if durable_content_added:
                 if live_console_session is not None:
                     session_values["hidden_from_default_timeline"] = 0
@@ -7299,7 +7783,10 @@ class CatalogStore:
                         table.c.environment.notin_(("test", "e2e")),
                         ~provider_proof_session_clause(table),
                         ~hatch_automation_session_clause(table),
-                        table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
+                        or_(
+                            table.c.title_attempt_count < MAX_TITLE_ATTEMPTS,
+                            table.c.title_dependency_incident_id.is_not(None),
+                        ),
                     )
                     .order_by(table.c.last_activity_at.desc(), table.c.session_id)
                     .limit(limit)
@@ -7324,6 +7811,478 @@ class CatalogStore:
             "observed_at": observed_at.isoformat(),
         }
 
+    def reconcile_storage_title_dependency(
+        self,
+        *,
+        provider: str,
+        model: str,
+        credential_binding: str,
+        credential_generation: str,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Create dependency state and adopt pre-circuit authentication debt."""
+
+        dependency = RuntimeDependencyState.__table__
+        sessions = StorageSession.__table__
+        catalog = LiveSessionCatalog.__table__
+        identity = (
+            dependency.c.use_case == TITLE_DEPENDENCY_USE_CASE,
+            dependency.c.provider == provider,
+            dependency.c.model == model,
+            dependency.c.credential_binding == credential_binding,
+        )
+        legacy_auth = and_(
+            or_(sessions.c.anchor_title.is_(None), sessions.c.anchor_title == ""),
+            _title_auth_failure_clause(sessions),
+        )
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(dependency).where(*identity)).mappings().first()
+            legacy_count = int(connection.execute(select(func.count()).select_from(sessions).where(legacy_auth)).scalar_one())
+            commit_seq = _current_commit_seq(connection)
+            incident_id: str | None = str(row["incident_id"]) if row is not None and row["incident_id"] else None
+            changed = False
+            if row is None:
+                incident_id = str(uuid4()) if legacy_count else None
+                state = "open" if incident_id else "healthy"
+                commit_seq = _advance_commit_seq(connection, observed_at)
+                connection.execute(
+                    insert(dependency).values(
+                        use_case=TITLE_DEPENDENCY_USE_CASE,
+                        provider=provider,
+                        model=model,
+                        credential_binding=credential_binding,
+                        state=state,
+                        incident_id=incident_id,
+                        failure_class="authentication" if incident_id else None,
+                        first_failure_at=observed_at if incident_id else None,
+                        last_failure_at=observed_at if incident_id else None,
+                        next_probe_at=observed_at if incident_id else None,
+                        credential_generation=credential_generation,
+                        last_error="adopted_legacy_authentication_debt" if incident_id else None,
+                        commit_seq=commit_seq,
+                        created_at=observed_at,
+                        updated_at=observed_at,
+                    )
+                )
+                changed = True
+            elif str(row["state"]) == "healthy" and legacy_count:
+                incident_id = str(uuid4())
+                commit_seq = _advance_commit_seq(connection, observed_at)
+                connection.execute(
+                    update(dependency)
+                    .where(*identity)
+                    .values(
+                        state="open",
+                        incident_id=incident_id,
+                        failure_class="authentication",
+                        first_failure_at=observed_at,
+                        last_failure_at=observed_at,
+                        next_probe_at=observed_at,
+                        credential_generation=credential_generation,
+                        last_error="adopted_legacy_authentication_debt",
+                        commit_seq=commit_seq,
+                        updated_at=observed_at,
+                    )
+                )
+                changed = True
+            elif str(row["state"]) != "healthy" and str(row["credential_generation"]) != credential_generation:
+                commit_seq = _advance_commit_seq(connection, observed_at)
+                connection.execute(
+                    update(dependency)
+                    .where(*identity)
+                    .values(
+                        state="open",
+                        credential_generation=credential_generation,
+                        next_probe_at=observed_at,
+                        probe_token=None,
+                        probe_expires_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=observed_at,
+                    )
+                )
+                # A fresh credential generation is the explicit signal to
+                # probe now. Keep the dependency's incident identity, but do
+                # not leave its bound obligations parked behind the failed
+                # generation's stale backoff timestamp.
+                if incident_id is not None:
+                    connection.execute(
+                        update(sessions)
+                        .where(sessions.c.title_dependency_incident_id == incident_id)
+                        .values(title_retry_at=observed_at, commit_seq=commit_seq, updated_at=observed_at)
+                    )
+                    connection.execute(
+                        update(catalog)
+                        .where(
+                            catalog.c.session_id.in_(
+                                select(sessions.c.session_id).where(sessions.c.title_dependency_incident_id == incident_id)
+                            )
+                        )
+                        .values(title_retry_at=observed_at, updated_at=observed_at)
+                    )
+                changed = True
+
+            bound = 0
+            unbound_legacy_count = int(
+                connection.execute(
+                    select(func.count())
+                    .select_from(sessions)
+                    .where(
+                        legacy_auth,
+                        sessions.c.title_dependency_incident_id.is_(None),
+                    )
+                ).scalar_one()
+            )
+            if incident_id is not None and unbound_legacy_count:
+                dep_row = connection.execute(select(dependency).where(*identity)).mappings().one()
+                retry_at = dep_row["next_probe_at"] or observed_at
+                if not changed:
+                    commit_seq = _advance_commit_seq(connection, observed_at)
+                bound = int(
+                    connection.execute(
+                        update(sessions)
+                        .where(legacy_auth, sessions.c.title_dependency_incident_id.is_(None))
+                        .values(
+                            title_dependency_incident_id=incident_id,
+                            title_retry_at=retry_at,
+                            commit_seq=commit_seq,
+                            updated_at=observed_at,
+                        )
+                    ).rowcount
+                    or 0
+                )
+                changed = changed or bound > 0
+            current = connection.execute(select(dependency).where(*identity)).mappings().one()
+            return {
+                "changed": changed,
+                "adopted_sessions": bound,
+                "dependency": _runtime_dependency_dto(current),
+                "commit_seq": str(commit_seq),
+            }
+
+    def acquire_storage_title_dependency(
+        self,
+        *,
+        session_id: UUID,
+        provider: str,
+        model: str,
+        credential_binding: str,
+        credential_generation: str,
+        probe_token: UUID,
+        observed_at: datetime,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        """Fence a shared outage and admit at most one recovery probe."""
+
+        dependency = RuntimeDependencyState.__table__
+        sessions = StorageSession.__table__
+        session_key = str(session_id)
+        token = str(probe_token)
+        identity = (
+            dependency.c.use_case == TITLE_DEPENDENCY_USE_CASE,
+            dependency.c.provider == provider,
+            dependency.c.model == model,
+            dependency.c.credential_binding == credential_binding,
+        )
+        with _write_transaction(self.engine) as connection:
+            dep = connection.execute(select(dependency).where(*identity)).mappings().first()
+            if dep is None:
+                return {"dependency_missing": True, "allowed": False, "commit_seq": str(_current_commit_seq(connection))}
+            session = connection.execute(
+                select(sessions.c.session_id, sessions.c.anchor_title).where(sessions.c.session_id == session_key)
+            ).first()
+            if session is None:
+                return {"session_missing": True, "allowed": False, "commit_seq": str(_current_commit_seq(connection))}
+            if session.anchor_title:
+                return {"allowed": False, "already_complete": True, "commit_seq": str(_current_commit_seq(connection))}
+            if str(dep["state"]) == "healthy":
+                return {
+                    "allowed": True,
+                    "probe": False,
+                    "incident_id": None,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+
+            incident_id = str(dep["incident_id"])
+            if dep["probe_token"] == token:
+                return {
+                    "allowed": True,
+                    "probe": True,
+                    "incident_id": incident_id,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            generation_changed = str(dep["credential_generation"]) != credential_generation
+            lease_expired = dep["probe_expires_at"] is None or _as_aware_utc(dep["probe_expires_at"]) <= observed_at
+            probe_due = dep["next_probe_at"] is None or _as_aware_utc(dep["next_probe_at"]) <= observed_at
+            allowed = (
+                generation_changed or (str(dep["state"]) == "open" and probe_due) or (str(dep["state"]) == "probing" and lease_expired)
+            )
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            if allowed:
+                probe_expires_at = observed_at + timedelta(seconds=lease_seconds)
+                connection.execute(
+                    update(dependency)
+                    .where(*identity)
+                    .values(
+                        state="probing",
+                        credential_generation=credential_generation,
+                        probe_token=token,
+                        probe_expires_at=probe_expires_at,
+                        commit_seq=commit_seq,
+                        updated_at=observed_at,
+                    )
+                )
+                retry_at = probe_expires_at
+            else:
+                retry_at = (
+                    dep["probe_expires_at"]
+                    if str(dep["state"]) == "probing" and dep["probe_expires_at"] is not None
+                    else dep["next_probe_at"] or (observed_at + TITLE_DEPENDENCY_PROBE_DELAY)
+                )
+            connection.execute(
+                update(sessions)
+                .where(sessions.c.session_id == session_key)
+                .values(
+                    title_dependency_incident_id=incident_id,
+                    title_retry_at=retry_at,
+                    commit_seq=commit_seq,
+                    updated_at=observed_at,
+                )
+            )
+            return {
+                "allowed": allowed,
+                "probe": allowed,
+                "incident_id": incident_id,
+                "retry_at": _encode_datetime(retry_at),
+                "commit_seq": str(commit_seq),
+            }
+
+    def fail_storage_title_dependency(
+        self,
+        *,
+        session_id: UUID,
+        provider: str,
+        model: str,
+        credential_binding: str,
+        credential_generation: str,
+        probe_token: UUID,
+        reason: str,
+        failed_at: datetime,
+    ) -> dict[str, Any]:
+        """Open or coalesce one authentication incident without spending row retries."""
+
+        dependency = RuntimeDependencyState.__table__
+        sessions = StorageSession.__table__
+        catalog = LiveSessionCatalog.__table__
+        identity = (
+            dependency.c.use_case == TITLE_DEPENDENCY_USE_CASE,
+            dependency.c.provider == provider,
+            dependency.c.model == model,
+            dependency.c.credential_binding == credential_binding,
+        )
+        with _write_transaction(self.engine) as connection:
+            dep = connection.execute(select(dependency).where(*identity)).mappings().first()
+            if dep is None:
+                return {"dependency_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if dep["last_failure_token"] == str(probe_token) and dep["incident_id"]:
+                return {
+                    "changed": False,
+                    "new_incident": False,
+                    "incident_id": str(dep["incident_id"]),
+                    "affected_sessions": 0,
+                    "attempt_consumed": False,
+                    "next_probe_at": _encode_datetime(dep["next_probe_at"]),
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            recovered_at = _as_aware_utc(dep["recovered_at"])
+            if str(dep["state"]) == "healthy" and recovered_at is not None and failed_at <= recovered_at:
+                return {
+                    "changed": False,
+                    "stale_failure": True,
+                    "attempt_consumed": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            newly_opened = str(dep["state"]) == "healthy" or not dep["incident_id"]
+            incident_id = str(uuid4()) if newly_opened else str(dep["incident_id"])
+            next_probe_at = failed_at + TITLE_DEPENDENCY_PROBE_DELAY
+            commit_seq = _advance_commit_seq(connection, failed_at)
+            connection.execute(
+                update(dependency)
+                .where(*identity)
+                .values(
+                    state="open",
+                    incident_id=incident_id,
+                    failure_class="authentication",
+                    first_failure_at=failed_at if newly_opened else dep["first_failure_at"],
+                    last_failure_at=failed_at,
+                    next_probe_at=next_probe_at,
+                    credential_generation=credential_generation,
+                    probe_token=None,
+                    probe_expires_at=None,
+                    last_failure_token=str(probe_token),
+                    last_error=reason[:255],
+                    recovered_at=None,
+                    commit_seq=commit_seq,
+                    updated_at=failed_at,
+                )
+            )
+            debt_clause = or_(sessions.c.session_id == str(session_id), _title_auth_failure_clause(sessions))
+            affected_ids = [
+                str(value)
+                for value in connection.execute(
+                    select(sessions.c.session_id).where(
+                        debt_clause,
+                        or_(sessions.c.anchor_title.is_(None), sessions.c.anchor_title == ""),
+                    )
+                ).scalars()
+            ]
+            if affected_ids:
+                connection.execute(
+                    update(sessions)
+                    .where(sessions.c.session_id.in_(affected_ids))
+                    .values(
+                        title_dependency_incident_id=incident_id,
+                        title_last_attempt_at=failed_at,
+                        title_retry_at=next_probe_at,
+                        title_last_error=reason[:128],
+                        commit_seq=commit_seq,
+                        updated_at=failed_at,
+                    )
+                )
+                connection.execute(
+                    update(catalog)
+                    .where(catalog.c.session_id.in_(affected_ids))
+                    .values(title_retry_at=next_probe_at, title_last_error=reason[:128], updated_at=failed_at)
+                )
+            return {
+                "changed": True,
+                "new_incident": newly_opened,
+                "incident_id": incident_id,
+                "affected_sessions": len(affected_ids),
+                "attempt_consumed": False,
+                "next_probe_at": next_probe_at.isoformat(),
+                "commit_seq": str(commit_seq),
+            }
+
+    def recover_storage_title_dependency(
+        self,
+        *,
+        provider: str,
+        model: str,
+        credential_binding: str,
+        credential_generation: str,
+        incident_id: UUID,
+        probe_token: UUID,
+        recovered_at: datetime,
+    ) -> dict[str, Any]:
+        """Close one incident and re-arm exactly the title debt it blocked."""
+
+        dependency = RuntimeDependencyState.__table__
+        sessions = StorageSession.__table__
+        catalog = LiveSessionCatalog.__table__
+        identity = (
+            dependency.c.use_case == TITLE_DEPENDENCY_USE_CASE,
+            dependency.c.provider == provider,
+            dependency.c.model == model,
+            dependency.c.credential_binding == credential_binding,
+        )
+        incident_key = str(incident_id)
+        token = str(probe_token)
+        with _write_transaction(self.engine) as connection:
+            dep = connection.execute(select(dependency).where(*identity)).mappings().first()
+            if dep is None:
+                return {"dependency_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if str(dep["state"]) == "healthy" and dep["incident_id"] is None:
+                return {"changed": False, "rearmed_sessions": 0, "commit_seq": str(_current_commit_seq(connection))}
+            if str(dep["incident_id"] or "") != incident_key or str(dep["probe_token"] or "") != token:
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            debt_ids = [
+                str(value)
+                for value in connection.execute(
+                    select(sessions.c.session_id).where(sessions.c.title_dependency_incident_id == incident_key)
+                ).scalars()
+            ]
+            commit_seq = _advance_commit_seq(connection, recovered_at)
+            connection.execute(
+                update(dependency)
+                .where(*identity)
+                .values(
+                    state="healthy",
+                    incident_id=None,
+                    failure_class=None,
+                    first_failure_at=None,
+                    last_failure_at=None,
+                    next_probe_at=None,
+                    credential_generation=credential_generation,
+                    probe_token=None,
+                    probe_expires_at=None,
+                    last_failure_token=None,
+                    last_error=None,
+                    recovered_at=recovered_at,
+                    commit_seq=commit_seq,
+                    updated_at=recovered_at,
+                )
+            )
+            if debt_ids:
+                connection.execute(
+                    update(sessions)
+                    .where(sessions.c.session_id.in_(debt_ids), sessions.c.title_dependency_incident_id == incident_key)
+                    .values(
+                        title_attempt_count=0,
+                        title_retry_at=recovered_at,
+                        title_last_error=None,
+                        title_dependency_incident_id=None,
+                        commit_seq=commit_seq,
+                        updated_at=recovered_at,
+                    )
+                )
+                connection.execute(
+                    update(catalog)
+                    .where(catalog.c.session_id.in_(debt_ids))
+                    .values(title_retry_at=recovered_at, title_last_error=None, updated_at=recovered_at)
+                )
+            return {
+                "changed": True,
+                "rearmed_sessions": len(debt_ids),
+                "incident_id": incident_key,
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_storage_title_dependency_health(self) -> dict[str, Any]:
+        dependency = RuntimeDependencyState.__table__
+        sessions = StorageSession.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(dependency)
+                    .where(dependency.c.use_case == TITLE_DEPENDENCY_USE_CASE)
+                    .order_by(dependency.c.provider, dependency.c.model, dependency.c.credential_binding)
+                )
+                .mappings()
+                .all()
+            )
+            blocked = dict(
+                connection.execute(
+                    select(sessions.c.title_dependency_incident_id, func.count())
+                    .where(sessions.c.title_dependency_incident_id.is_not(None))
+                    .group_by(sessions.c.title_dependency_incident_id)
+                ).all()
+            )
+            dependencies = []
+            for row in rows:
+                item = _runtime_dependency_dto(row)
+                item["blocked_sessions"] = int(blocked.get(row["incident_id"], 0)) if row["incident_id"] else 0
+                dependencies.append(item)
+            open_count = sum(1 for row in rows if str(row["state"]) != "healthy")
+            return {
+                "status": "degraded" if open_count else "healthy",
+                "open_dependencies": open_count,
+                "blocked_sessions": sum(item["blocked_sessions"] for item in dependencies),
+                "dependencies": dependencies,
+                "observed_at": observed_at.isoformat(),
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
     def complete_storage_title(self, *, session_id: UUID, title: str, completed_at: datetime) -> dict[str, Any]:
         if is_path_like_title(title):
             raise ValueError("path_like_title")
@@ -7345,6 +8304,7 @@ class CatalogStore:
                     title_last_attempt_at=completed_at,
                     title_retry_at=None,
                     title_last_error=None,
+                    title_dependency_incident_id=None,
                     commit_seq=commit_seq,
                     updated_at=completed_at,
                 )
@@ -7978,9 +8938,6 @@ class CatalogStore:
                     .values(semantic_projection_version=0, commit_seq=commit_seq, updated_at=commit_time)
                 )
             reopened_projectors = 0
-            import sys as _sys
-
-            print(f"DBG repair complete_after={complete_after}", file=_sys.stderr)
             if complete_after:
                 reopened_projectors = int(
                     connection.execute(
@@ -11094,6 +12051,28 @@ def _render_order_columns(first: object, last: object) -> dict[str, object | Non
     return values
 
 
+def _runtime_dependency_dto(row) -> dict[str, Any]:
+    return {
+        "use_case": str(row["use_case"]),
+        "provider": str(row["provider"]),
+        "model": str(row["model"]),
+        "credential_binding": str(row["credential_binding"]),
+        "state": str(row["state"]),
+        "incident_id": row["incident_id"],
+        "failure_class": row["failure_class"],
+        "first_failure_at": _encode_datetime(row["first_failure_at"]),
+        "last_failure_at": _encode_datetime(row["last_failure_at"]),
+        "next_probe_at": _encode_datetime(row["next_probe_at"]),
+        # This is a one-way fingerprint used only to notice credential repair;
+        # it is not credential material and cannot be reversed into the key.
+        "credential_generation": str(row["credential_generation"]),
+        "probe_expires_at": _encode_datetime(row["probe_expires_at"]),
+        "last_error": row["last_error"],
+        "recovered_at": _encode_datetime(row["recovered_at"]),
+        "updated_at": _encode_datetime(row["updated_at"]),
+    }
+
+
 def _storage_session_dto(row) -> dict[str, Any]:
     return {
         "session_id": str(row["session_id"]),
@@ -11118,6 +12097,7 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "title_last_attempt_at": _encode_datetime(row["title_last_attempt_at"]),
         "title_retry_at": _encode_datetime(row["title_retry_at"]),
         "title_last_error": row["title_last_error"],
+        "title_dependency_incident_id": row["title_dependency_incident_id"],
         "first_user_message_preview": row["first_user_message_preview"],
         "last_visible_text_preview": row["last_visible_text_preview"],
         "transcript_revision": str(row["transcript_revision"]),
@@ -11298,26 +12278,6 @@ def _u64_key(value: int) -> str:
     return f"{value:020d}"
 
 
-def _recency_weight(age_days: float) -> int:
-    for threshold, weight in _RECENCY_BUCKETS:
-        if age_days <= threshold:
-            return weight
-    return 10
-
-
-def _workspace_label(path: str, git_repo: str | None, git_branch: str | None) -> str:
-    if git_repo:
-        name = str(git_repo).rstrip("/").rsplit("/", 1)[-1]
-        if name.endswith(".git"):
-            name = name[:-4]
-        if name:
-            return f"{name} ({git_branch})" if git_branch else name
-    parts = path.split("/")
-    if len(parts) >= 3 and parts[1] == "Users":
-        return "~/" + "/".join(parts[3:]) if len(parts) > 3 else "~"
-    return path
-
-
 def _source_epoch_conflict(connection, *, reason: str, **evidence: Any) -> dict[str, Any]:
     """Refuse an epoch admission and say why.
 
@@ -11355,6 +12315,80 @@ def _advance_commit_seq(connection, now: datetime) -> int:
         .values(commit_seq=catalog_meta.c.commit_seq + 1, updated_at=now.isoformat())
         .returning(catalog_meta.c.commit_seq)
     ).scalar_one()
+
+
+def _runtime_activity_facts(
+    connection,
+    *,
+    events: list[Any],
+    updated_runtime_keys: set[str],
+) -> list[ReducerFact]:
+    """Promote accepted runtime phase events into the served fact reducer.
+
+    Runtime events already update the compatibility ``LiveRuntimeState`` row.
+    The served session contract intentionally ignores that row, so failing to
+    reduce the same accepted event left short Console turns with zero canonical
+    activity heads.  Bind every promoted event to its exact durable run before
+    it can become served evidence.
+    """
+
+    from zerg.services.session_runtime import phase_freshness_ms
+
+    run_table = LiveSessionRun.__table__
+    thread_table = LiveSessionThread.__table__
+    facts: list[ReducerFact] = []
+    for event in events:
+        if event.runtime_key not in updated_runtime_keys or event.kind != "phase_signal":
+            continue
+        if event.session_id is None or event.run_id is None:
+            continue
+        phase = str(event.phase or "").strip().lower()
+        freshness_ms = event.freshness_ms if event.freshness_ms is not None else phase_freshness_ms(phase)
+        if phase not in {"thinking", "running", "blocked", "stalled", "needs_user", "idle"} or freshness_ms is None:
+            continue
+        session_id = str(event.session_id)
+        run_id = str(event.run_id)
+        bound = connection.execute(
+            select(run_table.c.id)
+            .select_from(run_table.join(thread_table, thread_table.c.id == run_table.c.thread_id))
+            .where(run_table.c.id == run_id, thread_table.c.session_id == session_id)
+        ).scalar_one_or_none()
+        if bound is None:
+            continue
+        occurred_at = _as_aware_utc(event.occurred_at)
+        if occurred_at is None:
+            continue
+        raw_source = str(event.source or "runtime_event").strip() or "runtime_event"
+        value = {
+            "authority_class": "provider_runtime",
+            "provider": str(event.provider),
+            "session_id": session_id,
+            "run_id": run_id,
+            "kind": phase,
+            "raw_kind": phase,
+            "tool_name": str(event.tool_name) if event.tool_name else None,
+            "source": raw_source,
+            "observed_at": occurred_at.isoformat(),
+            "valid_until": (occurred_at + timedelta(milliseconds=freshness_ms)).isoformat(),
+        }
+        dedupe_key = hashlib.sha256(f"runtime-activity:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
+        facts.append(
+            ReducerFact(
+                family="activity",
+                subject_key=f"run:{run_id}",
+                source=raw_source,
+                source_epoch=run_id,
+                source_seq=None,
+                dedupe_key=dedupe_key,
+                evidence_hash=canonical_evidence_hash(value),
+                value=value,
+                observed_at=occurred_at,
+                session_id=session_id,
+                valid_until=occurred_at + timedelta(milliseconds=freshness_ms),
+                raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
+            )
+        )
+    return facts
 
 
 def _user_dto(row) -> dict[str, Any]:

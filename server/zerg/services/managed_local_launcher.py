@@ -307,7 +307,7 @@ def build_managed_local_launch_plan(
         provider_config=params.provider_config,
         environment=environment,
         origin_kind=origin_kind,
-        hidden_from_default_timeline=int(origin_kind is not None),
+        hidden_from_default_timeline=int(origin_kind is not None or launch_actor == "automation"),
     )
     return replace(plan, attach_command=_build_attach_command_for_plan(plan))
 

@@ -418,6 +418,74 @@ def settle_console_turn(
     db.commit()
 
 
+def reconcile_console_terminal_event(
+    db: Session,
+    *,
+    owner_id: int,
+    run_id: UUID,
+    terminal_state: str,
+    occurred_at: datetime,
+    exit_status: str,
+) -> UUID | None:
+    """Apply a live-store terminal event to the durable Console FIFO.
+
+    Runtime deployments may keep high-frequency state in the live store while
+    Console turn ownership remains in the archive database.  The live reducer
+    cannot update that second database transactionally, so the router invokes
+    this idempotent reconciliation step after the live write succeeds.  It is
+    deliberately scoped by owner and Console source: arbitrary runtime events
+    must never release another user's FIFO claim.
+    """
+
+    turn = (
+        db.query(SessionTurn)
+        .join(SessionInput, SessionInput.id == SessionTurn.session_input_id)
+        .filter(
+            SessionTurn.run_id == run_id,
+            SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
+            SessionInput.owner_id == owner_id,
+        )
+        .one_or_none()
+    )
+    if turn is None:
+        return None
+
+    thread_id = UUID(str(turn.thread_id))
+    if turn.state in {
+        SESSION_TURN_STATE_COMPLETED,
+        SESSION_TURN_STATE_FAILED,
+        SESSION_TURN_STATE_CANCELLED,
+    }:
+        return thread_id
+    if turn.state not in CONSOLE_EXECUTION_OWNER_STATES:
+        return None
+
+    outcome = {
+        "run_completed": SESSION_TURN_STATE_COMPLETED,
+        "run_cancelled": SESSION_TURN_STATE_CANCELLED,
+    }.get(terminal_state, SESSION_TURN_STATE_FAILED)
+    input_row = db.get(SessionInput, turn.session_input_id)
+    run = db.get(SessionRun, run_id)
+    if input_row is None or run is None:
+        raise ConsoleTurnConflict(f"Console turn {turn.id} is missing its input or run")
+
+    turn.state = outcome
+    turn.terminal_phase = terminal_state
+    turn.terminal_at = turn.terminal_at or occurred_at
+    turn.durable_at = turn.durable_at or occurred_at
+    run.ended_at = run.ended_at or occurred_at
+    run.exit_status = run.exit_status or exit_status
+    stamp_console_result(db, session_id=turn.session_id, outcome=outcome, at=occurred_at)
+    if outcome == SESSION_TURN_STATE_COMPLETED:
+        input_row.status = INPUT_STATUS_DELIVERED
+        input_row.last_error = None
+        input_row.delivered_at = input_row.delivered_at or occurred_at
+    else:
+        input_row.status = INPUT_STATUS_FAILED
+        input_row.last_error = terminal_state
+    return thread_id
+
+
 async def dispatch_next_console_turn(
     db: Session,
     *,
@@ -430,7 +498,14 @@ async def dispatch_next_console_turn(
 
     from zerg.services.machine_control_channel import get_machine_control_channel_registry
 
-    claimed = claim_next_console_turn(db, thread_id=thread_id)
+    # A prior terminal-event attempt may have committed the FIFO claim and
+    # crashed before sending its machine command. Replay that durable owner by
+    # stable run_id before attempting to allocate a new claim.
+    claimed = _starting_cold_console_turn_for_thread(
+        db,
+        owner_id=owner_id,
+        thread_id=thread_id,
+    ) or claim_next_console_turn(db, thread_id=thread_id)
     if claimed is None:
         return ConsoleTurnDispatch(turn_id=None, run_id=None, state="idle")
 
@@ -573,27 +648,61 @@ def _starting_cold_console_turns_for_device(
         .limit(100)
         .all()
     )
-    claimed: list[ClaimedConsoleTurn] = []
-    for turn, thread, input_row in rows:
-        if turn.run_id is None:
-            continue
-        claimed.append(
-            ClaimedConsoleTurn(
-                input_id=int(input_row.id),
-                turn_id=int(turn.id),
-                run_id=UUID(str(turn.run_id)),
-                session_id=UUID(str(turn.session_id)),
-                thread_id=UUID(str(thread.id)),
-                provider=str(thread.provider),
-                device_id=str(thread.device_id),
-                cwd=str(thread.cwd),
-                message=str(input_row.body),
-                client_request_id=str(input_row.client_request_id or turn.request_id or ""),
-                provider_config=dict(thread.provider_config_json or {}),
-                resume_provider_thread_id=_provider_resume_identity(db, thread),
-            )
+    return [
+        claimed
+        for turn, thread, input_row in rows
+        if (claimed := _claimed_cold_console_turn(db, turn=turn, thread=thread, input_row=input_row)) is not None
+    ]
+
+
+def _starting_cold_console_turn_for_thread(
+    db: Session,
+    *,
+    owner_id: int,
+    thread_id: UUID,
+) -> ClaimedConsoleTurn | None:
+    row = (
+        db.query(SessionTurn, SessionThread, SessionInput)
+        .join(SessionThread, SessionThread.id == SessionTurn.thread_id)
+        .join(SessionInput, SessionInput.id == SessionTurn.session_input_id)
+        .filter(
+            SessionTurn.thread_id == thread_id,
+            SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
+            SessionTurn.state == SESSION_TURN_STATE_STARTING,
+            SessionInput.owner_id == owner_id,
         )
-    return claimed
+        .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
+        .first()
+    )
+    if row is None:
+        return None
+    turn, thread, input_row = row
+    return _claimed_cold_console_turn(db, turn=turn, thread=thread, input_row=input_row)
+
+
+def _claimed_cold_console_turn(
+    db: Session,
+    *,
+    turn: SessionTurn,
+    thread: SessionThread,
+    input_row: SessionInput,
+) -> ClaimedConsoleTurn | None:
+    if turn.run_id is None:
+        return None
+    return ClaimedConsoleTurn(
+        input_id=int(input_row.id),
+        turn_id=int(turn.id),
+        run_id=UUID(str(turn.run_id)),
+        session_id=UUID(str(turn.session_id)),
+        thread_id=UUID(str(thread.id)),
+        provider=str(thread.provider),
+        device_id=str(thread.device_id),
+        cwd=str(thread.cwd),
+        message=str(input_row.body),
+        client_request_id=str(input_row.client_request_id or turn.request_id or ""),
+        provider_config=dict(thread.provider_config_json or {}),
+        resume_provider_thread_id=_provider_resume_identity(db, thread),
+    )
 
 
 async def enqueue_catalog_console_turn(
@@ -705,8 +814,13 @@ async def enqueue_catalog_console_turn(
             error = str(response.error or "Console turn dispatch outcome is unknown")
             update_result = await _mark_catalog_start_outcome_unknown(
                 client,
+                owner_id=owner_id,
                 turn_id=turn_id,
                 run_id=run_id,
+                session_id=UUID(str(turn["session_id"])),
+                thread_id=UUID(str(turn["thread_id"])),
+                provider=provider,
+                device_id=device_id,
                 error=error,
             )
             persisted_turn = dict(update_result.get("turn") or {})
@@ -738,6 +852,11 @@ async def enqueue_catalog_console_turn(
             "turn": {
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
+                "owner_id": owner_id,
+                "session_id": str(turn["session_id"]),
+                "thread_id": str(turn["thread_id"]),
+                "provider": provider,
+                "device_id": device_id,
                 "state": state,
                 "expected_state": SESSION_TURN_STATE_STARTING,
                 "error_code": error_code,
@@ -830,8 +949,13 @@ async def dispatch_catalog_claimed_turn(
             error = str(response.error or "Console turn dispatch outcome is unknown")
             update_result = await _mark_catalog_start_outcome_unknown(
                 catalog,
+                owner_id=owner_id,
                 turn_id=turn_id,
                 run_id=run_id,
+                session_id=session_id,
+                thread_id=UUID(str(turn["thread_id"])),
+                provider=provider,
+                device_id=device_id,
                 error=error,
             )
             persisted_turn = dict(update_result.get("turn") or {})
@@ -863,6 +987,11 @@ async def dispatch_catalog_claimed_turn(
             "turn": {
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
+                "owner_id": owner_id,
+                "session_id": str(session_id),
+                "thread_id": str(turn["thread_id"]),
+                "provider": provider,
+                "device_id": device_id,
                 "state": state,
                 "expected_state": SESSION_TURN_STATE_STARTING,
                 "error_code": error_code,
@@ -936,8 +1065,13 @@ async def reconcile_starting_console_turns_for_device(
                 error = f"Machine Agent reconnected without advertising {capability}; launch outcome remains unknown"
                 update_result = await _mark_catalog_start_outcome_unknown(
                     catalog,
+                    owner_id=owner_id,
                     turn_id=UUID(str(turn["turn_id"])),
                     run_id=UUID(str(turn["run_id"])),
+                    session_id=UUID(str(turn["session_id"])),
+                    thread_id=UUID(str(turn["thread_id"])),
+                    provider=str(turn["provider"]),
+                    device_id=str(turn["device_id"]),
                     error=error,
                 )
                 persisted_turn = dict(update_result.get("turn") or {})
@@ -1003,8 +1137,13 @@ async def reconcile_starting_console_turns_for_device(
 async def _mark_catalog_start_outcome_unknown(
     catalog,
     *,
+    owner_id: int,
     turn_id: UUID,
     run_id: UUID,
+    session_id: UUID,
+    thread_id: UUID,
+    provider: str,
+    device_id: str,
     error: str,
 ) -> dict[str, object]:
     return await catalog.call(
@@ -1013,6 +1152,11 @@ async def _mark_catalog_start_outcome_unknown(
             "turn": {
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
+                "owner_id": owner_id,
+                "session_id": str(session_id),
+                "thread_id": str(thread_id),
+                "provider": provider,
+                "device_id": device_id,
                 "state": SESSION_TURN_STATE_STARTING,
                 "expected_state": SESSION_TURN_STATE_STARTING,
                 "error_code": "turn_start_outcome_unknown",

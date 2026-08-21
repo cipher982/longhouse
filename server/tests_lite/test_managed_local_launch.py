@@ -157,12 +157,31 @@ def test_managed_local_launch_plan_builds_codex_attach_command_without_archive_d
     )
 
     assert plan.provider == "codex"
-    assert str(plan.session_id) in plan.attach_command
     assert "codex-bridge attach --session-id" in plan.attach_command
     assert plan.provider_session_id is None
     assert plan.source_name == "cinder"
     assert plan.project == "demo"
     assert plan.managed_transport == "codex_app_server"
+    assert str(plan.session_id) in plan.attach_command
+
+
+def test_explicit_automation_provenance_is_policy_hidden_without_path_heuristics():
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=1,
+            runner_target="cinder",
+            cwd="/tmp/ordinary-looking-workspace",
+            provider="codex",
+            project="ordinary",
+            machine_name="cinder",
+            launch_actor="automation",
+            launch_surface="ci",
+        )
+    )
+
+    assert plan.origin_kind is None
+    assert (plan.launch_actor, plan.launch_surface) == ("automation", "ci")
+    assert plan.hidden_from_default_timeline == 1
 
 
 def test_managed_local_launch_plan_builds_claude_attach_command_without_archive_db():

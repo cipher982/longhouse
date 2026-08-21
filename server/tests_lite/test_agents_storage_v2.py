@@ -4,6 +4,9 @@ import base64
 import hashlib
 import json
 from contextlib import asynccontextmanager
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -404,7 +407,7 @@ async def test_storage_v2_render_reader_surfaces_semantic_recovery_pending(monke
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_timeline_repairs_stale_semantic_catalog_projection(monkeypatch):
+async def test_storage_v2_timeline_read_does_not_repair_stale_semantic_projection(monkeypatch):
     session_id = uuid4()
     generation_id = uuid4()
 
@@ -419,7 +422,7 @@ async def test_storage_v2_timeline_repairs_stale_semantic_catalog_projection(mon
                 "sessions": [
                     {
                         "session_id": str(session_id),
-                        "semantic_projection_version": 0 if self.timeline_calls == 1 else 1,
+                        "semantic_projection_version": 0,
                         "current_render_generation": str(generation_id),
                     }
                 ],
@@ -429,18 +432,7 @@ async def test_storage_v2_timeline_repairs_stale_semantic_catalog_projection(mon
             }
 
     catalog = _Catalog()
-    repairs: list[dict[str, object]] = []
-
-    async def _repair(**kwargs):
-        repairs.append(kwargs)
-        return {"complete": True, "updated_object_count": 1}
-
-    render_workers = object()
-    raw_workers = object()
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
-    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
-    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: raw_workers)
-    monkeypatch.setattr(storage_router, "repair_storage_session_semantic_projection", _repair)
 
     app = FastAPI()
     app.include_router(storage_router.router)
@@ -451,15 +443,8 @@ async def test_storage_v2_timeline_repairs_stale_semantic_catalog_projection(mon
         response = await client.get("/agents/storage/v2/sessions")
 
     assert response.status_code == 200, response.text
-    assert catalog.timeline_calls == 2
-    assert len(repairs) == 1
-    assert repairs[0]["catalog"] is catalog
-    assert repairs[0]["render_workers"] is render_workers
-    assert repairs[0]["raw_workers"] is raw_workers
-    assert repairs[0]["session_id"] == str(session_id)
-    assert repairs[0]["owner_id"] == "42"
-    assert repairs[0]["generation_id"] == str(generation_id)
-    assert response.json()["sessions"][0]["semantic_projection_version"] == 1
+    assert catalog.timeline_calls == 1
+    assert response.json()["sessions"][0]["semantic_projection_version"] == 0
 
 
 @pytest.mark.asyncio
@@ -647,6 +632,136 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
         assert decoded.envelope_id == payload["expected_envelope_id"]
     finally:
         reset_pubsub_for_test()
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_console_provisional_preview_converges_to_one_durable_storage_event(monkeypatch):
+    tempdir = TemporaryDirectory(prefix="lh2-console-convergence-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(root / "objects")
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    tenant_id = get_settings().archive_primary_tenant_id
+    session_id = uuid4()
+    thread_id = uuid4()
+    now = datetime.now(UTC).replace(microsecond=0)
+    payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+    payload["session_id"] = str(session_id)
+    payload["session"].update(
+        started_at=(now - timedelta(minutes=1)).isoformat(),
+        last_activity_at=(now + timedelta(seconds=1)).isoformat(),
+        origin_kind="console",
+        launch_actor="user",
+        launch_surface="console",
+    )
+
+    try:
+        await catalog.call(
+            "session.console.create.v2",
+            {
+                "session": {
+                    "session_id": str(session_id),
+                    "thread_id": str(thread_id),
+                    "owner_id": 1,
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "cwd": "/workspace/longhouse",
+                    "project": "longhouse",
+                    "launch_surface": "console",
+                    "started_at": (now - timedelta(minutes=1)).isoformat(),
+                }
+            },
+        )
+        await catalog.call(
+            "session.runtime.apply.v2",
+            {
+                "events": [
+                    {
+                        "runtime_key": f"codex:{session_id}",
+                        "session_id": str(session_id),
+                        "thread_id": str(thread_id),
+                        "run_id": str(uuid4()),
+                        "provider": "codex",
+                        "device_id": "cinder",
+                        "source": "codex_console_live",
+                        "kind": "progress_signal",
+                        "occurred_at": now.isoformat(),
+                        "dedupe_key": f"preview:{session_id}:1",
+                        "payload": {
+                            "progress_kind": "bridge_live_transcript_delta",
+                            "live_text": "world",
+                            "thread_id": str(thread_id),
+                            "turn_id": "turn-1",
+                            "seq": 1,
+                            "turn_completed": True,
+                        },
+                    }
+                ]
+            },
+        )
+        provisional = await catalog.call(
+            "session.read.v2",
+            {"session_id": str(session_id)},
+        )
+        assert provisional.get("found") is True, provisional
+        assert provisional["facts"]["live_preview"] is not None, provisional
+        assert provisional["facts"]["live_preview"]["preview_text"] == "world"
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            committed = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert committed.status_code == 200, committed.text
+            receipt = committed.json()
+
+            converged = await catalog.call(
+                "session.read.v2",
+                {"session_id": str(session_id)},
+            )
+            assert converged["facts"]["live_preview"] is None
+
+            detail = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=20")
+            assert detail.status_code == 200, detail.text
+            assistant = [
+                event
+                for event in detail.json()["events"]
+                if event["role"] == "assistant" and event["content_text"] == "world"
+            ]
+            assert len(assistant) == 1
+
+            replay = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert replay.status_code == 200, replay.text
+            assert replay.json() == receipt
+            replayed_detail = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=20")
+            assert replayed_detail.status_code == 200, replayed_detail.text
+            replayed_assistant = [
+                event
+                for event in replayed_detail.json()["events"]
+                if event["role"] == "assistant" and event["content_text"] == "world"
+            ]
+            assert len(replayed_assistant) == 1
+    finally:
         await workers.close()
         await catalog.close()
         await daemon.close()

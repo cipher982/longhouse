@@ -12,82 +12,23 @@ renamed machine's ghost history leaks in. See
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from sqlalchemy import and_
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
-
-# Frecency: sum a recency weight per session in a cwd group. Frequent AND
-# recent directories dominate; a single stale session barely registers.
-_RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
-    (1.0, 100),
-    (4.0, 70),
-    (14.0, 50),
-    (31.0, 30),
-)
-_RECENCY_TAIL_WEIGHT = 10
-
-# Machine-label environments that are never real workspaces to surface.
-_EXCLUDED_ENVIRONMENTS = frozenset({"test", "e2e"})
-
-
-@dataclass(frozen=True)
-class WorkspaceSuggestionEntry:
-    path: str
-    label: str
-    git_repo: str | None
-    git_branch: str | None
-    score: float
-    last_used_at: datetime | None
-    session_count: int
-
-    def to_response(self) -> dict[str, object]:
-        return {
-            "path": self.path,
-            "label": self.label,
-            "git_repo": self.git_repo,
-            "git_branch": self.git_branch,
-            "score": self.score,
-            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
-            "session_count": self.session_count,
-        }
-
-
-def _recency_weight(age_days: float) -> int:
-    for threshold, weight in _RECENCY_BUCKETS:
-        if age_days <= threshold:
-            return weight
-    return _RECENCY_TAIL_WEIGHT
-
-
-def _compact_path(path: str) -> str:
-    """``/Users/x/git/zerg`` → ``~/git/zerg``."""
-    parts = path.split("/")
-    if len(parts) >= 3 and parts[1] == "Users":
-        return "~/" + "/".join(parts[3:]) if len(parts) > 3 else "~"
-    return path
-
-
-def _repo_name(git_repo: str | None) -> str | None:
-    if not git_repo:
-        return None
-    name = git_repo.rstrip("/").rsplit("/", 1)[-1]
-    if name.endswith(".git"):
-        name = name[:-4]
-    return name or None
-
-
-def _label(path: str, git_repo: str | None, git_branch: str | None) -> str:
-    repo = _repo_name(git_repo)
-    if repo:
-        return f"{repo} ({git_branch})" if git_branch else repo
-    return _compact_path(path)
+from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_MAX_PAGES
+from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE
+from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
+from zerg.services.workspace_suggestion_projection import WorkspaceSuggestionEntry
+from zerg.services.workspace_suggestion_projection import rank_human_workspace_candidates
 
 
 def build_workspace_suggestions(
@@ -119,66 +60,68 @@ def build_workspace_suggestions(
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=days_back)
-
     stmt = (
         select(
+            session_model.device_id,
+            session_model.provider,
+            session_model.environment,
+            session_model.project,
             session_model.cwd,
             session_model.git_repo,
             session_model.git_branch,
             session_model.last_activity_at,
             session_model.started_at,
+            session_model.first_user_message_preview,
+            session_model.origin_kind,
+            session_model.hidden_from_default_timeline,
+            session_model.user_hidden_from_timeline,
+            session_model.launch_actor,
+            SessionThread.branch_kind,
         )
-        .where(session_model.device_id == device_id)
-        .where(session_model.cwd.is_not(None))
-        .where(session_model.cwd.like("/%"))
-        .where(session_model.environment.notin_(_EXCLUDED_ENVIRONMENTS))
-    )
-
-    @dataclass
-    class _Group:
-        count: int = 0
-        score: float = 0.0
-        last_used_at: datetime | None = None
-        git_repo: str | None = None
-        git_branch: str | None = None
-
-    groups: dict[str, _Group] = {}
-    for cwd, git_repo, git_branch, last_activity_at, started_at in db.execute(stmt).all():
-        used_at = last_activity_at or started_at
-        if used_at is None:
-            continue
-        if used_at.tzinfo is None:
-            used_at = used_at.replace(tzinfo=timezone.utc)
-        if used_at < since:
-            continue
-
-        age_days = max(0.0, (now - used_at).total_seconds() / 86400.0)
-        group = groups.get(cwd)
-        if group is None:
-            group = _Group()
-            groups[cwd] = group
-        group.count += 1
-        group.score += _recency_weight(age_days)
-        # git metadata + last_used come from the most-recent session in the group.
-        if group.last_used_at is None or used_at > group.last_used_at:
-            group.last_used_at = used_at
-            group.git_repo = git_repo
-            group.git_branch = git_branch
-
-    entries = [
-        WorkspaceSuggestionEntry(
-            path=cwd,
-            label=_label(cwd, group.git_repo, group.git_branch),
-            git_repo=group.git_repo,
-            git_branch=group.git_branch,
-            score=group.score,
-            last_used_at=group.last_used_at,
-            session_count=group.count,
+        .outerjoin(
+            SessionThread,
+            and_(SessionThread.session_id == session_model.id, SessionThread.is_primary == 1),
         )
-        for cwd, group in groups.items()
-    ]
-    entries.sort(
-        key=lambda e: (e.score, e.last_used_at or datetime.min.replace(tzinfo=timezone.utc)),
-        reverse=True,
+        .where(
+            session_model.device_id == device_id,
+            func.coalesce(session_model.last_activity_at, session_model.started_at) >= since,
+        )
+        .order_by(
+            func.coalesce(session_model.last_activity_at, session_model.started_at).desc(),
+            session_model.id.desc(),
+        )
     )
-    return entries[:limit]
+    candidates: list[WorkspaceSessionFacts] = []
+    for page in range(WORKSPACE_CANDIDATE_MAX_PAGES):
+        rows = db.execute(stmt.offset(page * WORKSPACE_CANDIDATE_PAGE_SIZE).limit(WORKSPACE_CANDIDATE_PAGE_SIZE + 1)).all()
+        has_more = len(rows) > WORKSPACE_CANDIDATE_PAGE_SIZE
+        page_facts = [
+            WorkspaceSessionFacts(
+                device_id=row.device_id,
+                provider=row.provider,
+                environment=row.environment,
+                project=row.project,
+                cwd=row.cwd,
+                git_repo=row.git_repo,
+                git_branch=row.git_branch,
+                last_activity_at=row.last_activity_at,
+                started_at=row.started_at,
+                first_user_message_preview=row.first_user_message_preview,
+                origin_kind=row.origin_kind,
+                hidden_from_default_timeline=bool(row.hidden_from_default_timeline),
+                user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
+                launch_actor=row.launch_actor,
+                is_sidechain=row.branch_kind == "subagent",
+            )
+            for row in rows[:WORKSPACE_CANDIDATE_PAGE_SIZE]
+        ]
+        candidates.extend(page_facts)
+        if not has_more:
+            break
+    return rank_human_workspace_candidates(
+        candidates,
+        device_id=device_id,
+        now=now,
+        days_back=days_back,
+        limit=limit,
+    )

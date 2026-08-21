@@ -134,6 +134,34 @@
             }
           ]
         },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_unsupported",
+              "scenario_id": "codex_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ce56c55e20450ebdf4cf6d40baad36e0389c435f6de6362b377533b044c03068"
+            }
+          ]
+        },
         "session.resume.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -263,6 +291,31 @@
               ],
               "max_age_seconds": 604800,
               "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "helm_launch_visibility_preserved",
+              "scenario_id": "codex_helm_launch_visibility",
+              "oracle_source": "server/zerg/qa/provider_launch_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "06e3d748c4b4aa2aa062751c9286ece058956de9c74b3cf9763e63008c7d62ec"
             }
           ]
         },
@@ -843,6 +896,18 @@
           ],
           "required_assertions": [
             {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "claude_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ce56c55e20450ebdf4cf6d40baad36e0389c435f6de6362b377533b044c03068"
+            },
+            {
               "id": "real_print_marker_returned",
               "scenario_id": "claude_real_print",
               "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
@@ -1220,6 +1285,34 @@
               ],
               "max_age_seconds": 604800,
               "oracle_digest": "9acae2657018ba644824392e9aa28d76e4ed8633fc3e245b246656497cbb0f20"
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "opencode_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ce56c55e20450ebdf4cf6d40baad36e0389c435f6de6362b377533b044c03068"
             }
           ]
         },
@@ -1922,6 +2015,34 @@
             }
           ]
         },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "cursor_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ce56c55e20450ebdf4cf6d40baad36e0389c435f6de6362b377533b044c03068"
+            }
+          ]
+        },
         "session.resume.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -2216,7 +2337,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "e90a7fcf667e15551056285c51a53f049bd0e88c34305cda82ce1399c0a926da"
+      "adapter_digest": "9908d7775785b797821045eac33e1b532c424f5e8d9cb631240906e7fa869aa3"
     },
     {
       "provider": "pi",

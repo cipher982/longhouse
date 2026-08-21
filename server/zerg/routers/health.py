@@ -496,6 +496,25 @@ def health_check(request: Request):
     except Exception as e:
         checks["llm"] = {"status": "warn", "error": str(e)}
 
+    # 1c. Durable product dependency state. This intentionally does not feed
+    # /readyz: title generation can be degraded while the launch loop remains
+    # healthy, but operators must still see the shared outage and its debt.
+    if catalog_mode and not _settings.testing:
+        try:
+            from zerg.services.catalog_read_gateway import title_dependency_health
+
+            title_health = title_dependency_health()
+            degraded = title_health.get("status") == "degraded"
+            checks["session_titles"] = {
+                "status": "warn" if degraded else "pass",
+                **title_health,
+            }
+            if degraded and health_status["status"] == "healthy":
+                health_status["status"] = "degraded"
+                health_status["message"] = "Session title generation dependency is degraded"
+        except Exception as exc:  # catalog connectivity is graded separately below
+            checks["session_titles"] = {"status": "warn", "error": type(exc).__name__}
+
     # 2. Database connectivity
     if catalog_mode and not _settings.testing:
         try:

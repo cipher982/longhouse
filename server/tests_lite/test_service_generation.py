@@ -258,6 +258,11 @@ def test_get_engine_executable_uses_repo_build_when_no_runtime_artifact(
         "resolve_installed_runtime_artifact",
         lambda component: None,
     )
+    monkeypatch.setattr(
+        shipper_service.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=f"{engine_binary}\n", stderr=""),
+    )
 
     assert get_engine_executable() == str(engine_binary)
 

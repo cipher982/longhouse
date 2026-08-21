@@ -552,6 +552,55 @@ def test_served_projector_without_control_head_fails_actions_closed():
     assert served.control.actions.resume.reason == "machine_unknown"
 
 
+def test_served_console_keeps_live_control_and_fifo_send_without_interrupt_support():
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=83,
+        catalog_facts={
+            "catalog": {
+                "provider": "codex",
+                "cwd": "/repo",
+                "started_at": (NOW - timedelta(minutes=1)).isoformat(),
+                "origin_kind": "console",
+                "launch_surface": "ios",
+            },
+            "primary_thread": {"device_id": "cinder", "cwd": "/repo"},
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(seconds=5)).isoformat(),
+                "ended_at": None,
+            },
+            "connections": [],
+            "console_control": {
+                "turn_state": "active",
+                "machine_online": True,
+                "adapter_available": True,
+                "interrupt_adapter_available": False,
+                "can_start_turn": True,
+                "start_turn_blocked_by": None,
+                "can_interrupt_active_turn": False,
+            },
+        },
+        heads=[_activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1))],
+        supported_operations=set(),
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.mode == "console"
+    assert served.control.ownership == "owned"
+    assert served.control.connection == "connected"
+    assert served.control.actions.start_turn.state == "available"
+    assert served.control.actions.interrupt.state == "unavailable"
+    assert served.control.actions.interrupt.reason == "unsupported"
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "executing"
+    assert served.presentation.access is not None
+    assert served.presentation.access.key == "live_control"
+
+
 def test_served_projector_offers_cold_resume_only_from_matching_machine_contract():
     continuation = {
         "authority_class": "retained_launch_contract",

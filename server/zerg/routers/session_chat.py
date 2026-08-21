@@ -269,6 +269,11 @@ async def _write_hot_managed_local_launch_readiness(
                             "provider_thread_id": provider_thread_id,
                             "device_id": plan.source_name,
                             "cwd": plan.cwd,
+                            "launch_actor": plan.launch_actor,
+                            "launch_surface": plan.launch_surface,
+                            "environment": plan.environment,
+                            "origin_kind": plan.origin_kind,
+                            "hidden_from_default_timeline": plan.hidden_from_default_timeline,
                             "resume_attempt_id": str(resume_attempt_id),
                             "started_at": now.isoformat(),
                             "expires_at": expires_at.isoformat(),
@@ -365,7 +370,7 @@ async def _write_hot_managed_local_launch_readiness(
                 provider_config=plan.provider_config,
                 environment=plan.environment,
                 origin_kind=plan.origin_kind,
-                hidden_from_default_timeline=1,
+                hidden_from_default_timeline=plan.hidden_from_default_timeline,
             )
             attach_live_catalog_control(
                 live_db,

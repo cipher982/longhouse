@@ -557,10 +557,11 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
+      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_supported', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
+        "claude_console_adapter_lifecycle",
         "claude_turn_boundary_quiescent",
         "helm_cold_resume"
       ],
@@ -594,6 +595,17 @@
           "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
           "minimum_scenario_revision": 2,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "console_adapter_release_contract_preserved",
+          "variant": "interrupt_supported",
+          "scenario_id": "claude_console_adapter_lifecycle",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -1146,11 +1158,13 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
+      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_unsupported', 'coordination_instructions_model_visible_after_compaction', 'helm_launch_visibility_preserved', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
+        "codex_console_adapter_lifecycle",
         "codex_coordination_awareness_post_compaction",
+        "codex_helm_launch_visibility",
         "codex_turn_boundary_quiescent",
         "helm_cold_resume"
       ],
@@ -1161,6 +1175,17 @@
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
           "variant": null,
           "scenario_id": "codex_turn_boundary_quiescent",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "console_adapter_release_contract_preserved",
+          "variant": "interrupt_unsupported",
+          "scenario_id": "codex_console_adapter_lifecycle",
           "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
@@ -1184,6 +1209,17 @@
           "variant": "process_loss",
           "scenario_id": "helm_cold_resume",
           "minimum_scenario_revision": 2,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "helm_launch_visibility_preserved",
+          "variant": null,
+          "scenario_id": "codex_helm_launch_visibility",
+          "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2357,11 +2393,12 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
+      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_supported', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
         "helm_cold_resume",
+        "opencode_console_adapter_lifecycle",
         "opencode_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
@@ -2371,6 +2408,17 @@
           "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
           "variant": null,
           "scenario_id": "opencode_turn_boundary_quiescent",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "console_adapter_release_contract_preserved",
+          "variant": "interrupt_supported",
+          "scenario_id": "opencode_console_adapter_lifecycle",
           "minimum_scenario_revision": 1,
           "acceptable_evidence": [
             "live_token"

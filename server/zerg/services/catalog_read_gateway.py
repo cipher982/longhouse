@@ -151,6 +151,10 @@ def recent_visible_web_presence(*, owner_id: int, threshold: str) -> bool:
     return result.get("visible") is True
 
 
+def title_dependency_health() -> dict[str, Any]:
+    return _call("storage.session.title.dependency.health.v2", {})
+
+
 def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     try:
         _database_path, socket_path = catalogd_paths()
@@ -199,4 +203,5 @@ __all__ = [
     "shadow_session_state_health",
     "session_batch_snapshot",
     "timeline_snapshot",
+    "title_dependency_health",
 ]

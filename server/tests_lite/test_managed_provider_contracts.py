@@ -204,11 +204,16 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.resume.helm",
         "session.turn.start",
     }
-    assert set(codex.capabilities) == expected | turn_boundary | {"session.resume.helm"}
+    assert set(codex.capabilities) == expected | turn_boundary | {
+        "session.launch.helm",
+        "session.resume.helm",
+        "session.turn.start",
+    }
     assert set(opencode.capabilities) == turn_boundary | {
         "session.launch.helm",
         "session.reattach.helm",
         "session.resume.helm",
+        "session.turn.start",
     }
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
@@ -221,6 +226,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.directed_input.send",
         "coordination.directed_input.receive",
         "session.resume.helm",
+        "session.turn.start",
     }
     assert set(antigravity.capabilities) == turn_boundary | {
         "session.launch.helm",
@@ -519,12 +525,14 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.terminate", "opencode.terminate"),
         ("opencode", "session.turn.start", "opencode.turn_start"),
         ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
-        # Shadow-only: no machine-control capability resolves for antigravity.
+        # Maintenance-tier Antigravity remains hook-driven and has no Console
+        # turn admission, regardless of the dormant print adapter.
         ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
         ("antigravity", "session.answer_pause", None),
         ("antigravity", "session.terminate", None),
+        ("antigravity", "session.turn.interrupt", None),
     ],
 )
 def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -85,6 +84,12 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
             "accepted": 1,
             "duplicates": 0,
             "updated_runtime_keys": ["codex:catalog-runtime"],
+            "activity_facts": {
+                "changed_heads": 0,
+                "duplicates": 0,
+                "stale": 0,
+                "conflicts": 0,
+            },
             "commit_seq": "1",
         }
         assert replay["accepted"] == 1

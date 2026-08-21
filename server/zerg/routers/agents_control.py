@@ -18,6 +18,8 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import get_catalog_session_factory
+from zerg.database import reset_test_worker_id
+from zerg.database import set_test_worker_id
 from zerg.dependencies.agents_auth import _validate_device_token_for_request
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -166,14 +168,17 @@ async def _reconcile_console_turns_after_register(*, owner_id: int, device_id: s
 @router.websocket("/ws")
 async def machine_control_websocket(websocket: WebSocket) -> None:
     settings = get_settings()
-    db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
+    worker_id = websocket.query_params.get("worker")
+    worker_token = set_test_worker_id(worker_id) if worker_id else None
+    db: Session | None = None
     registry = get_machine_control_channel_registry()
     owner_id: int | None = None
     device_id: str | None = None
     console_reconcile_task: asyncio.Task[None] | None = None
 
-    await websocket.accept()
     try:
+        db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
+        await websocket.accept()
         if not settings.testing and not settings.single_tenant:
             await _close_control_ws(websocket, code=1011, reason="Multi-tenant agents control is not implemented")
             return
@@ -273,3 +278,5 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             db.close()
         if owner_id is not None and device_id is not None:
             await registry.unregister(owner_id=owner_id, device_id=device_id, websocket=websocket)
+        if worker_token is not None:
+            reset_test_worker_id(worker_token)

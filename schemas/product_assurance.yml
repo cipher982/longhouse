@@ -1,0 +1,35 @@
+schema_version: 1
+assertions:
+  - subject_kind: longhouse_product
+    capability: console.session_lifecycle
+    disposition: implemented
+    assertion_id: console_lifecycle_state_machine_preserved
+    variant: null
+    scenario_id: product_console_lifecycle
+    minimum_scenario_revision: 1
+    oracle_source: server/zerg/qa/product_console_lifecycle.py
+    acceptable_evidence:
+      - hermetic
+    max_age_seconds: 86400
+  - subject_kind: longhouse_product
+    capability: runtime.session_titles
+    disposition: implemented
+    assertion_id: dependency_incident_recovery
+    variant: null
+    scenario_id: title_dependency_recovery
+    minimum_scenario_revision: 1
+    oracle_source: server/zerg/qa/title_dependency_oracles.py
+    acceptable_evidence:
+      - hermetic
+    max_age_seconds: 86400
+  - subject_kind: longhouse_product
+    capability: runtime.session_titles
+    disposition: implemented
+    assertion_id: dependency_health
+    variant: null
+    scenario_id: title_dependency_live_health
+    minimum_scenario_revision: 1
+    oracle_source: server/zerg/qa/title_dependency_oracles.py
+    acceptable_evidence:
+      - live_token
+    max_age_seconds: 3600

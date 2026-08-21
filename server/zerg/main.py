@@ -122,6 +122,7 @@ from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
+from zerg.routers.observability import agents_router as agents_observability_router
 from zerg.routers.observability import router as observability_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
@@ -247,6 +248,7 @@ api_app.include_router(telemetry_beacon_router)
 api_app.include_router(telemetry_admin_router)
 api_app.include_router(telemetry_canary_router)
 api_app.include_router(observability_router)
+api_app.include_router(agents_observability_router)
 api_app.include_router(provider_capability_proofs_router)
 api_app.include_router(skills_router)
 api_app.include_router(session_chat_router)

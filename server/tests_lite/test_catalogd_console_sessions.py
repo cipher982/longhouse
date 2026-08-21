@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.fact_reducer import read_session_fact_heads
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
@@ -21,6 +22,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveUser
 from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
 from zerg.services.console_turns import CatalogConsoleTurn
+from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.session_runtime import RuntimeEventIngest
 
 
@@ -120,7 +122,7 @@ def test_console_create_outbox_is_exact_fail_closed_owner_evidence(tmp_path):
         assert store._session_explicitly_belongs_to_owner(connection, session_id=non_console_id, owner_id=1) is False
 
 
-def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
+def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
     engine = create_catalog_engine(tmp_path / "catalog-turns.db")
     initialize_catalog_schema(engine)
     store = CatalogStore(engine)
@@ -147,6 +149,35 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
             "started_at": datetime.now(UTC),
         }
     )
+    turn_identity = {
+        "owner_id": 1,
+        "session_id": str(session_id),
+        "thread_id": str(thread_id),
+        "provider": "codex",
+        "device_id": "cinder",
+    }
+
+    class _ConsoleRegistry:
+        @staticmethod
+        def is_online(*, owner_id, device_id):
+            return owner_id == 1 and device_id == "cinder"
+
+        @staticmethod
+        def supports(*, owner_id, device_id, capability):
+            return owner_id == 1 and device_id == "cinder" and capability == "codex.turn_start"
+
+    monkeypatch.setattr(
+        "zerg.services.live_catalog_timeline.get_machine_control_channel_registry",
+        lambda: _ConsoleRegistry(),
+    )
+    empty_read = store.read_session(session_id=str(session_id), owner_id=1)
+    empty_state = project_catalog_session_facts(
+        empty_read["facts"], observed_at=datetime.fromisoformat(empty_read["observed_at"])
+    ).session_state
+    assert empty_state.transcript.convergence == "current"
+    assert empty_state.presentation.access.key == "live_control"
+    assert empty_state.control is not None
+    assert empty_state.control.actions.start_turn.state == "available"
     unauthorized = store.enqueue_console_turn(
         data={
             "session_id": str(session_id),
@@ -191,8 +222,44 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert store.read_current_console_turn(session_id=str(session_id), owner_id=42) == {"found": False}
     facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
     assert facts["latest_console_turn"]["state"] == "starting"
+    starting_read = store.read_shadow_session_state(session_id=str(session_id), owner_id=1)
+    starting_state = project_catalog_session_facts(
+        starting_read["legacy_facts"],
+        observed_at=datetime.fromisoformat(starting_read["observed_at"]),
+        canonical_heads=starting_read["heads"],
+        commit_seq=int(starting_read["commit_seq"]),
+    ).session_state
+    assert starting_state.activity.state == "unknown"
+    assert starting_state.run is not None and starting_state.run.lifecycle == "starting"
+    assert starting_state.working_set == "open"
+    assert starting_state.presentation.primary is not None
+    assert starting_state.presentation.primary.label == "Starting"
+    assert starting_state.presentation.access.key == "live_control"
+
+    mismatches = {
+        "owner_id": 42,
+        "session_id": str(uuid4()),
+        "thread_id": str(uuid4()),
+        "provider": "claude",
+        "device_id": "cube",
+    }
+    for field, value in mismatches.items():
+        refused = store.update_console_turn(
+            data={
+                **turn_identity,
+                field: value,
+                "turn_id": first["turn"]["turn_id"],
+                "run_id": first["turn"]["run_id"],
+                "state": "starting",
+                "expected_state": "starting",
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        assert refused == {"found": False}
+
     uncertain = store.update_console_turn(
         data={
+            **turn_identity,
             "turn_id": first["turn"]["turn_id"],
             "run_id": first["turn"]["run_id"],
             "state": "starting",
@@ -213,6 +280,7 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
         }
     active = store.update_console_turn(
         data={
+            **turn_identity,
             "turn_id": first["turn"]["turn_id"],
             "run_id": first["turn"]["run_id"],
             "state": "active",
@@ -225,6 +293,58 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
         active_turn = db.get(LiveConsoleTurn, first["turn"]["turn_id"])
         active_receipt = db.get(LiveSessionInputReceipt, active_turn.receipt_id)
         assert active_receipt.error_json is None
+    pre_phase_read = store.read_shadow_session_state(session_id=str(session_id), owner_id=1)
+    pre_phase_state = project_catalog_session_facts(
+        pre_phase_read["legacy_facts"],
+        observed_at=datetime.fromisoformat(pre_phase_read["observed_at"]),
+        canonical_heads=pre_phase_read["heads"],
+        commit_seq=int(pre_phase_read["commit_seq"]),
+    ).session_state
+    assert pre_phase_state.activity.state == "unknown"
+    assert pre_phase_state.run is not None and pre_phase_state.run.lifecycle == "running"
+    assert pre_phase_state.working_set == "open"
+    assert pre_phase_state.presentation.primary is not None
+    assert pre_phase_state.presentation.primary.label == "Working"
+    assert pre_phase_state.presentation.access.key == "live_control"
+    phase_at = datetime.now(UTC)
+    runtime_result = store.apply_session_runtime(
+        events=[
+            RuntimeEventIngest(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                thread_id=thread_id,
+                run_id=first["turn"]["run_id"],
+                provider="codex",
+                device_id="cinder",
+                source="codex_exec",
+                kind="phase_signal",
+                phase="thinking",
+                occurred_at=phase_at,
+                dedupe_key=f"phase:{first['turn']['run_id']}:thinking",
+            )
+        ]
+    )
+    assert runtime_result["activity_facts"]["changed_heads"] == 1
+    with engine.connect() as connection:
+        connection.exec_driver_sql("BEGIN")
+        _commit_seq, heads = read_session_fact_heads(connection, session_id=str(session_id))
+        connection.rollback()
+    activity = next(head for head in heads if head["family"] == "activity")
+    assert json.loads(activity["value_json"])["kind"] == "thinking"
+    assert json.loads(activity["value_json"])["run_id"] == first["turn"]["run_id"]
+    active_read = store.read_shadow_session_state(session_id=str(session_id), owner_id=1)
+    active_state = project_catalog_session_facts(
+        active_read["legacy_facts"],
+        observed_at=datetime.fromisoformat(active_read["observed_at"]),
+        canonical_heads=active_read["heads"],
+        commit_seq=int(active_read["commit_seq"]),
+    ).session_state
+    assert active_state.activity.state in {"thinking", "executing"}
+    assert active_state.presentation.access.key == "live_control"
+    assert active_state.control is not None
+    assert active_state.control.actions.start_turn.state == "available"
+    assert active_state.control.actions.interrupt.state == "unavailable"
+    assert active_state.control.actions.interrupt.reason == "unsupported"
     provider_thread_id = "019f6b93-edf6-7bd0-a757-b5195a61abdd"
     store.apply_session_runtime(
         events=[
@@ -245,6 +365,7 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     )
     settled = store.update_console_turn(
         data={
+            **turn_identity,
             "run_id": first["turn"]["run_id"],
             "state": "completed",
             "updated_at": datetime.now(UTC),
@@ -255,8 +376,61 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert settled["next_turn"]["state"] == "starting"
     assert settled["next_turn"]["run_id"]
     assert settled["next_turn"]["resume_provider_thread_id"] == provider_thread_id
+    exact_replay = store.update_console_turn(
+        data={
+            **turn_identity,
+            "run_id": first["turn"]["run_id"],
+            "state": "completed",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert exact_replay["applied"] is False
+    assert exact_replay["exact_replay"] is True
+    assert exact_replay["next_turn"]["turn_id"] == settled["next_turn"]["turn_id"]
+    assert exact_replay["next_turn"]["run_id"] == settled["next_turn"]["run_id"]
+    conflicting_replay = store.update_console_turn(
+        data={
+            **turn_identity,
+            "run_id": first["turn"]["run_id"],
+            "state": "failed",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert conflicting_replay["applied"] is False
+    assert conflicting_replay["stale"] is True
+    assert conflicting_replay["next_turn"] is None
+    idle_at = datetime.now(UTC)
+    store.apply_session_runtime(
+        events=[
+            RuntimeEventIngest(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                thread_id=thread_id,
+                run_id=settled["next_turn"]["run_id"],
+                provider="codex",
+                device_id="cinder",
+                source="codex_exec",
+                kind="phase_signal",
+                phase="idle",
+                occurred_at=idle_at,
+                dedupe_key=f"phase:{settled['next_turn']['run_id']}:idle",
+            )
+        ]
+    )
+    queued_read = store.read_shadow_session_state(session_id=str(session_id), owner_id=1)
+    queued_state = project_catalog_session_facts(
+        queued_read["legacy_facts"],
+        observed_at=datetime.fromisoformat(queued_read["observed_at"]),
+        canonical_heads=queued_read["heads"],
+        commit_seq=int(queued_read["commit_seq"]),
+    ).session_state
+    assert queued_state.activity.state == "quiescent"
+    assert queued_state.presentation.access.key == "live_control"
+    assert queued_state.control is not None
+    assert queued_state.control.actions.start_turn.state == "available"
     stale_replay = store.update_console_turn(
         data={
+            **turn_identity,
             "turn_id": first["turn"]["turn_id"],
             "run_id": first["turn"]["run_id"],
             "state": "active",
@@ -270,6 +444,7 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
 
     failed = store.update_console_turn(
         data={
+            **turn_identity,
             "turn_id": settled["next_turn"]["turn_id"],
             "run_id": settled["next_turn"]["run_id"],
             "state": "failed",

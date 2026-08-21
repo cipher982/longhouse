@@ -87,6 +87,28 @@ class ModelConfig:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class UseCaseRuntimeBinding:
+    """Resolved provider transport and credential for one model call."""
+
+    model_id: str
+    provider: ModelProvider
+    credential_binding: str
+    credential: str
+    base_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UseCaseRuntimeIdentity:
+    """Transport identity before client-readiness validation."""
+
+    model_id: str
+    provider: ModelProvider
+    credential_binding: str
+    credential: str | None
+    base_url: str | None
+
+
 # =============================================================================
 # CONFIG LOADING - Direct load at import time (no lazy magic)
 # =============================================================================
@@ -285,6 +307,58 @@ def validate_use_case_llm_config(use_case: str) -> tuple[str, ModelProvider, str
     return model_id, model_config.provider, api_key_env_var
 
 
+def resolve_use_case_runtime_identity(use_case: str) -> UseCaseRuntimeIdentity:
+    """Resolve durable transport identity, including an explicit missing key.
+
+    Ordinary calls retain models.json + environment semantics. Session-title
+    assurance may use the immutable, gated loopback binding captured at process
+    startup; no other use case can inherit it.
+    """
+
+    model_id = get_model_for_use_case(use_case)
+    model_config = MODELS_BY_ID.get(model_id)
+    if not model_config:
+        raise ValueError(f"Model {model_id} not found in models config")
+
+    if use_case == "session_title":
+        from zerg.services.factory_assurance_title_binding import factory_assurance_title_binding
+
+        assurance = factory_assurance_title_binding()
+        if assurance is not None:
+            return UseCaseRuntimeIdentity(
+                model_id=model_id,
+                provider=model_config.provider,
+                credential_binding=assurance.credential_binding,
+                credential=assurance.read_token(),
+                base_url=assurance.base_url,
+            )
+
+    api_key_env_var = _get_api_key_env_var(model_config)
+    return UseCaseRuntimeIdentity(
+        model_id=model_id,
+        provider=model_config.provider,
+        credential_binding=api_key_env_var,
+        credential=os.getenv(api_key_env_var) or None,
+        base_url=model_config.base_url,
+    )
+
+
+def resolve_use_case_runtime_binding(use_case: str) -> UseCaseRuntimeBinding:
+    """Resolve a client-ready binding; missing credentials remain an error."""
+
+    identity = resolve_use_case_runtime_identity(use_case)
+    if identity.credential is None:
+        model_detail = f"model='{identity.model_id}', provider='{identity.provider.value}'"
+        raise ValueError(f"{identity.credential_binding} required for use case '{use_case}' ({model_detail})")
+    return UseCaseRuntimeBinding(
+        model_id=identity.model_id,
+        provider=identity.provider,
+        credential_binding=identity.credential_binding,
+        credential=identity.credential,
+        base_url=identity.base_url,
+    )
+
+
 # =============================================================================
 # API FUNCTIONS - For use by routers and services
 # =============================================================================
@@ -351,10 +425,11 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
     Raises:
         ValueError: If routing or required API key env var is missing.
     """
-    model_id, provider, api_key_env_var = validate_use_case_llm_config(use_case)
-    model_config = MODELS_BY_ID[model_id]
-    api_key = os.getenv(api_key_env_var)
-    base_url = model_config.base_url
+    binding = resolve_use_case_runtime_binding(use_case)
+    model_id = binding.model_id
+    provider = binding.provider
+    api_key = binding.credential
+    base_url = binding.base_url
 
     if provider == ModelProvider.ANTHROPIC:
         from anthropic import AsyncAnthropic

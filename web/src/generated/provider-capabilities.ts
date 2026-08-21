@@ -22,12 +22,12 @@ export type GeneratedProviderCapabilities = {
 export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, GeneratedProviderCapabilities> = {
   antigravity: {
     id: "antigravity",
-    launchAndSend: false,
+    launchAndSend: true,
     interrupt: false,
     steerMidTurn: false,
     resume: false,
     cloudSessionStart: "none",
-    nativeLaunchCommand: null,
+    nativeLaunchCommand: "longhouse antigravity",
   },
   claude: {
     id: "claude",
@@ -71,7 +71,7 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: false,
     resume: false,
-    cloudSessionStart: "live",
+    cloudSessionStart: "none",
     nativeLaunchCommand: "longhouse pi",
   },
 };

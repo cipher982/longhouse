@@ -415,6 +415,22 @@ def test_importing_schema_does_not_import_runtime_database_module():
     assert completed.returncode == 0, completed.stderr
 
 
+def test_workspace_projection_is_catalog_safe():
+    command = (
+        "import sys; import zerg.services.workspace_suggestion_projection; "
+        "assert 'zerg.database' not in sys.modules, sorted(k for k in sys.modules if k.startswith('zerg.database'))"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_catalogd_import_graph_excludes_web_and_archive_runtime():
     command = """
 import sys

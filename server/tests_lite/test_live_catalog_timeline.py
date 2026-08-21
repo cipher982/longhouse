@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
 from datetime import datetime
 from datetime import timedelta
@@ -12,11 +13,13 @@ import pytest
 
 import zerg.routers.timeline as timeline_router
 import zerg.services.live_catalog_timeline as live_catalog_timeline
+from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
+from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
@@ -841,6 +844,165 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
     assert session.timeline_title == "longhouse · Empty session"
     assert session.title_state == "awaiting_input"
     assert session.title_source == "project"
+
+
+def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'empty-open.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    def add_empty_helm(db, *, hidden: int, attached: bool):
+        session_id = str(uuid4())
+        thread_id = str(uuid4())
+        run_id = str(uuid4())
+        connection_id = str(uuid4())
+        lease_generation = str(uuid4())
+        actor = "automation" if hidden else "human_shell"
+        surface = "test" if hidden else "terminal"
+        origin_kind = "test_or_canary" if hidden else None
+        db.add(
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="codex",
+                environment="test" if hidden else "development",
+                project="longhouse",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+                primary_thread_id=thread_id,
+                launch_actor=actor,
+                launch_surface=surface,
+                origin_kind=origin_kind,
+                hidden_from_default_timeline=hidden,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=session_id,
+                provider="codex",
+                environment="test" if hidden else "development",
+                project="longhouse",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+                archive_state="pending",
+                launch_actor=actor,
+                launch_surface=surface,
+                origin_kind=origin_kind,
+                hidden_from_default_timeline=hidden,
+                parser_revision="test",
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionThread(
+                id=thread_id,
+                session_id=session_id,
+                provider="codex",
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionRun(
+                id=run_id,
+                thread_id=thread_id,
+                provider="codex",
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+        db.add(
+            LiveSessionConnection(
+                run_id=run_id,
+                adapter_connection_id=connection_id,
+                lease_generation=lease_generation,
+                control_plane="codex_app_server",
+                acquisition_kind="spawned_control",
+                state="attached" if attached else "detached",
+                can_send_input=1,
+                can_interrupt=1,
+                can_terminate=1,
+                can_tail_output=1,
+                can_resume=1,
+                acquired_at=now,
+                last_health_at=now,
+            )
+        )
+        if attached:
+            value = {
+                "authority_class": "provider_control",
+                "provider": "codex",
+                "session_id": session_id,
+                "run_id": run_id,
+                "connection_id": connection_id,
+                "lease_generation": lease_generation,
+                "granted_operations": ["interrupt", "send_input", "terminate"],
+                "state": "attached",
+                "terminal_attached": True,
+                "lease_ttl_ms": 60_000,
+                "source": "provider_control",
+                "observed_at": now.isoformat(),
+            }
+            db.add(
+                FactHead(
+                    family="control",
+                    subject_key=f"connection:{connection_id}:{lease_generation}",
+                    source="provider_control",
+                    source_epoch=lease_generation,
+                    session_id=session_id,
+                    ordering_mode="observed_at",
+                    evidence_hash=canonical_evidence_hash(value),
+                    observed_at=now,
+                    value_json=json.dumps(value),
+                    updated_commit_seq=1,
+                    received_at=now,
+                )
+            )
+        return session_id
+
+    with LiveSession() as db:
+        attached_human_id = add_empty_helm(db, hidden=0, attached=True)
+        add_empty_helm(db, hidden=0, attached=False)
+        add_empty_helm(db, hidden=1, attached=True)
+        db.commit()
+
+        snapshot = _snapshot(db, _params(include_test=True, include_automation=True))
+        assert snapshot["total"] == 1
+        assert snapshot["rows"][0]["facts"]["catalog"]["session_id"] == attached_human_id
+        head = db.query(FactHead).filter(FactHead.session_id == attached_human_id).one()
+        snapshot["rows"][0]["heads"] = [
+            {
+                "family": head.family,
+                "session_id": head.session_id,
+                "subject_key": head.subject_key,
+                "source": head.source,
+                "source_epoch": head.source_epoch,
+                "evidence_hash": head.evidence_hash,
+                "value_json": head.value_json,
+                "valid_until": None,
+                "updated_commit_seq": head.updated_commit_seq,
+            }
+        ]
+        snapshot["rows"][0]["heads_truncated"] = False
+        response = project_catalog_timeline_snapshot(snapshot)
+        assert response.sessions[0].head.session_state.control is not None, response.sessions[0].head.session_state.model_dump()
+        assert response.sessions[0].head.session_state.control.terminal_attached is True, response.sessions[0].head.session_state.model_dump()
+        assert response.sessions[0].head.session_state.working_set == "open"
+
+        head.observed_at = now - timedelta(minutes=2)
+        value = json.loads(head.value_json)
+        value["observed_at"] = head.observed_at.isoformat()
+        head.value_json = json.dumps(value)
+        head.evidence_hash = canonical_evidence_hash(value)
+        db.commit()
+        expired = _snapshot(db, _params(include_test=True, include_automation=True))
+        assert expired["total"] == 0
 
 
 def test_live_catalog_timeline_does_not_render_path_preview_as_title():

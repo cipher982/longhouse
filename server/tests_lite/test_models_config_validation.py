@@ -3,8 +3,21 @@
 from __future__ import annotations
 
 import json
+import importlib
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_models_config(monkeypatch):
+    """Keep fixture-driven module reloads from leaking into later test files."""
+
+    import zerg.models_config as models_config
+
+    original_path = models_config._get_config_path()
+    yield
+    monkeypatch.setenv("MODELS_CONFIG_PATH", str(original_path))
+    importlib.reload(models_config)
 
 
 def _write_test_config(tmp_path, *, with_summary_update=True):
@@ -70,8 +83,6 @@ def _write_test_config(tmp_path, *, with_summary_update=True):
 
 def _reload_models_config(monkeypatch, config_path):
     """Reload models_config with MODELS_CONFIG_PATH pointing at fixture."""
-    import importlib
-
     monkeypatch.setenv("MODELS_CONFIG_PATH", str(config_path))
     import zerg.models_config as mc
 

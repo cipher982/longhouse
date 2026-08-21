@@ -211,6 +211,7 @@ class CatalogDaemon:
                 ()
                 if self._runtime_boot_id is None
                 else (
+                    f"semantic-v2:{self._runtime_boot_id}",
                     f"search-v2:{self._runtime_boot_id}",
                     f"embeddings-v2:{self._runtime_boot_id}",
                 )
@@ -435,6 +436,8 @@ class CatalogDaemon:
             return await self._finish_local_launch(request)
         if request.method == "catalogd.session.reclassify_origin.v2":
             return await self._reclassify_session_origin(request)
+        if request.method == "session.repair.codex_launch_visibility.v2":
+            return await self._repair_codex_launch_visibility(request)
         if request.method == "interaction.register.v2":
             return await self._register_interaction(request)
         if request.method == "interaction.list.v2":
@@ -511,6 +514,16 @@ class CatalogDaemon:
             return await self._complete_storage_title(request)
         if request.method == "storage.session.title.fail.v2":
             return await self._fail_storage_title(request)
+        if request.method == "storage.session.title.dependency.reconcile.v2":
+            return await self._reconcile_storage_title_dependency(request)
+        if request.method == "storage.session.title.dependency.acquire.v2":
+            return await self._acquire_storage_title_dependency(request)
+        if request.method == "storage.session.title.dependency.fail.v2":
+            return await self._fail_storage_title_dependency(request)
+        if request.method == "storage.session.title.dependency.recover.v2":
+            return await self._recover_storage_title_dependency(request)
+        if request.method == "storage.session.title.dependency.health.v2":
+            return await self._read_storage_title_dependency_health(request)
         if request.method == "storage.session.delete.v2":
             return await self._delete_storage_session(request)
         if request.method == "storage.session.relinked_legacy.reconcile.v2":
@@ -1523,16 +1536,33 @@ class CatalogDaemon:
         if set(request.params) != {"turn"} or not isinstance(request.params["turn"], dict):
             return self._error(request, "invalid_request", "session.console.turn.update.v2 requires turn")
         data = dict(request.params["turn"])
-        required = {"run_id", "state", "updated_at"}
+        required = {
+            "run_id",
+            "state",
+            "updated_at",
+            "owner_id",
+            "session_id",
+            "thread_id",
+            "provider",
+            "device_id",
+        }
         if not required.issubset(data):
             return self._error(request, "invalid_request", "console turn update is missing required fields")
         try:
+            data["owner_id"] = int(data["owner_id"])
             if data.get("turn_id") is not None:
                 uuid.UUID(str(data["turn_id"]))
+            uuid.UUID(str(data["session_id"]))
+            uuid.UUID(str(data["thread_id"]))
             uuid.UUID(str(data["run_id"]))
             data["updated_at"] = _parse_datetime(data["updated_at"], "console turn.updated_at")
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             return self._error(request, "invalid_request", str(exc))
+        if data["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "console turn owner_id must be positive")
+        for field, maximum in (("provider", 64), ("device_id", 255)):
+            if not _is_string(data[field], maximum=maximum):
+                return self._error(request, "invalid_request", f"console turn {field} is invalid")
         if data["state"] not in {"starting", "active", "completed", "failed", "cancelled"}:
             return self._error(request, "invalid_request", "console turn state is invalid")
         if data.get("expected_state") is not None and data["expected_state"] not in {
@@ -1696,6 +1726,29 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.repair_expire_interaction, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _repair_codex_launch_visibility(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "dry_run", "expected_fingerprint"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "session.repair.codex_launch_visibility.v2 has invalid parameters",
+            )
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["session_id"]):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if type(params["dry_run"]) is not bool:
+            return self._error(request, "invalid_request", "dry_run must be a boolean")
+        fingerprint = params["expected_fingerprint"]
+        if params["dry_run"]:
+            if fingerprint is not None:
+                return self._error(request, "invalid_request", "dry-run must not include expected_fingerprint")
+        elif not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+            return self._error(request, "invalid_request", "apply requires the fingerprint from dry-run")
+        assert self._store is not None
+        result = await self._run_store(self._store.repair_codex_launch_visibility, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_interaction_decision(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2348,6 +2401,118 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.fail_storage_title, session_id=session_id, reason=reason, failed_at=failed_at)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    def _storage_title_dependency_identity(self, params: dict) -> dict:
+        return {
+            "provider": _bounded_text(params["provider"], "provider", 64),
+            "model": _bounded_text(params["model"], "model", 255),
+            "credential_binding": _bounded_text(params["credential_binding"], "credential_binding", 128),
+            "credential_generation": _bounded_text(params["credential_generation"], "credential_generation", 64),
+        }
+
+    async def _reconcile_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"provider", "model", "credential_binding", "credential_generation", "observed_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "title dependency reconcile has invalid parameters")
+        try:
+            params = self._storage_title_dependency_identity(request.params)
+            params["observed_at"] = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.reconcile_storage_title_dependency, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _acquire_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "session_id",
+            "provider",
+            "model",
+            "credential_binding",
+            "credential_generation",
+            "probe_token",
+            "observed_at",
+            "lease_seconds",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "title dependency acquire has invalid parameters")
+        try:
+            params = self._storage_title_dependency_identity(request.params)
+            params["session_id"] = _canonical_uuid(request.params["session_id"], "session_id")
+            params["probe_token"] = _canonical_uuid(request.params["probe_token"], "probe_token")
+            params["observed_at"] = _parse_datetime(request.params["observed_at"], "observed_at")
+            lease_seconds = request.params["lease_seconds"]
+            if type(lease_seconds) is not int or not 10 <= lease_seconds <= 300:
+                raise ValueError("lease_seconds must be an integer from 10 through 300")
+            params["lease_seconds"] = lease_seconds
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.acquire_storage_title_dependency, **params)
+        if result.get("dependency_missing") or result.get("session_missing"):
+            return self._error(request, "not_found", "title dependency or session does not exist")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _fail_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "session_id",
+            "provider",
+            "model",
+            "credential_binding",
+            "credential_generation",
+            "probe_token",
+            "reason",
+            "failed_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "title dependency failure has invalid parameters")
+        try:
+            params = self._storage_title_dependency_identity(request.params)
+            params["session_id"] = _canonical_uuid(request.params["session_id"], "session_id")
+            params["probe_token"] = _canonical_uuid(request.params["probe_token"], "probe_token")
+            params["reason"] = _bounded_text(request.params["reason"], "reason", 255)
+            params["failed_at"] = _parse_datetime(request.params["failed_at"], "failed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.fail_storage_title_dependency, **params)
+        if result.get("dependency_missing"):
+            return self._error(request, "not_found", "title dependency does not exist")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _recover_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "provider",
+            "model",
+            "credential_binding",
+            "credential_generation",
+            "incident_id",
+            "probe_token",
+            "recovered_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "title dependency recovery has invalid parameters")
+        try:
+            params = self._storage_title_dependency_identity(request.params)
+            params["incident_id"] = _canonical_uuid(request.params["incident_id"], "incident_id")
+            params["probe_token"] = _canonical_uuid(request.params["probe_token"], "probe_token")
+            params["recovered_at"] = _parse_datetime(request.params["recovered_at"], "recovered_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.recover_storage_title_dependency, **params)
+        if result.get("dependency_missing"):
+            return self._error(request, "not_found", "title dependency does not exist")
+        if result.get("claim_conflict"):
+            return self._error(request, "conflict", "title dependency recovery does not own the active probe")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_title_dependency_health(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if request.params:
+            return self._error(request, "invalid_request", "title dependency health takes no parameters")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.read_storage_title_dependency_health)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _delete_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3854,6 +4019,11 @@ _LOCAL_RESUME_FIELDS = {
     "provider_thread_id",
     "device_id",
     "cwd",
+    "launch_actor",
+    "launch_surface",
+    "environment",
+    "origin_kind",
+    "hidden_from_default_timeline",
     "resume_attempt_id",
     "started_at",
     "expires_at",
@@ -4002,7 +4172,7 @@ def _validate_local_launch_rpc(value: object) -> dict:
     plan.setdefault("environment", "development")
     plan.setdefault("origin_kind", None)
     plan.setdefault("hidden_from_default_timeline", int(plan["origin_kind"] in {"hatch_automation", "test_or_canary"}))
-    if plan["origin_kind"] in {"hatch_automation", "test_or_canary"}:
+    if plan["origin_kind"] in {"hatch_automation", "test_or_canary"} or plan.get("launch_actor") == "automation":
         plan["hidden_from_default_timeline"] = 1
     if not _is_canonical_uuid(plan["session_id"]):
         raise ValueError("local launch.plan.session_id must be a canonical UUID")
@@ -4060,9 +4230,18 @@ def _validate_local_resume_rpc(value: object) -> dict:
         ("provider_thread_id", 512),
         ("device_id", 255),
         ("cwd", 4096),
+        ("environment", 32),
     ):
         if not _is_string(result[field], maximum=maximum):
             raise ValueError(f"local resume.{field} must contain 1 to {maximum} characters")
+    for field, maximum in (("launch_actor", 32), ("launch_surface", 32), ("origin_kind", 64)):
+        raw = result[field]
+        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
+            raise ValueError(f"local resume.{field} must be null or contain 1 to {maximum} characters")
+    if type(result["hidden_from_default_timeline"]) is not int or result["hidden_from_default_timeline"] not in (0, 1):
+        raise ValueError("local resume.hidden_from_default_timeline must be 0 or 1")
+    if result["origin_kind"] in {"hatch_automation", "test_or_canary"} or result["launch_actor"] == "automation":
+        result["hidden_from_default_timeline"] = 1
     result["started_at"] = _parse_datetime(result["started_at"], "local resume.started_at")
     result["expires_at"] = _parse_datetime(result["expires_at"], "local resume.expires_at")
     if result["expires_at"] <= result["started_at"]:

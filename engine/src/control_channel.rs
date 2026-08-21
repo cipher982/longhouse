@@ -19,6 +19,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::antigravity_print::{
+    start_antigravity_print_turn, AntigravityPrintRunConfig, ANTIGRAVITY_PRINT_ADAPTER,
+};
 use crate::build_identity;
 use crate::claude_channel_control::{
     interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
@@ -35,9 +38,6 @@ use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
-use crate::antigravity_print::{
-    start_antigravity_print_turn, AntigravityPrintRunConfig, ANTIGRAVITY_PRINT_ADAPTER,
-};
 use crate::pi_print::{start_pi_print_turn, PiPrintRunConfig, PI_PRINT_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
@@ -88,6 +88,17 @@ const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
 static MANAGED_PROVIDER_CONTRACTS: OnceLock<Value> = OnceLock::new();
+
+fn console_turn_provider_supported(provider: &str) -> bool {
+    matches!(provider, "codex" | "cursor" | "opencode" | "claude" | "pi")
+}
+
+fn codex_console_binary_with_env(get_env: &impl Fn(&str) -> Option<OsString>) -> String {
+    get_env("LONGHOUSE_CODEX_BIN")
+        .and_then(|value| value.into_string().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CODEX_BIN.to_string())
+}
 
 #[derive(Clone, Debug)]
 pub struct ControlChannelStatus {
@@ -583,11 +594,8 @@ pub fn spawn_control_channel(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile Claude Console turn claims"),
         }
-        match crate::pi_print::recover_pi_print_turns(
-            &config.machine_name,
-            config.db_path.clone(),
-        )
-        .await
+        match crate::pi_print::recover_pi_print_turns(&config.machine_name, config.db_path.clone())
+            .await
         {
             Ok(count) if count > 0 => {
                 tracing::info!(count, "Recovered Pi Console turn monitors")
@@ -922,7 +930,6 @@ async fn execute_command(
 ) -> std::result::Result<Value, CommandError> {
     let command_type = required_string(frame, "command_type")?;
     let payload = frame.get("payload").cloned().unwrap_or_else(|| json!({}));
-
 
     if command_type == COMMAND_PROVIDER_LIVE_PROOF {
         return run_provider_live_proof_command(&payload).await;
@@ -1450,10 +1457,7 @@ async fn execute_turn_start(
             .unwrap_or(-1),
     );
     let provider = payload_required_string(payload, "provider")?;
-    if !matches!(
-        provider.as_str(),
-        "codex" | "cursor" | "opencode" | "claude" | "pi"
-    ) {
+    if !console_turn_provider_supported(&provider) {
         return Err(CommandError {
             code: "provider_unsupported".to_string(),
             message: format!("provider={provider} has no Console turn adapter"),
@@ -1733,15 +1737,12 @@ async fn execute_turn_start(
             run_id: run_id.clone(),
             client_request_id: client_request_id.clone(),
             cwd,
-            antigravity_bin: std::env::var("LONGHOUSE_ANTIGRAVITY_BIN").unwrap_or_else(|_| {
-                crate::antigravity_print::DEFAULT_ANTIGRAVITY_BIN.to_string()
-            }),
+            antigravity_bin: std::env::var("LONGHOUSE_ANTIGRAVITY_BIN")
+                .unwrap_or_else(|_| crate::antigravity_print::DEFAULT_ANTIGRAVITY_BIN.to_string()),
             prompt: message,
             model: payload_optional_string(payload, "model"),
-            conversation_id: payload_optional_string(payload, "provider_thread_id"),
-            print_timeout_secs: payload
-                .get("print_timeout_secs")
-                .and_then(Value::as_u64),
+            conversation_id: resume_provider_thread_id,
+            print_timeout_secs: payload.get("print_timeout_secs").and_then(Value::as_u64),
             permission_mode,
             machine_name: config.machine_name.clone(),
             local_db_path,
@@ -1778,7 +1779,7 @@ async fn execute_turn_start(
                 cwd,
                 api_url: config.api_url.clone(),
                 api_token,
-                codex_bin: DEFAULT_CODEX_BIN.to_string(),
+                codex_bin: codex_console_binary_with_env(&|name| std::env::var_os(name)),
                 approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
                 prompt: message,
@@ -3041,6 +3042,28 @@ mod tests {
     }
 
     #[test]
+    fn console_turn_provider_admission_covers_every_admitted_console_adapter() {
+        for provider in ["codex", "claude", "opencode", "cursor", "pi"] {
+            assert!(
+                console_turn_provider_supported(provider),
+                "{provider} must reach its Console adapter"
+            );
+        }
+        assert!(!console_turn_provider_supported("antigravity"));
+        assert!(!console_turn_provider_supported("unknown"));
+    }
+
+    #[test]
+    fn codex_console_uses_the_exact_staged_binary_override() {
+        let staged = OsString::from("/provider/codex-1.2.3/codex");
+        let resolved = codex_console_binary_with_env(&|name| {
+            (name == "LONGHOUSE_CODEX_BIN").then(|| staged.clone())
+        });
+        assert_eq!(resolved, "/provider/codex-1.2.3/codex");
+        assert_eq!(codex_console_binary_with_env(&|_| None), DEFAULT_CODEX_BIN);
+    }
+
+    #[test]
     fn managed_provider_contract_manifest_includes_operation_evidence() {
         let payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
         validate_managed_provider_contract_manifest(&payload).unwrap();
@@ -3121,7 +3144,10 @@ mod tests {
         );
         // Antigravity grants send and nothing else: the hook inbox delivers a
         // user turn and has no interrupt or active-turn steer to deliver.
-        assert_eq!(granted_control_operations("antigravity", true), ["send_input"]);
+        assert_eq!(
+            granted_control_operations("antigravity", true),
+            ["send_input"]
+        );
         // Detached means the hook has not been seen; the grant goes with it.
         assert!(granted_control_operations("antigravity", false).is_empty());
         assert!(granted_control_operations("antigravity", false).is_empty());

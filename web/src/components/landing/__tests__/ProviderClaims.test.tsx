@@ -41,8 +41,8 @@ describe("landing provider claims", () => {
     expect(cellsFor("Cursor Agent")).toEqual(["true", "true", "true", "false", "true"]);
     expect(cellsFor("OpenCode")).toEqual(["true", "true", "true", "false", "true"]);
     expect(cellsFor("Pi Agent")).toEqual(["true", "true", "true", "false", "false"]);
-    expect(cellsFor("Antigravity CLI")).toEqual(["true", "false", "false", "false", "false"]);
-    expect(screen.getByText(/Resume is not available yet/i)).toBeInTheDocument();
+    expect(cellsFor("Antigravity CLI")).toEqual(["true", "true", "false", "false", "false"]);
+    expect(screen.getAllByText(/Resume is not available yet/i)).toHaveLength(2);
   });
 
   it("renders FAQ provider answer consistent with the capability matrix", async () => {
@@ -52,11 +52,11 @@ describe("landing provider claims", () => {
     await user.click(screen.getByRole("button", { name: /Which providers are strongest today\?/i }));
 
     // Must match the provider rails: full set only for Claude Code and Codex,
-    // no mid-turn steering on Cursor/OpenCode, Pi without resume, Antigravity sync-only.
+    // no mid-turn steering on Cursor/OpenCode, Pi without resume, and
+    // Antigravity without interrupt or resume.
     const answer = screen.getByText(/Claude Code and Codex have the full set/i);
     expect(answer.textContent).toMatch(/Cursor Agent and OpenCode do everything except mid-turn steering/i);
     expect(answer.textContent).toMatch(/Pi Agent can launch, send, and interrupt, but resume is not wired up yet/i);
-    expect(answer.textContent).toMatch(/Antigravity sessions sync into the timeline for watching and search only/i);
-    expect(answer.textContent).not.toMatch(/Antigravity can launch/i);
+    expect(answer.textContent).toMatch(/Antigravity can launch and send through its hook channel/i);
   });
 });

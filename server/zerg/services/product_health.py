@@ -10,6 +10,7 @@ from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from zerg.database import live_catalog_enabled
 from zerg.schemas.observability import ProductHealthCheckEvidenceRefResponse
 from zerg.schemas.observability import ProductHealthCheckListResponse
 from zerg.schemas.observability import ProductHealthCheckLivePreviewCellResponse
@@ -28,6 +29,7 @@ from zerg.utils.time import utc_now
 MACHINE_CONNECTED_CHECK_ID = "machine_connected"
 RENDER_FRESHNESS_CHECK_ID = "render_freshness"
 LIVE_PREVIEW_CHECK_ID = "live_preview"
+SESSION_TITLES_CHECK_ID = "session_titles"
 RENDER_FRESHNESS_OK_SECONDS = 5 * 60
 LIVE_PREVIEW_RENDER_P95_OK_MS = 500
 LIVE_PREVIEW_RENDER_P95_FAILING_MS = 1_500
@@ -79,17 +81,78 @@ def build_product_health_checks(
         surface=surface,
         managed=managed,
     )
-    return ProductHealthCheckListResponse(
-        checks=[
-            _build_machine_connected_summary(db, window=resolved_window, generated_at=generated_at),
-            _build_render_freshness_summary(
-                render_observations.rows,
-                window=resolved_window,
-                generated_at=generated_at,
-            ),
-            _summarize_live_preview_check(live_preview),
-        ]
+    checks = [
+        _build_machine_connected_summary(db, window=resolved_window, generated_at=generated_at),
+        _build_render_freshness_summary(
+            render_observations.rows,
+            window=resolved_window,
+            generated_at=generated_at,
+        ),
+        _summarize_live_preview_check(live_preview),
+    ]
+    if live_catalog_enabled():
+        checks.append(_build_session_titles_summary(window=resolved_window, generated_at=generated_at))
+    return ProductHealthCheckListResponse(checks=checks)
+
+
+def _build_session_titles_summary(*, window: _Window, generated_at: datetime) -> ProductHealthCheckSummaryResponse:
+    from zerg.services.catalog_read_gateway import CatalogReadError
+    from zerg.services.catalog_read_gateway import title_dependency_health
+
+    try:
+        health = title_dependency_health()
+    except CatalogReadError:
+        return ProductHealthCheckSummaryResponse(
+            check=SESSION_TITLES_CHECK_ID,
+            verdict="unknown",
+            coverage="none",
+            window=window.label,
+            generated_at=generated_at,
+            headline="Session title dependency health is unavailable.",
+        )
+    dependencies = health.get("dependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        return ProductHealthCheckSummaryResponse(
+            check=SESSION_TITLES_CHECK_ID,
+            verdict="unknown",
+            coverage="none",
+            window=window.label,
+            generated_at=generated_at,
+            headline="Session title dependency has not reported yet.",
+        )
+    blocked = int(health.get("blocked_sessions") or 0)
+    opened = int(health.get("open_dependencies") or 0)
+    if opened:
+        verdict = "degraded"
+        headline = f"Session title generation is degraded; {blocked} session{'' if blocked == 1 else 's'} blocked."
+    else:
+        verdict = "ok"
+        headline = "Session title generation dependency is healthy."
+    return ProductHealthCheckSummaryResponse(
+        check=SESSION_TITLES_CHECK_ID,
+        verdict=verdict,
+        coverage="full",
+        window=window.label,
+        generated_at=generated_at,
+        headline=headline,
     )
+
+
+def build_session_title_health_check(*, window: str = "15m") -> ProductHealthCheckSummaryResponse:
+    """Build the title dependency check without touching retired archive rows."""
+
+    resolved_window = _parse_window(window)
+    generated_at = utc_now()
+    if not live_catalog_enabled():
+        return ProductHealthCheckSummaryResponse(
+            check=SESSION_TITLES_CHECK_ID,
+            verdict="unknown",
+            coverage="none",
+            window=resolved_window.label,
+            generated_at=generated_at,
+            headline="Session title dependency health requires the live catalog.",
+        )
+    return _build_session_titles_summary(window=resolved_window, generated_at=generated_at)
 
 
 def build_live_preview_check(
@@ -192,9 +255,7 @@ def _build_live_preview_cell(
         ios_render_duration_p95_ms=_percentile(ios_render_values, 95),
         ios_render_duration_max_ms=ios_render_values[-1] if ios_render_values else None,
     )
-    missing = _missing_live_preview_signals(
-        key, rows=rows, latency_values=latency_values, ios_render_values=ios_render_values
-    )
+    missing = _missing_live_preview_signals(key, rows=rows, latency_values=latency_values, ios_render_values=ios_render_values)
     coverage = _coverage_for_missing(rows, missing)
     verdict = _verdict_for_live_preview(coverage=coverage, render_p95_ms=signals.render_p95_ms)
     return ProductHealthCheckLivePreviewCellResponse(

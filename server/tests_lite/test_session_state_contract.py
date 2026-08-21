@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.console_control_projection import project_console_control
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.session_liveness_facts import ActivityObservation
 from zerg.services.session_liveness_facts import ControlObservation
@@ -243,6 +244,82 @@ def test_transcript_coordinates_advance_independently():
     assert facts.durable_revision == 17
     assert facts.render_revision == 13
     assert facts.last_append_at == NOW - timedelta(seconds=3)
+
+
+def test_empty_pending_console_shell_is_current_not_syncing():
+    facts = project_transcript_facts(
+        session=_session(origin_kind="console", transcript_revision=0),
+        last_activity_at=NOW,
+        user_messages=0,
+        assistant_messages=0,
+        archive_state="pending",
+        source_revision=None,
+        durable_revision=None,
+        render_revision=None,
+    )
+
+    assert facts.convergence == "current"
+    assert facts.searchable is False
+
+
+def test_zero_revision_pending_console_shell_is_current_not_syncing():
+    facts = project_transcript_facts(
+        session=_session(origin_kind="console", transcript_revision=0),
+        last_activity_at=NOW,
+        user_messages=0,
+        assistant_messages=0,
+        archive_state="pending",
+        source_revision=0,
+        durable_revision=0,
+        render_revision=0,
+    )
+
+    assert facts.convergence == "current"
+    assert facts.searchable is False
+
+
+@pytest.mark.parametrize(
+    ("turn_state", "expected_run", "expected_primary"),
+    [
+        ("starting", "starting", "Starting"),
+        ("active", "running", "Working"),
+    ],
+)
+def test_console_turn_before_first_provider_phase_is_still_open_and_explained(
+    turn_state,
+    expected_run,
+    expected_primary,
+):
+    projection = project_console_control(
+        closed=False,
+        execution_target_available=True,
+        turn_state=turn_state,
+        machine_online=True,
+        adapter_available=True,
+        interrupt_adapter_available=False,
+    )
+    capabilities = replace(
+        _capabilities(label="live", live=False, reattach=False),
+        control_owned=True,
+        turn_state=turn_state,
+        can_start_turn=True,
+        console_control=projection,
+    )
+
+    facts = _facts(
+        runtime=None,
+        session=_session(origin_kind="console"),
+        capabilities=capabilities,
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.mode == "console"
+    assert facts.run is not None and facts.run.lifecycle == expected_run
+    assert facts.working_set == "open"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.label == expected_primary
+    assert facts.presentation.access is not None
+    assert facts.presentation.access.key == "live_control"
 
 
 def test_process_gone_ends_run_but_does_not_close_session():

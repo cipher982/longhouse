@@ -28,6 +28,8 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.services.console_control_projection import ConsoleControlProjection
+from zerg.services.console_control_projection import project_console_control
 from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -139,6 +141,7 @@ class KernelSessionCapabilities:
     can_start_turn: bool = False
     start_turn_blocked_by: Optional[str] = None
     can_interrupt_active_turn: bool = False
+    console_control: ConsoleControlProjection | None = None
 
     # When live_control_available is False, this gives the reason: e.g.
     # "no_run", "connection_released", "process_ended", "imported_only".
@@ -197,17 +200,14 @@ def project_console_turn_capabilities(
 ) -> KernelSessionCapabilities:
     """Project Console's durable turn action without manufacturing a live lease."""
 
-    normalized_state = str(turn_state or "idle").strip().lower()
-    if normalized_state not in {"idle", "queued", "starting", "active", "draining"}:
-        normalized_state = "idle"
-    blocked_by = "session_closed" if closed else None
-    if blocked_by is None and not execution_target_available:
-        blocked_by = "execution_target_missing"
-    if blocked_by is None and not machine_online:
-        blocked_by = "machine_offline"
-    if blocked_by is None and not adapter_available:
-        blocked_by = "adapter_unavailable"
-    can_start = blocked_by is None
+    projection = project_console_control(
+        closed=closed,
+        execution_target_available=execution_target_available,
+        turn_state=turn_state,
+        machine_online=machine_online,
+        adapter_available=adapter_available,
+        interrupt_adapter_available=interrupt_adapter_available,
+    )
     return replace(
         capabilities,
         control_label="console",
@@ -215,14 +215,16 @@ def project_console_turn_capabilities(
         host_reattach_available=False,
         observe_only=False,
         search_only=False,
-        can_send_input=can_start,
+        can_send_input=projection.can_start_turn,
+        can_interrupt=projection.interrupt_adapter_available,
         can_resume=False,
         control_owned=True,
-        staleness_reason=blocked_by,
-        turn_state=normalized_state,
-        can_start_turn=can_start,
-        start_turn_blocked_by=blocked_by,
-        can_interrupt_active_turn=(normalized_state in {"starting", "active", "draining"} and interrupt_adapter_available),
+        staleness_reason=projection.start_turn_blocked_by,
+        turn_state=projection.turn_state,
+        can_start_turn=projection.can_start_turn,
+        start_turn_blocked_by=projection.start_turn_blocked_by,
+        can_interrupt_active_turn=projection.can_interrupt_active_turn,
+        console_control=projection,
     )
 
 

@@ -29,11 +29,17 @@ def test_capability_assertions_match_schema_scenario_count(facts) -> None:
     # 16 -> 25 scenarios and 24 -> 61 assertions on 2026-08-02: ended-Helm
     # Resume added eight supported-provider invariants plus one typed
     # unsupported-provider invariant across the five provider columns.
-    scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert len(scenario_ids) == 25
     # 61 -> 65 on 2026-08-03: native Resume split into clean-exit and
     # process-loss variants for each supported provider.
-    assert len(facts.capability_assertions) == 65
+    # 25 -> 30 scenarios and 65 -> 70 assertions on 2026-08-20: the four
+    # factory-acquired Console providers gained one release-contract scenario,
+    # and Codex gained the Helm launch-visibility scenario. Antigravity remains
+    # maintenance-tier and Pi has no factory acquisition lane, so neither is
+    # silently promoted by this inventory. A new capability cell must come with
+    # a producer rather than silently inflating the qualification matrix.
+    scenario_ids = {a.scenario_id for a in facts.capability_assertions}
+    assert len(scenario_ids) == 30
+    assert len(facts.capability_assertions) == 70
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:

@@ -81,9 +81,7 @@ describe("providers launch support", () => {
     ).toBe(true);
     expect(
       providers
-        // Antigravity dropped out: it is Shadow-only, so it can be archived but
-        // not launched or sent to.
-        .filter((provider) => ["claude", "codex", "cursor", "opencode"].includes(provider.id))
+        .filter((provider) => ["claude", "codex", "cursor", "opencode", "antigravity"].includes(provider.id))
         .every((provider) => provider.launchAndSend),
     ).toBe(true);
   });
@@ -122,9 +120,7 @@ describe("providers launch support", () => {
       hooksSupport: "none",
     });
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
-      // Shadow-only: send_input is policy_disabled in the contract and the
-      // engine no longer advertises antigravity.send.
-      launchAndSend: false,
+      launchAndSend: true,
       interrupt: false,
       steerMidTurn: false,
       resume: false,
@@ -167,12 +163,14 @@ describe("providers launch support", () => {
       expect(support!.interrupt).toBe(contract.interrupt && contract.terminate);
       expect(support!.steerMidTurn).toBe(contract.steer_active_turn);
       expect(support!.resume).toBe(contract.can_resume);
-      expect(support!.cloudSessionStart).toBe(contract.turn_start ? "live" : "none");
+      expect(support!.cloudSessionStart).toBe(
+        "session.turn.start" in contract.capabilities ? "live" : "none",
+      );
     }
 
     // The launch command is gated by the device entrypoint, not by the contract
-    // capability flags. Antigravity supports launch_local while its entrypoint is
-    // excluded, so the table must not offer a command the facade does not have.
+    // capability flags. An entrypoint can remain excluded even when a provider
+    // contract supports launch_local, so never offer a command the facade lacks.
     const entrypoints = loadDeviceEntrypoints();
     for (const id of launchIds) {
       const entry = entrypoints.commands.find(

@@ -13,8 +13,8 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
 from zerg.services.session_state_contract import SessionActivityFacts
-from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import SessionRunFacts
+from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_diagnostics import compare_session_state_axes
 from zerg.services.session_state_diagnostics import compare_session_state_projections
 from zerg.services.session_state_facts_projector import ShadowSessionStateProjection
@@ -61,6 +61,7 @@ def _legacy() -> SessionStateFacts:
             "control": _control(),
             "transcript": {"convergence": "unknown"},
             "host": {"state": "unknown"},
+            "working_set": "open",
             "presentation": {},
         }
     )
@@ -416,7 +417,16 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
             "observed_at": NOW.isoformat(),
             "provider": "codex",
             "head_count": 2,
-            "legacy_facts": {"catalog": {"session_id": requested_session_id}},
+            "legacy_facts": {
+                "catalog": {
+                    "session_id": requested_session_id,
+                    "launch_actor": "human_shell",
+                    "launch_surface": "terminal",
+                    "origin_kind": "managed_local",
+                    "hidden_from_default_timeline": 0,
+                    "user_hidden_from_timeline": 0,
+                }
+            },
             "heads": [],
         },
     )
@@ -456,7 +466,13 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
     assert payload["comparison"]["control_identity"]["status"] == "unbound"
     assert payload["served_path"] == "canonical_session_detail"
     assert payload["authorization_path"] == "provider_scoped_canonical_control"
-    assert payload["canonical_authorization_providers"] == ["claude", "codex", "cursor", "opencode"]
+    assert payload["canonical_authorization_providers"] == [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode",
+    ]
     assert "cutover_active" not in payload
     assert "authorization_cutover_active" not in payload
     assert payload["explain"]["commit_seq"] == 12
@@ -467,6 +483,12 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
         "access": None,
         "transcript": None,
     }
+    assert payload["explain"]["working_set"] == "open"
+    assert payload["explain"]["launch_actor"] == "human_shell"
+    assert payload["explain"]["launch_surface"] == "terminal"
+    assert payload["explain"]["origin_kind"] == "managed_local"
+    assert payload["explain"]["hidden_from_default_timeline"] is False
+    assert payload["explain"]["user_hidden_from_timeline"] is False
     assert payload["explain"]["actions"]["send_input"] == {"state": "available", "reason": None}
 
     assert payload["explain"]["projection_parity"]["status"] == "matched"

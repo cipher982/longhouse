@@ -66,6 +66,12 @@ class SessionStateExplainResponse(UTCBaseModel):
     state_contract_version: int
     presentation_policy_version: int
     presentation_keys: dict[str, str | None]
+    working_set: Literal["open", "recent", "history"]
+    launch_actor: str | None = None
+    launch_surface: str | None = None
+    origin_kind: str | None = None
+    hidden_from_default_timeline: bool
+    user_hidden_from_timeline: bool
     fact_sources: dict[str, FactHeadDiagnostic]
     actions: dict[str, SessionActionAvailability]
     projection_parity: SessionStateProjectionParity | None = None
@@ -275,6 +281,9 @@ def get_session_state_diagnostics(
             commit_seq=commit_seq,
         )
         served = served_response.session_state
+        catalog = legacy_facts.get("catalog")
+        if not isinstance(catalog, dict):
+            raise ValueError("catalog diagnostic identity is incomplete")
         shadow = project_shadow_session_state_facts(
             session_id=str(session_id),
             commit_seq=commit_seq,
@@ -307,6 +316,12 @@ def get_session_state_diagnostics(
                     "access": served.presentation.access.key if served.presentation.access else None,
                     "transcript": served.presentation.transcript.key if served.presentation.transcript else None,
                 },
+                working_set=served.working_set,
+                launch_actor=catalog.get("launch_actor"),
+                launch_surface=catalog.get("launch_surface"),
+                origin_kind=catalog.get("origin_kind"),
+                hidden_from_default_timeline=bool(catalog.get("hidden_from_default_timeline")),
+                user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
                 fact_sources=shadow.fact_sources,
                 actions={
                     name: getattr(served.control.actions, name)

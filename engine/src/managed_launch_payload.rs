@@ -58,39 +58,102 @@ impl PermissionMode {
     }
 }
 
-/// Return provenance for a provider launched from an attached human terminal.
-/// Managed Helm launchers share this contract so durable ingest can safely
-/// promote their first content into the default timeline.
-pub fn interactive_human_shell_provenance() -> (Option<&'static str>, Option<&'static str>) {
-    let hidden = std::env::var("LONGHOUSE_ORIGIN_KIND")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    let sidechain = matches!(
-        std::env::var("LONGHOUSE_IS_SIDECHAIN")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
+/// Normalized product provenance for one managed Helm registration.
+///
+/// The fields are private so provider launchers cannot manufacture a human
+/// stamp or accidentally keep one inherited through automation. Every fresh
+/// and resumed Helm payload must carry this typed value; `to_json` owns the
+/// wire representation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ManagedLaunchProvenance {
+    launch_actor: Option<&'static str>,
+    launch_surface: Option<&'static str>,
+}
+
+impl ManagedLaunchProvenance {
+    /// Classify the current wrapper invocation once, with automation and
+    /// sidechain evidence taking precedence over terminal interactivity.
+    pub fn interactive_helm() -> Self {
+        let origin_kind = std::env::var("LONGHOUSE_ORIGIN_KIND").ok();
+        let inherited_actor = std::env::var("LONGHOUSE_LAUNCH_ACTOR").ok();
+        let inherited_surface = std::env::var("LONGHOUSE_LAUNCH_SURFACE").ok();
+        let sidechain = env_truthy(std::env::var("LONGHOUSE_IS_SIDECHAIN").ok().as_deref());
+        Self::for_terminal_context(
+            std::io::stdin().is_terminal(),
+            std::io::stdout().is_terminal(),
+            origin_kind.as_deref(),
+            sidechain,
+            inherited_actor.as_deref(),
+            inherited_surface.as_deref(),
+        )
+    }
+
+    fn for_terminal_context(
+        stdin_is_terminal: bool,
+        stdout_is_terminal: bool,
+        origin_kind: Option<&str>,
+        sidechain: bool,
+        inherited_actor: Option<&str>,
+        inherited_surface: Option<&str>,
+    ) -> Self {
+        let origin_kind = normalize_token(origin_kind);
+        let inherited_actor = normalize_token(inherited_actor);
+        let inherited_surface = normalize_token(inherited_surface);
+
+        // Explicit automation always wins. Preserve useful typed provenance
+        // rather than merely dropping a human stamp: the Runtime Host can then
+        // enforce default-hidden policy even when a future automation cwd is
+        // not yet known to its provider-proof path classifier.
+        if sidechain {
+            return Self::automation("provider_subprocess");
+        }
+        if origin_kind.as_deref() == Some("hatch_automation") {
+            return Self::automation(automation_surface(inherited_surface.as_deref(), "hatch"));
+        }
+        if origin_kind.as_deref() == Some("test_or_canary") {
+            return Self::automation(automation_surface(inherited_surface.as_deref(), "test"));
+        }
+        if inherited_actor.as_deref() == Some("automation") {
+            return Self::automation(automation_surface(inherited_surface.as_deref(), "test"));
+        }
+
+        if stdin_is_terminal && stdout_is_terminal {
+            Self {
+                launch_actor: Some("human_shell"),
+                launch_surface: Some("terminal"),
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    fn automation(surface: &'static str) -> Self {
+        Self {
+            launch_actor: Some("automation"),
+            launch_surface: Some(surface),
+        }
+    }
+}
+
+fn normalize_token(value: Option<&str>) -> Option<String> {
+    let normalized = value?.trim().to_ascii_lowercase().replace('-', "_");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn env_truthy(value: Option<&str>) -> bool {
+    matches!(
+        value.unwrap_or_default().trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
-    );
-    human_shell_provenance_for_terminal(
-        std::io::stdin().is_terminal(),
-        std::io::stdout().is_terminal(),
-        hidden,
-        sidechain,
     )
 }
 
-fn human_shell_provenance_for_terminal(
-    stdin_is_terminal: bool,
-    stdout_is_terminal: bool,
-    hidden: bool,
-    sidechain: bool,
-) -> (Option<&'static str>, Option<&'static str>) {
-    if stdin_is_terminal && stdout_is_terminal && !hidden && !sidechain {
-        (Some("human_shell"), Some("terminal"))
-    } else {
-        (None, None)
+fn automation_surface(value: Option<&str>, fallback: &'static str) -> &'static str {
+    match value {
+        Some("hatch") => "hatch",
+        Some("test") => "test",
+        Some("ci") => "ci",
+        Some("provider_subprocess") => "provider_subprocess",
+        _ => fallback,
     }
 }
 
@@ -102,6 +165,7 @@ pub struct ManagedLaunchRegistration<'a> {
     pub loop_mode: &'a str,
     pub machine_name: &'a str,
     pub permission_mode: PermissionMode,
+    pub provenance: ManagedLaunchProvenance,
     /// Provider-specific fields (`session_id`, `native_claude_channels_available`).
     pub extra: Vec<(&'static str, Value)>,
 }
@@ -119,9 +183,17 @@ impl<'a> ManagedLaunchRegistration<'a> {
             "loop_mode": self.loop_mode,
             "machine_name": self.machine_name,
             "permission_mode": self.permission_mode.as_wire(),
+            "launch_actor": self.provenance.launch_actor,
+            "launch_surface": self.provenance.launch_surface,
         });
         let map = payload.as_object_mut().expect("object literal");
         for (key, value) in &self.extra {
+            // Shared registration fields are owned here. Silently ignoring an
+            // internal collision is safer than allowing provider-local JSON to
+            // override normalized provenance or another shared contract field.
+            if REQUIRED_REGISTRATION_KEYS.contains(key) {
+                continue;
+            }
             map.insert((*key).to_string(), value.clone());
         }
         payload
@@ -162,6 +234,8 @@ pub const REQUIRED_REGISTRATION_KEYS: &[&str] = &[
     "loop_mode",
     "machine_name",
     "permission_mode",
+    "launch_actor",
+    "launch_surface",
 ];
 
 #[cfg(test)]
@@ -178,6 +252,9 @@ mod tests {
             loop_mode: "assist",
             machine_name: "cinder",
             permission_mode: PermissionMode::Bypass,
+            provenance: ManagedLaunchProvenance::for_terminal_context(
+                true, true, None, false, None, None,
+            ),
             extra,
         }
         .to_json()
@@ -222,26 +299,71 @@ mod tests {
 
     #[test]
     fn human_shell_provenance_requires_visible_terminal_and_no_hidden_origin() {
-        assert_eq!(
-            human_shell_provenance_for_terminal(true, true, false, false),
-            (Some("human_shell"), Some("terminal"))
+        let human = ManagedLaunchProvenance::for_terminal_context(
+            true, true, None, false, None, None,
         );
-        for (stdin_is_terminal, stdout_is_terminal, hidden, sidechain) in [
-            (false, true, false, false),
-            (true, false, false, false),
-            (true, true, true, false),
-            (true, true, false, true),
-        ] {
+        assert_eq!(human.launch_actor, Some("human_shell"));
+        assert_eq!(human.launch_surface, Some("terminal"));
+        for (stdin_is_terminal, stdout_is_terminal) in [(false, true), (true, false)] {
             assert_eq!(
-                human_shell_provenance_for_terminal(
+                ManagedLaunchProvenance::for_terminal_context(
                     stdin_is_terminal,
                     stdout_is_terminal,
-                    hidden,
-                    sidechain,
+                    None,
+                    false,
+                    None,
+                    None,
                 ),
-                (None, None)
+                ManagedLaunchProvenance::default()
             );
         }
+    }
+
+    #[test]
+    fn automation_and_sidechain_evidence_precede_inherited_human_provenance() {
+        for (origin_kind, sidechain, expected_surface) in [
+            (Some("hatch-automation"), false, "hatch"),
+            (Some("test_or_canary"), false, "test"),
+            (None, true, "provider_subprocess"),
+        ] {
+            let provenance = ManagedLaunchProvenance::for_terminal_context(
+                true,
+                true,
+                origin_kind,
+                sidechain,
+                Some("human_shell"),
+                Some("terminal"),
+            );
+            assert_eq!(provenance.launch_actor, Some("automation"));
+            assert_eq!(provenance.launch_surface, Some(expected_surface));
+        }
+    }
+
+    #[test]
+    fn explicit_automation_provenance_is_normalized_without_a_tty() {
+        let provenance = ManagedLaunchProvenance::for_terminal_context(
+            false,
+            false,
+            None,
+            false,
+            Some("AUTOMATION"),
+            Some("CI"),
+        );
+        assert_eq!(provenance.launch_actor, Some("automation"));
+        assert_eq!(provenance.launch_surface, Some("ci"));
+    }
+
+    #[test]
+    fn provider_extras_cannot_override_shared_provenance() {
+        let payload = registration(
+            "codex",
+            vec![
+                ("launch_actor", json!("automation")),
+                ("launch_surface", json!("test")),
+            ],
+        );
+        assert_eq!(payload["launch_actor"], "human_shell");
+        assert_eq!(payload["launch_surface"], "terminal");
     }
 
     #[test]

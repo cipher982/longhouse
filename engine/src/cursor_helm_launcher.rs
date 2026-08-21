@@ -935,7 +935,7 @@ fn register(
     resume_provider_thread_id: Option<&str>,
 ) -> anyhow::Result<(Option<ManagedLaunchResponse>, Value)> {
     let (url, token, machine_name) = registration_credentials(config)?;
-    let mut payload = crate::managed_launch_payload::ManagedLaunchRegistration {
+    let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
         provider: "cursor",
         cwd,
         project: config.project.as_deref(),
@@ -947,6 +947,7 @@ fn register(
             "provider_local" => crate::managed_launch_payload::PermissionMode::ProviderLocal,
             _ => crate::managed_launch_payload::PermissionMode::Bypass,
         },
+        provenance: crate::managed_launch_payload::ManagedLaunchProvenance::interactive_helm(),
         // Cursor mints its own session id before registering, so the Runtime
         // Host must be told which one to bind rather than allocating its own.
         extra: match resume_provider_thread_id {
@@ -959,14 +960,6 @@ fn register(
         },
     }
     .to_json();
-    let (launch_actor, launch_surface) =
-        crate::managed_launch_payload::interactive_human_shell_provenance();
-    if let Some(actor) = launch_actor {
-        payload["launch_actor"] = json!(actor);
-    }
-    if let Some(surface) = launch_surface {
-        payload["launch_surface"] = json!(surface);
-    }
     let runtime = tokio::runtime::Runtime::new()?;
     let registration = crate::managed_launch_lifecycle::register_managed_launch_with_timeout(
         &runtime,

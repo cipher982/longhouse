@@ -142,6 +142,81 @@ async def ingest_runtime_observation_batch(
         token_owner_id = getattr(_token, "owner_id", None)
         owner_id = None if catalog_mode or token_owner_id is None else int(token_owner_id)
 
+        terminal_events = [
+            event
+            for event in events
+            if event.kind == "terminal_signal"
+            and event.run_id is not None
+            and str((event.payload or {}).get("terminal_state") or "") in {"run_completed", "run_failed", "run_cancelled"}
+        ]
+
+        async def _advance_compatibility_console_fifo(*, reconcile_live_store: bool) -> None:
+            """Settle durable Console ownership and dispatch its next queued turn."""
+
+            if owner_id is None or not terminal_events:
+                return
+
+            from zerg.database import get_session_factory
+            from zerg.models.agents import SessionTurn
+            from zerg.services.console_turns import dispatch_next_console_turn
+            from zerg.services.console_turns import reconcile_console_terminal_event
+
+            thread_ids: set = set()
+            if reconcile_live_store:
+
+                def _reconcile(wdb: Session):
+                    reconciled = set()
+                    for event in terminal_events:
+                        terminal_state = str((event.payload or {}).get("terminal_state") or "")
+                        payload_data = event.payload or {}
+                        explicit_exit_status = str(payload_data.get("exit_status") or "").strip()
+                        exit_code = payload_data.get("exit_code")
+                        exit_status = explicit_exit_status or (
+                            f"exit_{exit_code}" if isinstance(exit_code, int) and not isinstance(exit_code, bool) else terminal_state
+                        )
+                        thread_id = reconcile_console_terminal_event(
+                            wdb,
+                            owner_id=int(owner_id),
+                            run_id=event.run_id,
+                            terminal_state=terminal_state,
+                            occurred_at=event.occurred_at or now_utc,
+                            exit_status=exit_status[:64],
+                        )
+                        if thread_id is not None:
+                            reconciled.add(thread_id)
+                    return reconciled
+
+                assert ws is not None
+                thread_ids = await ws.execute(
+                    _reconcile,
+                    label="session-turn-terminal",
+                )
+            else:
+                SessionLocal = get_session_factory()
+                with SessionLocal() as turn_db:
+                    thread_ids = {
+                        thread_id
+                        for event in terminal_events
+                        if (
+                            thread_id := event.thread_id
+                            or (
+                                turn_db.query(SessionTurn.thread_id)
+                                .filter(SessionTurn.run_id == event.run_id, SessionTurn.source_kind == "console")
+                                .scalar()
+                            )
+                        )
+                        is not None
+                    }
+
+            SessionLocal = get_session_factory()
+            with SessionLocal() as turn_db:
+                for thread_id in thread_ids:
+                    await dispatch_next_console_turn(
+                        turn_db,
+                        owner_id=int(owner_id),
+                        thread_id=thread_id,
+                    )
+
         def _do_runtime_state(wdb: Session):
             ingest_result = ingest_runtime_events(wdb, events)
             push_contexts = _push_contexts_for_result(ingest_result)
@@ -498,6 +573,9 @@ async def ingest_runtime_observation_batch(
                     if (
                         event.kind != "terminal_signal"
                         or event.run_id is None
+                        or event.session_id is None
+                        or event.thread_id is None
+                        or event.device_id is None
                         or terminal_state
                         not in {
                             "run_completed",
@@ -515,6 +593,11 @@ async def ingest_runtime_observation_batch(
                         {
                             "turn": {
                                 "run_id": str(event.run_id),
+                                "owner_id": int(catalog_owner_id),
+                                "session_id": str(event.session_id),
+                                "thread_id": str(event.thread_id),
+                                "provider": event.provider,
+                                "device_id": event.device_id,
                                 "state": outcome,
                                 "error": None if outcome == "completed" else terminal_state,
                                 "updated_at": (event.occurred_at or now_utc).isoformat(),
@@ -583,6 +666,8 @@ async def ingest_runtime_observation_batch(
 
             _publish_runtime_updates(result)
 
+            await _advance_compatibility_console_fifo(reconcile_live_store=True)
+
             push_contexts = _push_contexts_for_result(result)
             if push_contexts:
 
@@ -621,40 +706,7 @@ async def ingest_runtime_observation_batch(
 
         await _run_runtime_followups(push_contexts, db)
 
-        terminal_events = [
-            event
-            for event in events
-            if event.kind == "terminal_signal"
-            and str((event.payload or {}).get("terminal_state") or "") in {"run_completed", "run_failed", "run_cancelled"}
-        ]
-        if owner_id is not None and terminal_events:
-            from zerg.database import get_session_factory
-            from zerg.models.agents import SessionTurn
-            from zerg.services.console_turns import dispatch_next_console_turn
-
-            SessionLocal = get_session_factory()
-            with SessionLocal() as turn_db:
-                thread_ids = {
-                    thread_id
-                    for event in terminal_events
-                    if (
-                        thread_id := event.thread_id
-                        or (
-                            turn_db.query(SessionTurn.thread_id)
-                            .filter(SessionTurn.run_id == event.run_id, SessionTurn.source_kind == "console")
-                            .scalar()
-                            if event.run_id is not None
-                            else None
-                        )
-                    )
-                    is not None
-                }
-                for thread_id in thread_ids:
-                    await dispatch_next_console_turn(
-                        turn_db,
-                        owner_id=int(owner_id),
-                        thread_id=thread_id,
-                    )
+        await _advance_compatibility_console_fifo(reconcile_live_store=False)
 
         return result
     except HTTPException:

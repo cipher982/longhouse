@@ -21,6 +21,7 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveTimelineCard
 from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 
 
@@ -155,6 +156,13 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
         attach_command=f"longhouse codex attach --session-id {session_id}",
         provider_session_id=provider_thread_id,
     )
+    # Reproduce the legacy Codex drift: the row was initially policy-hidden
+    # because its launcher omitted the shared human provenance fields.
+    launch["plan"].update(
+        launch_actor=None,
+        launch_surface=None,
+        hidden_from_default_timeline=1,
+    )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -241,6 +249,11 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
             "provider_thread_id": provider_thread_id,
             "device_id": "cinder",
             "cwd": "/workspace/longhouse",
+            "launch_actor": "human_shell",
+            "launch_surface": "terminal",
+            "environment": "development",
+            "origin_kind": None,
+            "hidden_from_default_timeline": 0,
             "resume_attempt_id": str(attempt_id),
             "started_at": (ended_at + timedelta(seconds=1)).isoformat(),
             "expires_at": (ended_at + timedelta(minutes=5)).isoformat(),
@@ -312,7 +325,19 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
         assert attempts[1].run_id == resumed["run_id"]
         assert attempts[1].state == "adopted"
         assert db.get(LiveLaunchReadiness, str(session_id)).state == "adopted"
-        assert db.get(LiveSessionCatalog, str(session_id)).ended_at is None
+        catalog = db.get(LiveSessionCatalog, str(session_id))
+        assert catalog.ended_at is None
+        assert (catalog.launch_actor, catalog.launch_surface, catalog.hidden_from_default_timeline) == (
+            "human_shell",
+            "terminal",
+            0,
+        )
+        card = db.get(LiveTimelineCard, str(session_id))
+        assert (card.launch_actor, card.launch_surface, card.hidden_from_default_timeline) == (
+            "human_shell",
+            "terminal",
+            0,
+        )
         receipts = {row.client_request_id: row for row in db.query(LiveSessionInputReceipt).all()}
         assert receipts[receipt_id].status == "queued"
         assert receipts[receipt_id].error_json is None
@@ -364,6 +389,11 @@ async def test_catalogd_resume_rejects_provider_thread_mismatch(daemon_paths):
                         "provider_thread_id": str(uuid4()),
                         "device_id": "cinder",
                         "cwd": "/workspace/longhouse",
+                        "launch_actor": "human_ui",
+                        "launch_surface": "cli",
+                        "environment": "development",
+                        "origin_kind": None,
+                        "hidden_from_default_timeline": 0,
                         "resume_attempt_id": str(uuid4()),
                         "started_at": (now + timedelta(seconds=1)).isoformat(),
                         "expires_at": (now + timedelta(minutes=5)).isoformat(),

@@ -45,6 +45,7 @@ from zerg.services import catalog_read_gateway
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.session_state_diagnostics import compare_session_state_axes
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
+from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE
 
 
 @pytest.fixture
@@ -65,6 +66,14 @@ def _seed_session(
     now: datetime,
     project: str = "zerg",
     owner_id: str | None = None,
+    cwd: str = "/Users/david/git/zerg",
+    environment: str = "prod",
+    launch_actor: str | None = None,
+    origin_kind: str | None = None,
+    hidden_from_default_timeline: int = 0,
+    user_hidden_from_timeline: int = 0,
+    first_user_message_preview: str | None = None,
+    branch_kind: str = "root",
 ) -> None:
     thread_id = str(uuid4())
     run_id = session_id
@@ -72,16 +81,21 @@ def _seed_session(
         LiveSessionCatalog.__table__.insert().values(
             session_id=session_id,
             provider="codex",
-            environment="prod",
+            environment=environment,
             project=project,
             device_id=device_id,
             device_name="Cinder",
-            cwd="/Users/david/git/zerg",
+            cwd=cwd,
             git_repo="https://github.com/cipher982/longhouse.git",
             git_branch="main",
             started_at=now - timedelta(hours=2),
             last_activity_at=now - timedelta(minutes=2),
             primary_thread_id=thread_id,
+            launch_actor=launch_actor,
+            origin_kind=origin_kind,
+            hidden_from_default_timeline=hidden_from_default_timeline,
+            user_hidden_from_timeline=user_hidden_from_timeline,
+            first_user_message_preview=first_user_message_preview,
         )
     )
     connection.execute(
@@ -100,16 +114,21 @@ def _seed_session(
         LiveTimelineCard.__table__.insert().values(
             session_id=session_id,
             provider="codex",
-            environment="prod",
+            environment=environment,
             project=project,
             device_id=device_id,
-            cwd="/Users/david/git/zerg",
+            cwd=cwd,
             started_at=now - timedelta(hours=2),
             last_activity_at=now - timedelta(minutes=2),
             user_messages=2,
             assistant_messages=3,
             tool_calls=4,
             parser_revision="parser-v2",
+            launch_actor=launch_actor,
+            origin_kind=origin_kind,
+            hidden_from_default_timeline=hidden_from_default_timeline,
+            user_hidden_from_timeline=user_hidden_from_timeline,
+            first_user_message_preview=first_user_message_preview,
         )
     )
     connection.execute(
@@ -118,6 +137,9 @@ def _seed_session(
             session_id=session_id,
             provider="codex",
             is_primary=1,
+            branch_kind=branch_kind,
+            origin_kind=origin_kind,
+            hidden_from_default_timeline=hidden_from_default_timeline,
             created_at=now - timedelta(hours=2),
             updated_at=now,
         )
@@ -1418,8 +1440,70 @@ async def test_enrollment_excludes_revoked_and_workspaces_are_owner_device_scope
                 },
             ],
         )
-        _seed_session(connection, session_id=str(uuid4()), device_id="cinder", now=now)
-        _seed_session(connection, session_id=str(uuid4()), device_id="private", now=now, project="secret")
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now,
+            launch_actor="human_shell",
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now - timedelta(hours=1),
+            launch_actor="human_ui",
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now,
+            cwd="/Users/david/.longhouse/canaries/provider-live/cursor/product-e2e/workspace",
+            launch_actor="human_shell",
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now,
+            cwd="/Users/david/git/hidden",
+            launch_actor="human_shell",
+            hidden_from_default_timeline=1,
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now,
+            cwd="/Users/david/git/user-hidden",
+            launch_actor="human_shell",
+            user_hidden_from_timeline=1,
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now,
+            cwd="/Users/david/git/sidechain",
+            launch_actor="human_shell",
+            branch_kind="subagent",
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="cinder",
+            now=now,
+            cwd="/Users/david/git/untyped",
+        )
+        _seed_session(
+            connection,
+            session_id=str(uuid4()),
+            device_id="private",
+            now=now,
+            project="secret",
+            launch_actor="human_shell",
+        )
     engine.dispose()
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -1432,8 +1516,12 @@ async def test_enrollment_excludes_revoked_and_workspaces_are_owner_device_scope
             "machine.workspace.list.v2",
             {"owner_id": 7, "device_id": "cinder", "limit": 12, "days_back": 45},
         )
-        assert [row["path"] for row in workspaces["workspaces"]] == ["/Users/david/git/zerg"]
+        assert [row["path"] for row in workspaces["workspaces"]] == [
+            "/Users/david/git/zerg",
+            "/Users/david/git/user-hidden",
+        ]
         assert workspaces["workspaces"][0]["label"] == "longhouse (main)"
+        assert workspaces["workspaces"][0]["session_count"] == 2
         assert (
             await client.call(
                 "machine.workspace.list.v2",
@@ -1449,6 +1537,67 @@ async def test_enrollment_excludes_revoked_and_workspaces_are_owner_device_scope
     finally:
         await client.close()
         await daemon.close()
+
+
+def test_catalog_workspace_scan_crosses_noisy_raw_page_for_human_evidence(daemon_paths):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id=str(uuid4()),
+                owner_id=7,
+                device_id="cinder",
+                token_hash="a" * 64,
+                created_at=now,
+                revoked_at=None,
+            )
+        )
+        connection.execute(
+            LiveSessionCatalog.__table__.insert(),
+            [
+                {
+                    "session_id": str(uuid4()),
+                    "provider": "canary",
+                    "environment": "prod",
+                    "project": "canary",
+                    "device_id": "cinder",
+                    "cwd": f"/tmp/provider-factory-{index}/workspace",
+                    "started_at": now,
+                    "last_activity_at": now,
+                    "launch_actor": "human_shell",
+                }
+                for index in range(WORKSPACE_CANDIDATE_PAGE_SIZE + 1)
+            ],
+        )
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=str(uuid4()),
+                provider="codex",
+                environment="prod",
+                project="human",
+                device_id="cinder",
+                cwd="/Users/david/git/human",
+                git_repo="https://github.com/example/human.git",
+                git_branch="main",
+                started_at=now - timedelta(days=1, hours=1),
+                last_activity_at=now - timedelta(days=1),
+                launch_actor="human_shell",
+            )
+        )
+
+    result = CatalogStore(engine).list_machine_workspaces(
+        owner_id=7,
+        device_id="cinder",
+        limit=12,
+        days_back=45,
+    )
+    engine.dispose()
+
+    assert [entry["path"] for entry in result["workspaces"]] == ["/Users/david/git/human"]
+    assert result["limit_exceeded"] is False
 
 
 @pytest.mark.timeout(30)

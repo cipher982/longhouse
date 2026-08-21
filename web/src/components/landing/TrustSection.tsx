@@ -29,7 +29,7 @@ const faqs: FAQ[] = [
   {
     question: "Which providers are strongest today?",
     answer:
-      "Claude Code and Codex have the full set: launch, send, interrupt, mid-turn steering, and resume. Cursor Agent and OpenCode do everything except mid-turn steering; your next instruction lands when the turn ends. Pi Agent can launch, send, and interrupt, but resume is not wired up yet. Antigravity sessions sync into the timeline for watching and search only. The provider list above is generated from the provider contract, so it is the exact answer.",
+      "Claude Code and Codex have the full set: launch, send, interrupt, mid-turn steering, and resume. Cursor Agent and OpenCode do everything except mid-turn steering; your next instruction lands when the turn ends. Pi Agent can launch, send, and interrupt, but resume is not wired up yet. Antigravity can launch and send through its hook channel, but interrupt and resume are not available. The provider list above is generated from the provider contract, so it is the exact answer.",
   },
   {
     question: "Where is my data stored?",

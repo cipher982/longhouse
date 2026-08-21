@@ -59,6 +59,11 @@ def _rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for provider in payload["providers"]:
         name = str(provider["provider"])
+        capabilities = provider.get("capabilities") or {}
+        console_turn_admitted = (
+            isinstance(capabilities, dict)
+            and "session.turn.start" in capabilities
+        )
         rows.append(
             {
                 "id": name,
@@ -69,7 +74,11 @@ def _rows() -> list[dict[str, object]]:
                 "interrupt": bool(provider["interrupt"]) and bool(provider["terminate"]),
                 "steerMidTurn": bool(provider["steer_active_turn"]),
                 "resume": bool(provider["can_resume"]),
-                "cloudSessionStart": "live" if provider.get("turn_start") else "none",
+                # The low-level turn_start flag describes adapter inventory.
+                # User-facing Console admission requires an implemented
+                # session.turn.start capability; Antigravity deliberately has
+                # the former but not the latter.
+                "cloudSessionStart": "live" if console_turn_admitted else "none",
                 "nativeLaunchCommand": launch_commands.get(name),
             }
         )

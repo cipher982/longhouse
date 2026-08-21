@@ -1,6 +1,31 @@
 import OSLog
 import SwiftUI
 
+enum WorkspaceSelectionSource: Equatable {
+    case implicitDefault
+    case explicitUserChoice
+}
+
+struct WorkspaceSelectionResolution: Equatable {
+    let path: String
+    let source: WorkspaceSelectionSource
+}
+
+func resolveFreshWorkspaceSelection(
+    currentPath: String,
+    source: WorkspaceSelectionSource,
+    suggestions: [WorkspaceSuggestion]
+) -> WorkspaceSelectionResolution {
+    let normalized = currentPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    if source == .explicitUserChoice, normalized.starts(with: "/") {
+        return WorkspaceSelectionResolution(path: normalized, source: .explicitUserChoice)
+    }
+    return WorkspaceSelectionResolution(
+        path: suggestions.first?.path ?? "",
+        source: .implicitDefault
+    )
+}
+
 @MainActor
 struct LaunchSessionSheet: View {
     @EnvironmentObject private var appState: AppState
@@ -22,6 +47,7 @@ struct LaunchSessionSheet: View {
     @State private var loadingWorkspaces = false
     @State private var workspaceError: String?
     @State private var cwd: String = ""
+    @State private var workspaceSelectionSource: WorkspaceSelectionSource = .implicitDefault
     @State private var displayName: String = ""
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "LaunchSession")
 
@@ -186,6 +212,7 @@ struct LaunchSessionSheet: View {
                             errorMessage: workspaceError
                         ) { path in
                             cwd = path
+                            workspaceSelectionSource = .explicitUserChoice
                             submitError = nil
                             logger.info("workspace selection committed path=\(path, privacy: .public)")
                         }
@@ -292,6 +319,8 @@ struct LaunchSessionSheet: View {
                let first = result.first(where: { Self.canStartInteractiveSession($0) }) ?? result.first {
                 selectedDeviceId = first.deviceId
                 selectedProvider = first.defaultProvider ?? ""
+                cwd = ""
+                workspaceSelectionSource = .implicitDefault
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -303,6 +332,7 @@ struct LaunchSessionSheet: View {
         selectedDeviceId = machine.deviceId
         selectedProvider = machine.defaultProvider ?? ""
         cwd = ""
+        workspaceSelectionSource = .implicitDefault
         workspaceError = nil
         submitError = nil
     }
@@ -315,6 +345,7 @@ struct LaunchSessionSheet: View {
         guard Self.canStartInteractiveSession(machines.first(where: { $0.deviceId == deviceId })) else {
             workspaces = []
             cwd = ""
+            workspaceSelectionSource = .implicitDefault
             workspaceError = nil
             return
         }
@@ -324,7 +355,7 @@ struct LaunchSessionSheet: View {
         if let cached = WorkspaceSuggestionsCacheStore.load(serverURL: appState.serverURL, deviceId: deviceId) {
             cacheHit = true
             workspaces = cached
-            if normalizedCwd.isEmpty, let first = cached.first?.path {
+            if workspaceSelectionSource == .implicitDefault, normalizedCwd.isEmpty, let first = cached.first?.path {
                 cwd = first
             }
         }
@@ -340,9 +371,13 @@ struct LaunchSessionSheet: View {
             let suggestions = try await api.workspaceSuggestions(deviceId: deviceId)
             guard !Task.isCancelled, deviceId == selectedDeviceId else { return }
             workspaces = suggestions
-            if normalizedCwd.isEmpty, let first = suggestions.first?.path {
-                cwd = first
-            }
+            let selection = resolveFreshWorkspaceSelection(
+                currentPath: normalizedCwd,
+                source: workspaceSelectionSource,
+                suggestions: suggestions
+            )
+            cwd = selection.path
+            workspaceSelectionSource = selection.source
             WorkspaceSuggestionsCacheStore.save(workspaces: suggestions, serverURL: appState.serverURL, deviceId: deviceId)
             logger.info("workspace suggestions load finished device=\(deviceId, privacy: .public) count=\(suggestions.count, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch {
@@ -727,8 +762,8 @@ private struct WorkspaceSelectionView: View {
 /// but is keyed per (serverURL, identity, deviceId) so switching machines
 /// never shows another machine's paths.
 enum WorkspaceSuggestionsCacheStore {
-    private static let cacheKey = "longhouse.launch.workspaces.cache.v1"
-    private static let version = 1
+    private static let cacheKey = "longhouse.launch.workspaces.cache.v2"
+    private static let version = 2
     private static let maxItems = 24
     private static let defaultMaxAge: TimeInterval = 24 * 60 * 60
 

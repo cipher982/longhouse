@@ -108,6 +108,23 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - &console_release_interrupt_unsupported
+        id: console_adapter_release_contract_preserved
+        variant: interrupt_unsupported
+        scenario_id: codex_console_adapter_lifecycle
+        oracle_source: server/zerg/qa/provider_console_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.resume.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -178,6 +195,21 @@ providers:
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
+        max_age_seconds: 604800
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.launch_local
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: helm_launch_visibility_preserved
+        scenario_id: codex_helm_launch_visibility
+        oracle_source: server/zerg/qa/provider_launch_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
         max_age_seconds: 604800
     coordination.awareness.create:
       disposition: implemented
@@ -477,6 +509,14 @@ providers:
         modes: [console]
       runtime_prerequisites: [session_context]
       required_assertions:
+      - &console_release_interrupt_supported
+        id: console_adapter_release_contract_preserved
+        variant: interrupt_supported
+        scenario_id: claude_console_adapter_lifecycle
+        oracle_source: server/zerg/qa/provider_console_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
       - id: real_print_marker_returned
         scenario_id: claude_real_print
         oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
@@ -737,6 +777,17 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - <<: *console_release_interrupt_supported
+        scenario_id: opencode_console_adapter_lifecycle
     session.resume.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1217,6 +1268,17 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.cursor.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - <<: *console_release_interrupt_supported
+        scenario_id: cursor_console_adapter_lifecycle
     session.resume.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1421,7 +1483,7 @@ providers:
   transcript_binding: true
   live_proof: false
   startup_coordination_context: false
-  # Empty capability set: no engine-side launch/steer/resume proof exists yet.
+  # Empty capability set: no factory release-acquisition lane exists for Pi.
   capabilities: {}
   can_resume: false
   turn_start: true

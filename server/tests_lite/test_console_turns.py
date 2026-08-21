@@ -25,6 +25,7 @@ from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.console_turns import mark_console_turn_active
+from zerg.services.console_turns import reconcile_console_terminal_event
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.console_turns import settle_console_turn
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
@@ -32,11 +33,13 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_CANCELLED
 from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
 from zerg.services.session_turns import SESSION_TURN_STATE_DRAINING
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
+from zerg.services.session_views import _current_console_turn_state
 
 
 def _db(tmp_path):
@@ -244,6 +247,70 @@ def test_console_turn_claim_and_settle_serializes_fifo_execution(tmp_path):
     assert next_claim.turn_id == second.turn_id
 
 
+@pytest.mark.parametrize(
+    ("terminal_state", "expected_state"),
+    [
+        ("run_completed", SESSION_TURN_STATE_COMPLETED),
+        ("run_failed", SESSION_TURN_STATE_FAILED),
+        ("run_cancelled", SESSION_TURN_STATE_CANCELLED),
+    ],
+)
+def test_live_store_terminal_reconciliation_releases_only_owned_console_fifo(
+    tmp_path,
+    terminal_state,
+    expected_state,
+):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
+    db.commit()
+    queued = enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Finish in the split store",
+        client_request_id="split-terminal",
+    )
+    claimed = claim_next_console_turn(db, thread_id=thread.id)
+    assert claimed is not None
+    mark_console_turn_active(db, turn_id=queued.turn_id)
+    occurred_at = datetime.now(timezone.utc)
+
+    assert reconcile_console_terminal_event(
+        db,
+        owner_id=2,
+        run_id=claimed.run_id,
+        terminal_state=terminal_state,
+        occurred_at=occurred_at,
+        exit_status="exit_0",
+    ) is None
+    assert db.get(SessionTurn, queued.turn_id).state == SESSION_TURN_STATE_ACTIVE
+
+    assert reconcile_console_terminal_event(
+        db,
+        owner_id=1,
+        run_id=claimed.run_id,
+        terminal_state=terminal_state,
+        occurred_at=occurred_at,
+        exit_status="exit_0",
+    ) == thread.id
+    db.commit()
+    assert db.get(SessionTurn, queued.turn_id).state == expected_state
+    assert db.get(SessionRun, claimed.run_id).ended_at.replace(tzinfo=timezone.utc) == occurred_at
+
+    # Machine retries are common; terminal replay returns the same FIFO key
+    # without mutating the already-settled outcome.
+    assert reconcile_console_terminal_event(
+        db,
+        owner_id=1,
+        run_id=claimed.run_id,
+        terminal_state=terminal_state,
+        occurred_at=occurred_at,
+        exit_status="exit_0",
+    ) == thread.id
+
+
 @pytest.mark.asyncio
 async def test_dispatch_next_console_turn_uses_run_id_as_durable_command_id(tmp_path):
     db = _db(tmp_path)
@@ -440,6 +507,76 @@ async def test_control_reconnect_replays_starting_turn_with_same_run_id(tmp_path
     assert registry.command["command_id"] == str(claimed.run_id)
     assert registry.command["payload"]["run_id"] == str(claimed.run_id)
     assert db.get(SessionTurn, claimed.turn_id).state == SESSION_TURN_STATE_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_dispatch_next_replays_preclaimed_starting_turn_after_crash(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
+    db.commit()
+    enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Continue the claimed turn",
+        client_request_id="preclaimed-request",
+    )
+    preclaimed = claim_next_console_turn(db, thread_id=thread.id)
+    assert preclaimed is not None
+
+    class Registry:
+        command = None
+
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+    registry = Registry()
+    outcome = await dispatch_next_console_turn(
+        db,
+        owner_id=1,
+        thread_id=thread.id,
+        registry=registry,
+    )
+
+    assert outcome.state == SESSION_TURN_STATE_ACTIVE
+    assert outcome.run_id == preclaimed.run_id
+    assert registry.command["command_id"] == str(preclaimed.run_id)
+    assert registry.command["payload"]["turn_id"] == str(preclaimed.turn_id)
+    assert db.get(SessionTurn, preclaimed.turn_id).state == SESSION_TURN_STATE_ACTIVE
+
+
+def test_current_console_turn_state_prefers_execution_owner_over_later_queue(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    session.origin_kind = "console"
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
+    db.commit()
+    enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="first",
+        client_request_id="owner-first",
+    )
+    claimed = claim_next_console_turn(db, thread_id=thread.id)
+    assert claimed is not None
+    mark_console_turn_active(db, turn_id=claimed.turn_id)
+    enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="second",
+        client_request_id="queued-second",
+    )
+
+    assert _current_console_turn_state(db, session_id=session.id) == SESSION_TURN_STATE_ACTIVE
 
 
 @pytest.mark.asyncio

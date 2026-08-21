@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 import zerg.database as database_module
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.auth import get_current_user
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
@@ -21,6 +22,7 @@ from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
 from zerg.schemas.observability import ObservabilityOverviewResponse
 from zerg.schemas.observability import ProductHealthCheckListResponse
 from zerg.schemas.observability import ProductHealthCheckLivePreviewResponse
+from zerg.schemas.observability import ProductHealthCheckSummaryResponse
 from zerg.schemas.observability import RealtimePropagationSessionReportResponse
 from zerg.schemas.observability import SlowTurnsListResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS
@@ -36,6 +38,7 @@ from zerg.services.observability_views import build_observability_overview_respo
 from zerg.services.observability_views import build_slow_turns_list_response
 from zerg.services.product_health import build_live_preview_check
 from zerg.services.product_health import build_product_health_checks
+from zerg.services.product_health import build_session_title_health_check
 from zerg.services.realtime_propagation import build_realtime_propagation_session_report
 from zerg.services.session_turns import list_managed_completed_turns
 from zerg.services.session_turns import list_slow_session_turns
@@ -46,6 +49,12 @@ router = APIRouter(
     prefix="/observability",
     tags=["observability"],
     dependencies=[Depends(get_current_user), Depends(require_single_tenant)],
+)
+
+agents_router = APIRouter(
+    prefix="/agents/observability",
+    tags=["agents"],
+    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
 )
 
 
@@ -76,6 +85,35 @@ async def list_product_health_checks(
             surface=surface,
             managed=managed,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@agents_router.get("/checks", response_model=ProductHealthCheckListResponse)
+async def list_agent_product_health_checks(
+    window: str = Query("15m", description="Recent observation window such as 15m, 1h, or 7d"),
+    db: Session = Depends(get_db),
+) -> ProductHealthCheckListResponse:
+    """Machine-readable product health over the canonical agents authority.
+
+    Factory assurance consumes this projection exactly like any Machine Agent;
+    it never receives a credential-rotation or dependency-probe operation.
+    """
+
+    try:
+        return build_product_health_checks(db, window=window)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@agents_router.get("/checks/session_titles", response_model=ProductHealthCheckSummaryResponse)
+async def read_agent_session_title_health_check(
+    window: str = Query("15m", description="Recent observation window such as 15m, 1h, or 7d"),
+) -> ProductHealthCheckSummaryResponse:
+    """Dependency-only product health with no retired archive-store reads."""
+
+    try:
+        return build_session_title_health_check(window=window)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

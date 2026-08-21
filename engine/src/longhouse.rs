@@ -20,7 +20,7 @@ use managed_launch_lifecycle::{
     register_managed_launch, register_managed_launch_with_timeout, ManagedLaunchResponse,
     ManagedLaunchTransaction,
 };
-use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
+use managed_launch_payload::{ManagedLaunchProvenance, ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::ffi::OsString;
@@ -1005,8 +1005,6 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     )?;
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
 
-    let (launch_actor, launch_surface) =
-        managed_launch_payload::interactive_human_shell_provenance();
     let mut payload = ManagedLaunchRegistration {
         provider: "antigravity",
         cwd: &cwd,
@@ -1017,15 +1015,10 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         // The hook inbox has no remote-approval surface; agy settles its own
         // permissions and Longhouse routes no approval to it.
         permission_mode: PermissionMode::Bypass,
+        provenance: ManagedLaunchProvenance::interactive_helm(),
         extra: vec![],
     }
     .to_json();
-    if let Some(actor) = launch_actor {
-        payload["launch_actor"] = json!(actor);
-    }
-    if let Some(surface) = launch_surface {
-        payload["launch_surface"] = json!(surface);
-    }
     // Mint locally so a degraded launch still owns a stable session id: the
     // hook stamps every presence and claim receipt with it, and a session that
     // changed identity mid-run would strand those receipts.
@@ -1342,8 +1335,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         "--claude-bin",
     )?;
     ensure_claude_channel_prerequisite(&binary)?;
-    let (launch_actor, launch_surface) =
-        managed_launch_payload::interactive_human_shell_provenance();
     let runtime = tokio::runtime::Runtime::new()?;
     let resume_target = args
         .resume
@@ -1365,6 +1356,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             loop_mode: &args.loop_mode,
             machine_name: &machine_name,
             permission_mode: target.permission_mode,
+            provenance: ManagedLaunchProvenance::interactive_helm(),
             extra: vec![
                 ("native_claude_channels_available", json!(true)),
                 ("session_id", json!(target.session_id)),
@@ -1374,7 +1366,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         }
         .to_json()
     } else {
-        let mut payload = ManagedLaunchRegistration {
+        ManagedLaunchRegistration {
             provider: "claude",
             cwd: &cwd,
             project: args.project.as_deref(),
@@ -1384,16 +1376,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             // Claude passes --dangerously-skip-permissions unless remote
             // approval was requested, so the flag and the wire value agree.
             permission_mode: PermissionMode::from_bypass_flag(!args.remote_approve),
+            provenance: ManagedLaunchProvenance::interactive_helm(),
             extra: vec![("native_claude_channels_available", json!(true))],
         }
-        .to_json();
-        if let Some(actor) = launch_actor {
-            payload["launch_actor"] = json!(actor);
-        }
-        if let Some(surface) = launch_surface {
-            payload["launch_surface"] = json!(surface);
-        }
-        payload
+        .to_json()
     };
     if resume_target.is_none() {
         payload["session_id"] = json!(Uuid::new_v4().to_string());
@@ -1640,8 +1626,6 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "OpenCode",
         "--opencode-bin",
     )?;
-    let (launch_actor, launch_surface) =
-        managed_launch_payload::interactive_human_shell_provenance();
     let resume_target = args
         .resume_session
         .as_deref()
@@ -1672,15 +1656,10 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         // OpenCode has no remote-approval surface: control_channel rejects any
         // non-bypass permission mode for it outright.
         permission_mode: PermissionMode::Bypass,
+        provenance: ManagedLaunchProvenance::interactive_helm(),
         extra,
     }
     .to_json();
-    if let Some(actor) = launch_actor {
-        payload["launch_actor"] = json!(actor);
-    }
-    if let Some(surface) = launch_surface {
-        payload["launch_surface"] = json!(surface);
-    }
     // A new launch mints its own session identity so it can start without the
     // Runtime Host. Resume keeps the Runtime Host's identity and stays fail
     // closed: local state cannot prove single-owner fencing for an existing
@@ -2315,6 +2294,7 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         // Pi has no remote-approval surface: control_channel rejects any
         // non-bypass permission mode for it outright.
         permission_mode: PermissionMode::Bypass,
+        provenance: ManagedLaunchProvenance::interactive_helm(),
         extra: vec![("provider_config", provider_config)],
     }
     .to_json();
@@ -2434,6 +2414,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         } else {
             PermissionMode::ProviderLocal
         },
+        provenance: ManagedLaunchProvenance::interactive_helm(),
         extra: vec![],
     }
     .to_json();
@@ -2682,6 +2663,7 @@ fn launch_managed_codex_resume(
         } else {
             PermissionMode::ProviderLocal
         },
+        provenance: ManagedLaunchProvenance::interactive_helm(),
         extra: vec![
             ("session_id", json!(session_id)),
             ("resume_attempt_id", json!(resume_attempt_id)),

@@ -18,6 +18,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
 
 import zerg.services.agent_heartbeat_health as heartbeat_health
+import zerg.services.catalog_read_gateway as catalog_read_gateway
 import zerg.services.product_health as product_health
 from zerg.database import Base
 from zerg.database import get_db
@@ -183,6 +184,30 @@ def test_product_health_summary_orders_launch_loop_checks(tmp_path, monkeypatch)
     assert _check(payload, "machine_connected").verdict == "ok"
     assert _check(payload, "render_freshness").verdict == "ok"
     assert _check(payload, "live_preview").verdict == "ok"
+
+
+def test_product_health_exposes_durable_session_title_dependency_incident(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(product_health, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        catalog_read_gateway,
+        "title_dependency_health",
+        lambda: {
+            "status": "degraded",
+            "open_dependencies": 1,
+            "blocked_sessions": 4,
+            "dependencies": [{"state": "open", "incident_id": str(uuid4())}],
+        },
+    )
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "session_titles")
+    assert check.verdict == "degraded"
+    assert check.coverage == "full"
+    assert "4 sessions blocked" in check.headline
 
 
 def test_machine_connected_unknown_without_recent_heartbeats(tmp_path, monkeypatch):
@@ -375,6 +400,10 @@ def test_product_health_check_routes_expose_summary_and_detail(tmp_path, monkeyp
         assert detail_payload["check"] == "live_preview"
         assert detail_payload["cells"][0]["thresholds"]["render_p95_ms_ok"] == 500
         assert detail_payload["cells"][0]["signals"]["events"] == 1
+
+        title_dependency = client.get("/agents/observability/checks/session_titles?window=15m")
+        assert title_dependency.status_code == 200
+        assert title_dependency.json()["check"] == "session_titles"
     finally:
         api_app.dependency_overrides.clear()
 
@@ -386,5 +415,9 @@ def test_product_health_rejects_invalid_window(tmp_path):
         response = client.get("/observability/checks/live_preview?window=forever")
         assert response.status_code == 400
         assert "Window must look like" in response.json()["detail"]
+
+        machine_response = client.get("/agents/observability/checks/session_titles?window=forever")
+        assert machine_response.status_code == 400
+        assert "Window must look like" in machine_response.json()["detail"]
     finally:
         api_app.dependency_overrides.clear()

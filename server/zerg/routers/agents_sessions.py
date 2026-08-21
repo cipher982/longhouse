@@ -1944,6 +1944,18 @@ def session_detail_payload(
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
     with timing.span("load_runtime"):
+        runtime_overlay = None
+        if str(getattr(session, "origin_kind", "") or "").strip() == "console":
+            from zerg.services.session_runtime import load_runtime_state_map
+            from zerg.services.session_runtime import resolve_runtime_overlay
+
+            runtime_state_map = load_runtime_state_map(db, [session.id])
+            runtime_overlay = resolve_runtime_overlay(
+                session,
+                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+                runtime_state_map=runtime_state_map,
+                now=datetime.now(timezone.utc),
+            )
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
         launch_attempt_map = latest_launch_attempts(db, [session.id])
@@ -1956,7 +1968,7 @@ def session_detail_payload(
             store,
             session,
             last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-            runtime_overlay=None,
+            runtime_overlay=runtime_overlay,
             first_user_message=first_user_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,

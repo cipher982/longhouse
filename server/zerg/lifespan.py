@@ -183,6 +183,9 @@ async def lifespan(app: FastAPI):
     refresh_database_settings_from_env()
     startup_started = time.monotonic()
     catalog_mode = live_catalog_enabled()
+    from zerg.services.factory_assurance_title_binding import factory_assurance_title_enabled
+
+    factory_title_assurance = factory_assurance_title_enabled()
     try:
         with _timed_startup_step("configure_observability"):
             configure_observability()
@@ -217,6 +220,15 @@ async def lifespan(app: FastAPI):
                 )
             logger.info("Storage-v2 live and repair worker lanes are ready")
             try:
+                from zerg.services.semantic_v2_projector import start_semantic_v2_projector
+
+                app.state.semantic_v2_projector_started = start_semantic_v2_projector()
+                if not app.state.semantic_v2_projector_started:
+                    logger.warning("Semantic-v2 projector is degraded; hot Runtime Host readiness is unaffected")
+            except Exception:
+                app.state.semantic_v2_projector_started = False
+                logger.exception("Failed to start semantic-v2 projector (non-fatal)")
+            try:
                 from zerg.services.search_v2_projector import start_search_v2_projector
 
                 app.state.search_v2_projector_started = start_search_v2_projector()
@@ -236,6 +248,22 @@ async def lifespan(app: FastAPI):
                 logger.info("Storage telemetry refresh loop started")
             except Exception:
                 logger.exception("Failed to start storage telemetry refresh loop (non-fatal)")
+        elif catalog_mode and factory_title_assurance:
+            # The hermetic title oracle needs the real catalog owner and real
+            # storage lanes, but none of the unrelated production projectors.
+            with _timed_startup_step("catalogd_supervisor"):
+                from zerg.services.catalogd_supervisor import start_catalogd_supervisor
+
+                app.state.catalogd_ping = await start_catalogd_supervisor()
+            with _timed_startup_step("storage_v2_workers"):
+                from zerg.services.raw_object_workers import get_raw_object_worker_pool
+                from zerg.services.render_object_workers import get_render_object_worker_pool
+
+                await asyncio.gather(
+                    get_raw_object_worker_pool().start(),
+                    get_render_object_worker_pool().start(),
+                )
+            logger.info("Factory assurance catalog and storage-v2 lanes are ready")
         elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
@@ -343,17 +371,23 @@ async def lifespan(app: FastAPI):
                 logger.info("Live catalog input recovery loop started")
             except Exception:
                 logger.exception("Failed to start live catalog input recovery loop")
-            try:
-                from zerg.services.storage_session_titles import run_storage_title_reconciler
-
-                asyncio.create_task(run_storage_title_reconciler())
-                logger.info("Storage-v2 AI title reconciler started")
-            except Exception:
-                logger.exception("Failed to start storage-v2 AI title reconciler")
             # Machine-control lease expiry is catalogd's job in live mode
             # (checkpoint loop). The old API-side reaper called
             # get_live_write_serializer(), which is intentionally never
             # configured when live_catalog_enabled().
+
+        # Factory title assurance is deliberately a test Runtime Host, but it
+        # must exercise the real background worker. This is the only normal
+        # production loop re-enabled by the startup-bound assurance gate.
+        if catalog_mode:
+            if not _settings.testing or factory_title_assurance:
+                try:
+                    from zerg.services.storage_session_titles import run_storage_title_reconciler
+
+                    asyncio.create_task(run_storage_title_reconciler())
+                    logger.info("Storage-v2 AI title reconciler started")
+                except Exception:
+                    logger.exception("Failed to start storage-v2 AI title reconciler")
 
         # Periodic runtime maintenance (runner-health reconcile, etc.). The
         # loop's own body branches on live_catalog_enabled() internally, so it
@@ -396,12 +430,18 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
-        if catalog_mode and not _settings.testing:
+        if catalog_mode and (not _settings.testing or factory_title_assurance):
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
                 await asyncio.gather(telemetry_task, return_exceptions=True)
+            try:
+                from zerg.services.semantic_v2_projector import stop_semantic_v2_projector
+
+                await stop_semantic_v2_projector()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop semantic-v2 projector")
             try:
                 from zerg.services.search_v2_projector import stop_search_v2_projector
 
@@ -472,12 +512,18 @@ async def lifespan(app: FastAPI):
 
         await topic_manager.shutdown()
 
-        if catalog_mode and not _settings.testing:
+        if catalog_mode and (not _settings.testing or factory_title_assurance):
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
                 await asyncio.gather(telemetry_task, return_exceptions=True)
+            try:
+                from zerg.services.semantic_v2_projector import stop_semantic_v2_projector
+
+                await stop_semantic_v2_projector()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop semantic-v2 projector")
             try:
                 from zerg.services.search_v2_projector import stop_search_v2_projector
 

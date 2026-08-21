@@ -48,7 +48,6 @@ from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
-from zerg.services.storage_v2_semantics import repair_storage_session_semantic_projection
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RawExportCursor
@@ -1361,66 +1360,6 @@ async def list_storage_v2_sessions(
             "catalog_response_invalid",
             "The session catalog returned an invalid timeline page.",
         )
-    stale_sessions = [
-        item
-        for item in sessions
-        if isinstance(item, dict)
-        and int(item.get("semantic_projection_version") or 0) < SEMANTIC_PROJECTION_VERSION
-        and item.get("current_render_generation")
-    ]
-    if stale_sessions:
-        render_workers = get_render_object_worker_pool()
-        raw_workers = get_raw_object_worker_pool()
-        try:
-            for item in stale_sessions:
-                repaired = await repair_storage_session_semantic_projection(
-                    catalog=catalogd,
-                    render_workers=render_workers,
-                    raw_workers=raw_workers,
-                    session_id=str(item["session_id"]),
-                    owner_id=str(owner_value),
-                    generation_id=str(item["current_render_generation"]),
-                )
-                if repaired.get("complete") is not True:
-                    raise StorageV2SemanticRecoveryError("semantic projection repair did not converge")
-            # The original page was selected from the old aggregate. Re-read
-            # it after repair so pagination and titles reflect the same facts.
-            result = await catalogd.call(
-                "storage.session.timeline.list.v2",
-                {
-                    "owner_id": str(owner_value),
-                    "before_last_activity_at": (
-                        before_last_activity_at.astimezone(UTC).isoformat() if before_last_activity_at is not None else None
-                    ),
-                    "before_session_id": str(before_session_id) if before_session_id is not None else None,
-                    "project": project,
-                    "provider": provider,
-                    "include_test": include_test,
-                    "limit": limit,
-                },
-            )
-            sessions = result.get("sessions")
-            if not isinstance(sessions, list):
-                raise StorageV2SemanticRecoveryError("catalog returned an invalid repaired timeline page")
-        except (CatalogUnavailable, CatalogRemoteError) as exc:
-            raise _http_error(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "catalog_unavailable",
-                "The session catalog is temporarily unavailable.",
-            ) from exc
-        except StorageV2SemanticRecoveryPermanentError as exc:
-            raise _http_error(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "semantic_recovery_permanent",
-                "Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
-            ) from exc
-        except StorageV2SemanticRecoveryError as exc:
-            raise _http_error(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "semantic_recovery_pending",
-                "Provider interaction semantics are pending immutable raw history; retry shortly.",
-                headers={"Retry-After": "60"},
-            ) from exc
     next_cursor = None
     if result.get("has_more") is True and sessions:
         last = sessions[-1]

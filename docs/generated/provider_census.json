@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 255,
+  "file_count": 259,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -746,6 +746,7 @@
     {
       "path": "server/tests_lite/test_catalogd_console_sessions.py",
       "providers": [
+        "claude",
         "codex",
         "pi"
       ]
@@ -806,6 +807,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_codex_launch_visibility_repair.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {
@@ -1129,6 +1137,15 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_provider_console_lifecycle.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_provider_factory_model.py",
       "providers": [
         "antigravity",
@@ -1264,6 +1281,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_resume_assurance.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {
@@ -1454,6 +1478,7 @@
     {
       "path": "server/tests_lite/test_session_state_diagnostics.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -1650,6 +1675,7 @@
       "path": "server/zerg/catalogd/store.py",
       "providers": [
         "claude",
+        "codex",
         "cursor",
         "opencode"
       ]
@@ -1715,6 +1741,15 @@
       "providers": [
         "codex",
         "cursor"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/provider_console_lifecycle.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
       ]
     },
     {

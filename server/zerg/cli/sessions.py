@@ -2,20 +2,73 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import httpx
 import typer
 
+from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import parse_uuid_or_exit
+from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 
 app = typer.Typer(help="Session inspection commands")
+
+
+@app.command("repair-codex-launch-visibility")
+def repair_codex_launch_visibility(
+    session_id: str = typer.Argument(..., help="Exact Codex session UUID."),
+    apply: bool = typer.Option(False, "--apply", help="Apply the dry-run plan."),
+    expected_fingerprint: str | None = typer.Option(
+        None,
+        "--expected-fingerprint",
+        help="Exact fingerprint printed by a preceding dry-run.",
+    ),
+) -> None:
+    """Repair one unambiguous sticky-hidden Codex Helm on this Runtime Host."""
+
+    canonical_session_id = parse_uuid_or_exit(session_id, label="session_id")
+    if apply and expected_fingerprint is None:
+        typer.secho("--apply requires --expected-fingerprint from dry-run", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+    if not apply and expected_fingerprint is not None:
+        typer.secho("dry-run does not accept --expected-fingerprint", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+    _, socket_path = catalogd_paths()
+
+    async def execute() -> dict[str, object]:
+        client = CatalogClient(socket_path)
+        try:
+            return await client.call(
+                "session.repair.codex_launch_visibility.v2",
+                {
+                    "session_id": canonical_session_id,
+                    "dry_run": not apply,
+                    "expected_fingerprint": expected_fingerprint,
+                },
+            )
+        finally:
+            await client.close()
+
+    try:
+        result = asyncio.run(execute())
+    except CatalogRemoteError as exc:
+        typer.secho(f"catalogd rejected repair: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    except (CatalogUnavailable, OSError) as exc:
+        typer.secho(f"catalogd is unavailable at {socket_path}: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+    if result.get("eligible") is not True or (apply and result.get("applied") is not True):
+        raise typer.Exit(code=2)
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:

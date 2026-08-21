@@ -27,6 +27,7 @@ from pydantic import Field
 from pydantic import model_validator
 from sqlalchemy import and_
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentEvent
@@ -39,10 +40,12 @@ from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import latest_live_launch_readiness_map as query_live_launch_readiness_map
 from zerg.services.live_launch_readiness import project_live_launch_readiness
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.raw_json_compression import decode_raw_json
@@ -2112,6 +2115,33 @@ def _archive_runtime_aliases(
     }
 
 
+def _current_console_turn_state(db: Session, *, session_id: UUID) -> str:
+    """Return the durable FIFO owner before any later queued turn."""
+
+    current = (
+        db.query(SessionTurn.state)
+        .filter(
+            SessionTurn.session_id == session_id,
+            SessionTurn.source_kind == "console",
+            SessionTurn.state.in_(("starting", "active", "draining")),
+        )
+        .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
+        .first()
+    )
+    if current is None:
+        current = (
+            db.query(SessionTurn.state)
+            .filter(
+                SessionTurn.session_id == session_id,
+                SessionTurn.source_kind == "console",
+                SessionTurn.state == "queued",
+            )
+            .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
+            .first()
+        )
+    return str(current[0]) if current is not None else "idle"
+
+
 def build_session_response(
     store: AgentsStore,
     session: AgentSession,
@@ -2141,6 +2171,37 @@ def build_session_response(
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     kernel_projection = project_session_kernel_fields(store.db, session, capabilities=kernel_capabilities)
     resolved_kernel_capabilities = kernel_projection.capabilities
+    is_console = str(getattr(session, "origin_kind", "") or "").strip() == "console"
+    if is_console:
+        turn_state = _current_console_turn_state(store.db, session_id=session.id)
+        device_id = str(getattr(session, "device_id", "") or "").strip()
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        provider = str(getattr(session, "provider", "") or "").strip()
+        registry = get_machine_control_channel_registry()
+        machine_online = bool(owner_id is not None and device_id and registry.is_online(owner_id=owner_id, device_id=device_id))
+        resolved_kernel_capabilities = project_console_turn_capabilities(
+            resolved_kernel_capabilities,
+            closed=bool(getattr(session, "ended_at", None)),
+            execution_target_available=bool(device_id and cwd),
+            turn_state=turn_state,
+            machine_online=machine_online,
+            adapter_available=bool(
+                machine_online
+                and registry.supports(
+                    owner_id=owner_id,
+                    device_id=device_id,
+                    capability=f"{provider}.turn_start",
+                )
+            ),
+            interrupt_adapter_available=bool(
+                machine_online
+                and registry.supports(
+                    owner_id=owner_id,
+                    device_id=device_id,
+                    capability=f"{provider}.turn_interrupt",
+                )
+            ),
+        )
     capability_flags = resolved_kernel_capabilities
     current_now = datetime.now(timezone.utc)
     display_last_activity_at = last_activity_at or session.ended_at or session.started_at
@@ -2179,21 +2240,41 @@ def build_session_response(
     from zerg.services.session_preferences import load_session_preferences
 
     preferences = load_session_preferences(session.id, standalone_session=session)
-    session_state = build_archive_session_state_facts(
-        session=session,
-        capabilities=capability_flags,
-        launch_state=launch_state,
-        launch_error_code=launch_error_code,
-        launch_error_message=launch_error_message,
-        execution_lifetime=execution_lifetime,
-        last_activity_at=display_last_activity_at,
-        has_visible_transcript_preview=has_visible_transcript_preview,
-        has_pending_response_turn=has_pending_response_turn,
-        user_messages=session.user_messages or 0,
-        assistant_messages=session.assistant_messages or 0,
-        archive_state=archive_state,
-        pause_request=pause_request,
-    )
+    if is_console:
+        session_state = build_session_state_facts(
+            session=session,
+            capabilities=capability_flags,
+            launch_state=launch_state,
+            launch_error_code=launch_error_code,
+            launch_error_message=launch_error_message,
+            execution_lifetime=execution_lifetime,
+            last_activity_at=display_last_activity_at,
+            has_visible_transcript_preview=has_visible_transcript_preview,
+            has_pending_response_turn=has_pending_response_turn,
+            user_messages=session.user_messages or 0,
+            assistant_messages=session.assistant_messages or 0,
+            archive_state=archive_state,
+            pause_request=pause_request,
+            runtime_view=runtime_overlay,
+            liveness=None,
+            now=current_now,
+        )
+    else:
+        session_state = build_archive_session_state_facts(
+            session=session,
+            capabilities=capability_flags,
+            launch_state=launch_state,
+            launch_error_code=launch_error_code,
+            launch_error_message=launch_error_message,
+            execution_lifetime=execution_lifetime,
+            last_activity_at=display_last_activity_at,
+            has_visible_transcript_preview=has_visible_transcript_preview,
+            has_pending_response_turn=has_pending_response_turn,
+            user_messages=session.user_messages or 0,
+            assistant_messages=session.assistant_messages or 0,
+            archive_state=archive_state,
+            pause_request=pause_request,
+        )
     runtime_display = build_compat_runtime_display_response(
         session_state=session_state,
         pause_request=pause_request,
@@ -2277,7 +2358,7 @@ def build_session_response(
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
-            runtime_view=None,
+            runtime_view=runtime_overlay,
             runtime_display=runtime_display,
             session_state=session_state,
         ),

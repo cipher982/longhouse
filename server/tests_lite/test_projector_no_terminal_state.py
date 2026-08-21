@@ -165,6 +165,7 @@ def test_reaper_deletes_retired_generations_and_spares_live_ones(store: CatalogS
     live_session = str(uuid4())
     retired_session = str(uuid4())
     _seed_row(store, projector=EMBEDDING_PROJECTOR_ID, session_id=live_session)
+    _seed_row(store, projector="semantic-v2", session_id=live_session)
     _seed_row(store, projector="search-v2", session_id=live_session)
     _seed_row(store, projector="render-v2", session_id=live_session)
     # Two earlier generations of the same projector, one holding a failure that

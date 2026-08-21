@@ -14,6 +14,7 @@ import json
 import sys
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC
 from datetime import datetime
 from typing import Any
@@ -24,6 +25,9 @@ PROFILE_ID = "helm_resume_v1"
 SCHEMA_VERSION = 1
 NATIVE_RESUME_ASSERTION = "native_provider_resume_proven"
 NATIVE_RESUME_VARIANTS = ("clean_exit", "process_loss")
+PROVIDER_RELEASE_SUBJECT = "provider_release"
+LONGHOUSE_PRODUCT_SUBJECT = "longhouse_product"
+SUBJECT_KINDS = frozenset({PROVIDER_RELEASE_SUBJECT, LONGHOUSE_PRODUCT_SUBJECT})
 
 
 def canonical_json(payload: object) -> bytes:
@@ -40,16 +44,18 @@ def content_digest(payload: Mapping[str, Any], field: str) -> str:
 
 def execution_variant_key(
     *,
-    provider: str,
+    provider: str | None,
     assertion_id: str,
     scenario_id: str,
     variant: object,
+    subject_kind: str = PROVIDER_RELEASE_SUBJECT,
 ) -> str:
     """Return the durable execution key for one authored assertion cell."""
 
     if isinstance(variant, str) and variant:
         return variant
-    return f"cell:{provider}:{assertion_id}:{scenario_id}"
+    subject_axis = provider if subject_kind == PROVIDER_RELEASE_SUBJECT else subject_kind
+    return f"cell:{subject_axis}:{assertion_id}:{scenario_id}"
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,15 @@ class ProducerRegistration:
     # advertise a bounded set of scenario ids while retaining one immutable
     # registration and one executable entrypoint.
     scenario_ids: tuple[str, ...] = ()
+    # Missing means a legacy provider registration. New registrations must be
+    # explicit so product producers cannot smuggle a provider artifact (or a
+    # provider producer silently omit one).
+    subject_kind: str | None = None
+    # A provider-neutral executable may cover several provider releases, but
+    # the worker must still grant only the credential authority needed by the
+    # selected provider.  The flat tuple remains the compatibility shape for
+    # single-provider producers.
+    credential_binding_ids_by_provider: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -99,6 +114,12 @@ class ProducerRegistration:
             "scenario_ids",
         ):
             payload[field] = list(payload[field])
+        if self.credential_binding_ids_by_provider:
+            payload["credential_binding_ids_by_provider"] = {
+                provider: list(bindings) for provider, bindings in sorted(self.credential_binding_ids_by_provider.items())
+            }
+        else:
+            payload.pop("credential_binding_ids_by_provider", None)
         return payload
 
 
@@ -111,6 +132,7 @@ def capability_contract_shape(assertions: Sequence[object], *, provider: str, ca
             continue
         rows.append(
             {
+                "subject_kind": PROVIDER_RELEASE_SUBJECT,
                 "provider": provider,
                 "capability": capability,
                 "disposition": getattr(assertion, "disposition", "implemented"),
@@ -126,8 +148,16 @@ def capability_contract_shape(assertions: Sequence[object], *, provider: str, ca
     return sorted(rows, key=_cell_sort_key)
 
 
-def _cell_sort_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str]:
+def _cell_subject_kind(cell: Mapping[str, Any]) -> str:
+    value = cell.get("subject_kind")
+    if isinstance(value, str) and value:
+        return value
+    return PROVIDER_RELEASE_SUBJECT
+
+
+def _cell_sort_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
     return (
+        _cell_subject_kind(cell),
         str(cell.get("provider") or ""),
         str(cell.get("capability") or ""),
         str(cell.get("assertion_id") or ""),
@@ -135,7 +165,7 @@ def _cell_sort_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def _cell_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str]:
+def _cell_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
     return _cell_sort_key(cell)
 
 
@@ -162,7 +192,7 @@ def _validate_contract(
     accepted_rows: Sequence[Mapping[str, Any]],
     current_rows: Sequence[Mapping[str, Any]],
     diagnostics: list[dict[str, Any]],
-) -> dict[tuple[str, str, str, str], Mapping[str, Any]]:
+) -> dict[tuple[str, str, str, str, str], Mapping[str, Any]]:
     accepted = {_cell_key(row): row for row in accepted_rows}
     current = {_cell_key(row): row for row in current_rows}
     if len(accepted) != len(accepted_rows) or len(current) != len(current_rows):
@@ -175,6 +205,8 @@ def _validate_contract(
         for field in ("scenario_id", "oracle_source"):
             if candidate.get(field) != baseline.get(field):
                 diagnostics.append(_diagnostic("contract_authority_changed", f"accepted {field} changed", cell=baseline))
+        if _cell_subject_kind(candidate) != _cell_subject_kind(baseline):
+            diagnostics.append(_diagnostic("contract_subject_kind_changed", "accepted subject kind changed", cell=baseline))
         minimum_revision = candidate.get("minimum_scenario_revision")
         accepted_revision = baseline.get("minimum_scenario_revision")
         if not isinstance(minimum_revision, int) or isinstance(minimum_revision, bool) or minimum_revision < accepted_revision:
@@ -203,19 +235,48 @@ def _producer_supports_cell(
     subject: Mapping[str, Any],
 ) -> list[str]:
     failures: list[str] = []
+    cell_subject_kind = _cell_subject_kind(cell)
+    declared_subject_kind = registration.get("subject_kind")
+    registration_subject_kind = declared_subject_kind or PROVIDER_RELEASE_SUBJECT
+    if registration_subject_kind not in SUBJECT_KINDS:
+        failures.append("subject_kind")
+    elif registration_subject_kind != cell_subject_kind:
+        failures.append("subject_kind")
+    if declared_subject_kind == LONGHOUSE_PRODUCT_SUBJECT:
+        if registration.get("providers"):
+            failures.append("product_provider_declaration")
+        if registration.get("provider_artifact_required") is not False:
+            failures.append("product_provider_artifact")
+    elif declared_subject_kind == PROVIDER_RELEASE_SUBJECT:
+        if not registration.get("providers"):
+            failures.append("provider_declaration")
+        if registration.get("provider_artifact_required") is not True:
+            failures.append("provider_artifact_required")
     declared_cells = {
         (item.get("assertion_id"), item.get("variant")) for item in registration.get("assertion_cells", []) if isinstance(item, Mapping)
     }
     if (cell.get("assertion_id"), cell.get("variant")) not in declared_cells:
         failures.append("cell")
-    if cell.get("provider") not in registration.get("providers", []):
-        failures.append("provider")
+    if cell_subject_kind == PROVIDER_RELEASE_SUBJECT:
+        if cell.get("provider") not in registration.get("providers", []):
+            failures.append("provider")
+    elif cell.get("provider") is not None:
+        failures.append("product_cell_provider")
     if census.get("platform") not in registration.get("platforms", []):
         failures.append("platform")
     if census.get("architecture") not in registration.get("architectures", []):
         failures.append("architecture")
+    subject_key = subject.get("subject_key")
+    if declared_subject_kind is not None:
+        if subject.get("subject_kind") != cell_subject_kind:
+            failures.append("subject_identity_kind")
+        if not isinstance(subject_key, str) or not subject_key.startswith(f"{cell_subject_kind}:sha256:"):
+            failures.append("subject_key")
     artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
-    if registration.get("provider_artifact_required", True):
+    if cell_subject_kind == LONGHOUSE_PRODUCT_SUBJECT:
+        if subject.get("provider") is not None or artifact:
+            failures.append("product_subject_provider_artifact")
+    elif registration.get("provider_artifact_required", True):
         for field in ("provider", "version", "executable_identity", "build_identity", "entrypoint", "build_root"):
             if not isinstance(artifact.get(field), str) or not artifact.get(field):
                 failures.append(f"provider_artifact_{field}")
@@ -232,7 +293,20 @@ def _producer_supports_cell(
         if artifact.get("architecture") != census.get("architecture"):
             failures.append("provider_artifact_architecture")
     available_bindings = set(census.get("credential_binding_ids", []))
-    if not set(registration.get("credential_binding_ids", [])).issubset(available_bindings):
+    bindings_by_provider = registration.get("credential_binding_ids_by_provider") or {}
+    selected_bindings: object = registration.get("credential_binding_ids", [])
+    if bindings_by_provider:
+        if not isinstance(bindings_by_provider, Mapping):
+            failures.append("credential_binding_map")
+            bindings_by_provider = {}
+        elif cell_subject_kind != PROVIDER_RELEASE_SUBJECT:
+            failures.append("credential_binding_map")
+        else:
+            selected_bindings = bindings_by_provider.get(str(cell.get("provider") or ""))
+            if not isinstance(selected_bindings, list):
+                failures.append("credential_binding_map")
+                selected_bindings = []
+    if not isinstance(selected_bindings, list) or not set(selected_bindings).issubset(available_bindings):
         failures.append("credential_binding")
     if registration.get("sandbox_policy") != census.get("sandbox_policy"):
         failures.append("sandbox_policy")
@@ -267,21 +341,30 @@ def _reuse_failures(
     failures: list[str] = []
     artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
     expected = {
-        "provider": cell.get("provider"),
         "assertion_id": cell.get("assertion_id"),
         "variant": execution_variant_key(
-            provider=str(cell.get("provider") or ""),
+            provider=str(cell.get("provider")) if cell.get("provider") is not None else None,
             assertion_id=str(cell.get("assertion_id") or ""),
             scenario_id=str(cell.get("scenario_id") or ""),
             variant=cell.get("variant"),
+            subject_kind=_cell_subject_kind(cell),
         ),
         "longhouse_source_sha": subject.get("longhouse_source_sha"),
         "accepted_epoch_digest": epoch.get("epoch_digest"),
     }
+    if subject.get("subject_key") is not None:
+        expected["subject_kind"] = _cell_subject_kind(cell)
+        expected["subject_key"] = subject.get("subject_key")
+    if _cell_subject_kind(cell) == PROVIDER_RELEASE_SUBJECT:
+        expected["provider"] = cell.get("provider")
     for field, value in expected.items():
         if proof.get(field) != value:
             failures.append(field)
-    if proof.get("evidence_class") != "hermetic" and cell.get("provider") != "antigravity":
+    if (
+        _cell_subject_kind(cell) == PROVIDER_RELEASE_SUBJECT
+        and proof.get("evidence_class") != "hermetic"
+        and cell.get("provider") != "antigravity"
+    ):
         for field in ("provider_version", "provider_executable_identity", "provider_build_identity"):
             expected_value = artifact.get(
                 {
@@ -317,6 +400,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     epoch = payload.get("accepted_epoch") if isinstance(payload.get("accepted_epoch"), Mapping) else {}
     census = payload.get("worker_census") if isinstance(payload.get("worker_census"), Mapping) else {}
     subjects = payload.get("subjects") if isinstance(payload.get("subjects"), Mapping) else {}
+    product_subject = payload.get("product_subject") if isinstance(payload.get("product_subject"), Mapping) else {}
     subject = payload.get("subject") if isinstance(payload.get("subject"), Mapping) else {}
     current_rows = payload.get("current_contract") if isinstance(payload.get("current_contract"), list) else []
     current_inputs = payload.get("protected_inputs") if isinstance(payload.get("protected_inputs"), Mapping) else {}
@@ -381,14 +465,17 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         if cell is None:
             cell_diagnostics.append(_diagnostic("selected_cell_missing", "selected Resume cell is absent", cell=selected))
         else:
-            provider_subject = subjects.get(str(cell.get("provider")))
-            if not isinstance(provider_subject, Mapping):
-                provider_subject = {}
+            if _cell_subject_kind(cell) == LONGHOUSE_PRODUCT_SUBJECT:
+                cell_subject = product_subject
+            else:
+                cell_subject = subjects.get(str(cell.get("provider")))
+            if not isinstance(cell_subject, Mapping):
+                cell_subject = {}
             for item in census_producers:
                 if not isinstance(item, Mapping) or not isinstance(item.get("registration"), Mapping):
                     continue
                 registration = item["registration"]
-                failures = _producer_supports_cell(registration, cell, census, provider_subject)
+                failures = _producer_supports_cell(registration, cell, census, cell_subject)
                 if not failures:
                     eligible.append(item)
             if not eligible:
@@ -403,7 +490,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 cell_diagnostics.append(_diagnostic("scheduling_action_invalid", "cell scheduling action is invalid", cell=cell))
             elif action == "reuse":
                 proof = decision.get("proof") if isinstance(decision.get("proof"), Mapping) else {}
-                failures = _reuse_failures(proof, cell, provider_subject, epoch, scheduling)
+                failures = _reuse_failures(proof, cell, cell_subject, epoch, scheduling)
                 if failures:
                     cell_diagnostics.append(
                         _diagnostic("scheduled_proof_not_reusable", f"scheduled proof cannot be reused: {sorted(set(failures))}", cell=cell)
@@ -411,6 +498,8 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         diagnostics.extend(cell_diagnostics)
         compiled: dict[str, Any] = {
             "cell": dict(selected),
+            "subject_kind": _cell_subject_kind(selected),
+            "subject_key": cell_subject.get("subject_key") if cell is not None else None,
             "valid": not cell_diagnostics,
             "diagnostics": cell_diagnostics,
             "producer_id": None,
@@ -434,29 +523,38 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "assertion_id": selected["assertion_id"],
                 "variant": selected["variant"],
                 "execution_variant": execution_variant_key(
-                    provider=str(selected["provider"]),
+                    provider=str(selected["provider"]) if selected.get("provider") is not None else None,
                     assertion_id=str(selected["assertion_id"]),
                     scenario_id=str(cell["scenario_id"]),
                     variant=selected.get("variant"),
+                    subject_kind=_cell_subject_kind(selected),
                 ),
                 "module": registration["executable_module"],
+                "implementation": registration["implementation"],
                 "oracle_source": registration["oracle_source"],
                 "oracle_entrypoint": registration["oracle_entrypoint"],
                 "evidence_class": sorted(set(registration["evidence_classes"]).intersection(cell["acceptable_evidence"]))[0],
                 "required_activity": list(registration["observed_activity"]),
                 "required_artifacts": list(registration["required_artifacts"]),
                 "required_cleanup": list(registration["required_cleanup"]),
-                "credential_binding_ids": list(registration["credential_binding_ids"]),
-                "provider": selected["provider"],
+                "credential_binding_ids": list(
+                    (registration.get("credential_binding_ids_by_provider") or {}).get(
+                        str(selected.get("provider") or ""),
+                        registration["credential_binding_ids"],
+                    )
+                ),
+                "subject_kind": _cell_subject_kind(selected),
+                "subject_key": cell_subject.get("subject_key"),
+                "provider": selected.get("provider"),
                 "capability": cell.get("capability"),
                 "disposition": cell.get("disposition", "implemented"),
-                "subject_id": provider_subject.get("subject_id"),
-                "provider_artifact": dict(provider_subject.get("provider_artifact") or {}),
+                "subject_id": cell_subject.get("subject_key") or cell_subject.get("subject_id"),
                 "provider_artifact_required": registration.get("provider_artifact_required", True),
                 "provider_contract_digest": sha256_json(cell),
                 "adapter_digest": producer.get("code_digest"),
                 "oracle_digest": producer.get("oracle_digest"),
                 "longhouse_source_sha": subject["longhouse_source_sha"],
+                "mode": sorted(registration.get("modes") or [""])[0] or None,
                 "worker_id": census.get("worker_id"),
                 "worker_platform": census.get("platform"),
                 "worker_architecture": census.get("architecture"),
@@ -468,9 +566,15 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "freshness_max_age_seconds": cell["max_age_seconds"],
                 "scheduling_reason": decision["reason"],
             }
+            if _cell_subject_kind(selected) == PROVIDER_RELEASE_SUBJECT:
+                command["provider_artifact"] = dict(cell_subject.get("provider_artifact") or {})
+            command["longhouse_source_sha"] = cell_subject.get("longhouse_source_sha")
             commands.append(command)
         compiled_cells.append(compiled)
 
+    subject_keys = sorted(
+        {str(item.get("subject_key")) for item in (*commands, *reused_proofs) if isinstance(item, Mapping) and item.get("subject_key")}
+    )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "resume_assurance_compile_report",
@@ -479,6 +583,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         "epoch_digest": epoch.get("epoch_digest"),
         "input_digest": sha256_json(payload),
         "subject": dict(subject),
+        "subject_keys": subject_keys,
         "worker_census_digest": census.get("census_digest"),
         "valid": not diagnostics,
         "diagnostics": diagnostics,
@@ -495,6 +600,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             "compile_input_digest": report["input_digest"],
             "worker_census_digest": census.get("census_digest"),
             "subject": dict(subject),
+            "subject_keys": subject_keys,
             "commands": commands,
             "reused_proofs": reused_proofs,
             "cost_budget_usd": scheduling.get("total_execute_cost_budget_usd"),
