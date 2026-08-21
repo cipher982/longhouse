@@ -23,6 +23,7 @@ class CodexLaunchVisibilityRepairFacts:
     is_sidechain: bool
     environment: str | None
     hidden_from_default_timeline: bool
+    primary_thread_hidden_from_default_timeline: bool
     user_hidden_from_timeline: bool
 
 
@@ -101,6 +102,7 @@ def plan_codex_launch_visibility_repair(
         "is_sidechain": False,
         "environment": facts.environment,
         "hidden_from_default_timeline": True,
+        "primary_thread_hidden_from_default_timeline": facts.primary_thread_hidden_from_default_timeline,
         "user_hidden_from_timeline": False,
     }
     return CodexLaunchVisibilityRepairPlan(

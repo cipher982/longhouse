@@ -2463,6 +2463,7 @@ class CatalogStore:
                 is_sidechain=primary_thread.get("branch_kind") == "subagent",
                 environment=str(catalog_row["environment"] or "").strip() or None,
                 hidden_from_default_timeline=bool(catalog_row["hidden_from_default_timeline"]),
+                primary_thread_hidden_from_default_timeline=bool(primary_thread.get("hidden_from_default_timeline")),
                 user_hidden_from_timeline=bool(catalog_row["user_hidden_from_timeline"]),
             )
             refusals = list(codex_launch_visibility_repair_refusals(facts))
@@ -2477,8 +2478,6 @@ class CatalogStore:
                 refusals.append("timeline_card_not_policy_hidden")
             if bool(card_row["user_hidden_from_timeline"]):
                 refusals.append("timeline_card_user_hidden")
-            if primary_thread.get("hidden_from_default_timeline") != 1:
-                refusals.append("primary_thread_not_policy_hidden")
             plan = plan_codex_launch_visibility_repair(facts)
             if plan is None or refusals:
                 return {
@@ -2553,7 +2552,7 @@ class CatalogStore:
                     thread_table.c.session_id == session_id,
                     thread_table.c.branch_kind == "root",
                     thread_table.c.origin_kind.is_(None),
-                    thread_table.c.hidden_from_default_timeline == 1,
+                    thread_table.c.hidden_from_default_timeline == int(facts.primary_thread_hidden_from_default_timeline),
                 )
                 .values(hidden_from_default_timeline=0, updated_at=observed_at)
             ).rowcount

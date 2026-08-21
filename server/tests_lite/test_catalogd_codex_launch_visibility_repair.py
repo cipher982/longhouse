@@ -34,7 +34,12 @@ def daemon_paths():
     root.rmdir()
 
 
-def _seed_eligible_session(database_path: Path, *, user_hidden: bool = False) -> str:
+def _seed_eligible_session(
+    database_path: Path,
+    *,
+    user_hidden: bool = False,
+    thread_hidden: bool = True,
+) -> str:
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     now = datetime.now(UTC).replace(microsecond=0)
@@ -106,7 +111,7 @@ def _seed_eligible_session(database_path: Path, *, user_hidden: bool = False) ->
                 cwd="/workspace/longhouse",
                 branch_kind="root",
                 origin_kind=None,
-                hidden_from_default_timeline=1,
+                hidden_from_default_timeline=int(thread_hidden),
                 is_primary=1,
                 created_at=now,
                 updated_at=now,
@@ -162,9 +167,13 @@ def _seed_eligible_session(database_path: Path, *, user_hidden: bool = False) ->
 
 
 @pytest.mark.asyncio
-async def test_codex_visibility_repair_is_dry_run_first_cas_and_idempotent(daemon_paths):
+@pytest.mark.parametrize("thread_hidden", [True, False])
+async def test_codex_visibility_repair_is_dry_run_first_cas_and_idempotent(
+    daemon_paths,
+    thread_hidden: bool,
+):
     database_path, socket_path = daemon_paths
-    session_id = _seed_eligible_session(database_path)
+    session_id = _seed_eligible_session(database_path, thread_hidden=thread_hidden)
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)

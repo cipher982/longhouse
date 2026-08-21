@@ -23,6 +23,7 @@ def _facts(**overrides) -> CodexLaunchVisibilityRepairFacts:
         "is_sidechain": False,
         "environment": "development",
         "hidden_from_default_timeline": True,
+        "primary_thread_hidden_from_default_timeline": True,
         "user_hidden_from_timeline": False,
     }
     values.update(overrides)
@@ -51,6 +52,7 @@ def test_repair_plan_names_every_eligibility_fact_in_its_compare_and_set():
         "is_sidechain": False,
         "environment": "development",
         "hidden_from_default_timeline": True,
+        "primary_thread_hidden_from_default_timeline": True,
         "user_hidden_from_timeline": False,
     }
 
@@ -62,6 +64,15 @@ def test_fresh_exact_active_run_is_sufficient_without_terminal_attachment():
         )
         is not None
     )
+
+
+def test_visible_primary_thread_is_safe_and_bound_into_compare_and_set():
+    plan = plan_codex_launch_visibility_repair(
+        _facts(primary_thread_hidden_from_default_timeline=False)
+    )
+
+    assert plan is not None
+    assert plan.compare_and_set["primary_thread_hidden_from_default_timeline"] is False
 
 
 @pytest.mark.parametrize(
