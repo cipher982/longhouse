@@ -50,6 +50,9 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.required_executables == ("jq",)
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "typed_compaction_receipt" in m.REGISTRATION.required_artifacts
     assert len(m._CELL_BY_VARIANT) == 5
 
 
@@ -169,52 +172,113 @@ def test_run_awareness_create_fails_when_the_reply_does_not_show_visibility(tmp_
     assert observation["coordination_instructions_model_visible"] is False
 
 
-class _FakeTui:
-    """Stand-in for provider_native_resume.PtyProcess that never spawns a real process."""
+class _FakeAppServerSocket:
+    def __init__(self, messages: list[dict[str, object]]) -> None:
+        self.messages = [json.dumps(message) for message in messages]
+        self.sent: list[dict[str, object]] = []
 
-    def __init__(self, _command: list[object], *, cwd: object, env: object, recording: Path) -> None:
-        del cwd, env
-        self.recording = recording
-        self.recording.parent.mkdir(parents=True, exist_ok=True)
-        self.recording.write_text("codex ready>\n", encoding="utf-8")
+    def __enter__(self):
+        return self
 
-    def settle(self, **_kwargs: object) -> bytes:
-        return b""
+    def __exit__(self, *_args: object) -> None:
+        return None
 
-    def send(self, text: str) -> None:
-        stripped = text.rstrip("\r\n")
-        if stripped == "/compact":
-            with self.recording.open("a", encoding="utf-8") as handle:
-                handle.write("Compacting conversation...\ncompact done\n")
-            return
-        match = re.search(r"starting with exactly (\S+):", stripped)
-        if match is not None:
-            marker = match.group(1)
-            with self.recording.open("a", encoding="utf-8") as handle:
-                handle.write(f"{marker} use inbox for durable recovery and reply to respond to attributed input.\n")
+    def send(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
 
-    def kill_group(self, _sig: int) -> None:
-        pass
+    def recv(self, *, timeout: float) -> str:
+        assert timeout > 0
+        if not self.messages:
+            raise TimeoutError
+        return self.messages.pop(0)
 
-    def wait(self, _timeout: float) -> int:
-        return 0
 
-    def close(self) -> None:
-        pass
+def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    socket = _FakeAppServerSocket(
+        [
+            {"id": 1, "result": {}},
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-compact",
+                    "item": {"id": "item-compact", "type": "contextCompaction"},
+                },
+            },
+            {"id": 2, "result": {}},
+        ]
+    )
+    monkeypatch.setattr(m, "websocket_connect", lambda *_a, **_k: socket)
+
+    receipt = m._typed_compact_thread("ws://127.0.0.1:1234", "thread-1", timeout=1)
+
+    assert receipt == {
+        "request_method": "thread/compact/start",
+        "request_completed": True,
+        "completion_method": "item/completed",
+        "context_compaction_completed": True,
+        "thread_id": "thread-1",
+        "turn_id": "turn-compact",
+        "item_id": "item-compact",
+        "item_type": "contextCompaction",
+    }
+    assert [message.get("method") for message in socket.sent] == [
+        "initialize",
+        "initialized",
+        "thread/compact/start",
+    ]
 
 
 def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
+    holder: dict[str, object] = {"send_count": 0}
 
     def fake_start(*_a: object, **kwargs: object) -> tuple[dict[str, object], subprocess.CompletedProcess[str], Path]:
         isolation_root = kwargs["isolation_root"]
         assert isinstance(isolation_root, Path)
-        summary = {"session_id": "session-1", "ws_url": "ws://127.0.0.1:1234"}
+        state_file = isolation_root / "state.json"
+        thread_path = isolation_root / "rollout.jsonl"
+        thread_path.write_text("", encoding="utf-8")
+        state_file.write_text(
+            json.dumps({"thread_id": "thread-1", "thread_path": str(thread_path)}),
+            encoding="utf-8",
+        )
+        holder["thread_path"] = thread_path
+        summary = {
+            "session_id": "session-1",
+            "ws_url": "ws://127.0.0.1:1234",
+            "state_file": str(state_file),
+        }
         return summary, subprocess.CompletedProcess(["start"], 0, "{}", ""), isolation_root
+
+    def fake_send(*_args: object, **_kwargs: object) -> dict[str, object]:
+        holder["send_count"] = int(holder["send_count"]) + 1
+        prompt = str(_args[4])
+        thread_path = holder["thread_path"]
+        assert isinstance(thread_path, Path)
+        if holder["send_count"] == 1:
+            marker = re.search(r"exactly (\S+) and", prompt, re.IGNORECASE).group(1)
+            assistant = marker
+        else:
+            marker = re.search(r"starting with exactly (\S+):", prompt).group(1)
+            assistant = f"{marker}: use inbox for durable recovery and reply for attributed input."
+        with thread_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"payload": {"type": "agent_message", "message": assistant}}) + "\n")
+        return {"last_turn_status": "completed", "thread_path": str(thread_path)}
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
     monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m, "_live_send_and_wait", fake_send)
+    monkeypatch.setattr(
+        m,
+        "_typed_compact_thread",
+        lambda *_a, **_k: {
+            "request_completed": True,
+            "context_compaction_completed": True,
+            "item_type": "contextCompaction",
+        },
+    )
     monkeypatch.setattr(
         m,
         "observe_codex_post_compaction_bootstrap",
@@ -224,8 +288,6 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
             "mcp_coordination_instructions_present": True,
         },
     )
-    monkeypatch.setattr(m, "PtyProcess", _FakeTui)
-
     root = tmp_path / "evidence"
     root.mkdir()
     observation, assertions = m._run_awareness_post_compaction(args, root)
@@ -236,44 +298,75 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
     }
     assert observation["compaction_signal_observed"] is True
     assert observation["post_compact_question_answered"] is True
+    assert observation["assistant_evidence_source"] == "native_rollout_assistant_event"
     assert observation["visible_bootstrap_count"] == 1
+    assert (root / "typed-compaction-receipt.json").is_file()
 
 
-def test_run_awareness_post_compaction_fails_closed_without_a_compaction_signal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the TUI never shows evidence /compact did anything, do not claim post-compaction visibility."""
-
+def test_run_awareness_post_compaction_rejects_user_prompt_echo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
-
-    class _SilentTui(_FakeTui):
-        def send(self, text: str) -> None:
-            stripped = text.rstrip("\r\n")
-            if stripped == "/compact":
-                return  # no visible acknowledgement at all
-            super().send(text)
+    holder: dict[str, object] = {"send_count": 0}
 
     def fake_start(*_a: object, **kwargs: object) -> tuple[dict[str, object], subprocess.CompletedProcess[str], Path]:
         isolation_root = kwargs["isolation_root"]
         assert isinstance(isolation_root, Path)
-        summary = {"session_id": "session-1", "ws_url": "ws://127.0.0.1:1234"}
+        state_file = isolation_root / "state.json"
+        thread_path = isolation_root / "rollout.jsonl"
+        thread_path.write_text("", encoding="utf-8")
+        state_file.write_text(
+            json.dumps({"thread_id": "thread-1", "thread_path": str(thread_path)}),
+            encoding="utf-8",
+        )
+        holder["thread_path"] = thread_path
+        summary = {
+            "session_id": "session-1",
+            "ws_url": "ws://127.0.0.1:1234",
+            "state_file": str(state_file),
+        }
         return summary, subprocess.CompletedProcess(["start"], 0, "{}", ""), isolation_root
+
+    def fake_send(*_args: object, **_kwargs: object) -> dict[str, object]:
+        holder["send_count"] = int(holder["send_count"]) + 1
+        prompt = str(_args[4])
+        thread_path = holder["thread_path"]
+        assert isinstance(thread_path, Path)
+        if holder["send_count"] == 1:
+            marker = re.search(r"exactly (\S+) and", prompt, re.IGNORECASE).group(1)
+            rows = [{"payload": {"type": "agent_message", "message": marker}}]
+        else:
+            rows = [
+                {"payload": {"type": "message", "role": "user", "content": prompt}},
+                {"payload": {"type": "agent_message", "message": "I do not know."}},
+            ]
+        with thread_path.open("a", encoding="utf-8") as stream:
+            for row in rows:
+                stream.write(json.dumps(row) + "\n")
+        return {"last_turn_status": "completed", "thread_path": str(thread_path)}
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
     monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: {"verification": {"verified": True}})
+    monkeypatch.setattr(m, "_live_send_and_wait", fake_send)
+    monkeypatch.setattr(
+        m,
+        "_typed_compact_thread",
+        lambda *_a, **_k: {
+            "request_completed": True,
+            "context_compaction_completed": True,
+            "item_type": "contextCompaction",
+        },
+    )
     monkeypatch.setattr(
         m,
         "observe_codex_post_compaction_bootstrap",
         lambda **_kwargs: {"coordination_instructions_model_visible_after_compaction": False, "visible_bootstrap_count": 0},
     )
-    monkeypatch.setattr(m, "PtyProcess", _SilentTui)
-
     root = tmp_path / "evidence"
     root.mkdir()
     observation, assertions = m._run_awareness_post_compaction(args, root)
 
-    assert observation["compaction_signal_observed"] is False
-    # The model may still answer correctly from un-compacted context; that
-    # must not be accepted as post-compaction evidence.
+    assert observation["compaction_signal_observed"] is True
+    assert observation["post_compact_question_answered"] is False
     assert assertions["coordination_instructions_model_visible_after_compaction"] is False
 
 

@@ -16,18 +16,11 @@ Every managed Codex app-server launch (``codex_app_server_args`` in
 server. The create scenario requires a real ``peers`` MCP invocation in the
 native rollout, not a model claim that it remembers particular tool names.
 
-Uncertainty flagged for human review (see the accompanying report): the
-post-compaction "model still sees coordination instructions" assertion needs
-a *real* Codex context compaction to have occurred, and this codebase has no
-existing mechanism (engine-side or otherwise) to trigger or detect one. This
-producer's best-effort attempt drives the stock Codex TUI over a real PTY
-(the same technique the codex_model_picker interaction probe uses for slash
-commands) and sends the literal text ``/compact``, then requires a weak
-"observed new output containing the word compact" heuristic before treating
-the follow-up turn as post-compaction evidence. That heuristic, and whether
-codex's real manual-compaction slash command is actually named ``/compact``,
-are both unverified against a live codex binary and should be checked by a
-human before this producer is trusted.
+The post-compaction scenario uses Codex app-server's typed
+``thread/compact/start`` request and requires the corresponding
+``item/completed`` notification whose item type is ``contextCompaction``.
+The visibility assertion then reads only a native assistant rollout event;
+terminal rendering and echoed user prompts are never evidence.
 """
 
 from __future__ import annotations
@@ -36,7 +29,6 @@ import argparse
 import hashlib
 import json
 import os
-import signal
 import sys
 import tempfile
 import time
@@ -48,6 +40,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from websockets.sync.client import connect as websocket_connect
+
 from zerg.mcp_server.server import COORDINATION_INSTRUCTIONS
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
@@ -56,10 +50,8 @@ from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_coordination_scenarios import observe_codex_post_compaction_bootstrap
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import PtyProcess
 from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _redact_state_for_evidence
-from zerg.qa.provider_native_resume import _terminal_text
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -105,9 +97,9 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=1,
+    scenario_revision=2,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -118,8 +110,9 @@ REGISTRATION = ProducerRegistration(
     observed_activity=(
         "coordination_mcp_server_registered",
         "coordination_question_answered_live",
-        "compaction_trigger_attempted",
-        "post_compaction_question_answered_live",
+        "typed_compaction_requested",
+        "context_compaction_item_completed",
+        "structured_post_compaction_assistant_reply",
         "bootstrap_hook_probe_run",
         "directed_input_created",
         "directed_input_receipt_polled",
@@ -132,6 +125,7 @@ REGISTRATION = ProducerRegistration(
     required_artifacts=(
         "provider_binary_receipt",
         "coordination_observation",
+        "typed_compaction_receipt",
         "cleanup_receipt",
     ),
     required_cleanup=(
@@ -301,6 +295,96 @@ def _answer_demonstrates_visibility(text: str, marker: str) -> bool:
     return marker in text and "inbox" in lowered and "reply" in lowered
 
 
+def _recv_app_server_message(socket: Any, *, deadline: float) -> dict[str, Any]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Codex app-server response deadline expired")
+    raw = socket.recv(timeout=remaining)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    if not isinstance(raw, str):
+        raise RuntimeError("Codex app-server returned a non-text WebSocket message")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise RuntimeError("Codex app-server returned a non-object JSON-RPC message")
+    return value
+
+
+def _typed_compact_thread(ws_url: str, thread_id: str, *, timeout: float) -> dict[str, Any]:
+    """Compact one Codex thread and retain only typed, credential-free proof."""
+
+    deadline = time.monotonic() + timeout
+    with websocket_connect(ws_url, open_timeout=min(timeout, 10), close_timeout=5) as socket:
+        socket.send(
+            json.dumps(
+                {
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {
+                            "name": "longhouse_coordination_assurance",
+                            "title": "Longhouse Coordination Assurance",
+                            "version": "1",
+                        },
+                        "capabilities": {"experimentalApi": True},
+                    },
+                }
+            )
+        )
+        while True:
+            message = _recv_app_server_message(socket, deadline=deadline)
+            if message.get("id") == 1:
+                if message.get("error") is not None:
+                    raise RuntimeError(f"Codex app-server initialize failed: {message['error']}")
+                break
+            if message.get("id") is not None and message.get("method") is not None:
+                raise RuntimeError("Codex app-server requested client action during initialize")
+
+        socket.send(json.dumps({"method": "initialized", "params": {}}))
+        socket.send(
+            json.dumps(
+                {
+                    "id": 2,
+                    "method": "thread/compact/start",
+                    "params": {"threadId": thread_id},
+                }
+            )
+        )
+        response_observed = False
+        completed_item: dict[str, Any] | None = None
+        completed_turn_id: str | None = None
+        while not response_observed or completed_item is None:
+            message = _recv_app_server_message(socket, deadline=deadline)
+            if message.get("id") == 2:
+                if message.get("error") is not None:
+                    raise RuntimeError(f"Codex thread/compact/start failed: {message['error']}")
+                response_observed = True
+                continue
+            if message.get("id") is not None and message.get("method") is not None:
+                raise RuntimeError("Codex app-server requested client action during compaction")
+            if message.get("method") != "item/completed":
+                continue
+            params = message.get("params")
+            if not isinstance(params, dict) or params.get("threadId") != thread_id:
+                continue
+            item = params.get("item")
+            if not isinstance(item, dict) or item.get("type") != "contextCompaction":
+                continue
+            completed_item = item
+            completed_turn_id = str(params.get("turnId") or "") or None
+
+    return {
+        "request_method": "thread/compact/start",
+        "request_completed": response_observed,
+        "completion_method": "item/completed",
+        "context_compaction_completed": completed_item is not None,
+        "thread_id": thread_id,
+        "turn_id": completed_turn_id,
+        "item_id": str((completed_item or {}).get("id") or "") or None,
+        "item_type": (completed_item or {}).get("type"),
+    }
+
+
 def _codex_tool_call_evidence(thread_path: Path) -> list[dict[str, Any]]:
     """Return credential-free native rollout evidence for Codex tool calls."""
 
@@ -453,48 +537,63 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             args,
             evidence_root=root,
             codex_bin=str(args.codex_bin),
-            launch_mode="tui",
+            launch_mode="detached_ui",
             isolation_root=isolation_root,
             register_managed=True,
         )
         session_id = str(summary.get("session_id") or "")
         ws_url = str(summary.get("ws_url") or "")
-        if not session_id or not ws_url:
-            raise RuntimeError("post-compaction bridge did not return ws_url")
-        recording = root / "post-compaction.tty"
-        tui_env = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
-        tui_env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
-        command = [
-            str(args.codex_bin),
-            "-c",
-            "check_for_update_on_startup=false",
-            "--enable",
-            "tui_app_server",
-            "--remote",
+        state_file = Path(str(summary.get("state_file") or ""))
+        if not session_id or not ws_url or not state_file.is_file():
+            raise RuntimeError("post-compaction bridge did not return its typed control state")
+        state = bridge_canary._read_json(state_file)
+        thread_id = str(state.get("thread_id") or "").strip()
+        thread_path = Path(str(state.get("thread_path") or ""))
+        if not thread_id or not thread_path.is_file():
+            raise RuntimeError("post-compaction bridge did not materialize a native Codex thread")
+
+        seed_marker = f"LONGHOUSE_COORD_COMPACT_SEED_{uuid.uuid4().hex}"
+        state = _live_send_and_wait(
+            args,
+            isolation_root,
+            session_id,
+            state_file,
+            f"Reply with exactly {seed_marker} and nothing else.",
+            timeout=args.live_send_timeout_secs,
+        )
+        seeded_thread_path = Path(str(state.get("thread_path") or ""))
+        seed_reply = _last_assistant_message(seeded_thread_path) if seeded_thread_path.is_file() else ""
+        if state.get("last_turn_status") != "completed" or seed_marker not in seed_reply:
+            raise RuntimeError("Codex seed turn did not produce structured assistant history before compaction")
+
+        compaction_receipt = _typed_compact_thread(
             ws_url,
-            "--no-alt-screen",
-        ]
-        process = PtyProcess(command, cwd=args.repo_root, env=tui_env, recording=recording)
-        try:
-            # No codex-specific "TUI is ready for input" text matcher exists
-            # in this codebase (unlike Claude/Cursor/OpenCode in
-            # provider_native_resume.py); this bounded settle is a generic
-            # best-effort substitute -- flagged for human verification.
-            process.settle(minimum=2.0, quiet=0.5, timeout=10.0)
-            pre_compact_text = _terminal_text(recording)
-            process.send("/compact\r")
-            process.settle(minimum=1.5, quiet=0.75, timeout=15.0)
-            post_compact_text = _terminal_text(recording)
-            compaction_signal_observed = "compact" in post_compact_text.lower() and post_compact_text != pre_compact_text
-            marker = f"LONGHOUSE_COORD_COMPACT_{uuid.uuid4().hex}"
-            process.send(_coordination_awareness_question(marker) + "\r")
-            process.settle(minimum=2.0, quiet=1.0, timeout=float(args.live_send_timeout_secs))
-            full_text = _terminal_text(recording)
-            answered_after_compact_attempt = _answer_demonstrates_visibility(full_text, marker)
-        finally:
-            process.kill_group(signal.SIGTERM)
-            process.wait(5)
-            process.close()
+            thread_id,
+            timeout=float(args.live_send_timeout_secs),
+        )
+        _write_json(root / "typed-compaction-receipt.json", compaction_receipt)
+        compaction_signal_observed = bool(
+            compaction_receipt.get("request_completed")
+            and compaction_receipt.get("context_compaction_completed")
+            and compaction_receipt.get("item_type") == "contextCompaction"
+        )
+
+        marker = f"LONGHOUSE_COORD_COMPACT_{uuid.uuid4().hex}"
+        state = _live_send_and_wait(
+            args,
+            isolation_root,
+            session_id,
+            state_file,
+            _coordination_awareness_question(marker),
+            timeout=args.live_send_timeout_secs,
+        )
+        final_thread_path = Path(str(state.get("thread_path") or ""))
+        assistant_text = _last_assistant_message(final_thread_path) if final_thread_path.is_file() else ""
+        (root / "post-compaction-assistant-response.txt").write_text(assistant_text, encoding="utf-8")
+        answered_after_compact_attempt = state.get("last_turn_status") == "completed" and _answer_demonstrates_visibility(
+            assistant_text,
+            marker,
+        )
     finally:
         if session_id:
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
@@ -504,9 +603,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         "visible_bootstrap_count": bootstrap_observation.get("visible_bootstrap_count"),
         "compaction_signal_observed": compaction_signal_observed,
         "post_compact_question_answered": answered_after_compact_attempt,
-        # Fail closed: without a genuine compaction signal, do not claim
-        # post-compaction visibility even if the follow-up turn answered
-        # correctly (it may simply be pre-compaction context still intact).
+        "assistant_evidence_source": "native_rollout_assistant_event",
         "coordination_instructions_model_visible_after_compaction": bool(compaction_signal_observed and answered_after_compact_attempt),
     }
     return observation, awareness_post_compaction_assertions(observation)

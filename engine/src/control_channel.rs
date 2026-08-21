@@ -90,11 +90,18 @@ fn console_turn_provider_supported(provider: &str) -> bool {
     matches!(provider, "codex" | "cursor" | "opencode" | "claude" | "pi")
 }
 
-fn codex_console_binary_with_env(get_env: &impl Fn(&str) -> Option<OsString>) -> String {
-    get_env("LONGHOUSE_CODEX_BIN")
-        .and_then(|value| value.into_string().ok())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_CODEX_BIN.to_string())
+fn console_provider_binary_with_env(
+    provider: &str,
+    get_env: &impl Fn(&str) -> Option<OsString>,
+) -> String {
+    let contract = managed_provider_contract_items()
+        .iter()
+        .find(|item| item.get("provider").and_then(Value::as_str) == Some(provider))
+        .unwrap_or_else(|| panic!("missing managed provider contract for {provider}"));
+    provider_binary_value(contract, get_env)
+        .unwrap_or_else(|| panic!("managed provider contract for {provider} has no CLI binary"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[derive(Clone, Debug)]
@@ -479,25 +486,32 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
     Ok(())
 }
 
+fn provider_binary_value(
+    contract: &Value,
+    env_lookup: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<OsString> {
+    if let Some(env_name) = contract.get("provider_cli_env").and_then(Value::as_str) {
+        if !env_name.trim().is_empty() {
+            if let Some(env_value) = env_lookup(env_name) {
+                return (!env_value.as_os_str().is_empty()).then_some(env_value);
+            }
+        }
+    }
+
+    contract
+        .get("provider_cli_binary")
+        .and_then(Value::as_str)
+        .filter(|binary| !binary.is_empty())
+        .map(OsString::from)
+}
+
 fn provider_binary_available(
     contract: &Value,
     path_value: Option<&OsStr>,
     env_lookup: &dyn Fn(&str) -> Option<OsString>,
 ) -> bool {
-    if let Some(env_name) = contract.get("provider_cli_env").and_then(Value::as_str) {
-        if !env_name.trim().is_empty() {
-            if let Some(env_value) = env_lookup(env_name) {
-                return !env_value.as_os_str().is_empty()
-                    && command_value_exists_in_path(env_value.as_os_str(), path_value);
-            }
-        }
-    }
-
-    let binary = contract
-        .get("provider_cli_binary")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    !binary.is_empty() && command_exists_in_path(binary, path_value)
+    provider_binary_value(contract, env_lookup)
+        .is_some_and(|binary| command_value_exists_in_path(binary.as_os_str(), path_value))
 }
 
 fn control_supports_for_path_with_env(
@@ -1599,8 +1613,9 @@ async fn execute_turn_start(
             run_id: run_id.clone(),
             client_request_id: client_request_id.clone(),
             cwd,
-            claude_bin: std::env::var("LONGHOUSE_CLAUDE_BIN")
-                .unwrap_or_else(|_| crate::claude_print::DEFAULT_CLAUDE_BIN.to_string()),
+            claude_bin: console_provider_binary_with_env("claude", &|name| {
+                std::env::var_os(name)
+            }),
             prompt: message,
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
@@ -1744,7 +1759,9 @@ async fn execute_turn_start(
                 cwd,
                 api_url: config.api_url.clone(),
                 api_token,
-                codex_bin: codex_console_binary_with_env(&|name| std::env::var_os(name)),
+                codex_bin: console_provider_binary_with_env("codex", &|name| {
+                    std::env::var_os(name)
+                }),
                 approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
                 prompt: message,
@@ -3018,13 +3035,22 @@ mod tests {
     }
 
     #[test]
-    fn codex_console_uses_the_exact_staged_binary_override() {
+    fn console_provider_uses_the_exact_staged_binary_override() {
         let staged = OsString::from("/provider/codex-1.2.3/codex");
-        let resolved = codex_console_binary_with_env(&|name| {
+        let resolved = console_provider_binary_with_env("codex", &|name| {
             (name == "LONGHOUSE_CODEX_BIN").then(|| staged.clone())
         });
         assert_eq!(resolved, "/provider/codex-1.2.3/codex");
-        assert_eq!(codex_console_binary_with_env(&|_| None), DEFAULT_CODEX_BIN);
+        assert_eq!(
+            console_provider_binary_with_env("codex", &|_| None),
+            DEFAULT_CODEX_BIN
+        );
+
+        let staged_claude = OsString::from("/provider/claude-4.5.0/claude-staged");
+        let resolved_claude = console_provider_binary_with_env("claude", &|name| {
+            (name == "LONGHOUSE_CLAUDE_BIN").then(|| staged_claude.clone())
+        });
+        assert_eq!(resolved_claude, "/provider/claude-4.5.0/claude-staged");
     }
 
     #[test]
@@ -3274,6 +3300,25 @@ mod tests {
         assert!(supports.contains(&"codex.resume_run_once".to_string()));
         assert!(supports.contains(&"codex.turn_start".to_string()));
         assert!(!supports.contains(&"codex.live_proof".to_string()));
+
+        // Capability discovery and Console dispatch resolve the same exact
+        // staged Claude executable even though no binary named `claude`
+        // exists on PATH.
+        write_executable(&dir, "custom-claude");
+        let staged_claude = dir.join("custom-claude").into_os_string();
+        let env_lookup = |name: &str| {
+            (name == "LONGHOUSE_CLAUDE_BIN").then(|| staged_claude.clone())
+        };
+        let supports = control_supports_for_path_with_env(
+            Some(dir.as_os_str()),
+            &env_lookup,
+            true,
+        );
+        assert!(supports.contains(&"claude.turn_start".to_string()));
+        assert_eq!(
+            console_provider_binary_with_env("claude", &env_lookup),
+            dir.join("custom-claude").to_string_lossy()
+        );
 
         write_executable(&dir, "codex");
         write_executable(&dir, "claude");

@@ -158,7 +158,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "87bbb4cce719d5123cd8e0f7b612b9f353587b9f78569f0b622a9c7f895df86a"
+              "oracle_digest": "ecaf9853215163235a67a0394b0206904bdbfc35f8845c40bcb510ea82dc8549"
             }
           ]
         },
@@ -366,7 +366,7 @@
               "id": "coordination_instructions_model_visible_after_compaction",
               "scenario_id": "codex_coordination_awareness_post_compaction",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -377,7 +377,7 @@
               "id": "no_duplicate_visible_bootstrap",
               "scenario_id": "codex_coordination_awareness_post_compaction",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -545,7 +545,7 @@
       "display_name": "Claude",
       "marketing_name": "Claude Code",
       "provider_cli_binary": "claude",
-      "provider_cli_env": null,
+      "provider_cli_env": "LONGHOUSE_CLAUDE_BIN",
       "requires_longhouse_cli": false,
       "managed_transport": "claude_channel_bridge",
       "console_adapter": "claude_print",
@@ -905,7 +905,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "87bbb4cce719d5123cd8e0f7b612b9f353587b9f78569f0b622a9c7f895df86a"
+              "oracle_digest": "ecaf9853215163235a67a0394b0206904bdbfc35f8845c40bcb510ea82dc8549"
             },
             {
               "id": "real_print_marker_returned",
@@ -1312,7 +1312,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "87bbb4cce719d5123cd8e0f7b612b9f353587b9f78569f0b622a9c7f895df86a"
+              "oracle_digest": "ecaf9853215163235a67a0394b0206904bdbfc35f8845c40bcb510ea82dc8549"
             }
           ]
         },
@@ -2037,7 +2037,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "87bbb4cce719d5123cd8e0f7b612b9f353587b9f78569f0b622a9c7f895df86a"
+              "oracle_digest": "ecaf9853215163235a67a0394b0206904bdbfc35f8845c40bcb510ea82dc8549"
             }
           ]
         },
