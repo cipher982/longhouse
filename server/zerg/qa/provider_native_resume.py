@@ -420,7 +420,7 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=2,
+        producer_revision=1,
         scenario_id="helm_cold_resume",
         scenario_revision=4,
         assertion_cells=(

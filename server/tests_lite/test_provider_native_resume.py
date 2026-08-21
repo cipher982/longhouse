@@ -185,7 +185,7 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     home = tmp_path / "home"
-    evidence = tmp_path / "evidence"
+    evidence = tmp_path / "retained" / "nested" / "evidence"
     args = argparse.Namespace(
         api_url="https://runtime.example",
         agents_token="device-token",
