@@ -37,6 +37,25 @@ def _fake_session(session_id: str, provider_cwd: Path) -> m._CursorSession:
     )
 
 
+def _cleanup_diagnostics(*, orphan_count: int = 0, final_socket_absent: bool = True) -> dict[str, object]:
+    verified = orphan_count == 0 and final_socket_absent
+    return {
+        "verification": {"verified": verified},
+        "verified": verified,
+        "orphan_count": orphan_count,
+        "processes": [{"pid": 101, "process_exited": orphan_count == 0, "process_group_dead": orphan_count == 0}],
+        "provider_processes": [{"pid": 102, "process_dead": orphan_count == 0}],
+        "attach_processes": [],
+        "provider_pid_errors": [],
+        "forced_cleanup_pids": [101],
+        "forced_provider_cleanup_pids": [102],
+        "forced_attach_cleanup_pids": [],
+        "control_endpoints": [{"kind": "unix_socket", "endpoint": "/tmp/cursor.sock", "absent": final_socket_absent}],
+        "final_socket_absent": final_socket_absent,
+        "shipper_stop": {"status": "pass", "stopped": True},
+    }
+
+
 def _deterministic_wait_until(predicate, *, timeout, description):  # noqa: ANN001 - test double
     value = predicate()
     if value:
@@ -133,7 +152,7 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: session)
-    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(
         m,
         "_wait_marker_reply",
@@ -151,6 +170,17 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
     assert result["assertions"] == {"coordination_instructions_model_visible": True}
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
 
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
+    awareness_cleanup = json.loads((args.evidence_root / "cleanup-receipt-awareness.json").read_text())
+    assert cleanup["artifact_kind"] == "cursor_coordination_cleanup_receipt"
+    assert cleanup["status"] == "pass"
+    assert cleanup["required_cleanup"] == {"no_orphan_provider_processes": True}
+    assert cleanup["sessions"] == {"awareness": awareness_cleanup}
+    launch_receipts = json.loads((args.evidence_root / "session-launch-receipts.json").read_text())
+    assert launch_receipts["provider"] == "cursor"
+    assert launch_receipts["sessions"]["awareness"]["session_id"] == "awareness-session"
+    assert launch_receipts["sessions"]["awareness"]["provider_thread_id"] == "thread-awareness-session"
+
     written = json.loads((args.evidence_root / "result.json").read_text())
     assert written == result
 
@@ -167,7 +197,7 @@ def test_run_coordination_awareness_create_fails_when_recitation_is_missing(tmp_
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: session)
-    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: "Sure, running it now. LONGHOUSE_CURSOR_COORD_AWARENESS_xyz")
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
 
@@ -192,7 +222,7 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
-    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
     monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
 
@@ -228,6 +258,40 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     }
     assert result["observation"]["source_session_id"] == "source-session"
 
+    source_cleanup = json.loads((args.evidence_root / "cleanup-receipt-source.json").read_text())
+    target_cleanup = json.loads((args.evidence_root / "cleanup-receipt-target.json").read_text())
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
+    assert source_cleanup["role"] == "source"
+    assert source_cleanup["session_id"] == "source-session"
+    assert source_cleanup["diagnostics"]["orphan_count"] == 0
+    assert target_cleanup["role"] == "target"
+    assert target_cleanup["session_id"] == "target-session"
+    assert target_cleanup["diagnostics"]["orphan_count"] == 0
+    assert cleanup == {
+        "schema_version": 1,
+        "artifact_kind": "cursor_coordination_cleanup_receipt",
+        "status": "pass",
+        "orphan_count": 0,
+        "no_orphan_provider_processes": True,
+        "required_cleanup": {"no_orphan_provider_processes": True},
+        "sessions": {"source": source_cleanup, "target": target_cleanup},
+    }
+
+    launch_receipts = json.loads((args.evidence_root / "session-launch-receipts.json").read_text())
+    assert launch_receipts["artifact_kind"] == "cursor_coordination_session_launch_receipts"
+    assert set(launch_receipts["sessions"]) == {"source", "target"}
+    assert launch_receipts["sessions"]["source"]["session_id"] == "source-session"
+    assert launch_receipts["sessions"]["target"]["session_id"] == "target-session"
+
+    manifest_paths = {entry["path"] for entry in result["artifact_manifest"]}
+    evidence_paths = {
+        path.relative_to(args.evidence_root).as_posix()
+        for path in args.evidence_root.rglob("*")
+        if path.is_file() and path.name != "result.json"
+    }
+    assert manifest_paths == evidence_paths
+    assert "session-launch-receipts.json" in manifest_paths
+
     written = json.loads((args.evidence_root / "result.json").read_text())
     assert written == result
 
@@ -254,7 +318,7 @@ def test_run_coordination_directed_input_fails_when_receipt_is_not_linked(tmp_pa
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
-    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
     monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
     monkeypatch.setattr(
@@ -276,6 +340,61 @@ def test_run_coordination_directed_input_fails_when_receipt_is_not_linked(tmp_pa
     assert result["status"] == "fail"
     assert result["assertions"]["provider_input_receipt_linked"] is False
     assert result["assertions"]["attributed_input_visible"] is True
+
+
+def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts() -> None:
+    unbound_launch = m._session_cleanup_receipt("target", None, launch_attempted=True)
+    assert unbound_launch["launch_attempted"] is True
+    assert unbound_launch["cleanup_attempted"] is False
+    assert unbound_launch["cleanup_complete"] is False
+    assert unbound_launch["no_orphan_provider_processes"] is False
+
+    clean = m._SessionCleanupReceipt(
+        schema_version=1,
+        artifact_kind="cursor_coordination_session_cleanup_receipt",
+        role="source",
+        session_id="source-session",
+        launch_attempted=True,
+        cleanup_attempted=True,
+        cleanup_complete=True,
+        orphan_count=0,
+        no_orphan_provider_processes=True,
+        diagnostics=_cleanup_diagnostics(),
+    )
+    orphaned = m._SessionCleanupReceipt(
+        schema_version=1,
+        artifact_kind="cursor_coordination_session_cleanup_receipt",
+        role="target",
+        session_id="target-session",
+        launch_attempted=True,
+        cleanup_attempted=True,
+        cleanup_complete=True,
+        orphan_count=1,
+        no_orphan_provider_processes=False,
+        diagnostics=_cleanup_diagnostics(orphan_count=1),
+    )
+    incomplete = m._SessionCleanupReceipt(
+        schema_version=1,
+        artifact_kind="cursor_coordination_session_cleanup_receipt",
+        role="target",
+        session_id="target-session",
+        launch_attempted=True,
+        cleanup_attempted=True,
+        cleanup_complete=False,
+        orphan_count=None,
+        no_orphan_provider_processes=False,
+        diagnostics={"status": "cleanup_failed"},
+    )
+
+    orphaned_aggregate = m._aggregate_cleanup_receipt({"source": clean, "target": orphaned})
+    assert orphaned_aggregate["status"] == "fail"
+    assert orphaned_aggregate["orphan_count"] == 1
+    assert orphaned_aggregate["required_cleanup"] == {"no_orphan_provider_processes": False}
+
+    incomplete_aggregate = m._aggregate_cleanup_receipt({"source": clean, "target": incomplete})
+    assert incomplete_aggregate["status"] == "fail"
+    assert incomplete_aggregate["orphan_count"] is None
+    assert incomplete_aggregate["required_cleanup"] == {"no_orphan_provider_processes": False}
 
 
 def test_run_coordination_reports_a_typed_failure_for_an_unrecognized_variant(tmp_path: Path, monkeypatch) -> None:
@@ -338,7 +457,7 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
-    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: {})
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: "attributed untrusted input from a peer, marker")
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)

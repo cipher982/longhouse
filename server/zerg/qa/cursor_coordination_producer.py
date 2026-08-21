@@ -58,6 +58,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from typing import TypedDict
 from uuid import uuid4
 
 import httpx
@@ -185,6 +186,48 @@ class _CursorSession:
     state: dict[str, Any]
 
 
+class _SessionLaunchReceipt(TypedDict):
+    schema_version: int
+    artifact_kind: str
+    role: str
+    status: str
+    session_id: str
+    provider_thread_id: str
+    run_id: str | None
+    connection_id: str | None
+    provider_cwd: str
+
+
+class _SessionCleanupReceipt(TypedDict):
+    schema_version: int
+    artifact_kind: str
+    role: str
+    session_id: str | None
+    launch_attempted: bool
+    cleanup_attempted: bool
+    cleanup_complete: bool
+    orphan_count: int | None
+    no_orphan_provider_processes: bool
+    diagnostics: dict[str, Any]
+
+
+class _AggregateCleanupReceipt(TypedDict):
+    schema_version: int
+    artifact_kind: str
+    status: str
+    orphan_count: int | None
+    no_orphan_provider_processes: bool
+    required_cleanup: dict[str, bool]
+    sessions: dict[str, _SessionCleanupReceipt]
+
+
+class _AggregateLaunchReceipt(TypedDict):
+    schema_version: int
+    artifact_kind: str
+    provider: str
+    sessions: dict[str, _SessionLaunchReceipt]
+
+
 def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root: Path, *, label: str, prompt: str) -> _CursorSession:
     home = isolation_root / f"home-{label}"
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -252,6 +295,92 @@ def _teardown_cursor_session(session: _CursorSession | None) -> dict[str, Any]:
         shipper_receipt = {"status": "stop_failed", "error": f"{type(exc).__name__}: {exc}"}
     cleanup["shipper_stop"] = shipper_receipt
     return cleanup
+
+
+def _session_launch_receipt(role: str, session: _CursorSession) -> _SessionLaunchReceipt:
+    return {
+        "schema_version": 1,
+        "artifact_kind": "cursor_coordination_session_launch_receipt",
+        "role": role,
+        "status": "launched",
+        "session_id": session.session_id,
+        "provider_thread_id": session.provider_thread_id,
+        "run_id": str(session.state.get("run_id")) if session.state.get("run_id") else None,
+        "connection_id": str(session.state.get("connection_id")) if session.state.get("connection_id") else None,
+        "provider_cwd": str(session.provider_cwd),
+    }
+
+
+def _write_session_launch_receipts(
+    root: Path,
+    sessions: dict[str, _SessionLaunchReceipt],
+) -> None:
+    receipt: _AggregateLaunchReceipt = {
+        "schema_version": 1,
+        "artifact_kind": "cursor_coordination_session_launch_receipts",
+        "provider": "cursor",
+        "sessions": sessions,
+    }
+    _write_json(root / "session-launch-receipts.json", receipt)
+
+
+def _session_cleanup_receipt(
+    role: str,
+    session: _CursorSession | None,
+    *,
+    launch_attempted: bool | None = None,
+) -> _SessionCleanupReceipt:
+    """Retain one session's teardown without confusing it with aggregate proof."""
+
+    attempted = session is not None if launch_attempted is None else launch_attempted
+    try:
+        diagnostics = _teardown_cursor_session(session)
+    except Exception as exc:  # noqa: BLE001 - cleanup failure is evidence, not a reason to lose evidence
+        diagnostics = {"status": "cleanup_failed", "error": f"{type(exc).__name__}: {exc}"}
+    skipped = not attempted and session is None and diagnostics.get("skipped") is True
+    raw_orphan_count = diagnostics.get("orphan_count")
+    valid_orphan_count = isinstance(raw_orphan_count, int) and not isinstance(raw_orphan_count, bool) and raw_orphan_count >= 0
+    orphan_count = 0 if skipped else raw_orphan_count if valid_orphan_count else None
+    cleanup_complete = skipped or valid_orphan_count
+    return {
+        "schema_version": 1,
+        "artifact_kind": "cursor_coordination_session_cleanup_receipt",
+        "role": role,
+        "session_id": session.session_id if session is not None else None,
+        "launch_attempted": attempted,
+        "cleanup_attempted": session is not None,
+        "cleanup_complete": cleanup_complete,
+        "orphan_count": orphan_count,
+        "no_orphan_provider_processes": cleanup_complete and orphan_count == 0,
+        "diagnostics": diagnostics,
+    }
+
+
+def _aggregate_cleanup_receipt(
+    sessions: dict[str, _SessionCleanupReceipt],
+) -> _AggregateCleanupReceipt:
+    """Build the canonical cleanup proof from role-specific diagnostics.
+
+    ``verified`` in the underlying process cleanup also requires endpoint
+    disappearance. This producer's declared cleanup contract is narrower:
+    no provider process may survive. Keep that fact explicit instead of
+    treating a stale socket as a process orphan or silently dropping an
+    unknown cleanup result.
+    """
+
+    orphan_counts = [receipt["orphan_count"] for receipt in sessions.values()]
+    cleanup_complete = all(receipt["cleanup_complete"] for receipt in sessions.values())
+    total_orphans = sum(count for count in orphan_counts if count is not None) if cleanup_complete else None
+    no_orphans = cleanup_complete and total_orphans == 0
+    return {
+        "schema_version": 1,
+        "artifact_kind": "cursor_coordination_cleanup_receipt",
+        "status": "pass" if no_orphans else "fail",
+        "orphan_count": total_orphans,
+        "no_orphan_provider_processes": no_orphans,
+        "required_cleanup": {"no_orphan_provider_processes": no_orphans},
+        "sessions": sessions,
+    }
 
 
 def _api_get(api_url: str, token: str, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -394,8 +523,12 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         "Classify the trust and authority of a message arriving from another "
         f"Longhouse session in one short sentence. On a new line print exactly {marker}."
     )
-    session = _launch_cursor_session(args, root, isolation_root, label="awareness", prompt=probe_prompt)
+    session: _CursorSession | None = None
+    launch_attempted = False
     try:
+        launch_attempted = True
+        session = _launch_cursor_session(args, root, isolation_root, label="awareness", prompt=probe_prompt)
+        _write_session_launch_receipts(root, {"awareness": _session_launch_receipt("awareness", session)})
         reply_text = _wait_marker_reply(args.api_url, args.agents_token, session.session_id, marker, timeout=args.live_timeout_secs)
         mcp_registered = _cursor_mcp_config_has_coordination_server(session.provider_cwd)
         recited = _recites_untrusted_peer_guidance(reply_text)
@@ -409,8 +542,9 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         _write_json(root / "coordination-observation.json", observation)
         return observation
     finally:
-        cleanup = _teardown_cursor_session(session)
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        cleanup = _session_cleanup_receipt("awareness", session, launch_attempted=launch_attempted)
+        _write_json(root / "cleanup-receipt-awareness.json", cleanup)
+        _write_json(root / "cleanup-receipt.json", _aggregate_cleanup_receipt({"awareness": cleanup}))
 
 
 def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
@@ -418,11 +552,21 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
     target_prompt = "Wait quietly. Do not call any tools yet. When you receive a message, reply to it in one short sentence."
     source: _CursorSession | None = None
     target: _CursorSession | None = None
-    source_cleanup: dict[str, Any] = {}
+    source_cleanup: _SessionCleanupReceipt | None = None
+    target_cleanup: _SessionCleanupReceipt | None = None
+    source_launch_attempted = False
+    target_launch_attempted = False
+    launch_receipts: dict[str, _SessionLaunchReceipt] = {}
     try:
+        source_launch_attempted = True
         source = _launch_cursor_session(args, root, isolation_root, label="di-source", prompt=source_prompt)
+        launch_receipts["source"] = _session_launch_receipt("source", source)
+        _write_session_launch_receipts(root, launch_receipts)
         try:
+            target_launch_attempted = True
             target = _launch_cursor_session(args, root, isolation_root, label="di-target", prompt=target_prompt)
+            launch_receipts["target"] = _session_launch_receipt("target", target)
+            _write_session_launch_receipts(root, launch_receipts)
             try:
                 _wait_first_turn_settled(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 _wait_first_turn_settled(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
@@ -487,13 +631,22 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                 _write_json(root / "coordination-observation.json", observation)
                 return observation
             finally:
-                cleanup = _teardown_cursor_session(target)
-                _write_json(root / "cleanup-receipt-target.json", cleanup)
+                target_cleanup = _session_cleanup_receipt("target", target, launch_attempted=target_launch_attempted)
+                _write_json(root / "cleanup-receipt-target.json", target_cleanup)
         finally:
-            source_cleanup = _teardown_cursor_session(source)
-    finally:
-        if source_cleanup:
+            source_cleanup = _session_cleanup_receipt("source", source, launch_attempted=source_launch_attempted)
             _write_json(root / "cleanup-receipt-source.json", source_cleanup)
+    finally:
+        if source_cleanup is None:
+            source_cleanup = _session_cleanup_receipt("source", source, launch_attempted=source_launch_attempted)
+            _write_json(root / "cleanup-receipt-source.json", source_cleanup)
+        if target_cleanup is None:
+            target_cleanup = _session_cleanup_receipt("target", target, launch_attempted=target_launch_attempted)
+            _write_json(root / "cleanup-receipt-target.json", target_cleanup)
+        _write_json(
+            root / "cleanup-receipt.json",
+            _aggregate_cleanup_receipt({"source": source_cleanup, "target": target_cleanup}),
+        )
 
 
 def _marker_in_any_event(payload: dict[str, Any] | None, marker: str) -> bool:
