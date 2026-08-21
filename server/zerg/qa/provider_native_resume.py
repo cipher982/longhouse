@@ -420,7 +420,7 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=1,
+        producer_revision=2,
         scenario_id="helm_cold_resume",
         scenario_revision=4,
         assertion_cells=(
@@ -691,6 +691,9 @@ def _start_transcript_shipper(
 ) -> TranscriptShipper:
     """Start the same file-watching Machine Agent used outside the factory."""
 
+    # This helper owns its nested evidence tree. Callers should not need to
+    # duplicate its internal log layout merely to make the first open succeed.
+    evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     _provision_transcript_roots(home, environment)
     engine_longhouse_home = longhouse_home or (home / ".longhouse")
     machine_dir = engine_longhouse_home / "machine"

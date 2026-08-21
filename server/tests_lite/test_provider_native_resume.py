@@ -186,7 +186,6 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
 ) -> None:
     home = tmp_path / "home"
     evidence = tmp_path / "evidence"
-    evidence.mkdir()
     args = argparse.Namespace(
         api_url="https://runtime.example",
         agents_token="device-token",
@@ -227,6 +226,7 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
         environment={"HOME": str(home), "CLAUDE_CONFIG_DIR": str(tmp_path / "staged-claude")},
         evidence_root=evidence,
     )
+    assert (evidence / "transcript-shipper.log").is_file()
     argv = [str(value) for value in captured["argv"]]
     assert "--token" not in argv
     flush_run: dict[str, object] = {}
