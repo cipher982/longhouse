@@ -81,7 +81,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=1,
@@ -832,6 +832,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--longhouse-cli", type=Path)
     parser.add_argument("--provider-bin", type=Path)
     parser.add_argument("--provider-version")
+    parser.add_argument("--model")
     parser.add_argument("--registration", action="store_true")
     return parser
 
