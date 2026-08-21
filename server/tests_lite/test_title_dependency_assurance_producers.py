@@ -96,11 +96,12 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert payload["session"]["origin_kind"] == "console"
     raw = payload["records"][0]["data_b64"]
     assert raw
-    assert LIVE_REGISTRATION.producer_revision == 3
-    assert LIVE_REGISTRATION.scenario_revision == 3
+    assert LIVE_REGISTRATION.producer_revision == 4
+    assert LIVE_REGISTRATION.scenario_revision == 4
+    assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
-    assert RECOVERY_REGISTRATION.producer_revision == 4
-    assert RECOVERY_REGISTRATION.scenario_revision == 4
+    assert RECOVERY_REGISTRATION.producer_revision == 5
+    assert RECOVERY_REGISTRATION.scenario_revision == 5
     assert "legacy_exact_provider_proof_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
 
 

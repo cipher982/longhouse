@@ -983,7 +983,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     title_health = completed["title_health"]
     health_signals = title_health.get("signals") if isinstance(title_health.get("signals"), dict) else {}
     observation = {
-        "ordinary_hidden_obligation_created": write_receipt["status_code"] == 200,
+        "typed_hidden_title_assurance_obligation_created": write_receipt["status_code"] == 200,
         "obligation_session_id": session_id,
         "obligation_titled": bool(session.get("anchor_title")),
         "claude_semantic_path_consumed": (
@@ -1003,7 +1003,7 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
         "credential_rotation_count": 0,
     }
     passed = (
-        observation["ordinary_hidden_obligation_created"]
+        observation["typed_hidden_title_assurance_obligation_created"]
         and observation["obligation_titled"]
         and observation["claude_semantic_path_consumed"]
         and observation["dependency_health_verdict"] == "ok"

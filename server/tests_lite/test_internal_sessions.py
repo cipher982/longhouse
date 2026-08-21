@@ -51,6 +51,12 @@ def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
         "Reply exactly OK",
         "Please reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123",
         "Reply with exactly LONGHOUSE_CLAUDE_PRINT_not-hex and nothing else.\n",
+        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdefZabcdef",
+        "reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef",
+        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef\v",
+        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef\f",
+        "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_91b38069e7",
+        "LONGHOUSE_CLAUDE_NOREPLY_74694349fb694c97af560ac98572f989",
     )
     metadata = MetaData()
     sessions = Table(
@@ -81,7 +87,7 @@ def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
         )
 
     assert [bool(sql_results[str(index)]) for index in range(len(prompts))] == [
-        is_provider_reply_exact_marker(prompt) for prompt in prompts
+        classify_provider_proof_environment(first_user_text=prompt) == "test" for prompt in prompts
     ]
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 
 from sqlalchemy import and_
-from sqlalchemy import case
 from sqlalchemy import func
 from sqlalchemy import or_
 
@@ -17,14 +16,15 @@ PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT = "/provider-factory/artifacts/"
 PROVIDER_FACTORY_TEMP_CWD_PREFIXES = ("/tmp/provider-factory-", "/private/tmp/provider-factory-")
 PROVIDER_FACTORY_LIVE_CELL_CWD_PREFIXES = ("/tmp/live-cell-run-", "/private/tmp/live-cell-run-")
 PROVIDER_FACTORY_MACHINE_ID = "provider-factory-resume"
+FACTORY_TITLE_ASSURANCE_PROJECT = "longhouse-title-assurance"
+FACTORY_TITLE_ASSURANCE_CWD = "/factory/title-assurance"
+FACTORY_TITLE_ASSURANCE_SURFACE = "factory_assurance"
 PROVIDER_COORDINATION_PROBE_CWD_PREFIXES = ("/tmp/lhx-claude-coord-", "/private/tmp/lhx-claude-coord-")
 PROVIDER_EVIDENCE_CWD_PREFIXES = ("/tmp/", "/private/tmp/")
 PROVIDER_EVIDENCE_CWD_SEGMENT = "/evidence/raw/"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
-PROVIDER_PRODUCT_CANARY_MARKER_PREFIX = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_"
-PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE = r"Reply with exactly LONGHOUSE\_CURSOR\_PRODUCT\_ONE\_%"
 PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
     r"^Reply (?:with )?exactly "
     r"(?:LONGHOUSE_(?:CODEX|OPENCODE|CURSOR|CLAUDE|AGY)_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_[0-9a-f]{6,}"
@@ -32,8 +32,6 @@ PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
     r"(?:\.| and nothing else\.)?$"
 )
 PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(r"LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}", re.IGNORECASE)
-PROVIDER_REPLY_EXACT_MARKER_PROVIDERS = ("CODEX", "OPENCODE", "CURSOR", "CLAUDE", "AGY")
-PROVIDER_REPLY_EXACT_BARE_MARKERS = ("FRESH_AFTER_CANCEL_OK", "CLEAN_EXIT_ORIGINAL_COMPLETE", "WARM_IDLE_OK")
 HATCH_EXECUTION_CONTRACT_RE = re.compile(
     r"^Hatch execution contract:\nThis is a single bounded, non-interactive run(?:\.| with a time budget\b)"
 )
@@ -41,6 +39,12 @@ HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single 
 SQL_LIKE_ESCAPE = "\\"
 SQL_WHITESPACE = " \t\r\n"
 SYNTHETIC_BENCH_PROJECTS = frozenset({"longhouse-bench"})
+
+
+def _normalize_internal_prompt(text: str | None) -> str:
+    """Match the explicit whitespace normalization used by SQLite clauses."""
+
+    return str(text or "").strip(SQL_WHITESPACE)
 
 
 def is_internal_canary_provider_filter(provider: str | None) -> bool:
@@ -83,24 +87,68 @@ def is_provider_factory_machine_id(machine_id: str | None) -> bool:
     return str(machine_id or "").strip().lower() == PROVIDER_FACTORY_MACHINE_ID
 
 
+def is_factory_title_assurance_session(
+    *,
+    provider: str | None,
+    environment: str | None,
+    project: str | None,
+    cwd: str | None,
+    machine_id: str | None,
+    origin_kind: str | None,
+    hidden_from_default_timeline: bool | int | None,
+    launch_actor: str | None,
+    launch_surface: str | None,
+) -> bool:
+    """Recognize the one factory-owned session intentionally carrying title debt."""
+
+    return (
+        str(provider or "").strip().lower() == "claude"
+        and str(environment or "").strip().lower() == "local"
+        and str(project or "").strip() == FACTORY_TITLE_ASSURANCE_PROJECT
+        and str(cwd or "").strip() == FACTORY_TITLE_ASSURANCE_CWD
+        and is_provider_factory_machine_id(machine_id)
+        and str(origin_kind or "").strip() == "console"
+        and bool(hidden_from_default_timeline)
+        and str(launch_actor or "").strip() == "automation"
+        and str(launch_surface or "").strip() == FACTORY_TITLE_ASSURANCE_SURFACE
+    )
+
+
+def factory_title_assurance_session_clause(model):
+    """SQL twin of :func:`is_factory_title_assurance_session`."""
+
+    columns = getattr(model, "c", model)
+    return and_(
+        func.lower(func.coalesce(columns.provider, "")) == "claude",
+        func.lower(func.coalesce(columns.environment, "")) == "local",
+        columns.project == FACTORY_TITLE_ASSURANCE_PROJECT,
+        columns.cwd == FACTORY_TITLE_ASSURANCE_CWD,
+        func.lower(func.coalesce(columns.machine_id, "")) == PROVIDER_FACTORY_MACHINE_ID,
+        columns.origin_kind == "console",
+        columns.hidden_from_default_timeline == 1,
+        columns.launch_actor == "automation",
+        columns.launch_surface == FACTORY_TITLE_ASSURANCE_SURFACE,
+    )
+
+
 def is_provider_coordination_awareness_marker(text: str | None) -> bool:
     return bool(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.search(str(text or "").strip()))
 
 
 def is_provider_noreply_marker(text: str | None) -> bool:
-    return bool(PROVIDER_NOREPLY_MARKER_RE.match(str(text or "").strip()))
+    return bool(PROVIDER_NOREPLY_MARKER_RE.match(_normalize_internal_prompt(text)))
 
 
 def is_provider_product_canary_marker(text: str | None) -> bool:
     """Recognize the bounded Cursor product canary prompt."""
 
-    return bool(PROVIDER_PRODUCT_CANARY_MARKER_RE.fullmatch(str(text or "").strip()))
+    return bool(PROVIDER_PRODUCT_CANARY_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
 
 
 def is_provider_reply_exact_marker(text: str | None) -> bool:
     """Recognize Longhouse's exact-response provider proof markers."""
 
-    return bool(PROVIDER_REPLY_EXACT_MARKER_RE.fullmatch(str(text or "").strip()))
+    return bool(PROVIDER_REPLY_EXACT_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
 
 
 def is_hatch_execution_contract(text: str | None) -> bool:
@@ -150,45 +198,10 @@ def provider_proof_session_clause(model):
     machine_id_column = getattr(columns, "machine_id", None)
     if machine_id_column is None:
         machine_id_column = getattr(columns, "device_id", None)
-    product_suffix = func.substr(first_user, len(PROVIDER_PRODUCT_CANARY_MARKER_PREFIX) + 1)
-    product_marker = and_(
-        first_user.like(PROVIDER_PRODUCT_CANARY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
-        func.length(product_suffix) > 0,
-        ~(product_suffix.op("GLOB")("*[^0-9a-f]*")),
-    )
+    product_marker = first_user.op("REGEXP")(PROVIDER_PRODUCT_CANARY_MARKER_RE.pattern)
+    noreply_marker = first_user.op("REGEXP")(PROVIDER_NOREPLY_MARKER_RE.pattern)
+    reply_exact_marker = first_user.op("REGEXP")(PROVIDER_REPLY_EXACT_MARKER_RE.pattern)
     six_hex = "[0-9a-f]" * 6
-    reply_exact_marker = []
-    for phrase in ("Reply exactly", "Reply with exactly"):
-        for provider in PROVIDER_REPLY_EXACT_MARKER_PROVIDERS:
-            prefix = f"{phrase} LONGHOUSE_{provider}_"
-            escaped_prefix = prefix.replace("_", SQL_LIKE_ESCAPE + "_")
-            marker_body = func.substr(first_user, len(prefix) + 1)
-            marker_core = case(
-                (marker_body.like("% and nothing else."), func.substr(marker_body, 1, func.length(marker_body) - 18)),
-                (marker_body.like("%."), func.substr(marker_body, 1, func.length(marker_body) - 1)),
-                else_=marker_body,
-            )
-            reply_exact_marker.append(
-                and_(
-                    first_user.like(f"{escaped_prefix}%", escape=SQL_LIKE_ESCAPE),
-                    ~(marker_core.op("GLOB")("*[^A-Za-z0-9_]*")),
-                    or_(
-                        and_(
-                            marker_core.op("GLOB")(f"*_{six_hex}*"),
-                            ~(marker_core.op("GLOB")("*_[0-9a-f]*[^0-9a-f]")),
-                        ),
-                    ),
-                )
-            )
-    reply_exact_marker.extend(
-        or_(
-            first_user == f"{phrase} {marker}",
-            first_user == f"{phrase} {marker}.",
-            first_user == f"{phrase} {marker} and nothing else.",
-        )
-        for phrase in ("Reply exactly", "Reply with exactly")
-        for marker in PROVIDER_REPLY_EXACT_BARE_MARKERS
-    )
     coordination_awareness_marker = func.lower(first_user).op("GLOB")("*longhouse_cursor_coord_awareness_" + six_hex + "*")
     metadata_markers = [coordination_awareness_marker]
     if machine_id_column is not None:
@@ -205,10 +218,10 @@ def provider_proof_session_clause(model):
         cwd.like("/private/tmp/lhx-claude-coord-%"),
         cwd.like("/tmp/%/evidence/raw/%"),
         cwd.like("/private/tmp/%/evidence/raw/%"),
-        first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
+        noreply_marker,
         product_marker,
+        reply_exact_marker,
         *metadata_markers,
-        *reply_exact_marker,
     )
 
 

@@ -99,7 +99,9 @@ from zerg.services.codex_launch_visibility_repair import codex_launch_visibility
 from zerg.services.codex_launch_visibility_repair import plan_codex_launch_visibility_repair
 from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.internal_sessions import factory_title_assurance_session_clause
 from zerg.services.internal_sessions import hatch_automation_session_clause
+from zerg.services.internal_sessions import is_factory_title_assurance_session
 from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_title import RESUME_SEED_TOKEN
@@ -316,6 +318,7 @@ def _retryable_title_row_failure_clause(table):
 def _storage_title_obligation_clause(table):
     """Rows that should eventually receive an AI title."""
 
+    factory_assurance = factory_title_assurance_session_clause(table)
     return and_(
         table.c.user_messages > 0,
         or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
@@ -325,8 +328,13 @@ def _storage_title_obligation_clause(table):
         ~table.c.first_user_message_preview.contains(RESUME_SEED_TOKEN, autoescape=True),
         ~func.lower(func.coalesce(table.c.project, "")).in_(SYNTHETIC_BENCH_PROJECTS),
         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
-        table.c.environment.notin_(("test", "e2e")),
-        ~provider_proof_session_clause(table),
+        or_(
+            factory_assurance,
+            and_(
+                table.c.environment.notin_(("test", "e2e")),
+                ~provider_proof_session_clause(table),
+            ),
+        ),
         ~hatch_automation_session_clause(table),
     )
 
@@ -6730,6 +6738,17 @@ class CatalogStore:
             )
             provider_automation = (
                 proof_environment == "test"
+                and not is_factory_title_assurance_session(
+                    provider=provider,
+                    environment=session_facts["environment"],
+                    project=session_facts["project"],
+                    cwd=session_facts["cwd"],
+                    machine_id=machine_id,
+                    origin_kind=session_facts["origin_kind"],
+                    hidden_from_default_timeline=session_facts["hidden_from_default_timeline"],
+                    launch_actor=session_facts["launch_actor"],
+                    launch_surface=session_facts["launch_surface"],
+                )
                 and live_console_session is None
                 and not (existing_session is not None and existing_session["origin_kind"] == "console")
                 and not (live_catalog_session is not None and live_catalog_session["origin_kind"] == "console")

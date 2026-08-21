@@ -459,6 +459,47 @@ def test_candidate_listing_skips_seed_marker_and_over_budget_sessions(tmp_path):
     assert str(burnt_id) not in candidates
 
 
+def test_typed_factory_title_assurance_is_the_only_factory_machine_title_obligation(tmp_path):
+    engine = _build_engine(tmp_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    assurance_id = uuid4()
+    ordinary_factory_id = uuid4()
+    common = {
+        "tenant_id": "tenant-a",
+        "owner_id": "42",
+        "provider": "claude",
+        "environment": "local",
+        "machine_id": "provider-factory-resume",
+        "project": "longhouse-title-assurance",
+        "cwd": "/factory/title-assurance",
+        "started_at": now,
+        "last_activity_at": now,
+        "user_messages": 1,
+        "semantic_projection_version": 1,
+        "first_user_message_preview": "Verify native Claude title projection",
+        "origin_kind": "console",
+        "hidden_from_default_timeline": 1,
+        "launch_actor": "automation",
+        "commit_seq": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            StorageSession.__table__.insert(),
+            [
+                {**common, "session_id": str(assurance_id), "launch_surface": "factory_assurance"},
+                {**common, "session_id": str(ordinary_factory_id), "launch_surface": "test"},
+            ],
+        )
+
+    candidates = _candidate_ids(engine)
+    assert str(assurance_id) in candidates
+    assert str(ordinary_factory_id) not in candidates
+    health = CatalogStore(engine).read_storage_title_dependency_health()
+    assert health["pending_sessions"] == 1
+
+
 def test_candidate_listing_drains_oldest_due_obligation_before_new_arrivals(tmp_path):
     engine = _build_engine(tmp_path)
     old_id = uuid4()

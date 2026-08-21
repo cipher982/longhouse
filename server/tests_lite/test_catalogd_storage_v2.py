@@ -504,6 +504,56 @@ async def test_provider_factory_machine_classifies_user_repo_storage_as_hidden_c
 
 
 @pytest.mark.asyncio
+async def test_typed_factory_title_assurance_preserves_hidden_console_provenance(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = uuid4()
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"typed title assurance\n",),
+            sealed_at=now,
+            machine_id="provider-factory-resume",
+            provider="claude",
+        )
+        raw["session_facts"].update(
+            environment="local",
+            project="longhouse-title-assurance",
+            cwd="/factory/title-assurance",
+            origin_kind="console",
+            hidden_from_default_timeline=True,
+            launch_actor="automation",
+            launch_surface="factory_assurance",
+        )
+        manifest = _render_manifest(generation_id, source_epoch=epoch, provider="claude")
+        manifest.update(
+            first_user_message_preview="Verify native Claude title projection",
+            last_visible_text_preview="Verify native Claude title projection",
+            user_messages=1,
+        )
+        raw.update(render_state="ready", render_manifest=manifest, projectors=["semantic-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["environment"] == "local"
+        assert session["session"]["origin_kind"] == "console"
+        assert session["session"]["hidden_from_default_timeline"] is True
+        assert session["session"]["launch_actor"] == "automation"
+        assert session["session"]["launch_surface"] == "factory_assurance"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_provider_factory_machine_reclassifies_existing_shadow_catalog_shell(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
