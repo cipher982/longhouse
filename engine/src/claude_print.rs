@@ -23,6 +23,7 @@ use tokio::process::{Child, Command};
 use uuid::Uuid;
 
 pub const CLAUDE_PRINT_ADAPTER: &str = "claude_print";
+#[cfg(test)]
 pub const DEFAULT_CLAUDE_BIN: &str = "claude";
 const STDERR_TAIL_LINES: usize = 40;
 
