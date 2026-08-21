@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 from dataclasses import replace
 from datetime import UTC
@@ -105,6 +106,59 @@ def _bundle(*records: ProviderCapabilityProofRecord) -> dict:
     return payload
 
 
+def _product_bundle() -> tuple[dict, str]:
+    record = _record().serialize()
+    record.pop("artifact_id")
+    for name in (
+        "provider",
+        "provider_version",
+        "provider_executable_identity",
+        "provider_build_identity",
+        "provider_build_granularity",
+    ):
+        record.pop(name, None)
+    record.update(
+        subject_kind="longhouse_product",
+        subject_key="longhouse_product:sha256:" + "a" * 64,
+        longhouse_git_sha="l" * 40,
+        provenance_extension={
+            "subject_kind": "longhouse_product",
+            "subject_key": "longhouse_product:sha256:" + "a" * 64,
+        },
+    )
+    artifact_id = hashlib.sha256(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+    record = {"artifact_id": artifact_id, **record}
+    referenced = {
+        *record["raw_reference_digests"],
+        record["accepted_epoch_digest"],
+        record["verifier_bundle_digest"],
+        record["worker_census_digest"],
+        record["compile_report_digest"],
+        record["plan_digest"],
+        record["sandbox_receipt_digest"],
+        record["cleanup_receipt_digest"],
+    }
+    payload = {
+        "schema_version": 3,
+        "artifact_kind": "provider_capability_proof_bundle",
+        "records": [record],
+        "publication": {
+            "worker_id": record["worker_id"],
+            "worker_census_digest": record["worker_census_digest"],
+            "auth_mechanism": record["auth_mechanism"],
+            "published_at": "2026-07-22T18:01:00Z",
+        },
+        "blobs": [
+            {"digest": digest, "content_base64": base64.b64encode(_BLOB_CONTENT[digest]).decode()}
+            for digest in sorted(referenced)
+        ],
+    }
+    payload["bundle_digest"] = routes._bundle_digest(payload)
+    return payload, artifact_id
+
+
 def _client(monkeypatch, tmp_path: Path, *, factory_token: str | None = "factory-secret") -> TestClient:
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
@@ -166,6 +220,46 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
     assert fetched.json()["records"][0]["run_reference"] == record.run_reference
     assert fetched.json()["total_records"] == 1
     assert fetched.json()["truncated"] is False
+
+
+def test_product_assurance_publish_is_archived_but_never_projected_as_a_provider(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    bundle, artifact_id = _product_bundle()
+    try:
+        first = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=bundle)
+        second = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=bundle)
+        fetched = client.get("/api/agents/provider-capability-proofs")
+        projection = client.get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert first.status_code == 201, first.text
+    assert second.json() == first.json() == {
+        "schema_version": 2,
+        "accepted": 1,
+        "trusted_artifact_ids": [artifact_id],
+    }
+    archive = tmp_path / "trusted-product-assurance"
+    assert len(list((archive / "bundles").glob("*.json"))) == 1
+    assert len(list((archive / "events" / artifact_id).glob("*.json"))) == 1
+    assert json.loads(next((archive / "bundles").glob("*.json")).read_text()) == bundle
+    assert artifact_id not in fetched.json()["trusted_artifact_ids"]
+    assert all(item["proof_artifact_id"] != artifact_id for item in projection.json()["capabilities"])
+
+    invalid, _ = _product_bundle()
+    invalid["records"][0]["provider"] = "codex"
+    invalid["records"][0]["artifact_id"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in invalid["records"][0].items() if key != "artifact_id"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    invalid["bundle_digest"] = routes._bundle_digest(invalid)
+    rejected = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=invalid)
+    assert rejected.status_code == 422
+    assert "provider identity" in rejected.json()["detail"]
 
 
 def test_factory_rejects_new_v2_publication_but_keeps_old_history_non_admissible(monkeypatch, tmp_path: Path) -> None:

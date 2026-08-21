@@ -20,6 +20,7 @@ from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.product_assurance_proof_archive import ProductAssuranceProofArchive
 from zerg.services.provider_capability_projection import PROJECTION_VERSION
 from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import PROOF_SCHEMA_VERSION
@@ -46,6 +47,10 @@ def _proof_store() -> ProviderCapabilityProofStore:
 
 def _legacy_proof_store() -> ProviderCapabilityProofStore:
     return ProviderCapabilityProofStore(_proof_store().root.parent / "historical-factory-v2")
+
+
+def _product_assurance_archive() -> ProductAssuranceProofArchive:
+    return ProductAssuranceProofArchive(_proof_store().root.parent / "trusted-product-assurance")
 
 
 def _verify_factory_token(request: Request) -> None:
@@ -205,6 +210,24 @@ async def publish_provider_capability_proofs(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="historical schema-v2 proofs are read-only and cannot be published",
         )
+    raw_records = payload.get("records")
+    if isinstance(raw_records, list) and raw_records:
+        subject_kinds = {record.get("subject_kind", "provider_release") for record in raw_records if isinstance(record, dict)}
+        if "longhouse_product" in subject_kinds:
+            if subject_kinds != {"longhouse_product"} or len(subject_kinds) != 1:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="proof bundle may not mix provider and Longhouse product subjects",
+                )
+            try:
+                trusted_ids = _product_assurance_archive().accept(payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            return {
+                "schema_version": 2,
+                "accepted": len(trusted_ids),
+                "trusted_artifact_ids": trusted_ids,
+            }
     try:
         records, blobs, publication = _validated_records(payload)
     except ValueError as exc:
