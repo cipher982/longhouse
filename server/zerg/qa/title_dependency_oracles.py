@@ -35,9 +35,6 @@ from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
 from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
-from zerg.storage_v2.contracts import EnvelopeIdentity
-from zerg.storage_v2.contracts import envelope_id
-from zerg.storage_v2.contracts import hash_records
 
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
 RUNTIME_API_TOKEN_ENV = "LONGHOUSE_RUNTIME_API_TOKEN"
@@ -317,6 +314,14 @@ def _capabilities(api_url: str, token: str | None, *, machine_id: str) -> dict[s
 
 
 def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, dict[str, Any]]:
+    # Registration loads this oracle from the immutable, narrow verifier
+    # bundle before a candidate checkout is selected. Storage-v2 is
+    # application source under test, so resolve its contract only when the
+    # product oracle executes against that exact checkout.
+    from zerg.storage_v2.contracts import EnvelopeIdentity
+    from zerg.storage_v2.contracts import envelope_id
+    from zerg.storage_v2.contracts import hash_records
+
     session_id = str(uuid4())
     source_epoch = uuid4()
     opaque_source_id = f"factory-title-assurance/{session_id}.jsonl"
