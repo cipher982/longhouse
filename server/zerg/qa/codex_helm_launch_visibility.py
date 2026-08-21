@@ -56,9 +56,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -424,6 +424,32 @@ def _stop_launch(
     }
 
 
+def _seed_codex_rollout(
+    tui: ProviderPtySession,
+    *,
+    codex_home: Path,
+    marker: str,
+    timeout: float,
+) -> dict[str, Any]:
+    """Create the provider history that a cold Resume is required to retain."""
+
+    tui.submit_line(f"Reply with exactly {marker}")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not tui.alive():
+            raise RuntimeError(f"Codex TUI exited before seeding its rollout ({tui.process.returncode})")
+        for path in codex_home.glob("sessions/**/*.jsonl"):
+            if bridge_canary._assistant_transcript_contains(path, marker):
+                return {
+                    "status": "pass",
+                    "rollout_path": str(path),
+                    "rollout_size": path.stat().st_size,
+                    "assistant_marker_observed": True,
+                }
+        time.sleep(0.25)
+    raise RuntimeError("Codex TUI did not persist the seed turn before cold Resume")
+
+
 def _human_launch_sequence(
     args: argparse.Namespace,
     *,
@@ -493,6 +519,13 @@ def _human_launch_sequence(
         )
         session_id = str(fresh_registration["session_id"])
         created_session_ids.append(session_id)
+        seed_receipt = _seed_codex_rollout(
+            fresh_tui,
+            codex_home=Path(environment["CODEX_HOME"]),
+            marker=f"LONGHOUSE_CODEX_HELM_SEED_{uuid.uuid4().hex}",
+            timeout=args.wait_ready_secs,
+        )
+        write_json(root / "human-seed-receipt.json", seed_receipt)
         stop_receipts.append(_stop_launch(args, tui=fresh_tui, session_id=session_id, isolation_root=isolation_root))
 
         resumed_at = time.monotonic()

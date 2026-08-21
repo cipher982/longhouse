@@ -374,7 +374,7 @@ fn resolve_bin(explicit: Option<String>) -> anyhow::Result<String> {
     }
     anyhow::bail!("cursor-agent executable not found. Install Cursor's CLI or set --cursor-bin.")
 }
-fn cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String> {
+pub(crate) fn create_cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String> {
     // Cursor 2026.07.23-e383d2b prints the conversation UUID but keeps the
     // create-chat process alive. Waiting for Command::output() therefore
     // blocks Helm before its managed state can be published. Treat the first
@@ -1357,7 +1357,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let launch_reservation = Some(LaunchReservation::create(&dir, &session_id, &launch_id)?);
     let conversation = match resume_conversation.as_deref() {
         Some(value) => value.to_owned(),
-        None => cursor_chat(&bin, &cwd)?,
+        None => create_cursor_chat(&bin, &cwd)?,
     };
     if matches!(permission_mode.as_str(), "remote_human")
         && registered
@@ -1794,7 +1794,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn cursor_chat_reaps_helper_after_uuid_without_waiting_for_exit() {
+    fn create_cursor_chat_reaps_helper_after_uuid_without_waiting_for_exit() {
         let root = tempfile::tempdir().unwrap();
         let script = root.path().join("cursor-agent");
         fs::write(
@@ -1805,7 +1805,7 @@ mod tests {
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
 
         let started = std::time::Instant::now();
-        let conversation = cursor_chat(script.to_str().unwrap(), root.path()).unwrap();
+        let conversation = create_cursor_chat(script.to_str().unwrap(), root.path()).unwrap();
 
         assert_eq!(conversation, "11111111-1111-4111-8111-111111111111");
         assert!(started.elapsed() < Duration::from_secs(5));

@@ -332,21 +332,13 @@ pub fn interrupt_cursor_print_turn(run_id: &str, session_id: &str) -> Result<()>
 }
 
 async fn create_chat(binary: &str, cwd: &Path) -> Result<String> {
-    let output = Command::new(binary)
-        .arg("create-chat")
-        .current_dir(cwd)
-        .output()
-        .await
-        .with_context(|| format!("running `{binary} create-chat`"))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cursor-agent create-chat failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let value = String::from_utf8(output.stdout)?.trim().to_string();
-    validate_uuid(&value, "cursor-agent create-chat result")?;
-    Ok(value)
+    let binary = binary.to_owned();
+    let cwd = cwd.to_owned();
+    tokio::task::spawn_blocking(move || {
+        crate::cursor_helm_launcher::create_cursor_chat(&binary, &cwd)
+    })
+    .await
+    .context("cursor-agent create-chat worker failed")?
 }
 
 async fn monitor_cursor_print(

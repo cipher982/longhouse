@@ -39,6 +39,10 @@ from zerg.services.session_turns import create_session_turn
 
 CONSOLE_TURN_START_COMMAND = "session.turn.start"
 CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
+# Leave enough room for the HTTP boundary to persist and return an ambiguous
+# command outcome instead of cancelling the request at the same instant as the
+# Machine Agent reply budget expires.
+CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS = 10
 logger = logging.getLogger("longhouse.console_latency")
 
 CONSOLE_EXECUTION_OWNER_STATES = frozenset(
@@ -198,7 +202,7 @@ async def interrupt_console_turn(
             "thread_id": str(turn.get("thread_id") or ""),
         },
         command_id=f"{run_id}:interrupt",
-        timeout_secs=15,
+        timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
     )
     message = dict(response.message or {})
     error = None
@@ -570,7 +574,7 @@ async def _dispatch_claimed_console_turn(
         command_type=CONSOLE_TURN_START_COMMAND,
         payload=payload,
         command_id=str(claimed.run_id),
-        timeout_secs=15,
+        timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
     )
     message = dict(response.message or {})
     if not response.transport_ok:
@@ -793,7 +797,7 @@ async def enqueue_catalog_console_turn(
             command_type=CONSOLE_TURN_START_COMMAND,
             payload=payload,
             command_id=str(run_id),
-            timeout_secs=15,
+            timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
         )
         response_message = dict(response.message or {})
         detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
@@ -942,7 +946,7 @@ async def dispatch_catalog_claimed_turn(
             command_type=CONSOLE_TURN_START_COMMAND,
             payload=payload,
             command_id=str(run_id),
-            timeout_secs=15,
+            timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
         )
         message = dict(response.message or {})
         if not response.transport_ok:

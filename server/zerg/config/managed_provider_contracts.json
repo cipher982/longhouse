@@ -158,7 +158,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
+              "oracle_digest": "5f9ab3fed3d980bcd3c7fd2813dd691453f2f73ba4d420a83936d5ba2f5c2df5"
             }
           ]
         },
@@ -538,7 +538,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "9c6570f6840ef5333dd51aee76a931da3ec1974dacdbd7765f2a73e47a315847"
+      "adapter_digest": "71ed7792937d022b02a67acc6a04b8316a841d2b378e795ff29a2bda7e3c0cf6"
     },
     {
       "provider": "claude",
@@ -905,7 +905,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
+              "oracle_digest": "5f9ab3fed3d980bcd3c7fd2813dd691453f2f73ba4d420a83936d5ba2f5c2df5"
             },
             {
               "id": "real_print_marker_returned",
@@ -1312,7 +1312,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
+              "oracle_digest": "5f9ab3fed3d980bcd3c7fd2813dd691453f2f73ba4d420a83936d5ba2f5c2df5"
             }
           ]
         },
@@ -2037,7 +2037,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1c2c4ca5831cb81e9647fe6ead9af0f533e9ebc21af4d70fe3926bd0542a2125"
+              "oracle_digest": "5f9ab3fed3d980bcd3c7fd2813dd691453f2f73ba4d420a83936d5ba2f5c2df5"
             }
           ]
         },
@@ -2335,7 +2335,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "9908d7775785b797821045eac33e1b532c424f5e8d9cb631240906e7fa869aa3"
+      "adapter_digest": "d7e4a49b4fcf1e1b831e68c278173174446f8231440681cae6ca2feb307fcc64"
     },
     {
       "provider": "pi",

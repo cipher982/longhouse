@@ -54,13 +54,13 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.required_executables == ("jq",)
-    assert m.REGISTRATION.producer_revision == 5
-    assert m.REGISTRATION.scenario_revision == 3
+    assert m.REGISTRATION.producer_revision == 6
+    assert m.REGISTRATION.scenario_revision == 4
     assert m.REGISTRATION.observation_scope == "scenario"
     assert "typed_compaction_receipt" not in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_artifacts_by_scenario == {
         "codex_coordination_awareness_post_compaction": ("typed_compaction_receipt",),
-        "codex_coordination_directed_input": ("target_send_readiness",),
+        "codex_coordination_directed_input": ("target_send_readiness", "machine_shipper_receipt"),
     }
     assert len(m._CELL_BY_VARIANT) == 5
 
@@ -276,12 +276,16 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
         assert isinstance(thread_path, Path)
         if holder["send_count"] == 1:
             marker = re.search(r"exactly (\S+) and", prompt, re.IGNORECASE).group(1)
-            assistant = marker
+            rows = [{"payload": {"type": "agent_message", "message": marker}}]
         else:
-            marker = re.search(r"starting with exactly (\S+):", prompt).group(1)
-            assistant = f"{marker}: use inbox for durable recovery and reply for attributed input."
+            marker = re.search(r"exactly (\S+) and", prompt, re.IGNORECASE).group(1)
+            rows = [
+                {"payload": {"type": "function_call", "name": "mcp__longhouse__inbox", "arguments": "{}"}},
+                {"payload": {"type": "agent_message", "message": marker}},
+            ]
         with thread_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps({"payload": {"type": "agent_message", "message": assistant}}) + "\n")
+            for row in rows:
+                stream.write(json.dumps(row) + "\n")
         return {"last_turn_status": "completed", "thread_id": "thread-1", "thread_path": str(thread_path)}
 
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
@@ -316,7 +320,8 @@ def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: py
     }
     assert observation["compaction_signal_observed"] is True
     assert observation["post_compact_question_answered"] is True
-    assert observation["assistant_evidence_source"] == "native_rollout_assistant_event"
+    assert observation["assistant_evidence_source"] == "native_rollout_mcp_and_assistant_events"
+    assert observation["post_compaction_inbox_invoked"] is True
     assert observation["visible_bootstrap_count"] == 1
     assert (root / "typed-compaction-receipt.json").is_file()
 
@@ -434,6 +439,11 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
     monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
+    monkeypatch.setattr(
+        m,
+        "_start_transcript_shipper",
+        lambda *_a, **_k: type("FakeShipper", (), {"stop": lambda self: {"status": "pass"}})(),
+    )
     monkeypatch.setattr(m, "_issue_coordination_token", fake_issue_token)
     monkeypatch.setattr(m, "_api_call", fake_api_call)
 
@@ -498,6 +508,11 @@ def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path
     monkeypatch.setattr(m.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
     monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
+    monkeypatch.setattr(
+        m,
+        "_start_transcript_shipper",
+        lambda *_a, **_k: type("FakeShipper", (), {"stop": lambda self: {"status": "pass"}})(),
+    )
     monkeypatch.setattr(m, "_issue_coordination_token", lambda _args, session_id: f"token-for-{session_id}")
     monkeypatch.setattr(m, "_api_call", fake_api_call)
 

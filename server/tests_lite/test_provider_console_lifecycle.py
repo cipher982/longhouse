@@ -22,7 +22,7 @@ def _receipts(provider: str = "claude") -> tuple[dict, dict, dict, dict]:
         "run_id": "run-1",
         "prompt_digest": "sha256:" + "a" * 64,
     }
-    dispatch = {"status": "pass", **identity}
+    dispatch = {"status": "pass", "qualification_model_bound": True, **identity}
     binding = {
         "status": "pass",
         **identity,
@@ -294,7 +294,9 @@ def test_start_turn_retries_transient_admission_with_stable_request(monkeypatch)
             raise RuntimeError('POST /turns returned HTTP 503: {"detail":"Request timed out"}')
         if len(calls) == 2:
             raise RuntimeError("adapter_unavailable")
-        return {"state": "queued", "run_id": "run-1"}
+        if len(calls) == 3:
+            return {"state": "queued", "turn_id": "turn-1", "run_id": None}
+        return {"state": "starting", "turn_id": "turn-1", "run_id": "run-1"}
 
     monkeypatch.setattr(lifecycle, "_request", request)
     monkeypatch.setattr(lifecycle.time, "sleep", lambda _seconds: None)
@@ -308,7 +310,7 @@ def test_start_turn_retries_transient_admission_with_stable_request(monkeypatch)
     )
 
     assert result["run_id"] == "run-1"
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert all(
         call[0][-1]
         == {

@@ -278,6 +278,7 @@ pub struct CodexExecRunConfig {
     pub codex_bin: String,
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
+    pub model: Option<String>,
     pub prompt: String,
     pub launch_actor: Option<String>,
     pub launch_surface: Option<String>,
@@ -325,6 +326,13 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));
     }
+    if let Some(model) = normalized_optional(&config.model) {
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(format!(
+            "model={}",
+            toml_quote_string(&model)
+        )));
+    }
     args.push(OsString::from("app-server"));
     args.push(OsString::from("--listen"));
     args.push(OsString::from("stdio://"));
@@ -341,6 +349,7 @@ fn warm_pool_compatible(config: &CodexExecRunConfig) -> bool {
         && normalized_optional(&config.approval_policy).as_deref()
             == Some(DEFAULT_CONSOLE_APPROVAL_POLICY)
         && normalized_optional(&config.sandbox).as_deref() == Some(DEFAULT_CONSOLE_SANDBOX)
+        && normalized_optional(&config.model).is_none()
 }
 
 pub async fn prewarm_codex_console_workers() {
@@ -456,6 +465,7 @@ async fn spawn_initialized_codex_worker(
         codex_bin: codex_bin.to_string(),
         approval_policy: approval_policy.map(str::to_string),
         sandbox: sandbox.map(str::to_string),
+        model: None,
         prompt: String::new(),
         launch_actor: launch_actor.map(str::to_string),
         launch_surface: launch_surface.map(str::to_string),
@@ -1775,6 +1785,7 @@ mod tests {
             codex_bin: "codex".to_string(),
             approval_policy: Some("never".to_string()),
             sandbox: Some("workspace-write".to_string()),
+            model: None,
             prompt: "Do one bounded turn".to_string(),
             launch_actor: None,
             launch_surface: None,
@@ -2036,7 +2047,9 @@ for line in sys.stdin:
 
     #[test]
     fn codex_app_server_args_are_noninteractive_and_bounded() {
-        let args = codex_exec_args(&config())
+        let mut config = config();
+        config.model = Some("gpt-5.3-codex-low".to_string());
+        let args = codex_exec_args(&config)
             .into_iter()
             .map(|value| value.to_string_lossy().to_string())
             .collect::<Vec<_>>();
@@ -2050,6 +2063,8 @@ for line in sys.stdin:
                 "approval_policy=\"never\"",
                 "-s",
                 "workspace-write",
+                "-c",
+                "model=\"gpt-5.3-codex-low\"",
                 "app-server",
                 "--listen",
                 "stdio://",

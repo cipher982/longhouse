@@ -77,6 +77,7 @@ from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _artifact_manifest
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _control_send
+from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _launch_command
 from zerg.qa.provider_native_resume import _qualification_secrets
@@ -99,9 +100,9 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=2,
+    scenario_revision=3,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -540,7 +541,7 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
             root,
             isolation_root,
             label="awareness",
-            prompt=f"Reply with exactly {baseline_marker} and nothing else.",
+            prompt=_cursor_bootstrap_prompt(baseline_marker),
         )
         _write_session_launch_receipts(root, {"awareness": _session_launch_receipt("awareness", session)})
         baseline_reply = _wait_marker_reply(
@@ -576,8 +577,8 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
 def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
     source_ready_marker = f"LONGHOUSE_CURSOR_SOURCE_READY_{uuid4().hex[:10]}"
     target_ready_marker = f"LONGHOUSE_CURSOR_TARGET_READY_{uuid4().hex[:10]}"
-    source_prompt = f"Reply with exactly {source_ready_marker} and nothing else."
-    target_prompt = f"Reply with exactly {target_ready_marker} and nothing else."
+    source_prompt = _cursor_bootstrap_prompt(source_ready_marker)
+    target_prompt = _cursor_bootstrap_prompt(target_ready_marker)
     source: _CursorSession | None = None
     target: _CursorSession | None = None
     source_cleanup: _SessionCleanupReceipt | None = None

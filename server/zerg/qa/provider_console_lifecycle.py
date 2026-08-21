@@ -46,6 +46,7 @@ UNSUPPORTED_VARIANT = "interrupt_unsupported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
 OBSERVED_ACTIVITY = (
     "adapter_dispatch_started",
+    "qualification_model_bound",
     "stock_provider_response_bound",
     "exact_session_thread_run_binding",
     "transcript_converged_exactly_once",
@@ -62,6 +63,7 @@ RECEIPT_FILES = (
     "provider-response-binding-receipt.json",
     "interrupt-contract-receipt.json",
     "cleanup-receipt.json",
+    "provider-failure-diagnostics.json",
 )
 PROVIDER_BIN_ENV = {
     "codex": "LONGHOUSE_CODEX_BIN",
@@ -85,10 +87,10 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=(
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (ASSERTION_ID, UNSUPPORTED_VARIANT),
@@ -258,7 +260,7 @@ def _create_session(
         "launch_surface": "test",
     }
     if model:
-        payload["model"] = f"openrouter/{model}" if provider == "opencode" and not model.startswith("openrouter/") else model
+        payload["model"] = _native_model(provider, model)
     deadline = time.monotonic() + 45
     last_error: Exception | None = None
     while time.monotonic() < deadline:
@@ -274,6 +276,8 @@ def _create_session(
 
 def _start_turn(*, api_url: str, token: str, session_id: str, message: str, request_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
+    stable_turn_id: str | None = None
+    last_result: dict[str, Any] | None = None
     while True:
         try:
             result = _request(
@@ -283,7 +287,6 @@ def _start_turn(*, api_url: str, token: str, session_id: str, message: str, requ
                 f"/api/agents/sessions/{session_id}/turns",
                 {"message": message, "client_request_id": request_id},
             )
-            break
         except RuntimeError as exc:
             detail = str(exc)
             transient = (
@@ -295,11 +298,26 @@ def _start_turn(*, api_url: str, token: str, session_id: str, message: str, requ
             if not transient or time.monotonic() >= deadline:
                 raise
             time.sleep(0.25)
-    if result.get("state") not in {"queued", "starting", "active", "completed"}:
-        raise RuntimeError(f"Console turn was not accepted: {result}")
-    if not isinstance(result.get("run_id"), str) or not result["run_id"]:
-        raise RuntimeError(f"Console turn returned no stable run_id: {result}")
-    return result
+            continue
+        last_result = result
+        if result.get("state") not in {"queued", "starting", "active", "completed"}:
+            raise RuntimeError(f"Console turn was not accepted: {result}")
+        raw_turn_id = result.get("turn_id")
+        if raw_turn_id is None or isinstance(raw_turn_id, bool) or not str(raw_turn_id):
+            raise RuntimeError(f"Console turn returned no stable turn_id: {result}")
+        turn_id = str(raw_turn_id)
+        if stable_turn_id is None:
+            stable_turn_id = turn_id
+        elif turn_id != stable_turn_id:
+            raise RuntimeError(f"Console request replay changed turn_id from {stable_turn_id} to {turn_id}")
+        if isinstance(result.get("run_id"), str) and result["run_id"]:
+            return result
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Console turn never acquired a stable run_id: {last_result}")
+        # Queued FIFO turns intentionally have no run until the prior owner
+        # releases. Replaying the same idempotency key observes that same turn
+        # after ownership transfers; it must not manufacture another turn.
+        time.sleep(0.25)
 
 
 def _claim_path(longhouse_home: Path, run_id: str) -> Path:
@@ -553,6 +571,69 @@ def _claim_uses_provider_binary(claim: Mapping[str, object], provider_binary: Pa
         return False
 
 
+def _native_model(provider: str, model: str) -> str:
+    return f"openrouter/{model}" if provider == "opencode" and not model.startswith("openrouter/") else model
+
+
+def _claim_uses_selected_model(claim: Mapping[str, object], *, provider: str, model: str) -> bool:
+    result = claim.get("result")
+    argv = result.get("argv") if isinstance(result, Mapping) else None
+    if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
+        return False
+    expected = _native_model(provider, model)
+    if provider == "codex":
+        encoded = expected.replace("\\", "\\\\").replace('"', '\\"')
+        return f'model="{encoded}"' in argv
+    return any(flag == "--model" and index + 1 < len(argv) and argv[index + 1] == expected for index, flag in enumerate(argv))
+
+
+def _retain_failure_claim_diagnostics(
+    root: Path,
+    claims: list[dict[str, Any]],
+    environment: Mapping[str, str],
+) -> None:
+    secrets = [value for name, value in environment.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
+
+    def redact(value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        for secret in secrets:
+            text = text.replace(secret, "[REDACTED]")
+        return text
+
+    retained: list[dict[str, object]] = []
+    for claim in claims:
+        result = claim.get("result") if isinstance(claim.get("result"), Mapping) else {}
+        streams: dict[str, object] = {}
+        for key in ("stdout_path", "stderr_path", "source_path"):
+            raw_path = claim.get(key)
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            try:
+                content = Path(raw_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            tail = content[-4096:]
+            for secret in secrets:
+                tail = tail.replace(secret, "[REDACTED]")
+            streams[key] = {
+                "size_bytes": len(content.encode("utf-8")),
+                "sha256": _sha256_bytes(content.encode("utf-8")),
+                "tail": tail,
+            }
+        retained.append(
+            {
+                "state": claim.get("state"),
+                "run_id": claim.get("run_id"),
+                "terminal_state": result.get("terminal_state"),
+                "error": redact(result.get("error") or claim.get("error")),
+                "streams": streams,
+            }
+        )
+    _write_json(root / "provider-failure-diagnostics.json", {"claims": retained})
+
+
 def console_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     return {ASSERTION_ID: all(observation.get(fact) is True for fact in OBSERVED_ACTIVITY)}
 
@@ -586,6 +667,7 @@ def _observation_from_receipts(
     )
     return {
         "adapter_dispatch_started": dispatch.get("status") == "pass",
+        "qualification_model_bound": dispatch.get("qualification_model_bound") is True,
         "stock_provider_response_bound": (
             binding.get("status") == "pass"
             and raw_response_bound
@@ -726,6 +808,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             raise RuntimeError("adapter claim did not preserve exact Console identity")
         if not _claim_uses_provider_binary(first_claim, args.provider_bin):
             raise RuntimeError("Console adapter did not launch the exact staged provider binary")
+        if not _claim_uses_selected_model(first_claim, provider=provider, model=args.model):
+            raise RuntimeError("Console adapter did not bind the selected qualification model")
         provider_response_evidence = _claim_output_evidence(provider, first_claim, marker)
         dispatch = {
             "status": "pass",
@@ -740,6 +824,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "prompt_digest": _sha256_bytes(message.encode()),
             "stable_run_id_on_retry": True,
             "provider_thread_id": first_claim.get("provider_thread_id"),
+            "qualification_model": args.model,
+            "native_model": _native_model(provider, args.model),
+            "qualification_model_bound": True,
             "argv": (first_claim.get("result") or {}).get("argv"),
         }
         _write_json(root / "adapter-dispatch-receipt.json", dispatch)
@@ -945,6 +1032,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "artifact_manifest": _artifact_manifest(root),
         }
     finally:
+        if not cleanup_written:
+            _retain_failure_claim_diagnostics(root, claims, environment)
         _force_cleanup(claims)
         if shipper is not None:
             shipper.stop()
@@ -970,7 +1059,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--longhouse-cli", type=Path)
     parser.add_argument("--provider-bin", type=Path)
     parser.add_argument("--provider-version")
-    parser.add_argument("--model")
+    parser.add_argument("--model", required=True)
     parser.add_argument("--registration", action="store_true")
     return parser
 

@@ -19,8 +19,9 @@ native rollout, not a model claim that it remembers particular tool names.
 The post-compaction scenario uses Codex app-server's typed
 ``thread/compact/start`` request and requires the corresponding
 ``item/completed`` notification whose item type is ``contextCompaction``.
-The visibility assertion then reads only a native assistant rollout event;
-terminal rendering and echoed user prompts are never evidence.
+The visibility assertion then requires a real ``inbox`` MCP invocation from
+the native rollout; terminal rendering, echoed prompts, and free-text tool-name
+recall are never evidence.
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ from typing import Any
 
 from websockets.sync.client import connect as websocket_connect
 
-from zerg.mcp_server.server import COORDINATION_INSTRUCTIONS
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
@@ -52,18 +52,9 @@ from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _redact_state_for_evidence
+from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-
-# This producer's live-visibility probes ask the model to name the tools for
-# durable recovery and for replying to attributed input, then scan its real
-# reply for "inbox"/"reply" (see _answer_demonstrates_visibility). Ground that
-# heuristic in the actual instructions text so a future rewording of
-# COORDINATION_INSTRUCTIONS that drops those tool names fails loudly here
-# instead of silently making every future run of this producer meaningless.
-assert (
-    "inbox" in COORDINATION_INSTRUCTIONS.lower() and "reply" in COORDINATION_INSTRUCTIONS.lower()
-), "coordination visibility probe keywords are no longer grounded in the real MCP server instructions text"
 
 _SCENARIO_CREATE = "codex_coordination_awareness_create"
 _SCENARIO_POST_COMPACTION = "codex_coordination_awareness_post_compaction"
@@ -98,9 +89,9 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=3,
+    scenario_revision=4,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -113,7 +104,7 @@ REGISTRATION = ProducerRegistration(
         "coordination_question_answered_live",
         "typed_compaction_requested",
         "context_compaction_item_completed",
-        "structured_post_compaction_assistant_reply",
+        "post_compaction_coordination_tool_invoked",
         "bootstrap_hook_probe_run",
         "directed_input_created",
         "directed_input_receipt_polled",
@@ -130,7 +121,7 @@ REGISTRATION = ProducerRegistration(
     ),
     required_artifacts_by_scenario={
         _SCENARIO_POST_COMPACTION: ("typed_compaction_receipt",),
-        _SCENARIO_DIRECTED_INPUT: ("target_send_readiness",),
+        _SCENARIO_DIRECTED_INPUT: ("target_send_readiness", "machine_shipper_receipt"),
     },
     required_cleanup=(
         "final_bridge_stopped",
@@ -289,18 +280,12 @@ def _last_assistant_message(thread_path: Path) -> str:
     return ""
 
 
-def _coordination_awareness_question(marker: str) -> str:
+def _post_compaction_inbox_probe(marker: str) -> str:
     return (
-        f"Without calling any tool, and using only what your MCP server instructions already told you, "
-        f"answer in one short sentence starting with exactly {marker}: which exact tool name should be used "
-        "for durable recovery when history needs to be found again, and which exact tool name should be used "
-        "to reply to attributed input from a peer?"
+        "Using the Longhouse coordination facility already described to you, recover any durable "
+        "attributed peer input currently waiting for this session. Actually call the appropriate tool "
+        f"once with its defaults. After it returns, reply with exactly {marker} and nothing else."
     )
-
-
-def _answer_demonstrates_visibility(text: str, marker: str) -> bool:
-    lowered = text.lower()
-    return marker in text and "inbox" in lowered and "reply" in lowered
 
 
 def _recv_app_server_message(socket: Any, *, deadline: float) -> dict[str, Any]:
@@ -633,16 +618,18 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             isolation_root,
             session_id,
             state_file,
-            _coordination_awareness_question(marker),
+            _post_compaction_inbox_probe(marker),
             timeout=args.live_send_timeout_secs,
         )
         final_thread_path = Path(str(state.get("thread_path") or ""))
         assistant_text = _last_assistant_message(final_thread_path) if final_thread_path.is_file() else ""
         (root / "post-compaction-assistant-response.txt").write_text(assistant_text, encoding="utf-8")
-        answered_after_compact_attempt = state.get("last_turn_status") == "completed" and _answer_demonstrates_visibility(
-            assistant_text,
-            marker,
+        tool_calls = _codex_tool_call_evidence(final_thread_path) if final_thread_path.is_file() else []
+        _write_json(root / "post-compaction-tool-call-evidence.json", tool_calls)
+        inbox_invoked = any(
+            isinstance(item.get("tool"), str) and item["tool"].rsplit("__", 1)[-1].rsplit(".", 1)[-1] == "inbox" for item in tool_calls
         )
+        answered_after_compact_attempt = state.get("last_turn_status") == "completed" and inbox_invoked and marker in assistant_text
     finally:
         receipts: dict[str, dict[str, Any]] = {}
         if session_id:
@@ -654,7 +641,8 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         "visible_bootstrap_count": bootstrap_observation.get("visible_bootstrap_count"),
         "compaction_signal_observed": compaction_signal_observed,
         "post_compact_question_answered": answered_after_compact_attempt,
-        "assistant_evidence_source": "native_rollout_assistant_event",
+        "assistant_evidence_source": "native_rollout_mcp_and_assistant_events",
+        "post_compaction_inbox_invoked": inbox_invoked,
         "coordination_instructions_model_visible_after_compaction": bool(compaction_signal_observed and answered_after_compact_attempt),
     }
     observation.update(cleanup["required_cleanup"])
@@ -666,27 +654,37 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
     target_root = root / "target"
     source_root.mkdir()
     target_root.mkdir()
-    source_isolation = Path(tempfile.mkdtemp(prefix="lcs-", dir="/tmp"))
-    target_isolation = Path(tempfile.mkdtemp(prefix="lcd-", dir="/tmp"))
+    machine_isolation = Path(tempfile.mkdtemp(prefix="lcd-", dir="/tmp"))
     source_session_id = ""
     target_session_id = ""
     minted_secrets: list[str] = []
     observation: dict[str, Any] | None = None
+    shipper = None
     try:
-        source_summary, _sr, source_isolation = bridge_canary._start_bridge(
+        machine_environment = bridge_canary._provider_runtime_environment(os.environ, machine_isolation)
+        machine_environment["LONGHOUSE_CODEX_BIN"] = str(args.codex_bin)
+        shipper = _start_transcript_shipper(
+            "codex",
+            args,
+            home=Path(machine_environment["HOME"]),
+            environment=machine_environment,
+            evidence_root=root / "machine-shipper",
+            longhouse_home=machine_isolation / "longhouse",
+        )
+        source_summary, _sr, _source_isolation = bridge_canary._start_bridge(
             args,
             evidence_root=source_root,
             codex_bin=str(args.codex_bin),
             launch_mode="detached_ui",
-            isolation_root=source_isolation,
+            isolation_root=machine_isolation,
             register_managed=True,
         )
-        target_summary, _tr, target_isolation = bridge_canary._start_bridge(
+        target_summary, _tr, _target_isolation = bridge_canary._start_bridge(
             args,
             evidence_root=target_root,
             codex_bin=str(args.codex_bin),
             launch_mode="detached_ui",
-            isolation_root=target_isolation,
+            isolation_root=machine_isolation,
             register_managed=True,
         )
         source_session_id = str(source_summary.get("session_id") or "")
@@ -783,9 +781,11 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
             _write_json(root / "redacted-secret-files.json", {"paths": redacted})
         cleanup_receipts: dict[str, Any] = {}
         if source_session_id:
-            cleanup_receipts["source"] = bridge_canary._stop_bridge(args, source_session_id, source_isolation)
+            cleanup_receipts["source"] = bridge_canary._stop_bridge(args, source_session_id, machine_isolation)
         if target_session_id:
-            cleanup_receipts["target"] = bridge_canary._stop_bridge(args, target_session_id, target_isolation)
+            cleanup_receipts["target"] = bridge_canary._stop_bridge(args, target_session_id, machine_isolation)
+        if shipper is not None:
+            _write_json(root / "machine-shipper-receipt.json", shipper.stop())
         cleanup = _aggregate_cleanup_receipt(cleanup_receipts)
         _write_json(root / "cleanup-receipt.json", cleanup)
         if observation is not None:
