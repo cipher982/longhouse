@@ -281,7 +281,7 @@ def test_compiler_reuses_only_exact_fresh_published_proof() -> None:
     reused = compiled["plan"]["reused_proofs"][0]
     assert reused["artifact_id"] == "a" * 64
     assert reused["producer_id"] == REGISTRATION.producer_id
-    assert reused["scenario_id"] == "codex_native_resume"
+    assert reused["scenario_id"] == "helm_cold_resume"
     assert reused["scenario_revision"] == REGISTRATION.scenario_revision
     assert reused["observation_scope"] == "cell"
 
