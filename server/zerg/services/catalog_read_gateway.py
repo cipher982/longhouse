@@ -30,10 +30,18 @@ _TIMELINE_ATTEMPT_SECONDS = 1.5
 # the launch sheet's human-perception threshold.
 _WORKSPACE_DEADLINE_SECONDS = 2.25
 _WORKSPACE_ATTEMPT_SECONDS = 1.0
+# Search hydrates a small, concurrency-bounded set of canonical session cards.
+# On the 30k-session dogfood catalog each owner-scoped reducer snapshot is
+# about 0.33-0.37s, so the generic 0.35s attempt budget turns healthy reads
+# into deterministic 503s. Keep the measured budget local to this operation;
+# callers still bound fan-out and the route retains its outer timeout.
+_SHADOW_STATE_DEADLINE_SECONDS = 2.25
+_SHADOW_STATE_ATTEMPT_SECONDS = 1.0
 
 _READ_BUDGETS = {
     "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
+    "session.shadow_state.read.v2": (_SHADOW_STATE_DEADLINE_SECONDS, _SHADOW_STATE_ATTEMPT_SECONDS),
 }
 
 

@@ -658,6 +658,26 @@ def test_catalog_gateway_gives_workspace_ranking_its_measured_bounded_budget(mon
     assert attempts == [1.0, 1.0]
 
 
+def test_catalog_gateway_gives_search_hydration_its_measured_bounded_budget(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "session.shadow_state.read.v2"
+        assert params == {"session_id": "session-1", "owner_id": 1}
+        attempts.append(timeout_seconds)
+        if len(attempts) == 1:
+            raise catalog_read_gateway.CatalogUnavailable("transient")
+        return {"found": True}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    result = catalog_read_gateway.shadow_session_state_snapshot("session-1", owner_id=1)
+
+    assert result == {"found": True}
+    assert attempts == [1.0, 1.0]
+
+
 def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
     attempts: list[float] = []
 
