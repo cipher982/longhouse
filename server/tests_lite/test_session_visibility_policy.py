@@ -13,6 +13,7 @@ from zerg.services.session_visibility_policy import SessionVisibilityFacts
 from zerg.services.session_visibility_policy import effective_system_hidden_clause
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import known_hidden_evidence_clause
+from zerg.services.session_visibility_policy import primary_worker_only_clause
 from zerg.services.session_visibility_policy import title_origin_eligible_clause
 
 CASES = (
@@ -173,6 +174,14 @@ def test_include_test_discounts_only_the_test_environment_projection():
         Column("first_user_message_preview", String),
         Column("hidden_from_default_timeline", Integer),
     )
+    threads = Table(
+        "session_threads",
+        metadata,
+        Column("id", String, primary_key=True),
+        Column("session_id", String),
+        Column("is_primary", Integer),
+        Column("branch_kind", String),
+    )
     engine = create_engine("sqlite://")
     metadata.create_all(engine)
     with engine.begin() as connection:
@@ -193,13 +202,37 @@ def test_include_test_discounts_only_the_test_environment_projection():
                     "launch_actor": "automation",
                     "hidden_from_default_timeline": 1,
                 },
+                {
+                    "session_id": "worker-test",
+                    "provider": "codex",
+                    "environment": "test",
+                    "launch_actor": "human_shell",
+                    "hidden_from_default_timeline": 1,
+                },
             ],
+        )
+        connection.execute(
+            insert(threads),
+            {
+                "id": "worker-primary",
+                "session_id": "worker-test",
+                "is_primary": 1,
+                "branch_kind": "subagent",
+            },
         )
         results = dict(
             connection.execute(
-                select(sessions.c.session_id, effective_system_hidden_clause(sessions, include_test=True))
+                select(
+                    sessions.c.session_id,
+                    effective_system_hidden_clause(
+                        sessions,
+                        include_test=True,
+                        worker_only_evidence=primary_worker_only_clause(sessions, threads),
+                    ),
+                )
             ).all()
         )
 
     assert bool(results["ordinary-test"]) is False
     assert bool(results["automated-test"]) is True
+    assert bool(results["worker-test"]) is True

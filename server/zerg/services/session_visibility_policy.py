@@ -13,6 +13,7 @@ from sqlalchemy import and_
 from sqlalchemy import false
 from sqlalchemy import func
 from sqlalchemy import or_
+from sqlalchemy import select
 
 from zerg.services.internal_sessions import HATCH_EXECUTION_CONTRACT_RE
 from zerg.services.internal_sessions import INTERNAL_CANARY_LABEL_PREFIXES
@@ -139,12 +140,33 @@ def known_hidden_evidence_clause(model, *, include_test: bool = False):
     return or_(*clauses) if clauses else false()
 
 
-def effective_system_hidden_clause(model, *, include_test: bool = False):
+def primary_worker_only_clause(model, thread_model):
+    """Correlated graph evidence for a worker-only primary thread."""
+
+    columns = getattr(model, "c", model)
+    threads = getattr(thread_model, "c", thread_model)
+    session_id = _column(columns, "session_id", "id")
+    if session_id is None:
+        return false()
+    return (
+        select(threads.id)
+        .where(
+            threads.session_id == session_id,
+            threads.is_primary == 1,
+            threads.branch_kind == "subagent",
+        )
+        .exists()
+    )
+
+
+def effective_system_hidden_clause(model, *, include_test: bool = False, worker_only_evidence=None):
     """Stored projection plus defensive positive evidence for default reads."""
 
     columns = getattr(model, "c", model)
     persisted = _column(columns, "hidden_from_default_timeline")
     evidence = known_hidden_evidence_clause(model, include_test=include_test)
+    if worker_only_evidence is not None:
+        evidence = or_(evidence, worker_only_evidence)
     if persisted is None:
         return evidence
     if not include_test:
@@ -163,13 +185,25 @@ def effective_system_hidden_clause(model, *, include_test: bool = False):
     return or_(persisted_non_test, evidence)
 
 
-def default_visible_clause(model, *, include_system_hidden: bool = False, include_test: bool = False):
+def default_visible_clause(
+    model,
+    *,
+    include_system_hidden: bool = False,
+    include_test: bool = False,
+    worker_only_evidence=None,
+):
     """Default product visibility over fields present on a session/card row."""
 
     columns = getattr(model, "c", model)
     clauses = []
     if not include_system_hidden:
-        clauses.append(~effective_system_hidden_clause(model, include_test=include_test))
+        clauses.append(
+            ~effective_system_hidden_clause(
+                model,
+                include_test=include_test,
+                worker_only_evidence=worker_only_evidence,
+            )
+        )
     user_hidden = _column(columns, "user_hidden_from_timeline")
     if user_hidden is not None:
         clauses.append(func.coalesce(user_hidden, 0) == 0)
@@ -244,6 +278,7 @@ __all__ = [
     "evaluate_origin_visibility",
     "facts_from_row",
     "known_hidden_evidence_clause",
+    "primary_worker_only_clause",
     "title_origin_eligible_clause",
     "visible_in_test_scope",
 ]

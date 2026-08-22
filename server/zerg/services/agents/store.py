@@ -86,6 +86,7 @@ from zerg.services.session_observations import record_source_line_observation
 from zerg.services.session_visibility_policy import effective_system_hidden_clause
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import facts_from_row
+from zerg.services.session_visibility_policy import primary_worker_only_clause
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import is_generic_environment_label
 from zerg.session_execution_home import normalize_session_label
@@ -4042,7 +4043,13 @@ class AgentsStore:
             stmt = stmt.where(time_anchor <= until)
 
         if not include_automation and not is_internal_canary_provider_filter(provider):
-            stmt = stmt.where(~effective_system_hidden_clause(AgentSession, include_test=include_test))
+            stmt = stmt.where(
+                ~effective_system_hidden_clause(
+                    AgentSession,
+                    include_test=include_test,
+                    worker_only_evidence=primary_worker_only_clause(AgentSession, SessionThread),
+                )
+            )
 
         stmt = stmt.where(
             or_(
@@ -4115,7 +4122,13 @@ class AgentsStore:
             stmt = stmt.where(time_anchor <= until)
 
         if not include_automation and not is_internal_canary_provider_filter(provider):
-            stmt = stmt.where(~effective_system_hidden_clause(TimelineCard, include_test=include_test))
+            stmt = stmt.where(
+                ~effective_system_hidden_clause(
+                    TimelineCard,
+                    include_test=include_test,
+                    worker_only_evidence=primary_worker_only_clause(TimelineCard, SessionThread),
+                )
+            )
 
         stmt = stmt.where(
             or_(

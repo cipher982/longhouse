@@ -926,6 +926,71 @@ def test_default_timeline_hides_provider_proof_rows_with_bad_legacy_provenance(t
     assert [row["session_id"] for row in debug_storage["sessions"]] == [human_id]
 
 
+def test_include_test_timeline_and_storage_never_promote_worker_primary(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'test-worker-filter.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    ordinary_id = str(uuid4())
+    worker_id = str(uuid4())
+
+    with LiveSession() as db:
+        for session_id, branch_kind in ((ordinary_id, "root"), (worker_id, "subagent")):
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    owner_id="42",
+                    provider="cursor",
+                    environment="test",
+                    machine_id="cinder",
+                    project="longhouse",
+                    started_at=now,
+                    last_activity_at=now,
+                    first_user_message_preview="Inspect test behavior",
+                    user_messages=1,
+                    assistant_messages=1,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    hidden_from_default_timeline=1,
+                    launch_actor="human_shell",
+                    launch_surface="terminal",
+                    commit_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveSessionThread(
+                    id=str(uuid4()),
+                    session_id=session_id,
+                    provider="cursor",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    branch_kind=branch_kind,
+                    is_primary=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        db.commit()
+
+        snapshot = _snapshot(db, _params(include_test=True, include_automation=False, hide_autonomous=False))
+
+    storage = CatalogStore(engine).list_storage_sessions(
+        owner_id="42",
+        before_last_activity_at=None,
+        before_session_id=None,
+        project=None,
+        provider=None,
+        include_test=True,
+        limit=20,
+    )
+    assert [row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]] == [ordinary_id]
+    assert [row["session_id"] for row in storage["sessions"]] == [ordinary_id]
+
+
 def test_hidden_factory_assurance_projection_preserves_launch_tuple(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'empty-shell.db'}")
     initialize_catalog_schema(engine)

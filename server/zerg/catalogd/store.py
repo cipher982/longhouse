@@ -110,6 +110,7 @@ from zerg.services.session_title import sanitize_title
 from zerg.services.session_visibility_policy import SessionVisibilityFacts
 from zerg.services.session_visibility_policy import effective_system_hidden_clause
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import primary_worker_only_clause
 from zerg.services.session_visibility_policy import title_origin_eligible_clause
 from zerg.services.session_visibility_policy import visible_in_test_scope
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_MAX_PAGES
@@ -4943,16 +4944,34 @@ class CatalogStore:
                     )
                 )
             if not include_automation:
+                legacy_worker_only = primary_worker_only_clause(card, LiveSessionThread.__table__)
+                storage_worker_only = primary_worker_only_clause(storage, LiveSessionThread.__table__)
                 legacy_where.append(
                     ~or_(
-                        effective_system_hidden_clause(card, include_test=include_test),
-                        effective_system_hidden_clause(catalog, include_test=include_test),
+                        effective_system_hidden_clause(
+                            card,
+                            include_test=include_test,
+                            worker_only_evidence=legacy_worker_only,
+                        ),
+                        effective_system_hidden_clause(
+                            catalog,
+                            include_test=include_test,
+                            worker_only_evidence=legacy_worker_only,
+                        ),
                     )
                 )
                 storage_where.append(
                     ~or_(
-                        effective_system_hidden_clause(storage, include_test=include_test),
-                        effective_system_hidden_clause(catalog, include_test=include_test),
+                        effective_system_hidden_clause(
+                            storage,
+                            include_test=include_test,
+                            worker_only_evidence=storage_worker_only,
+                        ),
+                        effective_system_hidden_clause(
+                            catalog,
+                            include_test=include_test,
+                            worker_only_evidence=storage_worker_only,
+                        ),
                     )
                 )
             if include_state_heads:
@@ -8976,7 +8995,13 @@ class CatalogStore:
             statement = statement.where(table.c.provider == provider)
         if not include_test:
             statement = statement.where(table.c.environment.notin_(("test", "e2e")))
-        statement = statement.where(~effective_system_hidden_clause(table, include_test=include_test))
+        statement = statement.where(
+            ~effective_system_hidden_clause(
+                table,
+                include_test=include_test,
+                worker_only_evidence=primary_worker_only_clause(table, LiveSessionThread.__table__),
+            )
+        )
         if before_last_activity_at is not None and before_session_id is not None:
             statement = statement.where(
                 or_(

@@ -16,6 +16,7 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import set_thread_execution_target
 from zerg.services.console_turns import begin_console_turn_drain
@@ -265,6 +266,12 @@ def test_include_test_unread_scope_reveals_ordinary_test_but_not_automation(tmp_
     )
     assert [row[1] for row in _unread_thread_rows(db, params=params, exclude=())] == [str(session.id)]
 
+    primary = db.get(SessionThread, session.primary_thread_id)
+    primary.branch_kind = "subagent"
+    db.commit()
+    assert _unread_thread_rows(db, params=params, exclude=()) == ()
+
+    primary.branch_kind = "root"
     session.launch_actor = "automation"
     db.commit()
     assert _unread_thread_rows(db, params=params, exclude=()) == ()
