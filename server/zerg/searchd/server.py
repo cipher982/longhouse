@@ -428,18 +428,19 @@ class SearchDaemon:
                     ),
                 )
             if request.method == "search.session.reconcile_visibility.v2":
+                params = {"test_scope_visible": False, **request.params}
                 _exact_keys(
-                    request.params,
+                    params,
                     {
                         "session_id",
                         "system_hidden",
+                        "test_scope_visible",
                         "user_hidden_from_timeline",
                         "user_state",
                         "source_commit_seq",
                     },
                 )
-                params = dict(request.params)
-                if type(params["system_hidden"]) is not bool:
+                if type(params["system_hidden"]) is not bool or type(params["test_scope_visible"]) is not bool:
                     raise ValueError("system_hidden must be a boolean")
                 if type(params["user_hidden_from_timeline"]) is not bool:
                     raise ValueError("user_hidden_from_timeline must be a boolean")
@@ -452,6 +453,7 @@ class SearchDaemon:
                         self._store.reconcile_session_visibility,
                         session_id=_uuid(params["session_id"], "session_id"),
                         system_hidden=params["system_hidden"],
+                        test_scope_visible=params["test_scope_visible"],
                         user_hidden_from_timeline=params["user_hidden_from_timeline"],
                         user_state=params["user_state"],
                         source_commit_seq=params["source_commit_seq"],
@@ -902,10 +904,11 @@ def _publish_params(value: dict) -> dict:
         "hidden_from_default_timeline",
         "origin_kind",
     }
-    optional = {"user_hidden_from_timeline", "user_state", "source_commit_seq", "tombstoned"}
+    optional = {"test_scope_visible", "user_hidden_from_timeline", "user_state", "source_commit_seq", "tombstoned"}
     if not required.issubset(value) or not set(value).issubset(required | optional):
         raise ValueError("request fields do not match the searchd contract")
     value = {
+        "test_scope_visible": False,
         "user_hidden_from_timeline": False,
         "user_state": "active",
         "source_commit_seq": 0,
@@ -915,7 +918,7 @@ def _publish_params(value: dict) -> dict:
     for field in ("object_count", "event_count"):
         if type(value[field]) is not int or not 0 <= value[field] <= 1_000_000_000:
             raise ValueError(f"{field} is invalid")
-    if type(value["hidden_from_default_timeline"]) is not bool:
+    if type(value["hidden_from_default_timeline"]) is not bool or type(value["test_scope_visible"]) is not bool:
         raise ValueError("hidden_from_default_timeline must be a boolean")
     if type(value["user_hidden_from_timeline"]) is not bool or type(value["tombstoned"]) is not bool:
         raise ValueError("search visibility booleans are invalid")
@@ -942,6 +945,7 @@ def _publish_params(value: dict) -> dict:
         "git_repo": _text(value["git_repo"], "git_repo", 500, optional=True),
         "started_at": _text(value["started_at"], "started_at", 64),
         "hidden_from_default_timeline": value["hidden_from_default_timeline"],
+        "test_scope_visible": value["test_scope_visible"],
         "origin_kind": _text(value["origin_kind"], "origin_kind", 64, optional=True),
         "user_hidden_from_timeline": value["user_hidden_from_timeline"],
         "user_state": _text(value["user_state"], "user_state", 32),
@@ -1122,10 +1126,10 @@ def _embedding_query_params(value: dict) -> dict:
         "exclude_environments",
         "since_iso",
     }
-    optional = {"include_origin_hidden"}
+    optional = {"include_origin_hidden", "include_test"}
     if not required.issubset(value) or not set(value).issubset(required | optional):
         raise ValueError("request fields do not match the searchd contract")
-    value = {"include_origin_hidden": False, **value}
+    value = {"include_origin_hidden": False, "include_test": False, **value}
     dims = value["dims"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("embedding query dimensions or limit are invalid")
@@ -1137,7 +1141,7 @@ def _embedding_query_params(value: dict) -> dict:
         raise ValueError("query embedding dimensions do not match payload")
     if not np.isfinite(np.frombuffer(query_embedding, dtype=np.float32)).all():
         raise ValueError("query embedding must be finite")
-    if type(value["include_origin_hidden"]) is not bool:
+    if type(value["include_origin_hidden"]) is not bool or type(value["include_test"]) is not bool:
         raise ValueError("include_origin_hidden is invalid")
     exclude_environments = value["exclude_environments"]
     if exclude_environments is not None:
@@ -1156,10 +1160,12 @@ def _embedding_query_params(value: dict) -> dict:
         "exclude_environments": exclude_environments,
         "since_iso": _text(value["since_iso"], "since_iso", 64, optional=True),
         "include_origin_hidden": value["include_origin_hidden"],
+        "include_test": value["include_test"],
     }
 
 
 def _search_params(value: dict) -> dict:
+    value = {"include_test": False, **value}
     _exact_keys(
         value,
         {
@@ -1173,13 +1179,14 @@ def _search_params(value: dict) -> dict:
             "limit",
             "include_snippets",
             "include_origin_hidden",
+            "include_test",
         },
     )
     if type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("limit is invalid")
     if type(value["include_snippets"]) is not bool:
         raise ValueError("include_snippets is invalid")
-    if type(value["include_origin_hidden"]) is not bool:
+    if type(value["include_origin_hidden"]) is not bool or type(value["include_test"]) is not bool:
         raise ValueError("include_origin_hidden is invalid")
     for field in ("window_start_us", "window_end_us"):
         item = value[field]
@@ -1202,6 +1209,7 @@ def _search_params(value: dict) -> dict:
         "limit": value["limit"],
         "include_snippets": value["include_snippets"],
         "include_origin_hidden": value["include_origin_hidden"],
+        "include_test": value["include_test"],
     }
 
 

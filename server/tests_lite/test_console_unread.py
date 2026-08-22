@@ -235,6 +235,41 @@ def test_unread_sessions_union_into_listing_past_days_back(tmp_path):
     assert _unread_thread_rows(db, params=params, exclude=()) == ()
 
 
+def test_include_test_unread_scope_reveals_ordinary_test_but_not_automation(tmp_path):
+    from zerg.services.timeline_session_listing import TimelineSessionListParams
+    from zerg.services.timeline_session_listing import _unread_thread_rows
+
+    db = _db(tmp_path)
+    session = _session(db)
+    session.environment = "test"
+    session.hidden_from_default_timeline = 1
+    session.launch_actor = "human_shell"
+    _run_console_turn_to(db, session, outcome="completed")
+    db.commit()
+
+    params = TimelineSessionListParams(
+        project=None,
+        provider=None,
+        environment=None,
+        include_test=True,
+        include_automation=False,
+        hide_autonomous=False,
+        device_id=None,
+        days_back=7,
+        query=None,
+        limit=20,
+        offset=0,
+        sort=None,
+        mode=None,
+        context_mode="forensic",
+    )
+    assert [row[1] for row in _unread_thread_rows(db, params=params, exclude=())] == [str(session.id)]
+
+    session.launch_actor = "automation"
+    db.commit()
+    assert _unread_thread_rows(db, params=params, exclude=()) == ()
+
+
 def test_read_session_leaves_the_union(tmp_path):
     from zerg.services.timeline_session_listing import TimelineSessionListParams
     from zerg.services.timeline_session_listing import _unread_thread_rows

@@ -207,7 +207,7 @@ def _unread_thread_rows(
     if params.device_id is not None:
         query = query.filter(AgentSession.device_id == params.device_id)
     if not params.include_automation:
-        query = query.filter(~effective_system_hidden_clause(AgentSession))
+        query = query.filter(~effective_system_hidden_clause(AgentSession, include_test=params.include_test))
     query = query.filter(AgentSession.user_hidden_from_timeline.is_not(True))
     if params.hide_autonomous:
         query = query.filter(or_(AgentSession.user_messages > 0, AgentSession.ended_at.is_(None)))

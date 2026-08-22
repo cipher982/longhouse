@@ -17,6 +17,7 @@ from zerg.models.agents import TimelineCard
 from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import facts_from_row
+from zerg.services.session_visibility_policy import visible_in_test_scope
 
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
@@ -128,6 +129,7 @@ def reconcile_legacy_session_visibility(db: Session, *, apply: bool) -> Visibili
                 {
                     "session_id": str(session.id),
                     "system_hidden": decision.system_hidden,
+                    "test_scope_visible": visible_in_test_scope(decision),
                     "user_hidden_from_timeline": bool(session.user_hidden_from_timeline),
                     "user_state": str(session.user_state or "active"),
                 }
@@ -475,6 +477,7 @@ def reconcile_derived_visibility(
                     params={
                         "session_id": session_id,
                         "system_hidden": system_hidden,
+                        "test_scope_visible": bool(row.get("test_scope_visible", False)),
                         "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
                         "user_state": str(row["user_state"]),
                         "source_commit_seq": int(catalog_result.get("commit_seq") or 0),
@@ -523,6 +526,7 @@ def reconcile_catalogd_all_visibility(
                     params={
                         "session_id": session_id,
                         "system_hidden": bool(row["system_hidden"]),
+                        "test_scope_visible": bool(row.get("test_scope_visible", False)),
                         "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
                         "user_state": str(row["user_state"]),
                         "source_commit_seq": source_commit_seq,

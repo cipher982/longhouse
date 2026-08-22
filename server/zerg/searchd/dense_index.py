@@ -58,6 +58,7 @@ class _Snapshot:
     providers: np.ndarray  # (N,) object
     environments: np.ndarray  # (N,) object
     hidden_from_default_timeline: np.ndarray  # (N,) bool
+    test_scope_visible: np.ndarray  # (N,) bool
     user_hidden_from_timeline: np.ndarray  # (N,) bool
     user_states: np.ndarray  # (N,) object
     tombstoned: np.ndarray  # (N,) bool
@@ -133,6 +134,7 @@ _EMPTY = _Snapshot(
             ("providers", object),
             ("environments", object),
             ("hidden_from_default_timeline", bool),
+            ("test_scope_visible", bool),
             ("user_hidden_from_timeline", bool),
             ("user_states", object),
             ("tombstoned", bool),
@@ -258,7 +260,7 @@ class ResidentEpisodeIndex:
             SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
                    e.start_order_time_us, e.event_index_start, e.event_index_end,
                    e.owner_id, e.content_hash, s.project, s.provider, s.environment, s.started_at,
-                   s.hidden_from_default_timeline, s.user_hidden_from_timeline,
+                   s.hidden_from_default_timeline, s.test_scope_visible, s.user_hidden_from_timeline,
                    s.user_state, s.tombstoned
             FROM episode_embeddings e
             JOIN session_index s
@@ -375,6 +377,7 @@ class ResidentEpisodeIndex:
             providers=column("provider", object, ""),
             environments=column("environment", object, ""),
             hidden_from_default_timeline=column("hidden_from_default_timeline", bool, False),
+            test_scope_visible=column("test_scope_visible", bool, False),
             user_hidden_from_timeline=column("user_hidden_from_timeline", bool, False),
             user_states=column("user_state", object, "active"),
             tombstoned=column("tombstoned", bool, False),
@@ -394,6 +397,7 @@ class ResidentEpisodeIndex:
         exclude_environments: list[str] | None = None,
         since_iso: str | None = None,
         include_origin_hidden: bool = False,
+        include_test: bool = False,
     ) -> list[dict[str, object]]:
         snapshot = self._snapshot  # one atomic read; immutable thereafter
         if not self._loaded:
@@ -403,7 +407,7 @@ class ResidentEpisodeIndex:
 
         keep = snapshot.owner_ids == owner_id
         if not include_origin_hidden:
-            keep &= ~snapshot.hidden_from_default_timeline
+            keep &= ~snapshot.hidden_from_default_timeline | (include_test & snapshot.test_scope_visible)
         keep &= ~snapshot.user_hidden_from_timeline
         keep &= ~snapshot.tombstoned
         keep &= ~np.isin(snapshot.user_states, ("archived", "snoozed", "deleted"))

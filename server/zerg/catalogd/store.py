@@ -111,6 +111,7 @@ from zerg.services.session_visibility_policy import SessionVisibilityFacts
 from zerg.services.session_visibility_policy import effective_system_hidden_clause
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import title_origin_eligible_clause
+from zerg.services.session_visibility_policy import visible_in_test_scope
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_MAX_PAGES
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE
 from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
@@ -5805,6 +5806,7 @@ class CatalogStore:
                         {
                             "session_id": session_id,
                             "system_hidden": final_hidden,
+                            "test_scope_visible": visible_in_test_scope(decision),
                             "user_hidden_from_timeline": user_hidden,
                             "user_state": user_state,
                         }

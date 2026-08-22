@@ -404,6 +404,7 @@ def test_visibility_reconcile_clears_stale_hidden_projection(tmp_path):
         {
             "session_id": str(session_id),
             "system_hidden": False,
+            "test_scope_visible": False,
             "user_hidden_from_timeline": False,
             "user_state": "active",
         }

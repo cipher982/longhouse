@@ -83,6 +83,94 @@ def _search_params(query: str) -> dict:
     }
 
 
+def _publish_visibility_fixture(
+    store: SearchStore,
+    *,
+    session_id: str,
+    environment: str,
+    hidden: bool,
+    test_scope_visible: bool,
+    order_time_us: int,
+) -> None:
+    generation_id = str(uuid4())
+    object_id = str(uuid4())
+    source_epoch = str(uuid4())
+    records = [{**record, "order_time_us": order_time_us + index} for index, record in enumerate(_records("scope needle"))]
+    assert store.index_object(
+        session_id=session_id,
+        generation_id=generation_id,
+        object_id=object_id,
+        desired_revision=1,
+        provider="codex",
+        machine_id="cinder",
+        project="longhouse",
+        environment=environment,
+        cwd="/workspace/longhouse",
+        git_repo="cipher982/longhouse",
+        opaque_source_id=f"codex/{session_id}.jsonl",
+        source_epoch=source_epoch,
+        records=records,
+    )["created"] is True
+    assert store.publish_generation(
+        session_id=session_id,
+        generation_id=generation_id,
+        owner_id="42",
+        desired_revision=1,
+        object_count=1,
+        object_set_hash=object_set_hash([object_id]),
+        event_count=len(records),
+        project="longhouse",
+        provider="codex",
+        environment=environment,
+        cwd="/workspace/longhouse",
+        git_repo="cipher982/longhouse",
+        started_at=datetime.fromtimestamp(order_time_us / 1_000_000, UTC).isoformat(),
+        hidden_from_default_timeline=hidden,
+        test_scope_visible=test_scope_visible,
+    )["published"] is True
+
+
+def test_include_test_reveals_only_test_environment_hidden_rows_in_search_and_worklog(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    ordinary_id = str(uuid4())
+    automation_id = str(uuid4())
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=ordinary_id,
+            environment="test",
+            hidden=True,
+            test_scope_visible=True,
+            order_time_us=now_us,
+        )
+        _publish_visibility_fixture(
+            store,
+            session_id=automation_id,
+            environment="test",
+            hidden=True,
+            test_scope_visible=False,
+            order_time_us=now_us + 10,
+        )
+        hidden = store.search(**_search_params("scope needle"), include_test=False)
+        included = store.search(**_search_params("scope needle"), include_test=True)
+        assert hidden["results"] == []
+        assert {row["session_id"] for row in included["results"]} == {ordinary_id}
+
+        worklog = store._worklog_sessions(
+            owner_id="42",
+            window_start_us=now_us - 1,
+            window_end_us=now_us + 100,
+            include_test=True,
+            cursor=None,
+            limit=10,
+        )
+        assert [row["session_id"] for row in worklog["items"]] == [ordinary_id]
+    finally:
+        connection.close()
+
+
 def test_worklog_export_bounds_oversized_messages_without_splitting_utf8():
     content = "a" * (128 * 1024) + "💾"
 
@@ -661,7 +749,7 @@ def test_archive_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCH_SQL}",
-            ("search db", "42", 0, None, None, None, None, None, None, None, None, None, None, 10),
+            ("search db", "42", 0, 0, None, None, None, None, None, None, None, None, None, None, 10),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("events_fts" in detail and "VIRTUAL TABLE INDEX 32:" in detail for detail in details)
@@ -683,7 +771,7 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
-            ("search db", "42", 0, None, None, None, None, None, None, None, None, None, None, 50_000, 10, "search db"),
+            ("search db", "42", 0, 0, None, None, None, None, None, None, None, None, None, None, 50_000, 10, "search db"),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
@@ -2095,6 +2183,7 @@ def test_visibility_reconcile_ignores_stale_source_commit_sequence(tmp_path):
         store.reconcile_session_visibility(
             session_id=session_id,
             system_hidden=True,
+            test_scope_visible=False,
             user_hidden_from_timeline=False,
             user_state="active",
             source_commit_seq=10,
@@ -2102,6 +2191,7 @@ def test_visibility_reconcile_ignores_stale_source_commit_sequence(tmp_path):
         stale = store.reconcile_session_visibility(
             session_id=session_id,
             system_hidden=False,
+            test_scope_visible=False,
             user_hidden_from_timeline=False,
             user_state="active",
             source_commit_seq=9,
@@ -2116,6 +2206,7 @@ def test_visibility_reconcile_ignores_stale_source_commit_sequence(tmp_path):
         fresh = store.reconcile_session_visibility(
             session_id=session_id,
             system_hidden=False,
+            test_scope_visible=False,
             user_hidden_from_timeline=False,
             user_state="active",
             source_commit_seq=11,

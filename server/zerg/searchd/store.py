@@ -74,7 +74,8 @@ _ARCHIVE_SEARCH_SQL = """
      AND m.desired_revision = s.indexed_through
      AND m.object_id = e.source_object_id
     WHERE events_fts MATCH ? AND s.owner_id = ?
-      AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
+      AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0
+           OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
       AND COALESCE(s.user_hidden_from_timeline, 0) = 0
       AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
       AND COALESCE(s.tombstoned, 0) = 0
@@ -113,7 +114,8 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = """
          AND m.desired_revision = s.indexed_through
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
-          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
+          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0
+               OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
           AND COALESCE(s.user_hidden_from_timeline, 0) = 0
           AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
           AND COALESCE(s.tombstoned, 0) = 0
@@ -161,7 +163,8 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
          AND m.desired_revision = s.indexed_through
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
-          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
+          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0
+               OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
           AND COALESCE(s.user_hidden_from_timeline, 0) = 0
           AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
           AND COALESCE(s.tombstoned, 0) = 0
@@ -220,7 +223,8 @@ _SEARCHABLE_SEARCH_SQL = """
         FROM searchable_fts
         JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
         WHERE searchable_fts MATCH ? AND e.owner_id = ?
-          AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0)
+          AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
+               OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
           AND COALESCE(e.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
           AND COALESCE(e.tombstoned, 0) = 0
@@ -449,6 +453,7 @@ def _add_missing_visibility_columns(connection: sqlite3.Connection) -> None:
 
     additive = {
         "hidden_from_default_timeline": "INTEGER",
+        "test_scope_visible": "INTEGER NOT NULL DEFAULT 0",
         "user_hidden_from_timeline": "INTEGER NOT NULL DEFAULT 0",
         "user_state": "TEXT NOT NULL DEFAULT 'active'",
         "source_commit_seq": "INTEGER NOT NULL DEFAULT 0",
@@ -581,6 +586,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             indexed_through INTEGER NOT NULL,
             event_count INTEGER NOT NULL,
             hidden_from_default_timeline INTEGER,
+            test_scope_visible INTEGER NOT NULL DEFAULT 0,
             user_hidden_from_timeline INTEGER NOT NULL DEFAULT 0,
             user_state TEXT NOT NULL DEFAULT 'active',
             source_commit_seq INTEGER NOT NULL DEFAULT 0,
@@ -636,6 +642,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             tool_calls INTEGER NOT NULL,
             is_sidechain INTEGER NOT NULL,
             hidden_from_default_timeline INTEGER,
+            test_scope_visible INTEGER NOT NULL DEFAULT 0,
             user_hidden_from_timeline INTEGER NOT NULL DEFAULT 0,
             user_state TEXT NOT NULL DEFAULT 'active',
             source_commit_seq INTEGER NOT NULL DEFAULT 0,
@@ -1411,6 +1418,7 @@ class SearchStore:
         git_repo: str | None,
         started_at: str,
         hidden_from_default_timeline: bool = False,
+        test_scope_visible: bool = False,
         origin_kind: str | None = None,
         user_hidden_from_timeline: bool = False,
         user_state: str = "active",
@@ -1451,10 +1459,10 @@ class SearchStore:
                     session_id, generation_id, owner_id, desired_revision, indexed_through,
                     object_count, object_set_hash, event_count,
                     user_messages, assistant_messages, tool_calls, is_sidechain,
-                    hidden_from_default_timeline, origin_kind,
+                    hidden_from_default_timeline, test_scope_visible, origin_kind,
                     user_hidden_from_timeline, user_state, source_commit_seq, tombstoned,
                     project, provider, environment, cwd, git_repo, started_at, published_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     generation_id=excluded.generation_id,
                     owner_id=excluded.owner_id,
@@ -1468,6 +1476,7 @@ class SearchStore:
                     tool_calls=excluded.tool_calls,
                     is_sidechain=excluded.is_sidechain,
                     hidden_from_default_timeline=excluded.hidden_from_default_timeline,
+                    test_scope_visible=excluded.test_scope_visible,
                     origin_kind=excluded.origin_kind,
                     user_hidden_from_timeline=excluded.user_hidden_from_timeline,
                     user_state=excluded.user_state,
@@ -1495,6 +1504,7 @@ class SearchStore:
                     int(aggregates["tool_calls"] or 0),
                     int(aggregates["is_sidechain"] or 0),
                     1 if hidden_from_default_timeline else 0,
+                    1 if test_scope_visible else 0,
                     origin_kind,
                     1 if user_hidden_from_timeline else 0,
                     user_state,
@@ -1551,6 +1561,7 @@ class SearchStore:
                 environment=environment,
                 event_count=event_count,
                 hidden_from_default_timeline=hidden_from_default_timeline,
+                test_scope_visible=test_scope_visible,
                 user_hidden_from_timeline=user_hidden_from_timeline,
                 user_state=user_state,
                 source_commit_seq=source_commit_seq,
@@ -1580,6 +1591,7 @@ class SearchStore:
         environment: str,
         event_count: int,
         hidden_from_default_timeline: bool = False,
+        test_scope_visible: bool = False,
         user_hidden_from_timeline: bool = False,
         user_state: str = "active",
         source_commit_seq: int = 0,
@@ -1595,14 +1607,14 @@ class SearchStore:
                 order_time_us, session_id, generation_id, source_object_id,
                 record_ordinal, event_id, role, tool_name,
                 interaction_kind, title_eligible,
-                indexed_through, event_count, hidden_from_default_timeline,
+                indexed_through, event_count, hidden_from_default_timeline, test_scope_visible,
                 user_hidden_from_timeline, user_state, source_commit_seq, tombstoned
             )
             SELECT e.id, ?, ?, ?, ?,
                    e.order_time_us, e.session_id, e.generation_id, e.source_object_id,
                    e.record_ordinal, e.event_id, e.role, e.tool_name,
                    e.interaction_kind, e.title_eligible,
-                   ?, ?, ?, ?, ?, ?, ?
+                   ?, ?, ?, ?, ?, ?, ?, ?
             FROM events e
             JOIN projection_membership m ON m.object_id = e.source_object_id
             WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
@@ -1617,6 +1629,7 @@ class SearchStore:
                 desired_revision,
                 event_count,
                 1 if hidden_from_default_timeline else 0,
+                1 if test_scope_visible else 0,
                 1 if user_hidden_from_timeline else 0,
                 user_state,
                 source_commit_seq,
@@ -1656,16 +1669,19 @@ class SearchStore:
         limit: int,
         include_snippets: bool = True,
         include_origin_hidden: bool = False,
+        include_test: bool = False,
     ) -> dict[str, object]:
         fts_query, query_token_count, compiled_token_count = self._compile_fts_query(query)
         if not fts_query:
             return {"results": [], "query_token_count": query_token_count, "compiled_token_count": compiled_token_count}
         use_searchable_corpus = window_start_us is not None and window_start_us >= _fast_scope_cutoff_us()
         include_hidden_flag = 1 if include_origin_hidden else 0
+        include_test_flag = 1 if include_test else 0
         filter_params = (
             fts_query,
             owner_id,
             include_hidden_flag,
+            include_test_flag,
             project,
             project,
             provider,
@@ -1937,7 +1953,8 @@ class SearchStore:
                 WHERE s.owner_id = ?
                   AND e.order_time_us >= ? AND e.order_time_us < ?
                   AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
-                  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+                  AND (COALESCE(s.hidden_from_default_timeline, 0) = 0
+                       OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
                   AND COALESCE(s.user_hidden_from_timeline, 0) = 0
                   AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
                   AND COALESCE(s.tombstoned, 0) = 0
@@ -1960,6 +1977,7 @@ class SearchStore:
                 owner_id,
                 window_start_us,
                 window_end_us,
+                1 if include_test else 0,
                 1 if include_test else 0,
                 first_order_us,
                 first_order_us,
@@ -2001,7 +2019,8 @@ class SearchStore:
               AND (e.role != 'user' OR (e.title_eligible = 1
                    AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
               AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
-              AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+              AND (COALESCE(s.hidden_from_default_timeline, 0) = 0
+                   OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
               AND COALESCE(s.user_hidden_from_timeline, 0) = 0
               AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
               AND COALESCE(s.tombstoned, 0) = 0
@@ -2019,6 +2038,7 @@ class SearchStore:
                 owner_id,
                 window_start_us,
                 window_end_us,
+                1 if include_test else 0,
                 1 if include_test else 0,
                 cursor_values[0],
                 *cursor_values,
@@ -2107,6 +2127,7 @@ class SearchStore:
         *,
         session_id: str,
         system_hidden: bool,
+        test_scope_visible: bool,
         user_hidden_from_timeline: bool,
         user_state: str,
         source_commit_seq: int,
@@ -2121,23 +2142,26 @@ class SearchStore:
                 cursor = self.connection.execute(
                     f"""
                     UPDATE {table}
-                    SET hidden_from_default_timeline = ?, user_hidden_from_timeline = ?,
+                    SET hidden_from_default_timeline = ?, test_scope_visible = ?, user_hidden_from_timeline = ?,
                         user_state = ?, source_commit_seq = ?
                     WHERE session_id = ?
                       AND source_commit_seq <= ?
                       AND (COALESCE(hidden_from_default_timeline, 0) != ?
+                           OR COALESCE(test_scope_visible, 0) != ?
                            OR COALESCE(user_hidden_from_timeline, 0) != ?
                            OR COALESCE(user_state, 'active') != ?
                            OR source_commit_seq < ?)
                     """,
                     (
                         target,
+                        int(test_scope_visible),
                         int(user_hidden_from_timeline),
                         user_state,
                         source_commit_seq,
                         session_id,
                         source_commit_seq,
                         target,
+                        int(test_scope_visible),
                         int(user_hidden_from_timeline),
                         user_state,
                         source_commit_seq,

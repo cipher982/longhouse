@@ -20,6 +20,9 @@ from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.searchd_supervisor import get_searchd_projector_client
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
+from zerg.services.session_visibility_policy import visible_in_test_scope
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
@@ -265,6 +268,7 @@ class SearchV2Projector:
         owner_id = session.get("owner_id")
         if owner_id is None:
             raise SearchProjectionError("owner_missing", "storage session has no owner for search isolation")
+        visibility = evaluate_origin_visibility(facts_from_row(session))
         published = await self.search.call(
             "search.index.publish.v2",
             {
@@ -282,6 +286,7 @@ class SearchV2Projector:
                 "git_repo": session.get("git_repo"),
                 "started_at": session["started_at"],
                 "hidden_from_default_timeline": bool(session.get("hidden_from_default_timeline", False)),
+                "test_scope_visible": visible_in_test_scope(visibility),
                 "origin_kind": session.get("origin_kind"),
                 "user_hidden_from_timeline": bool(session.get("user_hidden_from_timeline", False)),
                 "user_state": str(session.get("user_state") or "active"),

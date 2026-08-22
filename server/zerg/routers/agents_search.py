@@ -336,6 +336,7 @@ async def search_storage_v2_rows(
     timeout_seconds: float | None = None,
     include_snippets: bool = True,
     include_origin_hidden: bool = False,
+    include_test: bool = False,
 ) -> list[dict[str, object]]:
     """Search the disposable v2 index without opening the retired archive DB."""
 
@@ -358,6 +359,7 @@ async def search_storage_v2_rows(
             "limit": min(200, max(1, limit)),
             "include_snippets": include_snippets,
             "include_origin_hidden": include_origin_hidden,
+            "include_test": include_test,
         }
         if timeout_seconds is None:
             result = await search.call("search.query.v2", params)
@@ -475,6 +477,7 @@ async def search_storage_v2_episode_embeddings(
     since_iso: str | None = None,
     environment: str | None = None,
     include_origin_hidden: bool = False,
+    include_test: bool = False,
 ) -> _DenseQueryPayload:
     """Query the derived dense index through searchd, never its SQLite file.
 
@@ -502,6 +505,7 @@ async def search_storage_v2_episode_embeddings(
             "exclude_environments": exclude_environments,
             "since_iso": since_iso,
             "include_origin_hidden": include_origin_hidden,
+            "include_test": include_test,
         },
         timeout_seconds=timeout_seconds,
     )
@@ -532,6 +536,7 @@ async def search_storage_v2_sessions(
         days_back=days_back,
         limit=200,
         include_origin_hidden=include_automation,
+        include_test=include_test,
     )
     best_rows: dict[str, dict[str, object]] = {}
     for row in rows:
@@ -699,6 +704,7 @@ async def _semantic_recall(
             exclude_environments=exclude_environments or None,
             since_iso=since_iso,
             include_origin_hidden=include_automation,
+            include_test=include_test,
         )
         if dense_payload.coverage.stale:
             # Catalog advancement precedes the searchd mutation, so a second
@@ -997,6 +1003,7 @@ async def _lexical_recall_matches(
         timeout_seconds=timeout_seconds,
         include_snippets=False,
         include_origin_hidden=include_automation,
+        include_test=include_test,
     )
     matches: list[RecallMatch] = []
     seen: set[str] = set()

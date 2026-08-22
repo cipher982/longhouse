@@ -89,6 +89,12 @@ def evaluate_origin_visibility(facts: SessionVisibilityFacts) -> OriginVisibilit
     )
 
 
+def visible_in_test_scope(decision: OriginVisibilityDecision) -> bool:
+    """Return true only when test environment is the sole hidden reason."""
+
+    return decision.reason_keys == ("test_environment",)
+
+
 def known_hidden_evidence_clause(model, *, include_test: bool = False):
     """SQL twin for scalar evidence available on a denormalized session row."""
 
@@ -239,4 +245,5 @@ __all__ = [
     "facts_from_row",
     "known_hidden_evidence_clause",
     "title_origin_eligible_clause",
+    "visible_in_test_scope",
 ]
