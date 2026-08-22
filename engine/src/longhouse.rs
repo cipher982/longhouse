@@ -2609,6 +2609,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
+    emit_warp_codex_session_start(&session_id, &cwd, args.project.as_deref());
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &bridge.ws_url,
@@ -2776,6 +2777,7 @@ fn launch_managed_codex_resume(
     if target.bypass {
         eprintln!("Longhouse notice: retained bypass permission mode is active.");
     }
+    emit_warp_codex_session_start(&response.session_id, cwd, args.project.as_deref());
     let tui_result = run_codex_tui_with_recovery(
         codex_bin,
         &bridge.ws_url,
@@ -3291,6 +3293,38 @@ fn bridge_readyz_healthy(ws_url: Option<&str>) -> bool {
 
 fn interactive_stdio() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+fn warp_codex_session_start_marker(session_id: &str, cwd: &Path, project: Option<&str>) -> String {
+    let payload = json!({
+        "v": 1,
+        "agent": "codex",
+        "event": "session_start",
+        "session_id": session_id,
+        "cwd": cwd,
+        "project": project.unwrap_or_else(|| {
+            cwd.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("longhouse")
+        }),
+    });
+    format!("\x1b]777;notify;warp://cli-agent;{payload}\x07")
+}
+
+fn emit_warp_codex_session_start(session_id: &str, cwd: &Path, project: Option<&str>) {
+    if std::env::var("TERM_PROGRAM").as_deref() != Ok("WarpTerminal")
+        || std::env::var_os("WARP_CLI_AGENT_PROTOCOL_VERSION").is_none()
+        || std::env::var_os("WARP_CLIENT_VERSION").is_none()
+        || !std::io::stdout().is_terminal()
+    {
+        return;
+    }
+
+    let marker = warp_codex_session_start_marker(session_id, cwd, project);
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout
+        .write_all(marker.as_bytes())
+        .and_then(|()| stdout.flush());
 }
 
 fn wait_for_child_or_signal(
@@ -4108,6 +4142,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
     attach_codex_tui(&args.session_id)?;
+    emit_warp_codex_session_start(&args.session_id, Path::new(&state.cwd), None);
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &ws_url,
@@ -4335,6 +4370,30 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--remote", "ws://127.0.0.1:4321"]));
+    }
+
+    #[test]
+    fn warp_codex_session_start_marker_identifies_the_managed_session() {
+        let marker = warp_codex_session_start_marker(
+            "11111111-1111-4111-8111-111111111111",
+            Path::new("/tmp/demo"),
+            None,
+        );
+        let payload = marker
+            .strip_prefix("\x1b]777;notify;warp://cli-agent;")
+            .and_then(|value| value.strip_suffix('\x07'))
+            .expect("Warp OSC 777 framing");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(payload).unwrap(),
+            json!({
+                "v": 1,
+                "agent": "codex",
+                "event": "session_start",
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "cwd": "/tmp/demo",
+                "project": "demo",
+            })
+        );
     }
 
     #[test]
