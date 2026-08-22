@@ -44,8 +44,9 @@ def _load() -> dict:
 def available_native_managed_launch_commands() -> tuple[tuple[str, str], ...]:
     """`(provider, command)` for every managed launch entrypoint that ships.
 
-    Excluded entrypoints are omitted: `longhouse antigravity` is declared and
-    deliberately not built, so it must never be suggested.
+    Entrypoints whose status is not `available` are omitted. Status comes from
+    `config/native_device_entrypoints.json` and is the only authority; do not
+    hardcode per-provider exclusions here.
     """
 
     out: list[tuple[str, str]] = []
