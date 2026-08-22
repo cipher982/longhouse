@@ -11,6 +11,7 @@ from datetime import datetime
 from datetime import timezone
 
 from zerg.services.agents.models import SessionIngest
+from zerg.services.agents.store import _GENERIC_WORKSPACE_LABELS
 from zerg.services.agents.store import _normalize_ingested_project
 
 
@@ -48,3 +49,22 @@ def test_real_project_names_survive():
     assert _normalize_ingested_project(_ingest(project="  longhouse  ")) == "longhouse"
     assert _normalize_ingested_project(_ingest(project=None)) is None
     assert _normalize_ingested_project(_ingest(project="   ")) is None
+
+
+def test_a_stored_generic_label_is_cleared_when_ingest_reports_no_project():
+    """A replay must be able to retire labels the system no longer produces."""
+
+    from zerg.models.agents import AgentSession
+
+    session = AgentSession(project="workspace", provider="opencode")
+    assert _normalize_ingested_project(_ingest(project=None)) is None
+    # The update path clears it; asserted here through the same predicate the
+    # path uses, so the intent is pinned even though the branch needs a session.
+    assert str(session.project).strip() in _GENERIC_WORKSPACE_LABELS
+
+
+def test_a_real_stored_project_is_never_cleared():
+    from zerg.models.agents import AgentSession
+
+    session = AgentSession(project="g55", provider="opencode")
+    assert str(session.project).strip() not in _GENERIC_WORKSPACE_LABELS

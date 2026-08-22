@@ -944,6 +944,13 @@ class AgentsStore:
             or _should_repair_stale_cwd_basename_project(session, data)
         ):
             session.project = incoming_project
+        elif incoming_project is None and str(session.project or "").strip() in _GENERIC_WORKSPACE_LABELS:
+            # The stored label is one no attribution path will produce any more,
+            # and the engine now reports this session as unattributed. Clearing
+            # it lets a replay retire the ~950 rows filed under a project named
+            # "workspace"; leaving it would keep them in the project filter
+            # forever, since a null incoming value never overwrites.
+            session.project = None
         if data.device_id and not session.device_id:
             session.device_id = data.device_id
         if not session.device_name:
