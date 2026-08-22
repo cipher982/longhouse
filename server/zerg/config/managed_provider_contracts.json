@@ -2336,7 +2336,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "a4220290737980b845691508d79cc7f908407ec67cf1e4212472ee2b9bdde06e"
+      "adapter_digest": "f98374086cf22d4f793df6effd83e41651ea1809a15121ae25a816a02877ac12"
     },
     {
       "provider": "pi",
