@@ -162,15 +162,26 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
     """
 
     run = LiveSessionRun.__table__.alias("timeline_empty_run")
+    thread = LiveSessionThread.__table__.alias("timeline_empty_thread")
     control = LiveSessionConnection.__table__.alias("timeline_empty_control")
     head = FactHead.__table__.alias("timeline_empty_head")
     value = head.c.value_json
 
     active_activity = (
         select(1)
-        .select_from(run.join(head, head.c.session_id == session_id))
+        .select_from(
+            run.join(
+                thread,
+                and_(
+                    thread.c.id == run.c.thread_id,
+                    thread.c.session_id == session_id,
+                    thread.c.branch_kind == "root",
+                    thread.c.is_primary == 1,
+                ),
+            ).join(head, head.c.session_id == session_id)
+        )
         .where(
-            run.c.thread_id == thread_id,
+            or_(thread_id.is_(None), run.c.thread_id == thread_id),
             run.c.ended_at.is_(None),
             head.c.family == "activity",
             head.c.valid_until > observed_at,
@@ -184,9 +195,21 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
     control_valid_until = func.julianday(head.c.observed_at) + (cast(func.json_extract(value, "$.lease_ttl_ms"), Float) / 86_400_000.0)
     attached_terminal = (
         select(1)
-        .select_from(run.join(control, control.c.run_id == run.c.id).join(head, head.c.session_id == session_id))
+        .select_from(
+            run.join(
+                thread,
+                and_(
+                    thread.c.id == run.c.thread_id,
+                    thread.c.session_id == session_id,
+                    thread.c.branch_kind == "root",
+                    thread.c.is_primary == 1,
+                ),
+            )
+            .join(control, control.c.run_id == run.c.id)
+            .join(head, head.c.session_id == session_id)
+        )
         .where(
-            run.c.thread_id == thread_id,
+            or_(thread_id.is_(None), run.c.thread_id == thread_id),
             run.c.ended_at.is_(None),
             control.c.released_at.is_(None),
             control.c.state.in_(("attached", "degraded")),

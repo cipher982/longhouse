@@ -996,7 +996,7 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
     LiveSession = make_sessionmaker(engine)
     now = datetime.now(timezone.utc).replace(microsecond=0)
 
-    def add_empty_helm(db, *, hidden: int, attached: bool):
+    def add_empty_helm(db, *, hidden: int, attached: bool, primary_thread: bool = True):
         session_id = str(uuid4())
         thread_id = str(uuid4())
         run_id = str(uuid4())
@@ -1014,7 +1014,7 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
                 device_id="cinder",
                 started_at=now,
                 last_activity_at=now,
-                primary_thread_id=thread_id,
+                primary_thread_id=thread_id if primary_thread else None,
                 launch_actor=actor,
                 launch_surface=surface,
                 origin_kind=origin_kind,
@@ -1111,7 +1111,10 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
         return session_id
 
     with LiveSession() as db:
-        attached_human_id = add_empty_helm(db, hidden=0, attached=True)
+        # A launch can publish canonical run/control heads before the catalog
+        # primary-thread backfill lands. The open-session predicate must follow
+        # the durable root thread instead of dropping this valid empty Helm.
+        attached_human_id = add_empty_helm(db, hidden=0, attached=True, primary_thread=False)
         add_empty_helm(db, hidden=0, attached=False)
         add_empty_helm(db, hidden=1, attached=True)
         db.commit()
