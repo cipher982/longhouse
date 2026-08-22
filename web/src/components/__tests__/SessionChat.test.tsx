@@ -342,18 +342,24 @@ describe("SessionChat", () => {
     expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
   });
 
-  it("keeps the dock visible but replaces disabled composer controls when control is offline", () => {
+  it("keeps the dock visible but shows the blocker it was given, not a hardcoded heading", () => {
     renderSessionChat({
-      composerDisabledReason: "Longhouse can see this session, but cannot send prompts until the engine reconnects.",
+      composerDisabledTitle: "Can't send",
+      composerDisabledReason: "This session's machine isn't accepting new Codex turns.",
     });
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "Control offline",
+      "Can't send",
     );
     expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "cannot send prompts until the engine reconnects",
+      "isn't accepting new Codex turns",
+    );
+    // The heading used to be the literal string "Control offline" regardless of
+    // the blocker, which is how a connected machine got told to reconnect.
+    expect(screen.getByTestId("session-chat-disabled-reason")).not.toHaveTextContent(
+      "Control offline",
     );
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
@@ -361,16 +367,18 @@ describe("SessionChat", () => {
   it("replaces disabled full-panel composer controls with status copy", () => {
     renderSessionChat({
       layout: "panel",
-      composerDisabledReason: "Longhouse can see this session, but cannot send prompts until the engine reconnects.",
+      composerDisabledTitle: "Machine offline",
+      composerDisabledReason:
+        "The machine running this Codex session is offline. Sending resumes when it reconnects.",
     });
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "Control offline",
+      "Machine offline",
     );
     expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "cannot send prompts until the engine reconnects",
+      "Sending resumes when it reconnects",
     );
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });

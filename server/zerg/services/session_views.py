@@ -553,7 +553,11 @@ def project_compat_capabilities_from_state(
     reattach_available = actions.reattach.state == "available"
     owned = session_state.control.ownership == "owned"
     closed = session_state.disposition.state == "closed"
-    control_offline = owned and session_state.control.connection != "connected"
+    # A blocked Console turn is a control-unavailable state even when the
+    # machine channel is connected — `execution_target_missing` is exactly that
+    # — and must reach the typed explanation rather than the generic
+    # "cannot accept typed input" line meant for a read-only Helm path.
+    control_offline = owned and (session_state.control.connection != "connected" or (console and actions.start_turn.state != "available"))
     disabled_reason: SendDisabledReason | None
     if send_available:
         disabled_reason = None
@@ -2232,7 +2236,10 @@ def build_session_response(
         machine_online = bool(owner_id is not None and device_id and registry.is_online(owner_id=owner_id, device_id=device_id))
         resolved_kernel_capabilities = project_console_turn_capabilities(
             resolved_kernel_capabilities,
-            closed=bool(getattr(session, "ended_at", None)),
+            # Both, deliberately: `user_closed` writes `closed_at` and leaves
+            # `ended_at` NULL, so an `ended_at`-only test let a closed session
+            # keep advertising a startable turn.
+            closed=bool(getattr(session, "closed_at", None) or getattr(session, "ended_at", None)),
             execution_target_available=bool(device_id and cwd),
             turn_state=turn_state,
             machine_online=machine_online,

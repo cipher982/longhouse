@@ -4,19 +4,16 @@ import WebKit
 import OSLog
 
 /// The transcript WebView's height is not constant: the floating control card,
-/// the keyboard, and the safe area all resize it through SwiftUI. Two separate
-/// things break on every one of those changes, and neither is self-healing:
+/// the keyboard, and the safe area all resize it through SwiftUI. UIScrollView
+/// does not re-clamp `contentOffset` when its bounds change, so a pinned
+/// transcript ends up short of (or past) its last row — the reported symptom
+/// was a black band the exact height of a dismissed keyboard, which is the
+/// viewport delta, cleared by a drag because a drag reconciles the offset.
 ///
-///   1. UIScrollView does not re-clamp `contentOffset` when its bounds change,
-///      so a pinned transcript ends up short of (or past) its last row.
-///   2. WebKit renders only the region it believes is exposed. Growing the frame
-///      leaves the newly exposed strip unpainted — a blank band the exact height
-///      of whatever went away (a dismissed keyboard is the loud one) until a drag
-///      makes WebKit re-render.
-///
-/// The DOM's `resize` listener addresses (1) only if WebKit delivers the event,
-/// and addresses (2) never — it cannot see WebKit's painted region at all.
-/// `layoutSubviews` is the one trigger UIKit guarantees on a frame change.
+/// The DOM's `resize` listener already tried to cover this, but only if WebKit
+/// delivers the event; its regression test dispatches the event by hand, so the
+/// trigger was never under test. `layoutSubviews` is the one trigger UIKit
+/// guarantees on a frame change.
 final class TranscriptWebView: WKWebView {
     /// (previousHeight, newHeight). Only fires on a real height change.
     var onViewportHeightChange: ((CGFloat, CGFloat) -> Void)?
@@ -731,6 +728,12 @@ struct WebTranscriptView: UIViewRepresentable {
                 )
             }
         }
+#if DEBUG
+        /// Lets a test assert its own precondition. The intent is inferred from
+        /// drag geometry, so a fixture can silently fail to become unpinned and
+        /// make a re-pin assertion look like a product bug.
+        var isStickingToBottomForTesting: Bool { shouldStickToBottom }
+#endif
         private var userScrollInProgress = false
         /// Invalidates deferred viewport reconciliation across height changes and
         /// across WebView reuse.
@@ -841,42 +844,24 @@ struct WebTranscriptView: UIViewRepresentable {
             DispatchQueue.main.async { [weak self, weak webView] in
                 guard let self, let webView, generation == self.viewportReconcileGeneration else { return }
                 let scrollView = webView.scrollView
-                let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+                // The valid range is bounded by the adjusted insets, not by
+                // bounds alone. `contentInsetAdjustmentBehavior = .never` stops
+                // UIKit adding safe-area insets; it does not prove that nothing
+                // else set one, and clamping to the wrong maximum would strand
+                // exactly the rows this exists to reach.
+                let insets = scrollView.adjustedContentInset
+                let minOffset = -insets.top
+                let maxOffset = max(minOffset, scrollView.contentSize.height + insets.bottom - scrollView.bounds.height)
                 // Unconditional and low-volume (real height changes only): this
                 // is the evidence a screenshot of a blank band cannot give.
                 self.logger.info(
-                    "webkit transcript viewport \(Int(previous), privacy: .public)->\(Int(height), privacy: .public) content=\(Int(scrollView.contentSize.height), privacy: .public) offset=\(Int(scrollView.contentOffset.y), privacy: .public) max=\(Int(maxOffset), privacy: .public) stick=\(self.shouldStickToBottom, privacy: .public)"
+                    "webkit transcript viewport \(Int(previous), privacy: .public)->\(Int(height), privacy: .public) content=\(Int(scrollView.contentSize.height), privacy: .public) offset=\(Int(scrollView.contentOffset.y), privacy: .public) min=\(Int(minOffset), privacy: .public) max=\(Int(maxOffset), privacy: .public) inset=\(Int(insets.top), privacy: .public)/\(Int(insets.bottom), privacy: .public) stick=\(self.shouldStickToBottom, privacy: .public)"
                 )
-                // UIScrollView does not re-clamp contentOffset when its bounds
-                // change, so a shrink leaves the tail unreachable until a drag.
                 let target = self.shouldStickToBottom && !self.userScrollInProgress
                     ? maxOffset
-                    : min(max(scrollView.contentOffset.y, 0), maxOffset)
-                if abs(scrollView.contentOffset.y - target) > 0.5 {
-                    scrollView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
-                    return
-                }
-                // Nothing to re-pin, but growth still exposed a strip WebKit was
-                // never asked to paint: it renders the region it was last told
-                // was visible, and a frame change alone does not re-send that —
-                // a scroll update does, which is why dragging "fixes" it. Send
-                // one and land back on the same offset, so it is invisible.
-                //
-                // Never mid-drag. `keyboardDismissMode` is `.interactive`, so the
-                // gesture that produces these height changes IS a drag, and
-                // writing contentOffset under an active pan fights the recognizer.
-                // The clamp above is still allowed there: it only runs when the
-                // offset is genuinely out of range, which UIScrollView would
-                // rubber-band anyway.
-                guard height > previous, maxOffset > 1, !self.userScrollInProgress else { return }
-                let restore = scrollView.contentOffset
-                let nudged = restore.y > 1 ? restore.y - 1 : restore.y + 1
-                self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
-                scrollView.setContentOffset(CGPoint(x: restore.x, y: nudged), animated: false)
-                DispatchQueue.main.async { [weak self, weak webView] in
-                    guard let self, let webView, generation == self.viewportReconcileGeneration else { return }
-                    webView.scrollView.setContentOffset(restore, animated: false)
-                }
+                    : min(max(scrollView.contentOffset.y, minOffset), maxOffset)
+                guard abs(scrollView.contentOffset.y - target) > 0.5 else { return }
+                scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: target), animated: false)
             }
         }
 

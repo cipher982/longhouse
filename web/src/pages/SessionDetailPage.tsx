@@ -561,6 +561,7 @@ function SessionDetailWorkspaceRoute({
                   }
                   composerPlaceholder={interaction.placeholder}
                   composerDisabledReason={composerDisabledReason}
+                  composerDisabledTitle={interaction.notice?.title ?? null}
                   managedLaunchSuggestion={null}
                   submitLabel={interaction.submitLabel}
                   canQueueNextInput={Boolean(

@@ -100,6 +100,9 @@ interface SessionChatProps {
   /** Managed-local sessions use explicit live-send with fast JSON ack. */
   chatMode?: "managed_local";
   composerDisabledReason?: string | null;
+  /// Heading over the disabled-composer copy. Derived from the typed blocker;
+  /// falls back only when a caller has nothing better.
+  composerDisabledTitle?: string | null;
   managedLaunchSuggestion?: ManagedLaunchSuggestion | null;
   /**
    * When true, sending while the session is locked persists as a queued
@@ -177,6 +180,7 @@ export function SessionChat({
   keyboardHintText,
   chatMode,
   composerDisabledReason = null,
+  composerDisabledTitle = null,
   managedLaunchSuggestion = null,
   canQueueNextInput = false,
   canSteerActiveTurn = false,
@@ -1018,7 +1022,7 @@ export function SessionChat({
               data-testid="session-chat-disabled-reason"
             >
               <span className="session-chat-composer-unavailable__title">
-                Control offline
+                {composerDisabledTitle || "Control unavailable"}
               </span>
               <span className="session-chat-composer-unavailable__copy">
                 {composerDisabledReason}

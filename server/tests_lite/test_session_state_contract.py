@@ -23,6 +23,7 @@ from zerg.services.session_liveness_facts import PhaseObservation
 from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_runtime import SessionRuntimeView
+from zerg.services.session_state_contract import build_archive_session_state_facts
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_state_contract import project_transcript_facts
 
@@ -410,6 +411,64 @@ def test_closed_console_session_shows_no_access_chip_beside_its_closed_headline(
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.label == "Closed"
     assert facts.presentation.access is None
+
+
+def test_closed_console_session_never_advertises_live_control():
+    """`user_closed` writes `closed_at` and leaves `ended_at` NULL.
+
+    A Console blocker computed from `ended_at` alone therefore stays
+    `available` on a closed session, which put "Live control" beside "Closed".
+    The access chip is decided from the disposition, so both closure paths land
+    the same way.
+    """
+
+    projection = project_console_control(
+        closed=False,  # what an ended_at-only test computes for a user_closed session
+        execution_target_available=True,
+        turn_state="idle",
+        machine_online=True,
+        adapter_available=True,
+        interrupt_adapter_available=False,
+    )
+    assert projection.can_start_turn is True
+
+    facts = _facts(
+        runtime=_runtime(phase=None, terminal_state="user_closed"),
+        session=_session(origin_kind="console", closed_at=NOW - timedelta(seconds=5)),
+        capabilities=replace(
+            _capabilities(label="live", live=False, reattach=False),
+            control_owned=True,
+            can_start_turn=True,
+            start_turn_blocked_by=None,
+            console_control=projection,
+        ),
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.disposition.state == "closed"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.label == "Closed"
+    assert facts.presentation.access is None
+
+
+def test_unowned_console_projection_keeps_the_searchable_history_label():
+    """Archive and active-list rows are Console-moded with no control at all.
+
+    Routing every Console row to the turn-blocker projector dropped their
+    "Search only" chip, because `not_console` is not one of its blockers. Only
+    an owned dispatch path answers the Console access question.
+    """
+
+    facts = build_archive_session_state_facts(
+        session=_session(origin_kind="console", transcript_revision=7),
+        capabilities=_capabilities(label="imported", live=False, reattach=False, search=True, run_id=None),
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.mode == "console"
+    assert facts.control.ownership == "unowned"
+    assert facts.presentation.access is not None
+    assert facts.presentation.access.key == "search_only"
 
 
 def test_process_gone_ends_run_but_does_not_close_session():

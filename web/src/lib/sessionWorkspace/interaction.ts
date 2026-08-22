@@ -40,10 +40,15 @@ export function getSessionInteractionCapabilities({
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
 
+  // A Console turn can be blocked while the machine channel is still connected
+  // — `execution_target_missing` is exactly that — so connection alone does not
+  // decide this. Treat any owned-but-blocked Console session as unavailable so
+  // it reaches the typed blocker copy instead of the generic read-only text.
+  const consoleTurnBlocked = facts.mode === "console" && !liveControlAvailable;
   const mode: SessionInteractionMode =
     liveControlAvailable
       ? "managed_local"
-      : isManagedLocalSession && facts.control.connection !== "connected"
+      : isManagedLocalSession && (facts.control.connection !== "connected" || consoleTurnBlocked)
         ? "managed_local_unavailable"
         : "unsupported";
   const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;

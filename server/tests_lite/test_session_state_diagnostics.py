@@ -292,6 +292,21 @@ def test_projection_parity_detects_version_and_presentation_key_divergence():
     assert diverged.status == "diverged"
     assert diverged.mismatched_fields == ("state_contract_version", "primary_key")
 
+    # Reading the constant everywhere removed the only case that exercised a
+    # presentation-policy mismatch, which is the whole point of shipping the
+    # field. Diverge it explicitly instead.
+    stale_policy = compare_session_state_projections(
+        session_state=state,
+        machine_payload={
+            "commit_seq": "12",
+            "state_contract_version": STATE_CONTRACT_VERSION,
+            "presentation_policy_version": PRESENTATION_POLICY_VERSION - 1,
+            "presentation": {"primary": None, "access": None},
+        },
+    )
+    assert stale_policy.status == "diverged"
+    assert stale_policy.mismatched_fields == ("presentation_policy_version",)
+
     raced = compare_session_state_projections(
         session_state=state,
         machine_payload={

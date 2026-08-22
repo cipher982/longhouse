@@ -756,7 +756,7 @@ def assemble_session_state_facts(
         control=control,
         interaction=pending_interaction,
     )
-    access = _access(mode=mode, control=control, transcript=transcript)
+    access = _access(mode=mode, disposition=disposition, control=control, transcript=transcript)
     transcript_label = (
         SessionPresentationLabel(
             key="transcript_lagging",
@@ -954,8 +954,8 @@ def _console_access(control: SessionControlFacts) -> SessionPresentationLabel | 
         )
     reason = _clean(start_turn.reason)
     if reason == "session_closed":
-        # The primary label already says Closed, and there is no access left to
-        # describe. Two "Closed" chips on one card is noise.
+        # `_access` already drops the chip for a closed disposition; this covers
+        # a blocker that arrives before the disposition catches up.
         return None
     if reason == "machine_offline":
         return SessionPresentationLabel(
@@ -984,14 +984,23 @@ def _console_access(control: SessionControlFacts) -> SessionPresentationLabel | 
 def _access(
     *,
     mode: SessionMode,
+    disposition: SessionDispositionFacts,
     control: SessionControlFacts,
     transcript: SessionTranscriptFacts,
 ) -> SessionPresentationLabel | None:
-    # Console never falls through to the Helm ladder: borrowing lease vocabulary
-    # for a dispatch path is exactly what produced "Control degraded" on a
-    # healthy machine, and the ladder would call a closed Console session
-    # "Live control" whenever its machine happened to be reachable.
-    if mode == "console":
+    # A closed session has no access left to describe and the primary label
+    # already says Closed. Deciding this here rather than from a start_turn
+    # blocker also survives the two ways a session becomes closed: `user_closed`
+    # writes `closed_at` and leaves `ended_at` NULL, so a blocker-only guard let
+    # "Closed" sit beside "Live control".
+    if disposition.state == "closed":
+        return None
+    # Console does not fall through to the Helm ladder while Longhouse owns the
+    # dispatch path: borrowing lease vocabulary there is what produced "Control
+    # degraded" on a healthy machine. Unowned rows are a different question —
+    # archive and search projections are Console-moded but have no control at
+    # all, and the ladder below is what knows how to say "Search only".
+    if mode == "console" and control.ownership == "owned":
         return _console_access(control)
     live_actions = (
         control.actions.start_turn,
