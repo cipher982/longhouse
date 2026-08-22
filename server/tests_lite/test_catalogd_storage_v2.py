@@ -342,7 +342,27 @@ async def test_first_durable_content_keeps_automation_console_hidden(daemon_path
         assert stored.launch_actor == "automation"
         assert db.get(LiveSessionCatalog, str(session_id)).hidden_from_default_timeline == 1
         assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 1
-        engine.dispose()
+        stored.hidden_from_default_timeline = 0
+        db.get(LiveSessionCatalog, str(session_id)).hidden_from_default_timeline = 0
+        db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline = 0
+        db.commit()
+
+    store = CatalogStore(engine)
+    preview = store.reconcile_all_session_visibility(apply=False, observed_at=now + timedelta(seconds=1))
+    assert preview["evaluated"] == 1
+    assert preview["actionable_session_ids"] == [str(session_id)]
+    with Session(engine) as db:
+        assert db.get(StorageSession, str(session_id)).hidden_from_default_timeline == 0
+
+    applied = store.reconcile_all_session_visibility(apply=True, observed_at=now + timedelta(seconds=2))
+    assert applied["actionable_count"] == 1
+    assert applied["changed_rows"] >= 3
+    converged = store.reconcile_all_session_visibility(apply=False, observed_at=now + timedelta(seconds=3))
+    assert converged["actionable_count"] == 0
+    with Session(engine) as db:
+        assert db.get(StorageSession, str(session_id)).hidden_from_default_timeline == 1
+        assert db.get(LiveSessionCatalog, str(session_id)).launch_actor == "automation"
+    engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -828,10 +848,7 @@ async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_auto
     epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
     session_id = uuid4()
     generation_id = uuid4()
-    contract = (
-        "Hatch execution contract:\n"
-        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
-    )
+    contract = "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -925,10 +942,7 @@ async def test_hatch_execution_contract_does_not_override_console_storage_ingest
     session_id = uuid4()
     thread_id = uuid4()
     generation_id = uuid4()
-    contract = (
-        "Hatch execution contract:\n"
-        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
-    )
+    contract = "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     CatalogStore(engine).create_console_session(
@@ -1567,9 +1581,7 @@ async def test_claude_effort_then_real_prompt_reaches_title_generation(daemon_pa
         raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
         await client.call("storage.raw_object.commit.v2", raw)
 
-        assert (await client.call("storage.session.title.candidates.v2", {"limit": 10}))[
-            "sessions"
-        ] == []
+        assert (await client.call("storage.session.title.candidates.v2", {"limit": 10}))["sessions"] == []
 
         await client.call(
             "storage.session.semantic_projection.repair.v2",
@@ -2798,9 +2810,7 @@ async def test_startup_reaps_non_claude_semantic_debt_without_losing_claude_debt
     engine = create_catalog_engine(database_path)
     repaired = CatalogStore(engine).ensure_known_projector_states()
     with engine.connect() as connection:
-        rows = connection.exec_driver_sql(
-            "SELECT projector, session_id FROM projector_state ORDER BY projector, session_id"
-        ).all()
+        rows = connection.exec_driver_sql("SELECT projector, session_id FROM projector_state ORDER BY projector, session_id").all()
     engine.dispose()
 
     by_session = {

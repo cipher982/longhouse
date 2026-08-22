@@ -563,9 +563,35 @@ def db_reconcile_session_visibility(
 ) -> None:
     """Evaluate every session against the canonical presentation policy."""
 
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
     from zerg.database import make_sessionmaker
+    from zerg.services.agents.automation_backfill import reconcile_catalogd_all_visibility
     from zerg.services.agents.automation_backfill import reconcile_derived_visibility
     from zerg.services.agents.automation_backfill import reconcile_legacy_session_visibility
+
+    try:
+        payload = reconcile_catalogd_all_visibility(apply=apply_changes)
+    except (CatalogUnavailable, CatalogRemoteError, RuntimeError, OSError):
+        payload = None
+    if payload is not None:
+        payload = {
+            "status": "ok" if not payload["derived_failures"] else "partial",
+            "database_url": "catalogd",
+            **payload,
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            typer.echo(
+                f"Evaluated {payload['evaluated']} catalog session(s); actionable={payload['actionable_count']}; "
+                f"unresolved historical hidden={payload['unresolved_hidden_count']}."
+            )
+            if apply_changes:
+                typer.echo(
+                    f"Changed {payload['changed_rows']} catalog row(s); mirrored {payload['derived_applied_count']} search session(s)."
+                )
+        return
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
     SessionLocal = make_sessionmaker(engine)

@@ -478,3 +478,55 @@ def reconcile_derived_visibility(
         except (CatalogUnavailable, CatalogRemoteError, ValueError) as exc:
             failed.append({"session_id": session_id, "error": str(exc)})
     return {"applied": applied, "failed": failed}
+
+
+def reconcile_catalogd_all_visibility(
+    *,
+    apply: bool,
+    timeout_seconds: float = 120.0,
+) -> dict[str, Any]:
+    """Run the authoritative all-session catalog reconciliation and mirror searchd."""
+
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.catalogd.client import call_catalogd_sync
+    from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.services.searchd_supervisor import searchd_paths
+
+    _, catalogd_socket = catalogd_paths()
+    result = call_catalogd_sync(
+        catalogd_socket,
+        "catalogd.session.reconcile_visibility_all.v2",
+        params={"apply": apply, "observed_at": datetime.now(UTC).isoformat()},
+        timeout_seconds=timeout_seconds,
+    )
+    failures: list[dict[str, str]] = []
+    applied: list[str] = []
+    mirror_rows = result.pop("mirror_rows", [])
+    if apply and mirror_rows:
+        _, searchd_socket = searchd_paths()
+        source_commit_seq = int(result.get("commit_seq") or 0)
+        for row in mirror_rows:
+            session_id = str(row["session_id"])
+            try:
+                call_catalogd_sync(
+                    searchd_socket,
+                    "search.session.reconcile_visibility.v2",
+                    params={
+                        "session_id": session_id,
+                        "system_hidden": bool(row["system_hidden"]),
+                        "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
+                        "user_state": str(row["user_state"]),
+                        "source_commit_seq": source_commit_seq,
+                    },
+                    timeout_seconds=30.0,
+                )
+                applied.append(session_id)
+            except Exception as exc:  # per-row maintenance report; do not hide partial convergence
+                failures.append({"session_id": session_id, "error": str(exc)})
+    return {
+        **result,
+        "derived_applied_count": len(applied),
+        "derived_failures": failures,
+    }

@@ -438,6 +438,8 @@ class CatalogDaemon:
             return await self._reclassify_session_origin(request)
         if request.method == "catalogd.session.reconcile_visibility.v2":
             return await self._reconcile_session_visibility(request)
+        if request.method == "catalogd.session.reconcile_visibility_all.v2":
+            return await self._reconcile_all_session_visibility(request)
         if request.method == "session.repair.codex_launch_visibility.v2":
             return await self._repair_codex_launch_visibility(request)
         if request.method == "interaction.register.v2":
@@ -1109,6 +1111,20 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.reconcile_session_visibility, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _reconcile_all_session_visibility(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"apply", "observed_at"}:
+            return self._error(request, "invalid_request", "catalogd.session.reconcile_visibility_all.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["apply"]) is not bool:
+            return self._error(request, "invalid_request", "apply must be a boolean")
+        try:
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.reconcile_all_session_visibility, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_visible_notification_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

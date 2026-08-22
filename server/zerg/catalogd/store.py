@@ -107,7 +107,9 @@ from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
+from zerg.services.session_visibility_policy import SessionVisibilityFacts
 from zerg.services.session_visibility_policy import effective_system_hidden_clause
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import title_origin_eligible_clause
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_MAX_PAGES
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE
@@ -5676,6 +5678,124 @@ class CatalogStore:
             "system_hidden": system_hidden,
             "commit_seq": str(commit_seq),
         }
+
+    def reconcile_all_session_visibility(
+        self,
+        *,
+        apply: bool,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Evaluate the complete catalog/storage union and converge mirrors."""
+
+        catalog_table = LiveSessionCatalog.__table__
+        card_table = LiveTimelineCard.__table__
+        storage_table = StorageSession.__table__
+        thread_table = LiveSessionThread.__table__
+        context = _write_transaction(self.engine) if apply else _read_snapshot(self.engine)
+        with context as connection:
+            catalogs = {str(row["session_id"]): row for row in connection.execute(select(catalog_table)).mappings()}
+            cards = {str(row["session_id"]): row for row in connection.execute(select(card_table)).mappings()}
+            storage = {str(row["session_id"]): row for row in connection.execute(select(storage_table)).mappings()}
+            primary_threads = {
+                str(row["session_id"]): row
+                for row in connection.execute(select(thread_table).where(thread_table.c.is_primary == 1)).mappings()
+            }
+            session_ids = sorted(set(catalogs) | set(cards) | set(storage) | set(primary_threads))
+            actionable: list[str] = []
+            unresolved: list[str] = []
+            reason_counts: dict[str, int] = {}
+            mirror_rows: list[dict[str, Any]] = []
+            for session_id in session_ids:
+                catalog_row = catalogs.get(session_id) or {}
+                storage_row = storage.get(session_id) or {}
+                card_row = cards.get(session_id) or {}
+                thread_row = primary_threads.get(session_id) or {}
+                decision = evaluate_origin_visibility(
+                    SessionVisibilityFacts(
+                        provider=catalog_row.get("provider") or storage_row.get("provider") or card_row.get("provider"),
+                        project=catalog_row.get("project") or storage_row.get("project") or card_row.get("project"),
+                        environment=catalog_row.get("environment") or storage_row.get("environment") or card_row.get("environment"),
+                        origin_kind=catalog_row.get("origin_kind") or storage_row.get("origin_kind") or card_row.get("origin_kind"),
+                        launch_actor=catalog_row.get("launch_actor") or storage_row.get("launch_actor") or card_row.get("launch_actor"),
+                        launch_surface=catalog_row.get("launch_surface")
+                        or storage_row.get("launch_surface")
+                        or card_row.get("launch_surface"),
+                        cwd=storage_row.get("cwd") or catalog_row.get("cwd") or card_row.get("cwd"),
+                        machine_id=storage_row.get("machine_id") or catalog_row.get("device_id") or card_row.get("device_id"),
+                        first_user_message=storage_row.get("first_user_message_preview") or catalog_row.get("first_user_message_preview"),
+                        primary_thread_is_worker_only=thread_row.get("branch_kind") == "subagent",
+                    )
+                )
+                for reason in decision.reason_keys:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                current_hidden = any(
+                    bool(row.get("hidden_from_default_timeline")) for row in (catalog_row, card_row, storage_row, thread_row)
+                )
+                if decision.system_hidden and not current_hidden:
+                    actionable.append(session_id)
+                elif current_hidden and not decision.system_hidden:
+                    unresolved.append(session_id)
+                final_hidden = decision.system_hidden or current_hidden
+                user_hidden = bool(
+                    catalog_row.get("user_hidden_from_timeline")
+                    or storage_row.get("user_hidden_from_timeline")
+                    or card_row.get("user_hidden_from_timeline")
+                )
+                user_state = str(catalog_row.get("user_state") or storage_row.get("user_state") or "active")
+                if final_hidden or user_hidden or user_state not in {"active", "parked"}:
+                    mirror_rows.append(
+                        {
+                            "session_id": session_id,
+                            "system_hidden": final_hidden,
+                            "user_hidden_from_timeline": user_hidden,
+                            "user_state": user_state,
+                        }
+                    )
+
+            changed_rows = 0
+            commit_seq = _current_commit_seq(connection)
+            if apply and actionable:
+                commit_seq = _advance_commit_seq(connection, observed_at)
+                for table in (catalog_table, card_table, storage_table):
+                    values: dict[str, Any] = {
+                        "hidden_from_default_timeline": 1,
+                        "updated_at": observed_at,
+                    }
+                    if table is storage_table:
+                        values["commit_seq"] = commit_seq
+                    result = connection.execute(
+                        update(table)
+                        .where(
+                            table.c.session_id.in_(actionable),
+                            table.c.hidden_from_default_timeline == 0,
+                        )
+                        .values(**values)
+                    )
+                    changed_rows += int(result.rowcount or 0)
+                result = connection.execute(
+                    update(thread_table)
+                    .where(
+                        thread_table.c.session_id.in_(actionable),
+                        thread_table.c.hidden_from_default_timeline == 0,
+                    )
+                    .values(hidden_from_default_timeline=1, updated_at=observed_at)
+                )
+                changed_rows += int(result.rowcount or 0)
+
+            return {
+                "mode": "apply" if apply else "dry_run",
+                "evaluated": len(session_ids),
+                "actionable_count": len(actionable),
+                "actionable_session_ids": actionable,
+                "proven_hidden_count": sum(1 for row in mirror_rows if row["system_hidden"]),
+                "derived_visibility_count": len(mirror_rows),
+                "unresolved_hidden_count": len(unresolved),
+                "unresolved_hidden_session_ids": unresolved,
+                "reason_counts": reason_counts,
+                "changed_rows": changed_rows,
+                "mirror_rows": mirror_rows if apply else [],
+                "commit_seq": str(commit_seq),
+            }
 
     def update_session_preferences(
         self,
