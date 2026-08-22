@@ -1879,11 +1879,12 @@
           "owner_action": "real agy transcript assertion"
         },
         "turn_start": {
-          "level": "hermetic",
-          "source": "antigravity_print one-shot Console adapter argv, result parse, and transcript binding tests",
+          "level": "live_token",
+          "source": "real agy executed with the Console adapter's own argv, read from the engine, returning a structured result at the transcript path the adapter binds",
           "disposition": "implemented",
-          "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority. The level is deliberately `hermetic` and not `live_no_token`: the run-once canary proves the upstream `agy --print` surface by building the argv itself, so it is provider-release evidence, not adapter evidence. Only a canary that drives this adapter can raise the level.",
-          "owner_action": "Console turn canary that invokes the engine adapter rather than replicating its argv"
+          "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority. The canary now reads the argv from `longhouse-engine antigravity-console-argv` instead of rebuilding it, so the adapter's command line, the result shape it parses, and the transcript path it binds are all proven against the installed release. It refuses to run rather than falling back to a copy when the engine is unavailable.",
+          "observed_provider_version": "1.1.18",
+          "owner_action": "extend the canary to drive start_antigravity_print_turn so process supervision, turn-claim settlement, and engine-side transcript binding are covered too"
         }
       },
       "machine_control_supports": [

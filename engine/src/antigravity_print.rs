@@ -31,7 +31,7 @@ use uuid::Uuid;
 pub const ANTIGRAVITY_PRINT_ADAPTER: &str = "antigravity_print";
 pub const DEFAULT_ANTIGRAVITY_BIN: &str = "agy";
 const STDERR_TAIL_LINES: usize = 40;
-const DEFAULT_PRINT_TIMEOUT_SECS: u64 = 600;
+pub const DEFAULT_PRINT_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Clone, Debug)]
 pub struct AntigravityPrintRunConfig {
@@ -462,6 +462,24 @@ async fn settle_antigravity_claim(
 /// `--print-timeout` as the prompt and answer a question about its own flag,
 /// leaving the real prompt as a stray positional. The ordering here is
 /// load-bearing, not cosmetic.
+/// The argv the Console adapter passes to `agy`, exposed so the release canary
+/// can run exactly what the adapter runs.
+///
+/// The canary used to rebuild this list in Python under a comment promising it
+/// was byte-for-byte identical. That promise held only until someone edited
+/// this function, and nothing would have failed when it stopped holding: the
+/// canary would keep proving that `agy --print` works while the adapter built
+/// something else. Deriving the argv from here makes that drift impossible
+/// instead of merely discouraged.
+pub fn console_turn_argv(
+    prompt: &str,
+    model: Option<&str>,
+    conversation_id: Option<&str>,
+    print_timeout_secs: u64,
+) -> Vec<String> {
+    build_antigravity_args(prompt, model, conversation_id, print_timeout_secs)
+}
+
 fn build_antigravity_args(
     prompt: &str,
     model: Option<&str>,

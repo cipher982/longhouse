@@ -467,10 +467,11 @@ def test_antigravity_contract_serves_hook_send_and_print_console_turns():
     assert contract.turn_start is True
     turn_start_evidence = contract.operation_evidence_for("turn_start")
     assert turn_start_evidence["disposition"] == "implemented"
-    # Deliberately hermetic, not live: the run-once canary builds `agy --print`
-    # argv itself instead of driving the adapter, so it is provider-release
-    # evidence. Raising this level requires a canary that invokes the adapter.
-    assert turn_start_evidence["level"] == "hermetic"
+    # Live, because the run-once canary now reads the adapter's argv from the
+    # engine instead of rebuilding it, so a change to the adapter's command
+    # line changes what the canary executes. owner_action still names what is
+    # uncovered: process supervision and engine-side transcript binding.
+    assert turn_start_evidence["level"] == "live_token"
     assert turn_start_evidence["owner_action"]
     assert contract.machine_control_supports == (
         "antigravity.send",

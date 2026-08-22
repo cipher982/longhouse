@@ -1894,6 +1894,59 @@ def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: 
     return Path(result.stdout.strip()) / "longhouse-antigravity-hook.sh"
 
 
+def _resolve_engine_binary(args: argparse.Namespace) -> str | None:
+    """Locate the built `longhouse-engine`, which owns the Console adapter."""
+
+    env_candidate = str(os.environ.get("LONGHOUSE_ENGINE_BIN") or "").strip()
+    if env_candidate:
+        candidate = Path(env_candidate).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+    repo_root = Path(getattr(args, "repo_root", None) or _repo_root_from_script())
+    for profile in ("release", "debug"):
+        candidate = repo_root / "engine" / "target" / profile / "longhouse-engine"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("longhouse-engine")
+
+
+def _antigravity_console_argv(
+    engine_bin: str,
+    prompt: str,
+    print_timeout_secs: int,
+) -> list[str] | None:
+    """Ask the engine for the argv its Console adapter builds.
+
+    This is the whole point of the canary: running a hand-maintained copy of
+    the adapter's command line proves the provider works, not the adapter.
+    """
+
+    result = subprocess.run(
+        [
+            engine_bin,
+            "antigravity-console-argv",
+            "--prompt",
+            prompt,
+            "--print-timeout-secs",
+            str(print_timeout_secs),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    argv = payload.get("args")
+    if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+        return None
+    return argv
+
+
 def _resolve_antigravity_binary() -> str | None:
     env_candidate = str(os.environ.get("LONGHOUSE_ANTIGRAVITY_BIN") or "").strip()
     if env_candidate:
@@ -2319,12 +2372,16 @@ def _antigravity_unwatched_worker(
 
 
 def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    """Prove a real single-turn agy run, using the Console adapter's own argv.
+    """Prove a real single-turn agy run using the Console adapter's own argv.
 
-    This is the run_once evidence and the Console adapter's live proof at once:
-    antigravity_print builds exactly this command line, so a pass here means the
-    adapter's argv, its structured-result parse, and its transcript resolution
-    all hold against the installed release -- not just against a fake binary.
+    The argv is read from the engine rather than rebuilt here, so this covers
+    the adapter's command line, the structured-result shape it parses, and the
+    transcript path it binds, against the installed release.
+
+    What it still does not cover: the adapter's process supervision, turn-claim
+    settlement, and transcript binding through the engine. Those need a canary
+    that drives `start_antigravity_print_turn`, which is why the contract grades
+    `turn_start` below a full live proof.
     """
 
     binary = _resolve_antigravity_binary()
@@ -2354,17 +2411,32 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
     marker = f"LONGHOUSE_AGY_RUN_ONCE_{uuid.uuid4().hex}"
     workspace = root / "run-once-workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    # Byte-for-byte the argv antigravity_print builds, including `--print` last.
-    command = [
-        binary,
-        "--dangerously-skip-permissions",
-        "--output-format",
-        "json",
-        "--print-timeout",
-        f"{args.antigravity_print_timeout_secs}s",
-        "--print",
-        f"Reply with exactly {marker} and nothing else.",
-    ]
+    prompt = f"Reply with exactly {marker} and nothing else."
+
+    # The argv comes from the adapter itself. A replica maintained here would
+    # keep passing after the adapter changed, which is how this canary came to
+    # certify a Console path it never exercised.
+    engine_bin = _resolve_engine_binary(args)
+    if not engine_bin:
+        return {
+            "status": "blocked",
+            "failure_code": "engine_binary_not_found",
+            "reason": (
+                "longhouse-engine is not built, so the adapter's argv cannot be read. "
+                "Build the engine or set LONGHOUSE_ENGINE_BIN; this canary must not "
+                "fall back to a hand-maintained copy of the command line."
+            ),
+        }
+    adapter_args = _antigravity_console_argv(
+        engine_bin, prompt, args.antigravity_print_timeout_secs
+    )
+    if adapter_args is None:
+        return _fail(
+            "antigravity_adapter_argv_unavailable",
+            "the engine did not report the Console adapter argv",
+            engine_bin=engine_bin,
+        )
+    command = [binary, *adapter_args]
     env = _runtime_env(args, {"LONGHOUSE_HOOK_PYTHON": _hook_python(args), **worker_env})
     started = time.monotonic()
     try:
@@ -2412,6 +2484,8 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
         "worker_home": str(worker_home),
         "marker": marker,
         "argv": command,
+        "argv_source": "longhouse-engine antigravity-console-argv",
+        "engine_bin": engine_bin,
         "returncode": result.returncode,
         "elapsed_secs": elapsed,
         "timed_out": timed_out,
@@ -2467,7 +2541,7 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
             "turn_start": {
                 "status": "pass",
                 "level": "live_token",
-                "source": "antigravity_print adapter argv proved against the installed release",
+                "source": "the Console adapter's own argv, read from the engine, proved against the installed release",
                 "canary": "antigravity_real_run_once",
             },
         },
