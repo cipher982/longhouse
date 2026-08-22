@@ -417,6 +417,12 @@ enum Commands {
         /// When using --file, only ship once the unread range includes assistant/tool reply evidence
         #[arg(long)]
         require_reply_evidence: bool,
+
+        /// When using --file, rewind the source and re-parse it from the start.
+        /// Reaches sessions ingested before the parser learned to recover their
+        /// workspace; re-shipped events deduplicate by hash on the host.
+        #[arg(long)]
+        replay: bool,
     },
 
     /// Print the argv the Antigravity Console adapter builds, so a release
@@ -1520,6 +1526,7 @@ fn main() -> anyhow::Result<()> {
             machine_name,
             session_id,
             require_reply_evidence,
+            replay,
         } => {
             let algo = parse_compression_algo(&compression)?;
             // Initialize machine name for payload labeling
@@ -1545,6 +1552,7 @@ fn main() -> anyhow::Result<()> {
                     max_batch_bytes,
                     session_id.as_deref(),
                     require_reply_evidence,
+                    replay,
                     machine_name.as_deref(),
                 ))?;
             } else {

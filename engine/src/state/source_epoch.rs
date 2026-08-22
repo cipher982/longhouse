@@ -311,6 +311,15 @@ pub fn active_source_incarnation(
     Ok(load_active_epoch(conn, provider, opaque_source_id)?.map(|epoch| epoch.file_incarnation))
 }
 
+/// The active epoch id for a source, or `None` when it was never shipped.
+pub fn active_source_epoch(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<Option<Uuid>> {
+    Ok(load_active_epoch(conn, provider, opaque_source_id)?.map(|epoch| epoch.source_epoch))
+}
+
 pub fn active_source_revision(
     conn: &Connection,
     provider: &str,
@@ -536,6 +545,38 @@ pub fn resync_to_host_watermark(
     if changed != 1 {
         bail!("source epoch lane cursor changed before resync");
     }
+    Ok(current)
+}
+
+/// Rewind a lane to the start so its source re-parses from zero.
+///
+/// A source that has reached EOF ships nothing, which means a parser that
+/// learned to extract more from the same bytes cannot reach anything already
+/// ingested. Cursor solves this by comparing render revisions; the shared file
+/// path has no such marker, so rewinding is explicit and per-source rather than
+/// an automatic mass replay of every transcript on the machine.
+///
+/// Re-shipped events deduplicate by hash on the host, so a replay refreshes
+/// session facts without duplicating history.
+pub fn replay_lane_from_start(
+    conn: &Connection,
+    source_epoch: Uuid,
+    lane: SourceLane,
+) -> Result<u64> {
+    let current = lane_position(conn, source_epoch, lane)?;
+    if current == 0 {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = 0, updated_at = ?1
+         WHERE source_epoch = ?2 AND lane = ?3",
+        params![
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string(),
+            lane.as_str(),
+        ],
+    )?;
     Ok(current)
 }
 

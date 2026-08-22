@@ -679,6 +679,7 @@ pub async fn cmd_ship_file(
     max_batch_bytes: Option<u64>,
     session_id_override: Option<&str>,
     require_reply_evidence: bool,
+    replay: bool,
     machine_name: Option<&str>,
 ) -> anyhow::Result<()> {
     if !path.exists() {
@@ -706,6 +707,20 @@ pub async fn cmd_ship_file(
     }
 
     let mut conn = open_db(config.db_path.as_deref())?;
+
+    if replay && !dry_run {
+        match crate::storage_v2_shipper::replay_file_source(&mut conn, path, &provider)? {
+            Some(epoch) => tracing::info!(
+                path = %path.display(),
+                source_epoch = %epoch,
+                "Opened a replacement epoch for replay; the host deduplicates re-shipped events by hash"
+            ),
+            None => tracing::info!(
+                path = %path.display(),
+                "Source was never shipped; nothing to rewind"
+            ),
+        }
+    }
 
     if !dry_run {
         let client = ShipperClient::with_compression(&config, algo)?;
@@ -1097,6 +1112,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
         ))
         .unwrap();
@@ -1146,6 +1162,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
         ))
         .unwrap();
@@ -1194,6 +1211,7 @@ mod tests {
                 CompressionAlgo::Gzip,
                 None,
                 None,
+                false,
                 false,
                 None,
             ));
@@ -1263,6 +1281,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
         ))
         .unwrap();
@@ -1309,6 +1328,7 @@ mod tests {
             None,
             None,
             true,
+            false,
             None,
         ))
         .unwrap();
@@ -1358,6 +1378,7 @@ mod tests {
             None,
             None,
             true,
+            false,
             None,
         ))
         .unwrap();

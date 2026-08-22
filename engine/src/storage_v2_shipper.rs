@@ -113,6 +113,44 @@ fn preparation_result<T>(result: Result<T>) -> Result<T> {
     result.map_err(|source| StorageV2PreparationError { source }.into())
 }
 
+/// Open a replacement epoch for a file source so its next ship re-parses it
+/// whole.
+///
+/// Rewinding the local lane alone is not enough: the host tracks
+/// `accepted_through` per source epoch and ignores a range it has already
+/// accepted, so a rewound client re-sends bytes that land nowhere. Minting a
+/// replacement epoch is what the Cursor path does when its render revision
+/// changes, and it is what makes the host treat the same bytes as new
+/// material. Events still deduplicate by hash, so history is refreshed rather
+/// than duplicated.
+///
+/// Returns the new epoch, or `None` when the source was never shipped and a
+/// normal ship will pick it up anyway.
+pub(crate) fn replay_file_source(
+    conn: &mut Connection,
+    path: &Path,
+    provider: &str,
+) -> Result<Option<Uuid>> {
+    let canonical_path = stable_source_path(path);
+    let path_text = canonical_path.to_string_lossy();
+    let opaque_source_id = opaque_source_id(&path_text);
+    if source_epoch::active_source_epoch(conn, provider, &opaque_source_id)?.is_none() {
+        return Ok(None);
+    }
+    let resolution = source_epoch::observe_file(
+        conn,
+        provider,
+        &opaque_source_id,
+        path,
+        SourceLane::Durable,
+        0,
+        None,
+        None,
+        SourceChangeHint::Rewrite,
+    )?;
+    Ok(Some(resolution.source_epoch))
+}
+
 pub(crate) fn prepare_next_envelope(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
@@ -3666,6 +3704,44 @@ fn hex_hash(hash: [u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn replay_opens_a_replacement_epoch_so_the_host_stops_deduplicating() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"019c638d-0000-0000-0000-0000000000aa\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"content\":\"hi\"},\"cwd\":\"/tmp/proj\"}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        // Nothing shipped yet: a normal ship already covers this source.
+        assert_eq!(replay_file_source(&mut conn, &path, "claude").unwrap(), None);
+
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        let original_epoch = first.source_epoch;
+
+        // Rewinding the local cursor alone would re-send a range the host has
+        // already accepted. A replacement epoch is what makes the same bytes
+        // land, which is why replay mints one.
+        let replayed = replay_file_source(&mut conn, &path, "claude")
+            .unwrap()
+            .expect("a shipped source yields a replacement epoch");
+        assert_ne!(replayed, original_epoch);
+
+        // What matters is that the source becomes shippable again from the
+        // start, carrying the facts the parser now recovers. Without the
+        // replay this call returns None, because the lane sits at EOF.
+        let after = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .expect("replay makes an exhausted source shippable again");
+        assert_eq!(after.envelope.range_start, 0);
+        assert_eq!(after.envelope.session.cwd.as_deref(), Some("/tmp/proj"));
+        assert_eq!(after.envelope.session.project.as_deref(), Some("proj"));
+    }
 
     #[test]
     fn an_uppercase_claude_session_id_is_canonicalised() {
