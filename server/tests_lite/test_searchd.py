@@ -2195,6 +2195,46 @@ def test_reclassify_origin_clears_test_scope_visibility(tmp_path):
         connection.close()
 
 
+def test_stale_origin_reclassification_cannot_override_newer_visibility(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=session_id,
+            environment="local",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=now_us,
+            source_commit_seq=20,
+        )
+        stale = store.reclassify_session_origin(
+            session_id=session_id,
+            origin_kind="hatch_automation",
+            source_commit_seq=10,
+        )
+        assert stale["reclassified"] is False
+        assert stale["stale_source_commit_seq"] is True
+        assert stale["rows_changed"] == 0
+        index_row = connection.execute(
+            "SELECT hidden_from_default_timeline, test_scope_visible, origin_kind, source_commit_seq "
+            "FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        event_row = connection.execute(
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
+            "FROM searchable_events WHERE session_id = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        assert tuple(index_row) == (0, 0, None, 20)
+        assert tuple(event_row) == (0, 0, 20)
+        assert [row["session_id"] for row in store.search(**_search_params("scope needle"))["results"]] == [session_id]
+    finally:
+        connection.close()
+
+
 def test_reclassify_origin_rejects_unknown_kind(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)

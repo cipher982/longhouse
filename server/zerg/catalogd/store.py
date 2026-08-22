@@ -5680,18 +5680,18 @@ class CatalogStore:
         session_key = str(session_id)
         with _write_transaction(self.engine) as connection:
             changed_rows = 0
+            commit_seq = _advance_commit_seq(connection, observed_at)
             for table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__, StorageSession.__table__):
-                result = connection.execute(
-                    update(table)
-                    .where(table.c.session_id == session_key)
-                    .values(
-                        origin_kind=normalized,
-                        hidden_from_default_timeline=1,
-                        launch_actor="automation",
-                        launch_surface="hatch" if normalized == "hatch_automation" else "test",
-                        updated_at=observed_at,
-                    )
-                )
+                values: dict[str, Any] = {
+                    "origin_kind": normalized,
+                    "hidden_from_default_timeline": 1,
+                    "launch_actor": "automation",
+                    "launch_surface": "hatch" if normalized == "hatch_automation" else "test",
+                    "updated_at": observed_at,
+                }
+                if table is StorageSession.__table__:
+                    values["commit_seq"] = commit_seq
+                result = connection.execute(update(table).where(table.c.session_id == session_key).values(**values))
                 changed_rows += int(result.rowcount or 0)
             thread_result = connection.execute(
                 update(LiveSessionThread.__table__)
@@ -5703,7 +5703,6 @@ class CatalogStore:
                 )
             )
             changed_rows += int(thread_result.rowcount or 0)
-            commit_seq = _advance_commit_seq(connection, observed_at)
         return {"reclassified": changed_rows > 0, "rows_changed": changed_rows, "commit_seq": str(commit_seq)}
 
     def reconcile_session_visibility(

@@ -2122,6 +2122,13 @@ class SearchStore:
         changed_rows = 0
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            current_source_commit_seq = self.connection.execute(
+                "SELECT source_commit_seq FROM session_index WHERE session_id = ?",
+                (str(session_id),),
+            ).fetchone()
+            stale_source_commit_seq = bool(
+                current_source_commit_seq is not None and int(current_source_commit_seq["source_commit_seq"] or 0) > source_commit_seq
+            )
             for table in ("session_index", "searchable_events"):
                 cursor = self.connection.execute(
                     f"""
@@ -2130,11 +2137,12 @@ class SearchStore:
                         test_scope_visible = 0,
                         source_commit_seq = MAX(source_commit_seq, ?)
                     WHERE session_id = ?
+                      AND source_commit_seq <= ?
                       AND (COALESCE(hidden_from_default_timeline, 0) != 1
                            OR COALESCE(test_scope_visible, 0) != 0
                            OR source_commit_seq < ?)
                     """,
-                    (source_commit_seq, str(session_id), source_commit_seq),
+                    (source_commit_seq, str(session_id), source_commit_seq, source_commit_seq),
                 )
                 changed_rows += int(cursor.rowcount or 0)
             cursor = self.connection.execute(
@@ -2142,16 +2150,22 @@ class SearchStore:
                 UPDATE session_index
                 SET origin_kind = ?
                 WHERE session_id = ?
+                  AND source_commit_seq <= ?
                   AND COALESCE(origin_kind, '') != ?
                 """,
-                (normalized, str(session_id), normalized),
+                (normalized, str(session_id), source_commit_seq, normalized),
             )
             changed_rows += int(cursor.rowcount or 0)
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")
             raise
-        return {"reclassified": True, "rows_changed": changed_rows, "observed_at": now}
+        return {
+            "reclassified": not stale_source_commit_seq,
+            "rows_changed": changed_rows,
+            "stale_source_commit_seq": stale_source_commit_seq,
+            "observed_at": now,
+        }
 
     def reconcile_session_visibility(
         self,

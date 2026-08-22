@@ -527,6 +527,50 @@ def test_search_projection_snapshot_carries_primary_worker_fact(tmp_path):
     engine.dispose()
 
 
+def test_origin_reclassification_persists_projector_source_sequence(tmp_path):
+    database_path = tmp_path / "catalog.db"
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(
+            StorageSession(
+                session_id=str(session_id),
+                tenant_id="default",
+                owner_id="42",
+                provider="cursor",
+                environment="test",
+                machine_id="cinder",
+                project="longhouse",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                hidden_from_default_timeline=0,
+                raw_state="durable",
+                render_state="ready",
+                media_state="complete",
+                commit_seq=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    result = CatalogStore(engine).reclassify_session_origin(
+        session_id=str(session_id),
+        origin_kind="hatch_automation",
+        observed_at=now + timedelta(seconds=1),
+    )
+    with Session(engine) as db:
+        stored = db.get(StorageSession, str(session_id))
+        assert stored.hidden_from_default_timeline == 1
+        assert stored.origin_kind == "hatch_automation"
+        assert stored.commit_seq == int(result["commit_seq"])
+        assert stored.commit_seq > 0
+    engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_storage_commit_rejects_existing_session_owner_mismatch(daemon_paths):
     database_path, socket_path = daemon_paths
