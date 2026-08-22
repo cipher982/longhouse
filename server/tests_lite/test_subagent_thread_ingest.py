@@ -987,7 +987,11 @@ def test_unresolved_child_file_is_hidden_from_default_timeline(tmp_path):
         assert total == 0
         assert rows == ()
 
-        raw_total, raw_rows = store.list_timeline_thread_page(hide_autonomous=False, include_test=True)
+        raw_total, raw_rows = store.list_timeline_thread_page(
+            hide_autonomous=False,
+            include_test=True,
+            include_automation=True,
+        )
         assert raw_total == 1
         assert raw_rows[0][1] == str(CHILD_ID)
 
