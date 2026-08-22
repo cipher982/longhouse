@@ -424,9 +424,12 @@ async fn monitor_cursor_print(
                         "run_failed".to_string()
                     }
                 });
-                if terminal != "run_completed" {
-                    cleanup_process_group(sink.process_group_id).await;
-                }
+                // A successful provider exit can still leave MCP/helper
+                // children in the owned process group.  The provider PID
+                // being gone is not sufficient evidence that this Console
+                // turn released all of its resources, so reap the group for
+                // every terminal outcome before publishing the claim.
+                cleanup_process_group(sink.process_group_id).await;
                 sink.post_terminal(&terminal, status.code(), stderr_tail(stderr_path))
                     .await;
                 return;

@@ -85,6 +85,7 @@ from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _secret_scan
 from zerg.qa.provider_native_resume import _sha256
 from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.provider_native_resume import _state_candidates
 from zerg.qa.provider_native_resume import _stop
 from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
@@ -307,13 +308,14 @@ def _launch_cursor_session(
     if hooks.returncode != 0:
         raise RuntimeError(f"Cursor native hook configuration failed for {label}: {hooks.stderr[-1000:]}")
 
+    prior_state_paths = set(_state_candidates(_SPEC, home))
     process = PtyProcess(
         _launch_command(_SPEC, args, None, use_credential_files=True, cwd=provider_cwd, prompt=prompt),
         cwd=provider_cwd,
         env=environment,
         recording=root / f"{label}.tty",
     )
-    state = _wait_state(_SPEC, home, process=process)
+    state = _wait_state(_SPEC, home, process=process, exclude_paths=prior_state_paths)
     _wait_cursor_tui_ready(process, root / f"{label}.tty")
     return _CursorSession(
         session_id=str(state["session_id"]),

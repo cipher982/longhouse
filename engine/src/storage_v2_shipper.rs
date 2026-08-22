@@ -1874,17 +1874,23 @@ fn cursor_text_projection(
             .unwrap_or("assistant");
         let blocks = cursor_message_blocks(&message);
         if role == "user" {
-            if let Some(turn) = current_turn.take() {
-                store_turns.push(turn);
-            }
             let prompt = blocks
                 .iter()
                 .filter_map(|block| block.get("text").and_then(Value::as_str))
                 .find_map(|text| {
                     let (effective_role, effective_text) = classify_cursor_text(role, text);
                     (effective_role == "user").then_some(effective_text)
-                })
-                .unwrap_or_default();
+                });
+            // Cursor stores injected context as a user-role message, but it
+            // is not a provider turn and has no matching hook receipt. Do
+            // not let those context records shift the receipt/store-turn
+            // alignment for the next real prompt.
+            let Some(prompt) = prompt else {
+                continue;
+            };
+            if let Some(turn) = current_turn.take() {
+                store_turns.push(turn);
+            }
             current_turn = Some(CursorStoreTurn {
                 prompt,
                 suppressible_blocks: Vec::new(),
@@ -4364,6 +4370,49 @@ mod tests {
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(selected.len(), 2, "unverified text remains in raw storage");
+    }
+
+    #[test]
+    fn cursor_injected_user_context_does_not_shift_receipt_alignment() {
+        let injected = "1111111111111111111111111111111111111111111111111111111111111111";
+        let user = "2222222222222222222222222222222222222222222222222222222222222222";
+        let reply = "3333333333333333333333333333333333333333333333333333333333333333";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                injected,
+                serde_json::json!({
+                    "role":"user",
+                    "content":[{"type":"text","text":"<user_info>workspace context</user_info><rules>runtime guidance</rules>"}]
+                }),
+            ),
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
+                generation_id: "generation-injected-context".to_string(),
+                prompt: "do work".to_string(),
+                response_text: Some("done".to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            ..Default::default()
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+
+        assert_eq!(rendered.len(), 3);
+        assert_eq!(rendered[0].role, "system");
+        assert_eq!(rendered[1].role, "user");
+        assert_eq!(rendered[1].content_text.as_deref(), Some("do work"));
+        assert_eq!(rendered[2].role, "assistant");
+        assert_eq!(rendered[2].content_text.as_deref(), Some("done"));
     }
 
     #[test]

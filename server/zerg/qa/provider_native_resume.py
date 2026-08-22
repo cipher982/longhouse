@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -1540,7 +1541,9 @@ def _wait_state(
     prior_run_id: str | None = None,
     timeout: float = 45,
     process: PtyProcess | None = None,
+    exclude_paths: Collection[Path] | None = None,
 ) -> dict[str, Any]:
+    excluded = {path.resolve() for path in (exclude_paths or ())}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process is not None:
@@ -1556,6 +1559,8 @@ def _wait_state(
             elif spec.provider == "cursor":
                 _accept_cursor_workspace_trust(process)
         for path in _state_candidates(spec, home):
+            if path.resolve() in excluded:
+                continue
             try:
                 state = _normalize_state(spec, _read_json(path), path)
             except (OSError, json.JSONDecodeError):
