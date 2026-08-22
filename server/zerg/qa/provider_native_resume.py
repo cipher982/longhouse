@@ -957,7 +957,14 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _bound_terminal_recordings(root: Path, *, provider: str, states: list[dict[str, Any]]) -> None:
+def _bound_terminal_recordings(
+    root: Path,
+    *,
+    provider: str,
+    states: list[dict[str, Any]],
+    recording_names: Collection[str] | None = None,
+    checkpoint_name: str | None = "native-resume-terminal-checkpoint.json",
+) -> None:
     """Retain diagnostic PTY head/tail while keeping proof bytes bounded.
 
     Runtime Host transcripts and bridge receipts are the Resume authority; raw
@@ -967,7 +974,7 @@ def _bound_terminal_recordings(root: Path, *, provider: str, states: list[dict[s
     """
 
     rows: list[dict[str, Any]] = []
-    for name in _TERMINAL_RECORDINGS:
+    for name in recording_names or _TERMINAL_RECORDINGS:
         path = root / name
         if not path.is_file() or path.is_symlink():
             continue
@@ -996,11 +1003,11 @@ def _bound_terminal_recordings(root: Path, *, provider: str, states: list[dict[s
                 "retained_sha256": _sha256(path),
             }
         )
-    if rows:
+    if rows and checkpoint_name is not None:
         initial_state = states[0] if states else {}
         resumed_state = states[-1] if len(states) > 1 else {}
         _write_json(
-            root / "native-resume-terminal-checkpoint.json",
+            root / checkpoint_name,
             {
                 "policy": "head_tail_v1",
                 "maximum_source_bytes_retained": _MAX_RETAINED_TERMINAL_BYTES,

@@ -50,6 +50,7 @@ from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _artifact_manifest
+from zerg.qa.provider_native_resume import _bound_terminal_recordings
 from zerg.qa.provider_native_resume import _isolated_provider_home
 from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _secret_scan
@@ -65,6 +66,21 @@ from zerg.qa.resume_assurance import ProducerRegistration
 # _assurance_child_environment forwards it) and only fall back to this when
 # unset, rather than inventing a different default of our own.
 _DEFAULT_CURSOR_MODEL = "gpt-5.3-codex-low"
+
+
+def _bound_product_terminal_recording(root: Path) -> None:
+    """Keep the product canary's full-screen PTY diagnostic within proof limits."""
+
+    product_e2e_root = root / "product-e2e"
+    if product_e2e_root.is_dir():
+        _bound_terminal_recordings(
+            product_e2e_root,
+            provider="cursor-turn-boundary",
+            states=[],
+            recording_names=("terminal.raw",),
+            checkpoint_name=None,
+        )
+
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.turn_boundary.v1",
@@ -232,6 +248,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         if shipper is not None:
             _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             shipper = None
+        _bound_product_terminal_recording(root)
         redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
         result: dict[str, Any] = {
             "schema_version": 1,
@@ -266,6 +283,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
                 _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             except Exception:  # noqa: BLE001 - preserve the causal failure
                 pass
+        _bound_product_terminal_recording(root)
         redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
         failure = {
             "schema_version": 1,

@@ -80,6 +80,10 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
         assert e2e_args.turn_boundary_only is True
         assert e2e_args.longhouse_bin == str(args.longhouse_cli)
         assert e2e_args.engine_bin == str(args.engine)
+        e2e_args.artifact_root.mkdir(parents=True)
+        (e2e_args.artifact_root / "terminal.raw").write_bytes(
+            b"head-marker" + (b"x" * (128 * 1024)) + b"tail-marker"
+        )
         return {
             "status": "passed",
             "session_id": "session-123",
@@ -116,6 +120,10 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
     assert result["producer"]["producer_id"] == REGISTRATION.producer_id
     assert result["session_id"] == "session-123"
     assert fake_shipper.stop_calls >= 1
+    retained_terminal = args.evidence_root / "product-e2e" / "terminal.raw"
+    assert retained_terminal.stat().st_size <= 64 * 1024 + 128
+    assert b"head-marker" in retained_terminal.read_bytes()
+    assert b"tail-marker" in retained_terminal.read_bytes()
 
     cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
     assert cleanup["required_cleanup"] == {

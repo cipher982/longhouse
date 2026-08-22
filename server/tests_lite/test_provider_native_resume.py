@@ -3217,6 +3217,30 @@ def test_terminal_recordings_keep_bounded_head_and_tail_with_receipt(tmp_path: P
     assert receipt["native_resume_ready"] is True
 
 
+def test_terminal_recordings_can_bound_nested_product_diagnostics_without_checkpoint(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "product-e2e"
+    evidence.mkdir(parents=True)
+    source = b"head-marker" + (b"x" * (128 * 1024)) + b"tail-marker"
+    recording = evidence / "terminal.raw"
+    recording.write_bytes(source)
+
+    _bound_terminal_recordings(
+        evidence,
+        provider="cursor-turn-boundary",
+        states=[],
+        recording_names=("terminal.raw",),
+        checkpoint_name=None,
+    )
+
+    retained = recording.read_bytes()
+    assert b"head-marker" in retained
+    assert b"tail-marker" in retained
+    assert len(retained) < len(source)
+    assert not (evidence / "native-resume-terminal-checkpoint.json").exists()
+
+
 def test_finalized_secret_scan_downgrades_pass_and_refreshes_manifest(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
     evidence.mkdir()
