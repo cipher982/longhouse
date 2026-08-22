@@ -1193,7 +1193,8 @@ pub(crate) fn machine_evidence_from_observations(
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
     run_windows: &crate::state::session_run_binding::RunWindowIndex,
-    process_snapshot_complete: bool,
+    managed_snapshot_complete: bool,
+    unmanaged_snapshot_complete: bool,
     now: DateTime<Utc>,
     continuation_observations: Option<&[crate::managed_resume_scan::ResumeContractObservation]>,
 ) -> MachineEvidence {
@@ -1285,7 +1286,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.app_server_pid,
             obs.app_server_process_start_time.as_deref(),
             boot_id.as_deref(),
-            process_snapshot_complete,
+            managed_snapshot_complete,
             obs.app_server_alive,
             "codex_bridge_scan",
             &envelope_observed_at,
@@ -1401,7 +1402,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.claude_pid,
             Some(&obs.started_at),
             boot_id.as_deref(),
-            process_snapshot_complete,
+            managed_snapshot_complete,
             obs.claude_alive,
             "claude_channel_scan",
             &envelope_observed_at,
@@ -1510,7 +1511,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.pid,
             Some(&obs.process_start_time),
             boot_id.as_deref(),
-            process_snapshot_complete,
+            managed_snapshot_complete,
             obs.server_alive,
             "opencode_server_scan",
             &envelope_observed_at,
@@ -1593,7 +1594,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.launcher_pid,
             obs.launcher_process_start_time.as_deref(),
             boot_id.as_deref(),
-            process_snapshot_complete,
+            managed_snapshot_complete,
             obs.launcher_alive,
             "cursor_helm_scan",
             &envelope_observed_at,
@@ -1839,20 +1840,20 @@ pub(crate) fn machine_evidence_from_observations(
         process_snapshot_scopes: vec![
             ProcessSnapshotScope {
                 scope: "managed_state_files".to_string(),
-                complete: process_snapshot_complete,
+                complete: managed_snapshot_complete,
                 captured_at: envelope_observed_at.clone(),
                 machine_boot_id: boot_id.clone(),
                 source: "managed_provider_scan".to_string(),
-                failure_reason: (!process_snapshot_complete)
+                failure_reason: (!managed_snapshot_complete)
                     .then(|| "incremental_or_partial_scan".to_string()),
             },
             ProcessSnapshotScope {
                 scope: "unmanaged_provider_processes".to_string(),
-                complete: process_snapshot_complete,
+                complete: unmanaged_snapshot_complete,
                 captured_at: envelope_observed_at.clone(),
                 machine_boot_id: boot_id,
                 source: "unmanaged_process_scan".to_string(),
-                failure_reason: (!process_snapshot_complete)
+                failure_reason: (!unmanaged_snapshot_complete)
                     .then(|| "incremental_or_partial_scan".to_string()),
             },
         ],
@@ -5076,6 +5077,7 @@ mod tests {
             std::slice::from_ref(&phase),
             &RunWindowIndex::default(),
             true,
+            true,
             now,
             Some(&[]),
         );
@@ -5258,6 +5260,7 @@ mod tests {
             &[],
             &RunWindowIndex::default(),
             false,
+            false,
             now,
             Some(&[]),
         );
@@ -5421,6 +5424,7 @@ mod tests {
             &[],
             &RunWindowIndex::default(),
             true,
+            true,
             now,
             Some(&[]),
         )
@@ -5432,12 +5436,16 @@ mod tests {
 
     #[test]
     fn a_launcher_owned_antigravity_session_grants_send_while_its_hook_is_live() {
-        let control = antigravity_control(&[antigravity_observation(Some("2026-05-08T12:00:08Z"), true)]);
+        let control =
+            antigravity_control(&[antigravity_observation(Some("2026-05-08T12:00:08Z"), true)]);
         assert_eq!(control.len(), 1);
         assert_eq!(control[0].connection_id.as_deref(), Some("conn-agy"));
         assert_eq!(control[0].lease_generation.as_deref(), Some("gen-agy"));
         assert_eq!(control[0].state, "attached");
-        assert_eq!(control[0].granted_operations, vec!["send_input".to_string()]);
+        assert_eq!(
+            control[0].granted_operations,
+            vec!["send_input".to_string()]
+        );
     }
 
     #[test]
@@ -5455,7 +5463,11 @@ mod tests {
     fn a_shadow_antigravity_session_produces_no_control_fact_at_all() {
         // No launcher, no identity, nothing to authorize against. Observe-only
         // by construction rather than by a provider-name special case.
-        assert!(antigravity_control(&[antigravity_observation(Some("2026-05-08T12:00:08Z"), false)]).is_empty());
+        assert!(antigravity_control(&[antigravity_observation(
+            Some("2026-05-08T12:00:08Z"),
+            false
+        )])
+        .is_empty());
     }
 
     #[test]
@@ -5538,6 +5550,7 @@ mod tests {
             &[],
             &RunWindowIndex::default(),
             true,
+            true,
             first_now,
             Some(&[]),
         );
@@ -5551,6 +5564,7 @@ mod tests {
             &[rescanned],
             &[],
             &RunWindowIndex::default(),
+            true,
             true,
             first_now + chrono::Duration::minutes(5),
             Some(&[]),
@@ -5585,6 +5599,7 @@ mod tests {
             &[],
             &RunWindowIndex::default(),
             true,
+            true,
             first_now,
             Some(&[]),
         );
@@ -5618,6 +5633,7 @@ mod tests {
             &[],
             &[phase],
             &RunWindowIndex::default(),
+            true,
             true,
             now,
             Some(&[]),
@@ -5657,6 +5673,7 @@ mod tests {
             &[],
             &[],
             &RunWindowIndex::default(),
+            true,
             true,
             now,
             Some(std::slice::from_ref(&continuation)),
@@ -5741,6 +5758,7 @@ mod tests {
             std::slice::from_ref(&phase),
             &windows,
             true,
+            true,
             now,
             Some(&[]),
         );
@@ -5784,6 +5802,7 @@ mod tests {
             std::slice::from_ref(&phase),
             &RunWindowIndex::default(),
             true,
+            true,
             now,
             Some(&[]),
         );
@@ -5802,6 +5821,7 @@ mod tests {
             &[],
             std::slice::from_ref(&phase),
             &remembered,
+            true,
             true,
             now,
             Some(&[]),
@@ -5904,6 +5924,7 @@ mod tests {
                 &[],
                 &[],
                 &RunWindowIndex::default(),
+                true,
                 true,
                 now,
                 Some(&[]),

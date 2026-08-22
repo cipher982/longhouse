@@ -3188,6 +3188,7 @@ def _control_send(
     text: str,
     *,
     initial: bool = False,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if spec.provider == "claude":
         command = [str(args.engine), "claude-channel", "send", "--session-id", state["session_id"], "--text", text]
@@ -3211,6 +3212,8 @@ def _control_send(
         process.send("\r")
         return {"method": "provider_tty_bootstrap", "returncode": 0}
     elif spec.provider == "cursor":
+        if environment is None:
+            raise RuntimeError("Cursor managed control requires the qualification environment")
         command = [str(args.engine), "cursor-helm", "send", "--session-id", state["session_id"], "--text", text]
     else:
         if process.process.poll() is not None:
@@ -3227,7 +3230,15 @@ def _control_send(
     completed: subprocess.CompletedProcess[str]
     while True:
         attempts += 1
-        completed = subprocess.run(command, cwd=args.repo_root, capture_output=True, text=True, timeout=30, check=False)
+        completed = subprocess.run(
+            command,
+            cwd=args.repo_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
         if completed.returncode == 0:
             break
         detail = f"{completed.stdout}\n{completed.stderr}"
@@ -3362,7 +3373,14 @@ def _stop(
                 **({"diagnostic_path": recovery_diagnostic_path} if recovery_diagnostic_path is not None else {}),
             )
             cursor_recovery["idle_wait_error"] = f"{type(idle_error).__name__}: {idle_error}"
-        control_result = _control_send(spec, args, state, process, "/exit")
+        control_result = _control_send(
+            spec,
+            args,
+            state,
+            process,
+            "/exit",
+            environment=environment,
+        )
         control_returncode = int(control_result["returncode"])
         method = "cursor_native_exit"
     elif spec.provider == "opencode":
@@ -3827,7 +3845,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         _write_json(root / "post-stop-transcript-ship-receipt.json", shipper.flush("post-stop"))
         stale_marker = _resume_marker(provider, "STALE")
         try:
-            _control_send(spec, args, initial_state, initial, _resume_marker_prompt(provider, stale_marker))
+            _control_send(
+                spec,
+                args,
+                initial_state,
+                initial,
+                _resume_marker_prompt(provider, stale_marker),
+                environment=environment,
+            )
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             stale = {"marker": stale_marker, "rejected": True, "error": f"{type(exc).__name__}: {exc}"}
         else:
@@ -3973,7 +3998,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             # the hook boundary separate from transcript projection so the
             # shipper cannot be flushed during that persistence window.
             post_resume_hook_event_bytes = _cursor_hook_event_bytes(resumed_state, environment)
-        post_send = _control_send(spec, args, resumed_state, resumed, _resume_marker_prompt(provider, post_marker))
+        post_send = _control_send(
+            spec,
+            args,
+            resumed_state,
+            resumed,
+            _resume_marker_prompt(provider, post_marker),
+            environment=environment,
+        )
         _write_json(root / "post-resume-send.json", post_send)
         if spec.provider == "cursor":
             try:

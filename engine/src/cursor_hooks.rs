@@ -5,7 +5,6 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -326,62 +325,23 @@ fn wake_transcript(
     generation_id: Option<&Value>,
     transcript_path: Option<&str>,
 ) {
-    let home_root = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
-    let cursor_home = std::env::var_os("CURSOR_HOME")
+    let explicit = transcript_path
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_root.join(".cursor"));
-    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_root.join(".config"));
-    let transcript_hint = transcript_path
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LONGHOUSE_CURSOR_TRANSCRIPT_PATH").map(PathBuf::from))
-        .filter(|path| path.is_file());
-    let transcript = transcript_hint.or_else(|| {
-        [
-            xdg_config_home.join("cursor/chats"),
-            cursor_home.join("chats"),
-        ]
-        .into_iter()
-        .find_map(|root| {
-            let workspaces = std::fs::read_dir(root).ok()?;
-            let stores: Vec<PathBuf> = workspaces
-                .flatten()
-                .map(|entry| entry.path().join(conversation).join("store.db"))
-                .filter(|path| path.is_file())
-                .collect();
-            let [store] = stores.as_slice() else {
-                return None;
-            };
-            Some(store.clone())
+        .or_else(|| std::env::var_os("LONGHOUSE_CURSOR_TRANSCRIPT_PATH").map(PathBuf::from));
+    let turn_id = generation_id
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string())
         })
-    });
-    let Some(transcript) = transcript else {
-        return;
-    };
-    let socket = home().join("agent/transcript-wake.sock");
-    let Ok(mut stream) = UnixStream::connect(socket) else {
-        return;
-    };
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(75)));
-    let observed_at_ms = Utc::now().timestamp_millis();
-    let file_len_hint = transcript
-        .metadata()
-        .map(|value| value.len())
-        .unwrap_or_default();
-    let _ = stream.write_all(
-        json!({
-            "provider":"cursor",
-            "path":transcript,
-            "phase":"idle",
-            "session_id":session_id,
-            "turn_id":generation_id,
-            "wake_reason":"turn_completed",
-            "observed_at_ms":observed_at_ms,
-            "file_len_hint":file_len_hint,
-        })
-        .to_string()
-        .as_bytes(),
+        .unwrap_or_else(|| conversation.to_string());
+    crate::cursor_visibility::wake_cursor_transcript(
+        session_id,
+        conversation,
+        &turn_id,
+        None,
+        explicit.as_deref(),
     );
 }
 pub fn permission(event: &str) -> anyhow::Result<()> {

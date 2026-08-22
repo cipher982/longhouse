@@ -1,16 +1,21 @@
 //! Provider-receipt evidence for managed Cursor turns.
 //!
 //! Cursor's store is a lossless artifact archive, not a presentation log.  The
-//! managed hook stream supplies the stronger turn boundary and committed
-//! response receipt used by the renderer.
+//! managed Helm hooks and Console stream both supply stronger turn boundaries
+//! and committed response receipts used by the renderer.
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration as StdDuration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const COMPLETED_RECEIPT_GRACE: Duration = Duration::seconds(30);
 
@@ -30,7 +35,7 @@ impl CursorEvidenceWait {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CursorHookTurn {
+pub(crate) struct CursorProviderTurn {
     pub generation_id: String,
     pub prompt: String,
     pub response_text: Option<String>,
@@ -38,7 +43,7 @@ pub(crate) struct CursorHookTurn {
     pub stop_observed_at: Option<DateTime<Utc>>,
 }
 
-impl CursorHookTurn {
+impl CursorProviderTurn {
     fn unsettled_reason(
         &self,
         session_ended: bool,
@@ -68,7 +73,7 @@ impl CursorHookTurn {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CursorVisibilityEvidence {
-    pub turns: Vec<CursorHookTurn>,
+    pub turns: Vec<CursorProviderTurn>,
     pub session_ended: bool,
     pub ambiguous: bool,
 }
@@ -85,23 +90,161 @@ impl CursorVisibilityEvidence {
     }
 }
 
-fn hook_events_path(session_id: &str) -> Result<PathBuf> {
-    Ok(crate::config::get_longhouse_home()?
-        .join("managed-local/cursor-helm/hook-events")
-        .join(format!("{session_id}.ndjson")))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CursorProviderReceipt<'a> {
+    Prompt(&'a str),
+    Response(&'a str),
+    Stop(&'a str),
+}
+
+fn receipt_events_path(root: &Path, session_id: &str) -> PathBuf {
+    root.join("hook-events")
+        .join(format!("{session_id}.ndjson"))
+}
+
+pub(crate) fn append_cursor_provider_receipt(
+    root: &Path,
+    session_id: &str,
+    conversation_id: &str,
+    generation_id: &str,
+    source: &str,
+    receipt: CursorProviderReceipt<'_>,
+) -> Result<()> {
+    let (event, payload) = match receipt {
+        CursorProviderReceipt::Prompt(prompt) => (
+            "beforeSubmitPrompt",
+            json!({"generation_id": generation_id, "prompt": prompt}),
+        ),
+        CursorProviderReceipt::Response(text) => (
+            "afterAgentResponse",
+            json!({"generation_id": generation_id, "text": text}),
+        ),
+        CursorProviderReceipt::Stop(status) => (
+            "stop",
+            json!({"generation_id": generation_id, "status": status}),
+        ),
+    };
+    let path = receipt_events_path(root, session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut line = serde_json::to_vec(&json!({
+        "event": event,
+        "observed_at": Utc::now().to_rfc3339(),
+        "session_id": session_id,
+        "conversation_id": conversation_id,
+        "source": source,
+        "payload": payload,
+    }))?;
+    line.push(b'\n');
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(&line)?;
+    Ok(())
+}
+
+pub(crate) fn has_cursor_prompt_receipt(
+    root: &Path,
+    session_id: &str,
+    conversation_id: &str,
+    generation_id: &str,
+) -> bool {
+    let Ok(contents) = fs::read_to_string(receipt_events_path(root, session_id)) else {
+        return false;
+    };
+    contents.lines().any(|line| {
+        serde_json::from_str::<Value>(line).ok().is_some_and(|row| {
+            row.get("event").and_then(Value::as_str) == Some("beforeSubmitPrompt")
+                && row.get("conversation_id").and_then(Value::as_str) == Some(conversation_id)
+                && row
+                    .get("payload")
+                    .and_then(|payload| payload.get("generation_id"))
+                    .and_then(Value::as_str)
+                    == Some(generation_id)
+        })
+    })
+}
+
+fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+    let cursor_home = std::env::var_os("CURSOR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cursor"));
+    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    [
+        xdg_config_home.join("cursor/chats"),
+        cursor_home.join("chats"),
+    ]
+    .into_iter()
+    .find_map(|root| {
+        let stores = fs::read_dir(root)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path().join(conversation_id).join("store.db"))
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+        let [store] = stores.as_slice() else {
+            return None;
+        };
+        Some(store.clone())
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn wake_cursor_transcript(
+    session_id: &str,
+    conversation_id: &str,
+    generation_id: &str,
+    run_id: Option<&str>,
+    transcript_path: Option<&Path>,
+) {
+    let transcript = transcript_path
+        .filter(|path| path.is_file())
+        .map(Path::to_path_buf)
+        .or_else(|| configured_cursor_store(conversation_id));
+    let Some(transcript) = transcript else {
+        return;
+    };
+    let Ok(socket) = crate::config::get_agent_transcript_wake_socket_path() else {
+        return;
+    };
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return;
+    };
+    let _ = stream.set_write_timeout(Some(StdDuration::from_millis(75)));
+    let payload = json!({
+        "provider": "cursor",
+        "path": transcript,
+        "phase": "idle",
+        "session_id": session_id,
+        "run_id": run_id,
+        "turn_id": generation_id,
+        "provider_turn_id": conversation_id,
+        "wake_reason": "turn_completed",
+        "observed_at_ms": Utc::now().timestamp_millis(),
+        "file_len_hint": transcript.metadata().ok().map(|metadata| metadata.len()),
+    });
+    let _ = stream.write_all(payload.to_string().as_bytes());
 }
 
 pub(crate) fn load_cursor_visibility_evidence(
     session_id: &str,
     conversation_id: &str,
 ) -> Result<Option<CursorVisibilityEvidence>> {
-    let path = hook_events_path(session_id)?;
+    let path = receipt_events_path(
+        &crate::config::get_longhouse_home()?.join("managed-local/cursor-helm"),
+        session_id,
+    );
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("reading Cursor hook evidence {}", path.display()));
+                .with_context(|| format!("reading Cursor provider receipts {}", path.display()));
         }
     };
     let mut evidence = parse_cursor_visibility_evidence(&contents, conversation_id)?;
@@ -109,7 +252,7 @@ pub(crate) fn load_cursor_visibility_evidence(
         evidence.session_ended |= session_lifecycle_ended(
             path.parent()
                 .and_then(|events| events.parent())
-                .context("Cursor hook evidence path has no lifecycle root")?,
+                .context("Cursor receipt path has no lifecycle root")?,
             session_id,
         );
     }
@@ -147,7 +290,7 @@ pub(crate) fn parse_cursor_visibility_evidence(
     contents: &str,
     conversation_id: &str,
 ) -> Result<CursorVisibilityEvidence> {
-    let mut turns = Vec::<CursorHookTurn>::new();
+    let mut turns = Vec::<CursorProviderTurn>::new();
     let mut indices = HashMap::<String, usize>::new();
     let mut session_ended = false;
     let mut ambiguous = false;
@@ -187,7 +330,7 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 continue;
             }
             indices.insert(generation_id.to_string(), turns.len());
-            turns.push(CursorHookTurn {
+            turns.push(CursorProviderTurn {
                 generation_id: generation_id.to_string(),
                 prompt: prompt.to_string(),
                 response_text: None,
@@ -379,6 +522,48 @@ mod tests {
         )
         .unwrap();
         assert!(evidence.ambiguous);
+    }
+
+    #[test]
+    fn console_provider_receipts_form_one_settled_idempotent_turn() {
+        let root = tempfile::tempdir().unwrap();
+        for _ in 0..2 {
+            append_cursor_provider_receipt(
+                root.path(),
+                "session",
+                "conversation",
+                "run-1",
+                "cursor_print",
+                CursorProviderReceipt::Prompt("hello"),
+            )
+            .unwrap();
+            append_cursor_provider_receipt(
+                root.path(),
+                "session",
+                "conversation",
+                "run-1",
+                "cursor_print",
+                CursorProviderReceipt::Response("world"),
+            )
+            .unwrap();
+            append_cursor_provider_receipt(
+                root.path(),
+                "session",
+                "conversation",
+                "run-1",
+                "cursor_print",
+                CursorProviderReceipt::Stop("completed"),
+            )
+            .unwrap();
+        }
+        let contents = fs::read_to_string(receipt_events_path(root.path(), "session")).unwrap();
+        let evidence = parse_cursor_visibility_evidence(&contents, "conversation").unwrap();
+        assert_eq!(evidence.turns.len(), 1);
+        assert_eq!(evidence.turns[0].prompt, "hello");
+        assert_eq!(evidence.turns[0].response_text.as_deref(), Some("world"));
+        assert_eq!(evidence.turns[0].stop_status.as_deref(), Some("completed"));
+        assert!(!evidence.ambiguous);
+        assert_eq!(evidence.unsettled_reason(), None);
     }
 
     #[test]

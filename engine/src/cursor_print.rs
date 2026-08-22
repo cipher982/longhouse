@@ -66,6 +66,12 @@ struct CursorPrintSink {
     runtime_events_outbox_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CursorPrintReceipt {
+    Prompt(String),
+    Response(String),
+}
+
 pub async fn start_cursor_print_turn(
     config: CursorPrintRunConfig,
 ) -> Result<CursorPrintRunSummary> {
@@ -640,22 +646,45 @@ impl CursorPrintSink {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if observed == self.provider_thread_id {
-                if let Ok(root) = cursor_managed_root() {
-                    let _ = promote_binding(
+                if let Ok(registry) = crate::turn_claims::default_registry() {
+                    let _ = registry.mark_provider_binding(&self.run_id, observed, None);
+                }
+            }
+        }
+        if let Some(receipt) = cursor_print_receipt(&event) {
+            if let Ok(root) = cursor_managed_root() {
+                let provider_receipt = match &receipt {
+                    CursorPrintReceipt::Prompt(prompt) => {
+                        crate::cursor_visibility::CursorProviderReceipt::Prompt(prompt)
+                    }
+                    CursorPrintReceipt::Response(text) => {
+                        crate::cursor_visibility::CursorProviderReceipt::Response(text)
+                    }
+                };
+                if let Err(error) = crate::cursor_visibility::append_cursor_provider_receipt(
+                    &root,
+                    &self.session_id,
+                    &self.provider_thread_id,
+                    &self.run_id,
+                    CURSOR_PRINT_ADAPTER,
+                    provider_receipt,
+                ) {
+                    eprintln!("[cursor-print] provider receipt write failed: {error}");
+                } else if matches!(receipt, CursorPrintReceipt::Prompt(_))
+                    && promote_binding(
                         &root,
                         &self.session_id,
                         &self.thread_id,
                         self.turn_id.as_deref(),
                         &self.run_id,
                         self.client_request_id.as_deref(),
-                        observed,
+                        &self.provider_thread_id,
                         &self.launch_id,
-                    );
+                    )
+                    .is_ok()
+                {
+                    self.post_binding().await;
                 }
-                if let Ok(registry) = crate::turn_claims::default_registry() {
-                    let _ = registry.mark_provider_binding(&self.run_id, observed, None);
-                }
-                self.post_binding().await;
             }
         }
         let phase = match (
@@ -717,6 +746,26 @@ impl CursorPrintSink {
         exit_code: Option<i32>,
         stderr: Option<String>,
     ) {
+        if let Ok(root) = cursor_managed_root() {
+            let status = cursor_receipt_status(terminal_state);
+            if let Err(error) = crate::cursor_visibility::append_cursor_provider_receipt(
+                &root,
+                &self.session_id,
+                &self.provider_thread_id,
+                &self.run_id,
+                CURSOR_PRINT_ADAPTER,
+                crate::cursor_visibility::CursorProviderReceipt::Stop(status),
+            ) {
+                eprintln!("[cursor-print] terminal receipt write failed: {error}");
+            }
+        }
+        crate::cursor_visibility::wake_cursor_transcript(
+            &self.session_id,
+            &self.provider_thread_id,
+            &self.run_id,
+            Some(&self.run_id),
+            None,
+        );
         crate::turn_claims::mark_terminal(
             &self.run_id,
             terminal_state,
@@ -799,6 +848,34 @@ fn cursor_tool_name(event: &Value) -> Option<String> {
         }
     }
     None
+}
+
+fn cursor_print_receipt(event: &Value) -> Option<CursorPrintReceipt> {
+    match event.get("type").and_then(Value::as_str) {
+        Some("user") => cursor_message_text(event)
+            .filter(|text| !text.trim().is_empty())
+            .map(CursorPrintReceipt::Prompt),
+        Some("result")
+            if event.get("subtype").and_then(Value::as_str) == Some("success")
+                && event.get("is_error").and_then(Value::as_bool) != Some(true) =>
+        {
+            event
+                .get("result")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|text| !text.trim().is_empty())
+                .map(CursorPrintReceipt::Response)
+        }
+        _ => None,
+    }
+}
+
+fn cursor_receipt_status(terminal_state: &str) -> &'static str {
+    match terminal_state {
+        "run_completed" => "completed",
+        "run_cancelled" => "aborted",
+        _ => "error",
+    }
 }
 
 fn cursor_resume_prompt(
@@ -960,6 +1037,14 @@ fn promote_binding(
     provider_thread_id: &str,
     launch_id: &str,
 ) -> Result<()> {
+    if !crate::cursor_visibility::has_cursor_prompt_receipt(
+        root,
+        session_id,
+        provider_thread_id,
+        run_id,
+    ) {
+        anyhow::bail!("Cursor stream binding cannot publish before its prompt receipt");
+    }
     let target = root
         .join("binding-probes")
         .join(format!("{session_id}.json"));
@@ -1090,6 +1175,36 @@ mod tests {
             Some("run_failed")
         );
         assert!(terminal_state_from_event(&json!({"type":"assistant"})).is_none());
+        assert_eq!(cursor_receipt_status("run_completed"), "completed");
+        assert_eq!(cursor_receipt_status("run_cancelled"), "aborted");
+        assert_eq!(cursor_receipt_status("run_failed"), "error");
+    }
+
+    #[test]
+    fn console_stream_commits_only_prompt_and_success_result_receipts() {
+        assert_eq!(
+            cursor_print_receipt(&json!({
+                "type":"user",
+                "message":{"content":[{"type":"text","text":"hello"}]}
+            })),
+            Some(CursorPrintReceipt::Prompt("hello".to_string()))
+        );
+        assert_eq!(
+            cursor_print_receipt(&json!({
+                "type":"assistant",
+                "message":{"content":[{"type":"text","text":"provisional"}]}
+            })),
+            None
+        );
+        assert_eq!(
+            cursor_print_receipt(&json!({
+                "type":"result",
+                "subtype":"success",
+                "is_error":false,
+                "result":"committed"
+            })),
+            Some(CursorPrintReceipt::Response("committed".to_string()))
+        );
     }
 
     #[test]
@@ -1111,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    fn system_init_promotes_only_the_exact_pending_binding() {
+    fn prompt_receipt_promotes_only_the_exact_pending_binding() {
         let temp = tempfile::tempdir().unwrap();
         let session_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
@@ -1141,6 +1256,26 @@ mod tests {
             &launch_id,
         )
         .is_err());
+        assert!(promote_binding(
+            temp.path(),
+            &session_id,
+            &thread_id,
+            Some(&turn_id),
+            &run_id,
+            Some("request-1"),
+            &provider_thread_id,
+            &launch_id,
+        )
+        .is_err());
+        crate::cursor_visibility::append_cursor_provider_receipt(
+            temp.path(),
+            &session_id,
+            &provider_thread_id,
+            &run_id,
+            CURSOR_PRINT_ADAPTER,
+            crate::cursor_visibility::CursorProviderReceipt::Prompt("hello"),
+        )
+        .unwrap();
         promote_binding(
             temp.path(),
             &session_id,

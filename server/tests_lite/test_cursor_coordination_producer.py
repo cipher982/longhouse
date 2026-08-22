@@ -29,12 +29,37 @@ def _fake_session(session_id: str, provider_cwd: Path) -> m._CursorSession:
         session_id=session_id,
         provider_thread_id=f"thread-{session_id}",
         home=provider_cwd,
-        environment={},
+        environment={"LONGHOUSE_HOME": str(provider_cwd / ".longhouse")},
         process=None,  # type: ignore[arg-type]
-        shipper=None,  # type: ignore[arg-type]
         provider_cwd=provider_cwd,
         state={},
     )
+
+
+class _FakeShipper:
+    def __init__(self) -> None:
+        self.stop_calls = 0
+        self.receipt = {"status": "ready"}
+
+    def stop(self) -> dict[str, object]:
+        self.stop_calls += 1
+        return {
+            "status": "pass",
+            "stopped": True,
+            "process_dead": True,
+            "process_group_dead": True,
+        }
+
+
+def _install_fake_machine(monkeypatch, tmp_path: Path) -> _FakeShipper:  # noqa: ANN001 - pytest helper
+    shipper = _FakeShipper()
+    machine = m._CursorMachine(
+        home=tmp_path / "machine-home",
+        environment={"HOME": str(tmp_path / "machine-home")},
+        shipper=shipper,  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(m, "_start_cursor_machine", lambda *_a, **_k: machine)
+    return shipper
 
 
 def _cleanup_diagnostics(*, orphan_count: int = 0, final_socket_absent: bool = True) -> dict[str, object]:
@@ -163,6 +188,7 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
         variant=None,
     )
     session = _fake_session("awareness-session", tmp_path / "cwd")
+    shipper = _install_fake_machine(monkeypatch, tmp_path)
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: session)
@@ -196,6 +222,8 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
         "final_socket_absent": True,
     }
     assert cleanup["sessions"] == {"awareness": awareness_cleanup}
+    assert cleanup["machine"]["process_dead"] is True
+    assert shipper.stop_calls == 1
     launch_receipts = json.loads((args.evidence_root / "session-launch-receipts.json").read_text())
     assert launch_receipts["provider"] == "cursor"
     assert launch_receipts["sessions"]["awareness"]["session_id"] == "awareness-session"
@@ -214,6 +242,7 @@ def test_run_coordination_awareness_create_retains_false_assertion_without_faili
         variant=None,
     )
     session = _fake_session("awareness-session-2", tmp_path / "cwd2")
+    _install_fake_machine(monkeypatch, tmp_path)
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: session)
@@ -242,12 +271,32 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     target = _fake_session("target-session", tmp_path / "tgt-cwd")
     sessions = iter([source, target])
     tokens = iter(["source-coordination-token", "target-coordination-token"])
+    shipper = _install_fake_machine(monkeypatch, tmp_path)
+    launched_machines: list[m._CursorMachine] = []
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
-    monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
+    def launch_on_machine(_args, _root, machine, **_kwargs):  # noqa: ANN001 - test double
+        launched_machines.append(machine)
+        return next(sessions)
+
+    monkeypatch.setattr(m, "_launch_cursor_session", launch_on_machine)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(
+        m,
+        "_wait_assistant_response_after_marker",
+        lambda *a, **k: (
+            {"events": []},
+            {
+                "method": "assistant_marker_then_new_assistant_event",
+                "timed_out": False,
+                "marker_observed_in_assistant": True,
+            },
+        ),
+    )
     monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
 
     def fake_create_directed_input(  # noqa: ANN001
@@ -261,8 +310,6 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
 
     monkeypatch.setattr(m, "_create_directed_input", fake_create_directed_input)
     monkeypatch.setattr(m, "_wait_until", _deterministic_wait_until)
-    monkeypatch.setattr(m, "_marker_in_any_event", lambda _payload, _marker: True)
-    monkeypatch.setattr(m, "_hosted_events", lambda *a, **k: {"events": []})
     monkeypatch.setattr(
         m,
         "_find_inbound_directed_input",
@@ -284,6 +331,10 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     assert result["observation"]["source_session_id"] == "source-session"
     assert result["observation"]["source_ready"] is True
     assert result["observation"]["target_ready"] is True
+    assert result["observation"]["source_attribution_matches"] is True
+    assert shipper.stop_calls == 1
+    assert len(launched_machines) == 2
+    assert launched_machines[0] is launched_machines[1]
 
     source_cleanup = json.loads((args.evidence_root / "cleanup-receipt-source.json").read_text())
     target_cleanup = json.loads((args.evidence_root / "cleanup-receipt-target.json").read_text())
@@ -306,6 +357,12 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
             "final_socket_absent": True,
         },
         "sessions": {"source": source_cleanup, "target": target_cleanup},
+        "machine": {
+            "status": "pass",
+            "stopped": True,
+            "process_dead": True,
+            "process_group_dead": True,
+        },
     }
 
     launch_receipts = json.loads((args.evidence_root / "session-launch-receipts.json").read_text())
@@ -346,12 +403,27 @@ def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_ob
     target = _fake_session("target-session-2", tmp_path / "tgt-cwd2")
     sessions = iter([source, target])
     tokens = iter(["source-token-2", "target-token-2"])
+    _install_fake_machine(monkeypatch, tmp_path)
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(
+        m,
+        "_wait_assistant_response_after_marker",
+        lambda *a, **k: (
+            {"events": []},
+            {
+                "method": "assistant_marker_then_new_assistant_event",
+                "timed_out": True,
+                "marker_observed_in_assistant": False,
+            },
+        ),
+    )
     monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
     monkeypatch.setattr(
         m,
@@ -359,8 +431,6 @@ def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_ob
         lambda *a, **k: {"id": 9, "source_session_id": "source-session-2", "input_receipt": None},
     )
     monkeypatch.setattr(m, "_wait_until", _deterministic_wait_until)
-    monkeypatch.setattr(m, "_marker_in_any_event", lambda _payload, _marker: True)
-    monkeypatch.setattr(m, "_hosted_events", lambda *a, **k: {"events": []})
     monkeypatch.setattr(
         m,
         "_find_inbound_directed_input",
@@ -372,11 +442,13 @@ def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_ob
     assert result["status"] == "pass"
     assert result["observation_scope"] == "scenario"
     assert result["assertions"]["provider_input_receipt_linked"] is False
-    assert result["assertions"]["attributed_input_visible"] is True
+    assert result["assertions"]["attributed_input_visible"] is False
 
 
-def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts() -> None:
-    unbound_launch = m._session_cleanup_receipt("target", None, launch_attempted=True)
+def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts(tmp_path: Path) -> None:
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
+    machine_cleanup = {"stopped": True, "process_dead": True, "process_group_dead": True}
+    unbound_launch = m._session_cleanup_receipt("target", args, None, launch_attempted=True)
     assert unbound_launch["launch_attempted"] is True
     assert unbound_launch["cleanup_attempted"] is False
     assert unbound_launch["cleanup_complete"] is False
@@ -419,7 +491,7 @@ def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts() -> N
         diagnostics={"status": "cleanup_failed"},
     )
 
-    orphaned_aggregate = m._aggregate_cleanup_receipt({"source": clean, "target": orphaned})
+    orphaned_aggregate = m._aggregate_cleanup_receipt({"source": clean, "target": orphaned}, machine_cleanup)
     assert orphaned_aggregate["status"] == "fail"
     assert orphaned_aggregate["orphan_count"] == 1
     assert orphaned_aggregate["required_cleanup"] == {
@@ -427,13 +499,21 @@ def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts() -> N
         "final_socket_absent": True,
     }
 
-    incomplete_aggregate = m._aggregate_cleanup_receipt({"source": clean, "target": incomplete})
+    incomplete_aggregate = m._aggregate_cleanup_receipt({"source": clean, "target": incomplete}, machine_cleanup)
     assert incomplete_aggregate["status"] == "fail"
     assert incomplete_aggregate["orphan_count"] is None
     assert incomplete_aggregate["required_cleanup"] == {
         "no_orphan_provider_processes": False,
         "final_socket_absent": False,
     }
+
+    machine_failure = m._aggregate_cleanup_receipt(
+        {"source": clean},
+        {"stopped": False, "process_dead": False, "process_group_dead": False},
+    )
+    assert machine_failure["status"] == "fail"
+    assert machine_failure["orphan_count"] == 1
+    assert machine_failure["required_cleanup"]["no_orphan_provider_processes"] is False
 
 
 def test_run_coordination_reports_a_typed_failure_for_an_unrecognized_variant(tmp_path: Path, monkeypatch) -> None:
@@ -493,6 +573,7 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
     session = _fake_session(f"{assertion_id}-session", tmp_path / f"cwd-{assertion_id}")
     second_session = _fake_session(f"{assertion_id}-session-2", tmp_path / f"cwd-{assertion_id}-2")
     sessions = iter([session, second_session])
+    _install_fake_machine(monkeypatch, tmp_path)
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
@@ -501,6 +582,20 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
     monkeypatch.setattr(m, "_control_send", lambda *a, **k: {"returncode": 0})
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(
+        m,
+        "_wait_assistant_response_after_marker",
+        lambda *a, **k: (
+            {"events": []},
+            {
+                "method": "assistant_marker_then_new_assistant_event",
+                "timed_out": False,
+                "marker_observed_in_assistant": True,
+            },
+        ),
+    )
     monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: "a-coordination-token")
     monkeypatch.setattr(
         m,
@@ -508,8 +603,6 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
         lambda *a, **k: {"id": 1, "source_session_id": "source", "input_receipt": {"status": "delivered"}},
     )
     monkeypatch.setattr(m, "_wait_until", _deterministic_wait_until)
-    monkeypatch.setattr(m, "_marker_in_any_event", lambda _payload, _marker: True)
-    monkeypatch.setattr(m, "_hosted_events", lambda *a, **k: {"events": []})
     monkeypatch.setattr(m, "_find_inbound_directed_input", lambda *a, **k: {"id": 1, "source_session_id": "source"})
 
     # Plant a secret-shaped leak under the evidence root before the redaction

@@ -416,7 +416,8 @@ struct ManagedObservationSnapshot {
 struct ProjectionBuildInput {
     generation: u64,
     managed_scan_partial: bool,
-    process_snapshot_complete: bool,
+    managed_snapshot_complete: bool,
+    unmanaged_snapshot_complete: bool,
     db_path: PathBuf,
     tracker: ConsecutiveErrorTracker,
     parse_tracker: RecentIssueTracker,
@@ -1004,7 +1005,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_full_reconciled_at: Option<String> = None;
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_projected_managed_scan_partial = false;
-    let mut last_projected_process_snapshot_complete = false;
+    let mut last_projected_managed_snapshot_complete = false;
+    let mut last_projected_unmanaged_snapshot_complete = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
@@ -1258,7 +1260,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     let input = ProjectionBuildInput {
                                         generation: projection_generation,
                                         managed_scan_partial: last_projected_managed_scan_partial,
-                                        process_snapshot_complete: last_projected_process_snapshot_complete,
+                                        managed_snapshot_complete:
+                                            last_projected_managed_snapshot_complete,
+                                        unmanaged_snapshot_complete:
+                                            last_projected_unmanaged_snapshot_complete,
                                         db_path: projection_db_path.clone(),
                                         tracker: tracker.clone(),
                                         parse_tracker: parse_tracker.clone(),
@@ -1559,7 +1564,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 "Discarded stale unmanaged reconciliation result"
                             );
                         }
-                        if !stale { match result.result {
+                        if !stale {
+                            match result.result {
                             Ok(bindings) => {
                                 if result.elapsed_ms > 1_000 {
                                     tracing::warn!(
@@ -1578,38 +1584,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                                 last_projected_managed_observations = result.managed;
                                 last_projected_managed_scan_partial = result.managed_scan_partial;
-                                last_projected_process_snapshot_complete =
+                                last_projected_managed_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                                last_projected_unmanaged_snapshot_complete =
                                     result.full_reconciliation_candidate;
                                 last_unmanaged_session_bindings = Some(bindings);
                                 if result.full_reconciliation_candidate {
                                     last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
                                 }
-                                let input = ProjectionBuildInput {
-                                    generation: projection_generation,
-                                    managed_scan_partial: last_projected_managed_scan_partial,
-                                    process_snapshot_complete:
-                                        last_projected_process_snapshot_complete,
-                                    db_path: projection_db_path.clone(),
-                                    tracker: tracker.clone(),
-                                    parse_tracker: parse_tracker.clone(),
-                                    ship_stats: ship_stats.clone(),
-                                    is_offline: offline.is_offline,
-                                    last_ship_at: last_ship_at.clone(),
-                                    machine_id: config.shipper_config.machine_name.clone(),
-                                    managed: last_projected_managed_observations.clone(),
-                                    unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                                    limiter: adaptive_limiter.snapshot(),
-                                    scheduler: scheduler.snapshot(),
-                                    archive_repair_mode: config.archive_repair_mode,
-                                    last_full_reconciled_at: last_full_reconciled_at.clone(),
-                                    session_snapshot_state: session_snapshot_state.clone(),
-                                };
-                                if !maybe_start_projection_build(&mut projection_build_tasks, input) {
-                                    projection_build_pending = true;
-                                }
                             }
                             Err(err) => {
-                                projection_generation = projection_generation.saturating_add(1);
+                                // Managed state files are authoritative for Helm ownership.
+                                // Optional Shadow process discovery must not suppress a newly
+                                // observed managed run. Publish that managed truth with the
+                                // last-known unmanaged bindings, but mark only the unmanaged
+                                // scope incomplete so the Runtime Host cannot close missing
+                                // Shadow sessions from this partial observation.
+                                last_projected_managed_observations = result.managed;
+                                last_projected_managed_scan_partial =
+                                    result.managed_scan_partial;
+                                last_projected_managed_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                                last_projected_unmanaged_snapshot_complete = false;
+                                pending_full_reconciliation = true;
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
                                 tracing::warn!(
@@ -1619,7 +1616,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     err
                                 );
                             }
-                        }}
+                            }
+                            let input = ProjectionBuildInput {
+                                generation: projection_generation,
+                                managed_scan_partial: last_projected_managed_scan_partial,
+                                managed_snapshot_complete:
+                                    last_projected_managed_snapshot_complete,
+                                unmanaged_snapshot_complete:
+                                    last_projected_unmanaged_snapshot_complete,
+                                db_path: projection_db_path.clone(),
+                                tracker: tracker.clone(),
+                                parse_tracker: parse_tracker.clone(),
+                                ship_stats: ship_stats.clone(),
+                                is_offline: offline.is_offline,
+                                last_ship_at: last_ship_at.clone(),
+                                machine_id: config.shipper_config.machine_name.clone(),
+                                managed: last_projected_managed_observations.clone(),
+                                unmanaged: last_unmanaged_session_bindings
+                                    .clone()
+                                    .unwrap_or_default(),
+                                limiter: adaptive_limiter.snapshot(),
+                                scheduler: scheduler.snapshot(),
+                                archive_repair_mode: config.archive_repair_mode,
+                                last_full_reconciled_at: last_full_reconciled_at.clone(),
+                                session_snapshot_state: session_snapshot_state.clone(),
+                            };
+                            if !maybe_start_projection_build(&mut projection_build_tasks, input) {
+                                projection_build_pending = true;
+                            }
+                        }
                     }
                     Some(Err(err)) => {
                         projection_generation = projection_generation.saturating_add(1);
@@ -1975,7 +2000,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
                         managed_scan_partial: last_projected_managed_scan_partial,
-                        process_snapshot_complete: last_projected_process_snapshot_complete,
+                        managed_snapshot_complete:
+                            last_projected_managed_snapshot_complete,
+                        unmanaged_snapshot_complete:
+                            last_projected_unmanaged_snapshot_complete,
                         db_path: projection_db_path.clone(),
                         tracker: tracker.clone(),
                         parse_tracker: parse_tracker.clone(),
@@ -2009,7 +2037,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
                         managed_scan_partial: last_projected_managed_scan_partial,
-                        process_snapshot_complete: last_projected_process_snapshot_complete,
+                        managed_snapshot_complete:
+                            last_projected_managed_snapshot_complete,
+                        unmanaged_snapshot_complete:
+                            last_projected_unmanaged_snapshot_complete,
                         db_path: projection_db_path.clone(),
                         tracker: tracker.clone(),
                         parse_tracker: parse_tracker.clone(),
@@ -2486,7 +2517,8 @@ fn maybe_start_projection_build(
         let ProjectionBuildInput {
             generation,
             managed_scan_partial,
-            process_snapshot_complete,
+            managed_snapshot_complete,
+            unmanaged_snapshot_complete,
             db_path,
             tracker,
             parse_tracker,
@@ -2519,7 +2551,8 @@ fn maybe_start_projection_build(
                     &managed.opencode,
                     &managed.cursor,
                     &unmanaged,
-                    process_snapshot_complete,
+                    managed_snapshot_complete,
+                    unmanaged_snapshot_complete,
                     Some(limiter),
                     Some(scheduler),
                     archive_repair_mode,
@@ -2553,7 +2586,8 @@ fn build_local_status_projection(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
-    process_snapshot_complete: bool,
+    managed_snapshot_complete: bool,
+    unmanaged_snapshot_complete: bool,
     limiter_snapshot: Option<crate::scheduler::LimiterSnapshot>,
     scheduler_snapshot: Option<crate::scheduler::SchedulerSnapshot>,
     archive_repair_mode: ArchiveRepairMode,
@@ -2673,7 +2707,8 @@ fn build_local_status_projection(
         unmanaged_session_bindings,
         &phase_ledger,
         &run_windows,
-        process_snapshot_complete,
+        managed_snapshot_complete,
+        unmanaged_snapshot_complete,
         now,
         None,
     ));
@@ -5673,6 +5708,7 @@ mod tests {
             &[],
             &[],
             &cached,
+            true,
             false,
             None,
             None,
@@ -5681,6 +5717,17 @@ mod tests {
         );
 
         assert_eq!(projection.payload.unmanaged_session_bindings, cached);
+        let scopes = projection
+            .payload
+            .machine_evidence
+            .as_ref()
+            .unwrap()
+            .process_snapshot_scopes
+            .iter()
+            .map(|scope| (scope.scope.as_str(), scope.complete))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(scopes.get("managed_state_files"), Some(&true));
+        assert_eq!(scopes.get("unmanaged_provider_processes"), Some(&false));
     }
 
     #[test]
@@ -5708,6 +5755,7 @@ mod tests {
             &[],
             &cached,
             false,
+            false,
             None,
             None,
             ArchiveRepairMode::Drain,
@@ -5727,6 +5775,7 @@ mod tests {
             &[],
             &[],
             &cached,
+            false,
             false,
             None,
             None,
@@ -5748,6 +5797,7 @@ mod tests {
             &[],
             &[],
             &changed,
+            false,
             false,
             None,
             None,

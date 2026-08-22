@@ -2445,9 +2445,11 @@ def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, mon
 
     process = FakeProviderProcess()
     commands: list[list[str]] = []
+    environments: list[dict[str, str] | None] = []
 
-    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+    def fake_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
+        environments.append(kwargs.get("env"))
         if len(commands) == 1:
             return subprocess.CompletedProcess(argv, 1, "", "provider_not_idle")
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -2461,10 +2463,15 @@ def test_cursor_control_send_retries_only_provider_idle_race(tmp_path: Path, mon
         process,  # type: ignore[arg-type]
         "seed",
         initial=False,
+        environment={"LONGHOUSE_HOME": str(tmp_path / "isolated-home")},
     )
 
     assert result["attempts"] == 2
     assert len(commands) == 2
+    assert environments == [
+        {"LONGHOUSE_HOME": str(tmp_path / "isolated-home")},
+        {"LONGHOUSE_HOME": str(tmp_path / "isolated-home")},
+    ]
     assert process.sent == []
 
 
@@ -2501,7 +2508,7 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
     monkeypatch.setattr(
         provider_native_resume,
         "_control_send",
-        lambda spec, args, state, process, text: calls.append(("send", text)) or {"returncode": 0},
+        lambda spec, args, state, process, text, **kwargs: calls.append(("send", text)) or {"returncode": 0},
     )
     monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
     monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
@@ -2558,7 +2565,7 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
     monkeypatch.setattr(
         provider_native_resume,
         "_control_send",
-        lambda spec, args, state, process, text: calls.append(("send", text)) or {"returncode": 0},
+        lambda spec, args, state, process, text, **kwargs: calls.append(("send", text)) or {"returncode": 0},
     )
     monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
     monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)

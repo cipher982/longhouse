@@ -1928,9 +1928,9 @@ fn cursor_text_projection(
     }
     if evidence.ambiguous {
         tracing::warn!(
-            reason = "conflicting_hook_evidence",
+            reason = "conflicting_provider_receipt",
             store_turn_count = store_turns.len(),
-            hook_turn_count = evidence.turns.len(),
+            receipt_turn_count = evidence.turns.len(),
             "Suppressing managed Cursor assistant text"
         );
         return projection;
@@ -1939,15 +1939,15 @@ fn cursor_text_projection(
         tracing::warn!(
             reason = "ambiguous_turn_alignment",
             store_turn_count = store_turns.len(),
-            hook_turn_count = evidence.turns.len(),
+            receipt_turn_count = evidence.turns.len(),
             "Suppressing managed Cursor assistant text"
         );
         return projection;
     };
     for (store_index, evidence_index) in alignment {
         let store_turn = &store_turns[store_index];
-        let hook_turn = &evidence.turns[evidence_index];
-        if let Some(response_text) = hook_turn.response_text.as_ref() {
+        let receipt_turn = &evidence.turns[evidence_index];
+        if let Some(response_text) = receipt_turn.response_text.as_ref() {
             if let Some(indices) =
                 unique_cursor_receipt_path(&store_turn.text_blocks, response_text)
             {
@@ -1960,7 +1960,7 @@ fn cursor_text_projection(
             } else {
                 tracing::warn!(
                     reason = "ambiguous_receipt_binding",
-                    generation_id = hook_turn.generation_id,
+                    generation_id = receipt_turn.generation_id,
                     text_block_count = store_turn.text_blocks.len(),
                     "Suppressing managed Cursor assistant text"
                 );
@@ -1972,24 +1972,24 @@ fn cursor_text_projection(
 
 fn unique_cursor_turn_alignment(
     store_turns: &[CursorStoreTurn],
-    hook_turns: &[crate::cursor_visibility::CursorHookTurn],
+    receipt_turns: &[crate::cursor_visibility::CursorProviderTurn],
 ) -> Option<Vec<(usize, usize)>> {
-    if hook_turns.is_empty() {
+    if receipt_turns.is_empty() {
         return Some(Vec::new());
     }
     let mut states = HashMap::<usize, (u8, Vec<usize>)>::new();
     for (store_index, store_turn) in store_turns.iter().enumerate() {
-        if store_turn.prompt.trim() == hook_turns[0].prompt.trim() {
+        if store_turn.prompt.trim() == receipt_turns[0].prompt.trim() {
             states.insert(store_index, (1, vec![store_index]));
         }
     }
-    for hook_turn in hook_turns.iter().skip(1) {
+    for receipt_turn in receipt_turns.iter().skip(1) {
         let mut next = HashMap::<usize, (u8, Vec<usize>)>::new();
         for (previous_index, (path_count, path)) in &states {
             for (store_index, store_turn) in
                 store_turns.iter().enumerate().skip(*previous_index + 1)
             {
-                if store_turn.prompt.trim() != hook_turn.prompt.trim() {
+                if store_turn.prompt.trim() != receipt_turn.prompt.trim() {
                     continue;
                 }
                 let entry = next.entry(store_index).or_insert_with(|| {
@@ -2400,7 +2400,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
                     tracing::warn!(
                         session_id = binding.session_id,
                         conversation_id = snapshot.conversation_uuid,
-                        reason = "missing_hook_evidence",
+                        reason = "missing_provider_receipt",
                         "Suppressing managed Cursor assistant text"
                     );
                 }
@@ -2409,8 +2409,9 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         })
         .transpose()?;
     // Do not consume raw records while the provider's turn receipt is still
-    // racing the stop hook.  Both terminal hooks wake the shipper, so the
-    // settled turn will be captured without permanently losing its render.
+    // racing the terminal provider receipt. Both managed adapters wake the
+    // shipper after that receipt, so the settled turn is captured without
+    // permanently losing its render.
     if let Some(wait) = visibility_evidence
         .as_ref()
         .and_then(|evidence| evidence.unsettled_reason())
@@ -3820,7 +3821,9 @@ mod tests {
         assert!(should_wait_for_unclaimed_cursor_source(true, false, true));
         assert!(!should_wait_for_unclaimed_cursor_source(true, false, false));
         assert!(should_wait_for_unclaimed_cursor_source(false, true, false));
-        assert!(!should_wait_for_unclaimed_cursor_source(false, false, false));
+        assert!(!should_wait_for_unclaimed_cursor_source(
+            false, false, false
+        ));
     }
 
     fn acknowledge_prepared(conn: &mut Connection, prepared: &PreparedStorageV2Envelope) {
@@ -4174,7 +4177,7 @@ mod tests {
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
-            turns: vec![crate::cursor_visibility::CursorHookTurn {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-1".to_string(),
                 prompt: "hello test 1".to_string(),
                 response_text: None,
@@ -4220,7 +4223,7 @@ mod tests {
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
-            turns: vec![crate::cursor_visibility::CursorHookTurn {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-2".to_string(),
                 prompt: "do work".to_string(),
                 response_text: Some("progressdone".to_string()),
@@ -4259,7 +4262,7 @@ mod tests {
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
-            turns: vec![crate::cursor_visibility::CursorHookTurn {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-ambiguous".to_string(),
                 prompt: "repeat".to_string(),
                 response_text: Some("same answer".to_string()),
@@ -4289,7 +4292,7 @@ mod tests {
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
-            turns: vec![crate::cursor_visibility::CursorHookTurn {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-conflict".to_string(),
                 prompt: "hello".to_string(),
                 response_text: Some("world".to_string()),
@@ -4325,7 +4328,7 @@ mod tests {
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
-            turns: vec![crate::cursor_visibility::CursorHookTurn {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-failed-tool".to_string(),
                 prompt: "run it".to_string(),
                 response_text: None,
@@ -4388,7 +4391,7 @@ mod tests {
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
-            turns: vec![crate::cursor_visibility::CursorHookTurn {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-repeated".to_string(),
                 prompt: "same prompt".to_string(),
                 response_text: Some("same reply".to_string()),
@@ -5026,7 +5029,13 @@ mod tests {
         assert_eq!(late_metadata.range_start, user_line.len() as u64);
         assert_eq!(late_metadata.event_count, 0);
         assert_eq!(
-            late_metadata.envelope.render.as_ref().unwrap().records.len(),
+            late_metadata
+                .envelope
+                .render
+                .as_ref()
+                .unwrap()
+                .records
+                .len(),
             0
         );
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);

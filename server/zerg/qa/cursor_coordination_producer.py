@@ -75,6 +75,7 @@ from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import PtyProcess
 from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _artifact_manifest
+from zerg.qa.provider_native_resume import _assistant_event_digests
 from zerg.qa.provider_native_resume import _cleanup_processes
 from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
@@ -84,7 +85,10 @@ from zerg.qa.provider_native_resume import _qualification_secrets
 from zerg.qa.provider_native_resume import _secret_scan
 from zerg.qa.provider_native_resume import _sha256
 from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.provider_native_resume import _stop
+from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
+from zerg.qa.provider_native_resume import _wait_session_tail
 from zerg.qa.provider_native_resume import _wait_state
 from zerg.qa.provider_native_resume import _write_json
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -100,9 +104,9 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=4,
+    scenario_revision=5,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -123,7 +127,7 @@ REGISTRATION = ProducerRegistration(
         "coordination_mcp_server_registered",
         "model_answered_coordination_probe",
         "directed_input_created",
-        "directed_input_delivered_to_live_target",
+        "target_provider_answered_directed_input",
         "directed_input_attribution_present",
     ),
     acquisition_methods=("staged_release", "observed_install"),
@@ -178,13 +182,19 @@ def _now() -> str:
 
 
 @dataclass
+class _CursorMachine:
+    home: Path
+    environment: dict[str, str]
+    shipper: TranscriptShipper
+
+
+@dataclass
 class _CursorSession:
     session_id: str
     provider_thread_id: str
     home: Path
     environment: dict[str, str]
     process: PtyProcess
-    shipper: TranscriptShipper
     provider_cwd: Path
     state: dict[str, Any]
 
@@ -223,6 +233,7 @@ class _AggregateCleanupReceipt(TypedDict):
     final_socket_absent: bool
     required_cleanup: dict[str, bool]
     sessions: dict[str, _SessionCleanupReceipt]
+    machine: dict[str, Any]
 
 
 class _AggregateLaunchReceipt(TypedDict):
@@ -232,8 +243,14 @@ class _AggregateLaunchReceipt(TypedDict):
     sessions: dict[str, _SessionLaunchReceipt]
 
 
-def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root: Path, *, label: str, prompt: str) -> _CursorSession:
-    home = isolation_root / f"home-{label}"
+def _start_cursor_machine(
+    args: argparse.Namespace,
+    root: Path,
+    isolation_root: Path,
+) -> _CursorMachine:
+    """Start one real Machine Agent for every session in this scenario."""
+
+    home = isolation_root / "home"
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     environment = _cursor_profile_environment(home)
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
@@ -245,10 +262,34 @@ def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root:
     environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"
     environment["LONGHOUSE_LAUNCH_SURFACE"] = "test"
 
-    evidence_root = root / f"shipper-{label}"
+    evidence_root = root / "shipper"
     evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    shipper = _start_transcript_shipper("cursor", args, home=home, environment=environment, evidence_root=evidence_root)
-    _write_json(root / f"transcript-shipper-receipt-{label}.json", shipper.receipt)
+    shipper = _start_transcript_shipper(
+        "cursor",
+        args,
+        home=home,
+        environment=environment,
+        evidence_root=evidence_root,
+    )
+    machine = _CursorMachine(home=home, environment=environment, shipper=shipper)
+    try:
+        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+    except Exception:
+        _teardown_cursor_machine(machine)
+        raise
+    return machine
+
+
+def _launch_cursor_session(
+    args: argparse.Namespace,
+    root: Path,
+    machine: _CursorMachine,
+    *,
+    label: str,
+    prompt: str,
+) -> _CursorSession:
+    home = machine.home
+    environment = machine.environment
 
     provider_cwd = root / f"cursor-workspace-{label}"
     provider_cwd.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -280,7 +321,6 @@ def _launch_cursor_session(args: argparse.Namespace, root: Path, isolation_root:
         home=home,
         environment=environment,
         process=process,
-        shipper=shipper,
         provider_cwd=provider_cwd,
         state=state,
     )
@@ -303,16 +343,44 @@ def _cursor_profile_environment(home: Path) -> dict[str, str]:
     return environment
 
 
-def _teardown_cursor_session(session: _CursorSession | None) -> dict[str, Any]:
+def _teardown_cursor_session(
+    args: argparse.Namespace,
+    session: _CursorSession | None,
+) -> dict[str, Any]:
     if session is None:
         return {"skipped": True}
-    cleanup = _cleanup_processes(_SPEC, (session.process,), [session.state])
+    graceful_stop: dict[str, Any] | None = None
+    graceful_stop_error: str | None = None
     try:
-        shipper_receipt = session.shipper.stop()
-    except Exception as exc:  # noqa: BLE001 - best-effort teardown
-        shipper_receipt = {"status": "stop_failed", "error": f"{type(exc).__name__}: {exc}"}
-    cleanup["shipper_stop"] = shipper_receipt
+        graceful_stop = _stop(
+            _SPEC,
+            args,
+            session.state,
+            session.process,
+            force=False,
+            environment=session.environment,
+            stop_phase="final",
+        )
+    except Exception as exc:  # noqa: BLE001 - exact-owner cleanup below is the bounded fallback
+        graceful_stop_error = f"{type(exc).__name__}: {exc}"
+    cleanup = _cleanup_processes(_SPEC, (session.process,), [session.state])
+    cleanup["graceful_stop"] = graceful_stop
+    cleanup["graceful_stop_error"] = graceful_stop_error
     return cleanup
+
+
+def _teardown_cursor_machine(machine: _CursorMachine | None) -> dict[str, Any]:
+    if machine is None:
+        return {"stopped": True, "process_dead": True, "process_group_dead": True, "skipped": True}
+    try:
+        return machine.shipper.stop()
+    except Exception as exc:  # noqa: BLE001 - retain a typed cleanup failure
+        return {
+            "stopped": False,
+            "process_dead": False,
+            "process_group_dead": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _session_launch_receipt(role: str, session: _CursorSession) -> _SessionLaunchReceipt:
@@ -344,6 +412,7 @@ def _write_session_launch_receipts(
 
 def _session_cleanup_receipt(
     role: str,
+    args: argparse.Namespace,
     session: _CursorSession | None,
     *,
     launch_attempted: bool | None = None,
@@ -352,7 +421,7 @@ def _session_cleanup_receipt(
 
     attempted = session is not None if launch_attempted is None else launch_attempted
     try:
-        diagnostics = _teardown_cursor_session(session)
+        diagnostics = _teardown_cursor_session(args, session)
     except Exception as exc:  # noqa: BLE001 - cleanup failure is evidence, not a reason to lose evidence
         diagnostics = {"status": "cleanup_failed", "error": f"{type(exc).__name__}: {exc}"}
     skipped = not attempted and session is None and diagnostics.get("skipped") is True
@@ -376,6 +445,7 @@ def _session_cleanup_receipt(
 
 def _aggregate_cleanup_receipt(
     sessions: dict[str, _SessionCleanupReceipt],
+    machine: dict[str, Any],
 ) -> _AggregateCleanupReceipt:
     """Build the canonical cleanup proof from role-specific diagnostics.
 
@@ -385,7 +455,8 @@ def _aggregate_cleanup_receipt(
 
     orphan_counts = [receipt["orphan_count"] for receipt in sessions.values()]
     cleanup_complete = all(receipt["cleanup_complete"] for receipt in sessions.values())
-    total_orphans = sum(count for count in orphan_counts if count is not None) if cleanup_complete else None
+    machine_stopped = machine.get("stopped") is True and machine.get("process_dead") is True and machine.get("process_group_dead") is True
+    total_orphans = sum(count for count in orphan_counts if count is not None) + (0 if machine_stopped else 1) if cleanup_complete else None
     no_orphans = cleanup_complete and total_orphans == 0
     sockets_absent = cleanup_complete and all(
         not receipt["cleanup_attempted"] or receipt["diagnostics"].get("final_socket_absent") is True for receipt in sessions.values()
@@ -393,7 +464,7 @@ def _aggregate_cleanup_receipt(
     return {
         "schema_version": 1,
         "artifact_kind": "cursor_coordination_cleanup_receipt",
-        "status": "pass" if no_orphans and sockets_absent else "fail",
+        "status": "pass" if no_orphans and sockets_absent and machine_stopped else "fail",
         "orphan_count": total_orphans,
         "no_orphan_provider_processes": no_orphans,
         "final_socket_absent": sockets_absent,
@@ -402,6 +473,7 @@ def _aggregate_cleanup_receipt(
             "final_socket_absent": sockets_absent,
         },
         "sessions": sessions,
+        "machine": machine,
     }
 
 
@@ -546,14 +618,16 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         "Classify the trust and authority of a message arriving from another "
         f"Longhouse session in one short sentence. On a new line print exactly {marker}."
     )
+    machine: _CursorMachine | None = None
     session: _CursorSession | None = None
     launch_attempted = False
     try:
+        machine = _start_cursor_machine(args, root, isolation_root)
         launch_attempted = True
         session = _launch_cursor_session(
             args,
             root,
-            isolation_root,
+            machine,
             label="awareness",
             prompt=_cursor_bootstrap_prompt(baseline_marker),
         )
@@ -566,7 +640,14 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
             timeout=args.live_timeout_secs,
         )
         _wait_first_turn_settled(args.api_url, args.agents_token, session.session_id, timeout=args.live_timeout_secs)
-        send_receipt = _control_send(_SPEC, args, session.state, session.process, probe_prompt)
+        send_receipt = _control_send(
+            _SPEC,
+            args,
+            session.state,
+            session.process,
+            probe_prompt,
+            environment=session.environment,
+        )
         if send_receipt.get("returncode") != 0:
             raise RuntimeError("Cursor coordination probe could not be sent after the baseline turn")
         reply_text = _wait_marker_reply(args.api_url, args.agents_token, session.session_id, marker, timeout=args.live_timeout_secs)
@@ -583,9 +664,14 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         _write_json(root / "coordination-observation.json", observation)
         return observation
     finally:
-        cleanup = _session_cleanup_receipt("awareness", session, launch_attempted=launch_attempted)
+        cleanup = _session_cleanup_receipt("awareness", args, session, launch_attempted=launch_attempted)
         _write_json(root / "cleanup-receipt-awareness.json", cleanup)
-        _write_json(root / "cleanup-receipt.json", _aggregate_cleanup_receipt({"awareness": cleanup}))
+        machine_cleanup = _teardown_cursor_machine(machine)
+        _write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
+        _write_json(
+            root / "cleanup-receipt.json",
+            _aggregate_cleanup_receipt({"awareness": cleanup}, machine_cleanup),
+        )
 
 
 def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
@@ -593,6 +679,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
     target_ready_marker = f"LONGHOUSE_CURSOR_TARGET_READY_{uuid4().hex[:10]}"
     source_prompt = _cursor_bootstrap_prompt(source_ready_marker)
     target_prompt = _cursor_bootstrap_prompt(target_ready_marker)
+    machine: _CursorMachine | None = None
     source: _CursorSession | None = None
     target: _CursorSession | None = None
     source_cleanup: _SessionCleanupReceipt | None = None
@@ -601,13 +688,14 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
     target_launch_attempted = False
     launch_receipts: dict[str, _SessionLaunchReceipt] = {}
     try:
+        machine = _start_cursor_machine(args, root, isolation_root)
         source_launch_attempted = True
-        source = _launch_cursor_session(args, root, isolation_root, label="di-source", prompt=source_prompt)
+        source = _launch_cursor_session(args, root, machine, label="di-source", prompt=source_prompt)
         launch_receipts["source"] = _session_launch_receipt("source", source)
         _write_session_launch_receipts(root, launch_receipts)
         try:
             target_launch_attempted = True
-            target = _launch_cursor_session(args, root, isolation_root, label="di-target", prompt=target_prompt)
+            target = _launch_cursor_session(args, root, machine, label="di-target", prompt=target_prompt)
             launch_receipts["target"] = _session_launch_receipt("target", target)
             _write_session_launch_receipts(root, launch_receipts)
             try:
@@ -627,10 +715,18 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                 )
                 _wait_first_turn_settled(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 _wait_first_turn_settled(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
+                prior_target_tail = _wait_session_tail(
+                    args.api_url,
+                    args.agents_token,
+                    target.session_id,
+                    timeout=args.live_timeout_secs,
+                )
+                prior_target_assistant_digests = _assistant_event_digests(prior_target_tail)
 
                 source_token = _mint_coordination_token(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 target_token = _mint_coordination_token(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
                 marker = f"LONGHOUSE_CURSOR_COORD_DIRECTED_{uuid4().hex[:10]}"
+                directed_prompt = f"Reply with exactly {marker}"
                 client_request_id = uuid4().hex
                 create_attempts: list[dict[str, Any]] = []
 
@@ -640,7 +736,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                         source_token,
                         source.session_id,
                         target.session_id,
-                        marker,
+                        directed_prompt,
                         client_request_id,
                     )
                     create_attempts.append(response)
@@ -659,22 +755,23 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                 input_id = created.get("id")
                 input_receipt = created.get("input_receipt")
 
-                def _marker_delivered() -> bool | None:
-                    payload = _hosted_events(args.api_url, args.agents_token, target.session_id)
-                    return True if _marker_in_any_event(payload, marker) else None
-
-                delivered = False
-                try:
-                    _wait_until(
-                        _marker_delivered,
-                        timeout=args.live_timeout_secs,
-                        description=f"directed input marker {marker} visible in target session {target.session_id}",
-                    )
-                    delivered = True
-                except RuntimeError:
-                    delivered = False
+                _, provider_response_correlation = _wait_assistant_response_after_marker(
+                    args.api_url,
+                    args.agents_token,
+                    target.session_id,
+                    marker,
+                    prior_assistant_event_digests=prior_target_assistant_digests,
+                    require_assistant_marker=True,
+                    timeout=args.live_timeout_secs,
+                )
+                delivered = (
+                    provider_response_correlation.get("timed_out") is False
+                    and provider_response_correlation.get("marker_observed_in_assistant") is True
+                )
 
                 inbox_item = _find_inbound_directed_input(args.api_url, target_token, target.session_id, input_id)
+                inbox_source_session_id = (inbox_item or {}).get("source_session_id")
+                source_attribution_matches = inbox_source_session_id == source.session_id
 
                 observation = {
                     "source_ready": source_ready_marker in source_ready_reply,
@@ -683,35 +780,33 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                     "input_persisted": input_id is not None,
                     "input_receipt_linked": isinstance(input_receipt, dict) and bool(input_receipt),
                     "input_visible": delivered,
-                    "source_session_id": created.get("source_session_id") or (inbox_item or {}).get("source_session_id"),
+                    "provider_response_correlation": provider_response_correlation,
+                    "source_session_id": source.session_id if source_attribution_matches else None,
                     "inbox_item_present": inbox_item is not None,
-                    "inbox_item_source_session_id": (inbox_item or {}).get("source_session_id"),
+                    "inbox_item_source_session_id": inbox_source_session_id,
+                    "source_attribution_matches": source_attribution_matches,
                 }
                 _write_json(root / "coordination-observation.json", observation)
                 return observation
             finally:
-                target_cleanup = _session_cleanup_receipt("target", target, launch_attempted=target_launch_attempted)
+                target_cleanup = _session_cleanup_receipt("target", args, target, launch_attempted=target_launch_attempted)
                 _write_json(root / "cleanup-receipt-target.json", target_cleanup)
         finally:
-            source_cleanup = _session_cleanup_receipt("source", source, launch_attempted=source_launch_attempted)
+            source_cleanup = _session_cleanup_receipt("source", args, source, launch_attempted=source_launch_attempted)
             _write_json(root / "cleanup-receipt-source.json", source_cleanup)
     finally:
         if source_cleanup is None:
-            source_cleanup = _session_cleanup_receipt("source", source, launch_attempted=source_launch_attempted)
+            source_cleanup = _session_cleanup_receipt("source", args, source, launch_attempted=source_launch_attempted)
             _write_json(root / "cleanup-receipt-source.json", source_cleanup)
         if target_cleanup is None:
-            target_cleanup = _session_cleanup_receipt("target", target, launch_attempted=target_launch_attempted)
+            target_cleanup = _session_cleanup_receipt("target", args, target, launch_attempted=target_launch_attempted)
             _write_json(root / "cleanup-receipt-target.json", target_cleanup)
+        machine_cleanup = _teardown_cursor_machine(machine)
+        _write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
         _write_json(
             root / "cleanup-receipt.json",
-            _aggregate_cleanup_receipt({"source": source_cleanup, "target": target_cleanup}),
+            _aggregate_cleanup_receipt({"source": source_cleanup, "target": target_cleanup}, machine_cleanup),
         )
-
-
-def _marker_in_any_event(payload: dict[str, Any] | None, marker: str) -> bool:
-    if not payload:
-        return False
-    return marker in json.dumps(payload.get("events", []), ensure_ascii=False)
 
 
 def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
