@@ -13,12 +13,13 @@ import XCTest
 @MainActor
 final class WebTranscriptScrollPinningTests: XCTestCase {
     private var window: UIWindow!
-    private var webView: WKWebView!
+    private var webView: TranscriptWebView!
+    private var nativeViewportCoordinator: WebTranscriptView.Coordinator?
 
     override func setUp() async throws {
         try await super.setUp()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        webView = TranscriptWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         window.addSubview(webView)
         window.makeKeyAndVisible()
@@ -26,6 +27,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        nativeViewportCoordinator = nil
         webView.removeFromSuperview()
         webView = nil
         window.isHidden = true
@@ -68,9 +70,17 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     /// Re-pinning must not fight a user who deliberately scrolled up. Native
     /// owns that intent; a viewport change must not silently re-stick.
     func testUnpinnedTranscriptIsNotRepinnedByAViewportChange() async throws {
+        let coordinator = attachNativeViewportHook()
         try await render(rowCount: 40, stick: true)
         try await setStickToBottom(false)
-        _ = try await evaluate("window.scrollTo(0, 0); 1")
+
+        // Record the same intent natively that a real drag toward older messages
+        // does, so the native re-pin is under test here too. The scroll itself
+        // is native: routing it through JS raced the delegate callbacks, and a
+        // drag that had not landed yet reads as "still at the bottom".
+        coordinator.scrollViewWillBeginDragging(webView.scrollView)
+        webView.scrollView.setContentOffset(.zero, animated: false)
+        coordinator.scrollViewDidEndDragging(webView.scrollView, willDecelerate: false)
         try await settle()
 
         try await resizeViewport(height: 240)
@@ -92,6 +102,55 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         XCTAssertNotNil(metrics["dom_ms"], "renderTranscript must return its timing metrics")
         let rows = try await number("document.querySelectorAll('#root > *').length")
         XCTAssertEqual(rows, 8, accuracy: 0, "Every payload row must reach the DOM")
+    }
+
+    /// The production trigger, not a synthetic one.
+    ///
+    /// `testViewportResizeRepinsFrozenNativeContentOffset` hand-dispatches a
+    /// `resize` event, so it proves the DOM handler while assuming WebKit
+    /// delivers that event on a native frame change. This asserts the native
+    /// path instead: the DOM is explicitly told NOT to stick, so the only thing
+    /// that can land the scroll view on the last row is `layoutSubviews`.
+    ///
+    /// On growth the same hook also sends a no-op scroll update, which is what
+    /// makes WebKit paint the newly exposed strip. That half is not assertable
+    /// here — WebKit renders out of process — so the offset is the guard.
+    func testNativeFrameChangeAloneRepinsWithoutTheDOMResizeHandler() async throws {
+        attachNativeViewportHook()
+
+        try await render(rowCount: 40, stick: true)
+        try await assertNativePinnedToBottom("initial render")
+        try await setStickToBottom(false)
+
+        // Shrink, as the control card growing or the keyboard appearing does.
+        try await resizeNativeFrameOnly(height: 240)
+        try await assertNativePinnedToBottom("after the frame shrank")
+
+        // Grow back, as dismissing the keyboard does. This is the direction that
+        // left an unpainted band the height of whatever went away.
+        try await resizeNativeFrameOnly(height: 400)
+        try await assertNativePinnedToBottom("after the frame grew back")
+    }
+
+    /// Wire the production `layoutSubviews` hook to a real coordinator.
+    @discardableResult
+    private func attachNativeViewportHook() -> WebTranscriptView.Coordinator {
+        let coordinator = WebTranscriptView.Coordinator()
+        coordinator.webView = webView
+        webView.onViewportHeightChange = { [weak webView] previous, height in
+            guard let webView else { return }
+            coordinator.viewportHeightDidChange(from: previous, to: height, on: webView)
+        }
+        nativeViewportCoordinator = coordinator
+        return coordinator
+    }
+
+    /// Change only the native frame: no `dispatchEvent`, no JS at all.
+    private func resizeNativeFrameOnly(height: CGFloat) async throws {
+        webView.frame = CGRect(x: 0, y: 0, width: webView.frame.width, height: height)
+        webView.layoutIfNeeded()
+        window.layoutIfNeeded()
+        try await settle()
     }
 
     // MARK: - Harness

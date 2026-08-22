@@ -3,6 +3,44 @@ import SwiftUI
 import WebKit
 import OSLog
 
+/// The transcript WebView's height is not constant: the floating control card,
+/// the keyboard, and the safe area all resize it through SwiftUI. Two separate
+/// things break on every one of those changes, and neither is self-healing:
+///
+///   1. UIScrollView does not re-clamp `contentOffset` when its bounds change,
+///      so a pinned transcript ends up short of (or past) its last row.
+///   2. WebKit renders only the region it believes is exposed. Growing the frame
+///      leaves the newly exposed strip unpainted — a blank band the exact height
+///      of whatever went away (a dismissed keyboard is the loud one) until a drag
+///      makes WebKit re-render.
+///
+/// The DOM's `resize` listener addresses (1) only if WebKit delivers the event,
+/// and addresses (2) never — it cannot see WebKit's painted region at all.
+/// `layoutSubviews` is the one trigger UIKit guarantees on a frame change.
+final class TranscriptWebView: WKWebView {
+    /// (previousHeight, newHeight). Only fires on a real height change.
+    var onViewportHeightChange: ((CGFloat, CGFloat) -> Void)?
+    /// Seeded to zero rather than "unset": treating the first layout as a
+    /// baseline to record silently swallows a change when the first layout pass
+    /// IS the change, which is exactly what happens to a pooled WebView adopted
+    /// into a session whose chrome is already a different height.
+    private var observedHeight: CGFloat = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let height = bounds.height
+        guard height > 0, abs(height - observedHeight) > 0.5 else { return }
+        let previous = observedHeight
+        observedHeight = height
+        onViewportHeightChange?(previous, height)
+    }
+
+    func prepareForTranscriptReuse() {
+        onViewportHeightChange = nil
+        observedHeight = 0
+    }
+}
+
 /// Renders the transcript body in WebKit while leaving the session chrome,
 /// runtime controls, and composer native.
 struct WebTranscriptView: UIViewRepresentable {
@@ -42,7 +80,7 @@ struct WebTranscriptView: UIViewRepresentable {
         Coordinator()
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> TranscriptWebView {
         let pooled = WebTranscriptWebViewPool.takeOrCreate()
         let webView = pooled.webView
         webView.navigationDelegate = context.coordinator
@@ -63,8 +101,15 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
-        context.coordinator.webView = webView
-        context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
+        // Capture the coordinator, not the whole representable context: an
+        // escaping closure that holds Context also pins the SwiftUI environment.
+        let coordinator = context.coordinator
+        webView.onViewportHeightChange = { [weak webView] previous, height in
+            guard let webView else { return }
+            coordinator.viewportHeightDidChange(from: previous, to: height, on: webView)
+        }
+        coordinator.webView = webView
+        coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         let lifecycleStage = pooled.reused ? "webview_reused" : "webview_make"
         Task { @MainActor in
             onLifecycle?(lifecycleStage)
@@ -73,19 +118,19 @@ struct WebTranscriptView: UIViewRepresentable {
             // Adopt the warm spare's existing navigation, even if WebKit is
             // still finishing it. Restarting loadHTMLString() here discarded
             // launch prewarm work exactly when the user opened a session early.
-            context.coordinator.adoptDocument(serverURL: serverURL, loaded: pooled.isLoaded)
+            coordinator.adoptDocument(serverURL: serverURL, loaded: pooled.isLoaded)
             if pooled.isLoaded {
                 Task { @MainActor in
                     onLifecycle?("webview_document_reused")
                 }
             }
         } else {
-            context.coordinator.loadDocument(serverURL: serverURL, on: webView)
+            coordinator.loadDocument(serverURL: serverURL, on: webView)
         }
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
+    func updateUIView(_ webView: TranscriptWebView, context: Context) {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         context.coordinator.send(
@@ -98,7 +143,7 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleUIView(_ webView: TranscriptWebView, coordinator: Coordinator) {
         coordinator.prepareForReuse()
         WebTranscriptWebViewPool.recycle(webView)
     }
@@ -778,6 +823,44 @@ struct WebTranscriptView: UIViewRepresentable {
             }
         }
 
+        /// Reconcile what a viewport height change breaks, from the one trigger
+        /// UIKit guarantees. Deferred off the layout pass so the scroll writes
+        /// do not re-enter `layoutSubviews`.
+        func viewportHeightDidChange(from previous: CGFloat, to height: CGFloat, on webView: WKWebView) {
+            DispatchQueue.main.async { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                let scrollView = webView.scrollView
+                let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+                // Unconditional and low-volume (real height changes only): this
+                // is the evidence a screenshot of a blank band cannot give.
+                self.logger.info(
+                    "webkit transcript viewport \(Int(previous), privacy: .public)->\(Int(height), privacy: .public) content=\(Int(scrollView.contentSize.height), privacy: .public) offset=\(Int(scrollView.contentOffset.y), privacy: .public) max=\(Int(maxOffset), privacy: .public) stick=\(self.shouldStickToBottom, privacy: .public)"
+                )
+                // UIScrollView does not re-clamp contentOffset when its bounds
+                // change, so a shrink leaves the tail unreachable until a drag.
+                let target = self.shouldStickToBottom && !self.userScrollInProgress
+                    ? maxOffset
+                    : min(max(scrollView.contentOffset.y, 0), maxOffset)
+                if abs(scrollView.contentOffset.y - target) > 0.5 {
+                    scrollView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                    return
+                }
+                // Nothing to re-pin, but growth still exposed a strip WebKit was
+                // never asked to paint: it renders the region it was last told
+                // was visible, and a frame change alone does not re-send that —
+                // a scroll update does, which is why dragging "fixes" it. Send
+                // one and land back on the same offset, so it is invisible.
+                guard height > previous, maxOffset > 1 else { return }
+                let restore = scrollView.contentOffset
+                let nudged = restore.y > 1 ? restore.y - 1 : restore.y + 1
+                self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
+                scrollView.setContentOffset(CGPoint(x: restore.x, y: nudged), animated: false)
+                DispatchQueue.main.async {
+                    scrollView.setContentOffset(restore, animated: false)
+                }
+            }
+        }
+
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             emitNearTopIfNeeded(scrollView)
         }
@@ -827,6 +910,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func prepareForReuse() {
+            (webView as? TranscriptWebView)?.prepareForTranscriptReuse()
             webView?.navigationDelegate = nil
             webView?.scrollView.delegate = nil
             webView = nil
@@ -1090,13 +1174,13 @@ struct WebTranscriptPreparedPayload {
 @MainActor
 enum WebTranscriptWebViewPool {
     struct PooledWebView {
-        let webView: WKWebView
+        let webView: TranscriptWebView
         let reused: Bool
         let isLoaded: Bool
     }
 
     private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
-    private static var warmedWebView: WKWebView?
+    private static var warmedWebView: TranscriptWebView?
     private static var warmedWebViewLoaded = false
     private static var prewarmDelegate: WebTranscriptPrewarmDelegate?
 
@@ -1132,19 +1216,20 @@ enum WebTranscriptWebViewPool {
         return PooledWebView(webView: configuredWebView(), reused: false, isLoaded: false)
     }
 
-    static func recycle(_ webView: WKWebView) {
+    static func recycle(_ webView: TranscriptWebView) {
         // A just-popped transcript is a better warm spare than a new WebView
         // still starting its content process. Keep one globally bounded spare.
         prewarmDelegate = nil
+        webView.prepareForTranscriptReuse()
         warmedWebView = webView
         warmedWebViewLoaded = true
         logger.info("webkit recycled")
     }
 
-    private static func configuredWebView() -> WKWebView {
+    private static func configuredWebView() -> TranscriptWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
-        return WKWebView(frame: .zero, configuration: configuration)
+        return TranscriptWebView(frame: .zero, configuration: configuration)
     }
 }
 
