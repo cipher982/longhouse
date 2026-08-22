@@ -362,7 +362,8 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypatch):
+@pytest.mark.parametrize("include_automation", (False, True))
+async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypatch, include_automation):
     session_id = uuid4()
     observed: dict[str, object] = {}
 
@@ -383,6 +384,7 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
                 "include_origin_hidden",
             }
             assert params["include_snippets"] is True
+            assert params["include_origin_hidden"] is include_automation
             return {
                 "results": [
                     {
@@ -412,7 +414,7 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
 
     result = await timeline_router._search_storage_v2_timeline(
         owner_id=7,
-        params=_params(query="needle"),
+        params=_params(query="needle", include_automation=include_automation),
     )
 
     assert result.total == 1
