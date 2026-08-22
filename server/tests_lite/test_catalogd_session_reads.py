@@ -678,6 +678,26 @@ def test_catalog_gateway_gives_search_hydration_its_measured_bounded_budget(monk
     assert attempts == [1.0, 1.0]
 
 
+def test_catalog_gateway_gives_title_health_its_measured_bounded_budget(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "storage.session.title.dependency.health.v2"
+        assert params == {}
+        attempts.append(timeout_seconds)
+        if len(attempts) == 1:
+            raise catalog_read_gateway.CatalogUnavailable("transient")
+        return {"status": "healthy", "pending_sessions": 0}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    result = catalog_read_gateway.title_dependency_health()
+
+    assert result == {"status": "healthy", "pending_sessions": 0}
+    assert attempts == [2.0, 2.0]
+
+
 def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
     attempts: list[float] = []
 

@@ -37,11 +37,19 @@ _WORKSPACE_ATTEMPT_SECONDS = 1.0
 # callers still bound fan-out and the route retains its outer timeout.
 _SHADOW_STATE_DEADLINE_SECONDS = 2.25
 _SHADOW_STATE_ATTEMPT_SECONDS = 1.0
+# Title health computes the durable debt shape across the full session catalog.
+# Hosted david010 measured 1.22s at 30k sessions after the presentation-policy
+# backfill, so the generic point-read budget made a healthy dependency report
+# unavailable. Keep this operator read explicitly bounded without slowing the
+# ordinary catalog gateway paths.
+_TITLE_HEALTH_DEADLINE_SECONDS = 4.25
+_TITLE_HEALTH_ATTEMPT_SECONDS = 2.0
 
 _READ_BUDGETS = {
     "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
     "session.shadow_state.read.v2": (_SHADOW_STATE_DEADLINE_SECONDS, _SHADOW_STATE_ATTEMPT_SECONDS),
+    "storage.session.title.dependency.health.v2": (_TITLE_HEALTH_DEADLINE_SECONDS, _TITLE_HEALTH_ATTEMPT_SECONDS),
 }
 
 
