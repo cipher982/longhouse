@@ -373,12 +373,23 @@ def _should_repair_stale_cwd_basename_project(session: AgentSession, data: Sessi
     return _incoming_project_matches_git_root_hint(incoming_project, data.git_repo)
 
 
+# Directory basenames that name a container, not a project. Kept in step with
+# `is_generic_workspace_label` in engine/src/pipeline/parser.rs: an engine that
+# refuses these still has to be backstopped here, because older engines and
+# replayed retries ship values the current engine would never produce.
+_GENERIC_WORKSPACE_LABELS = frozenset({"workspace", "ws", "w"})
+
+
 def _normalize_ingested_project(data: SessionIngest) -> str | None:
     project = str(data.project or "").strip()
     if not project:
         return None
-    cwd_name = Path(str(data.cwd or "").strip()).name.strip()
-    if project == "workspace" and cwd_name == project and not data.git_repo:
+    if project in _GENERIC_WORKSPACE_LABELS:
+        # Previously this only dropped `workspace` when the cwd basename matched
+        # and no git remote was present. Both extra conditions let the value
+        # through in the corpus it was written to stop: an ephemeral run
+        # directory inside a real repository satisfies neither. A generic
+        # container basename is never a project name, whatever surrounds it.
         return None
     return project
 
