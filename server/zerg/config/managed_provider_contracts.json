@@ -1602,7 +1602,7 @@
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
       "requires_longhouse_cli": false,
       "managed_transport": "antigravity_hook_inbox",
-      "console_adapter": null,
+      "console_adapter": "antigravity_print",
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "adapter_sources": [
@@ -1624,7 +1624,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
-      "support_tier": "maintenance",
+      "support_tier": "launch",
       "interaction_probes": [
         {
           "probe_id": "antigravity_shadow_control_absence",
@@ -1798,7 +1798,7 @@
         }
       },
       "can_resume": false,
-      "turn_start": false,
+      "turn_start": true,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -1879,15 +1879,16 @@
           "owner_action": "real agy transcript assertion"
         },
         "turn_start": {
-          "level": "none",
-          "source": "Antigravity is maintenance-tier and has no product Console adapter",
-          "disposition": "policy_disabled",
-          "reason": "Antigravity remains an ingest, archive, and transcript maintenance provider. A provider release probe for `agy --print` does not authorize a user-facing Console control path.",
-          "routed_to": "shadow_archive_only"
+          "level": "hermetic",
+          "source": "antigravity_print one-shot Console adapter argv, result parse, and transcript binding tests",
+          "disposition": "implemented",
+          "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority. The level is deliberately `hermetic` and not `live_no_token`: the run-once canary proves the upstream `agy --print` surface by building the argv itself, so it is provider-release evidence, not adapter evidence. Only a canary that drives this adapter can raise the level.",
+          "owner_action": "Console turn canary that invokes the engine adapter rather than replicating its argv"
         }
       },
       "machine_control_supports": [
-        "antigravity.send"
+        "antigravity.send",
+        "antigravity.turn_start"
       ],
       "adapter_digest": "1f12612715d34b9c11b1861961adfdbb06f6a6f040691045869c32773c2eed7a"
     },

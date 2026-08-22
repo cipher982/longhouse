@@ -431,7 +431,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     }
 
 
-def test_antigravity_contract_routes_hook_delivered_send_only():
+def test_antigravity_contract_serves_hook_send_and_print_console_turns():
     """Antigravity routes send through the hook inbox, and nothing else.
 
     Until 2026-07-31 this declared send_input: true and advertised
@@ -459,11 +459,23 @@ def test_antigravity_contract_routes_hook_delivered_send_only():
     assert send_evidence["disposition"] == "implemented"
     assert send_evidence["level"] == "live_token"
     assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
-    assert contract.console_adapter is None
-    assert contract.support_tier == "maintenance"
-    assert contract.turn_start is False
-    assert contract.operation_evidence_for("turn_start")["disposition"] == "policy_disabled"
-    assert contract.machine_control_supports == ("antigravity.send",)
+    # Console is served through the one-shot print adapter, which is the point:
+    # hook delivery is unavailable under GEMINI_API_KEY auth, so `agy --print`
+    # is the control surface that works under either credential authority.
+    assert contract.console_adapter == "antigravity_print"
+    assert contract.support_tier == "launch"
+    assert contract.turn_start is True
+    turn_start_evidence = contract.operation_evidence_for("turn_start")
+    assert turn_start_evidence["disposition"] == "implemented"
+    # Deliberately hermetic, not live: the run-once canary builds `agy --print`
+    # argv itself instead of driving the adapter, so it is provider-release
+    # evidence. Raising this level requires a canary that invokes the adapter.
+    assert turn_start_evidence["level"] == "hermetic"
+    assert turn_start_evidence["owner_action"]
+    assert contract.machine_control_supports == (
+        "antigravity.send",
+        "antigravity.turn_start",
+    )
     assert contract.connection_capabilities == {
         "can_send_input": 1,
         "can_interrupt": 0,
@@ -713,8 +725,11 @@ def test_factory_provider_set_is_derived_from_the_contract_not_hand_maintained()
     assert factory_provider_names(include_maintenance=True) == every_provider
     assert factory_provider_names() == launch_only
     assert "cursor" in factory_provider_names()
-    assert "antigravity" not in factory_provider_names()
-    assert "antigravity" in factory_provider_names(include_maintenance=True)
+    # Antigravity is launch tier, so it is in the control-proof lanes rather
+    # than only the ingest ones. The derivation is what this test guards:
+    # changing the tier in the contract moves it without any lane keeping its
+    # own hand-maintained tuple.
+    assert "antigravity" in factory_provider_names()
 
 
 def test_every_contract_provider_resolves_a_harness_adapter() -> None:
