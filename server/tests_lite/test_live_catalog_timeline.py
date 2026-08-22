@@ -996,7 +996,14 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
     LiveSession = make_sessionmaker(engine)
     now = datetime.now(timezone.utc).replace(microsecond=0)
 
-    def add_empty_helm(db, *, hidden: int, attached: bool, primary_thread: bool = True):
+    def add_empty_helm(
+        db,
+        *,
+        hidden: int,
+        attached: bool,
+        primary_thread: bool = True,
+        connection_state: str | None = None,
+    ):
         session_id = str(uuid4())
         thread_id = str(uuid4())
         run_id = str(uuid4())
@@ -1068,7 +1075,7 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
                 lease_generation=lease_generation,
                 control_plane="codex_app_server",
                 acquisition_kind="spawned_control",
-                state="attached" if attached else "detached",
+                state=connection_state or ("attached" if attached else "detached"),
                 can_send_input=1,
                 can_interrupt=1,
                 can_terminate=1,
@@ -1115,38 +1122,56 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
         # primary-thread backfill lands. The open-session predicate must follow
         # the durable root thread instead of dropping this valid empty Helm.
         attached_human_id = add_empty_helm(db, hidden=0, attached=True, primary_thread=False)
+        # The mutable connection row can lag the canonical control head; the
+        # latter still admits this empty Helm to the default timeline.
+        stale_connection_id = add_empty_helm(
+            db,
+            hidden=0,
+            attached=True,
+            connection_state="detached",
+        )
         add_empty_helm(db, hidden=0, attached=False)
         add_empty_helm(db, hidden=1, attached=True)
         db.commit()
 
         snapshot = _snapshot(db, _params(include_test=True, include_automation=True))
-        assert snapshot["total"] == 1
-        assert snapshot["rows"][0]["facts"]["catalog"]["session_id"] == attached_human_id
-        head = db.query(FactHead).filter(FactHead.session_id == attached_human_id).one()
-        snapshot["rows"][0]["heads"] = [
-            {
-                "family": head.family,
-                "session_id": head.session_id,
-                "subject_key": head.subject_key,
-                "source": head.source,
-                "source_epoch": head.source_epoch,
-                "evidence_hash": head.evidence_hash,
-                "value_json": head.value_json,
-                "valid_until": None,
-                "updated_commit_seq": head.updated_commit_seq,
-            }
-        ]
-        snapshot["rows"][0]["heads_truncated"] = False
+        assert snapshot["total"] == 2
+        assert {
+            row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]
+        } == {attached_human_id, stale_connection_id}
+        for session_id in (attached_human_id, stale_connection_id):
+            row = next(item for item in snapshot["rows"] if item["facts"]["catalog"]["session_id"] == session_id)
+            head = db.query(FactHead).filter(FactHead.session_id == session_id).one()
+            row["heads"] = [
+                {
+                    "family": head.family,
+                    "session_id": head.session_id,
+                    "subject_key": head.subject_key,
+                    "source": head.source,
+                    "source_epoch": head.source_epoch,
+                    "evidence_hash": head.evidence_hash,
+                    "value_json": head.value_json,
+                    "valid_until": None,
+                    "updated_commit_seq": head.updated_commit_seq,
+                }
+            ]
+            row["heads_truncated"] = False
         response = project_catalog_timeline_snapshot(snapshot)
-        assert response.sessions[0].head.session_state.control is not None, response.sessions[0].head.session_state.model_dump()
-        assert response.sessions[0].head.session_state.control.terminal_attached is True, response.sessions[0].head.session_state.model_dump()
-        assert response.sessions[0].head.session_state.working_set == "open"
+        attached_response = next(card for card in response.sessions if card.head.id == attached_human_id)
+        assert attached_response.head.session_state.control is not None, attached_response.head.session_state.model_dump()
+        assert attached_response.head.session_state.control.terminal_attached is True, attached_response.head.session_state.model_dump()
+        assert attached_response.head.session_state.working_set == "open"
+        stale_response = next(card for card in response.sessions if card.head.id == stale_connection_id)
+        assert stale_response.head.session_state.control is not None, stale_response.head.session_state.model_dump()
+        assert stale_response.head.session_state.control.terminal_attached is True, stale_response.head.session_state.model_dump()
+        assert stale_response.head.session_state.working_set == "open"
 
-        head.observed_at = now - timedelta(minutes=2)
-        value = json.loads(head.value_json)
-        value["observed_at"] = head.observed_at.isoformat()
-        head.value_json = json.dumps(value)
-        head.evidence_hash = canonical_evidence_hash(value)
+        for head in db.query(FactHead).filter(FactHead.session_id.in_((attached_human_id, stale_connection_id))):
+            head.observed_at = now - timedelta(minutes=2)
+            value = json.loads(head.value_json)
+            value["observed_at"] = head.observed_at.isoformat()
+            head.value_json = json.dumps(value)
+            head.evidence_hash = canonical_evidence_hash(value)
         db.commit()
         expired = _snapshot(db, _params(include_test=True, include_automation=True))
         assert expired["total"] == 0

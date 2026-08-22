@@ -212,7 +212,6 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
             or_(thread_id.is_(None), run.c.thread_id == thread_id),
             run.c.ended_at.is_(None),
             control.c.released_at.is_(None),
-            control.c.state.in_(("attached", "degraded")),
             control.c.adapter_connection_id.is_not(None),
             control.c.lease_generation.is_not(None),
             head.c.family == "control",

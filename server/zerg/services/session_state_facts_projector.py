@@ -634,7 +634,11 @@ def _bound_control_coordinates(catalog_facts: Mapping[str, Any]) -> set[tuple[st
     coordinates: set[tuple[str, str, str]] = set()
     for connection in connections:
         row = _mapping(connection)
-        if row.get("released_at") is not None or _text(row.get("state")) not in {"attached", "degraded"}:
+        # The mutable connection state can lag the canonical control head
+        # during teardown. Keep the durable identity binding here, while the
+        # fresh head remains the authority for attached/degraded state and
+        # action grants. A released row is still never eligible.
+        if row.get("released_at") is not None:
             continue
         coordinate = (
             _text(row.get("run_id")) or "",
