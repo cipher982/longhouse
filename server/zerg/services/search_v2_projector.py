@@ -268,7 +268,12 @@ class SearchV2Projector:
         owner_id = session.get("owner_id")
         if owner_id is None:
             raise SearchProjectionError("owner_missing", "storage session has no owner for search isolation")
-        visibility = evaluate_origin_visibility(facts_from_row(session))
+        visibility = evaluate_origin_visibility(
+            facts_from_row(
+                session,
+                primary_thread_is_worker_only=bool(session.get("primary_thread_is_worker_only")),
+            )
+        )
         published = await self.search.call(
             "search.index.publish.v2",
             {

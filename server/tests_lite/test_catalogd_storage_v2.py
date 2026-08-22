@@ -473,6 +473,60 @@ def test_worker_only_primary_thread_never_enters_or_completes_title_debt(tmp_pat
     engine.dispose()
 
 
+def test_search_projection_snapshot_carries_primary_worker_fact(tmp_path):
+    database_path = tmp_path / "catalog.db"
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(
+            StorageSession(
+                session_id=str(session_id),
+                tenant_id="default",
+                owner_id="42",
+                provider="cursor",
+                environment="test",
+                machine_id="cinder",
+                project="longhouse",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                hidden_from_default_timeline=1,
+                raw_state="durable",
+                render_state="ready",
+                media_state="complete",
+                commit_seq=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionThread(
+                id=str(uuid4()),
+                session_id=str(session_id),
+                provider="cursor",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                branch_kind="subagent",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    result = CatalogStore(engine).list_storage_session_render_objects(
+        session_id=session_id,
+        generation_id=None,
+        snapshot_revision=1,
+        after_object_id=None,
+        limit=100,
+    )
+    assert result["session"]["primary_thread_is_worker_only"] is True
+    engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_storage_commit_rejects_existing_session_owner_mismatch(daemon_paths):
     database_path, socket_path = daemon_paths

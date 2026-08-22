@@ -10,12 +10,12 @@ from uuid import uuid4
 
 import pytest
 
+from zerg.services import search_v2_projector
 from zerg.services.search_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
 from zerg.services.search_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.search_v2_projector import SearchV2Projector
 from zerg.services.search_v2_projector import _run_forever
 from zerg.services.search_v2_projector import _run_worker
-from zerg.services import search_v2_projector
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 
@@ -285,10 +285,12 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
                     "owner_id": "42",
                     "project": "longhouse",
                     "provider": "codex",
-                    "environment": "local",
+                    "environment": "test",
                     "cwd": "/workspace/longhouse",
                     "git_repo": "cipher982/longhouse",
                     "started_at": now.isoformat(),
+                    "hidden_from_default_timeline": True,
+                    "primary_thread_is_worker_only": True,
                 },
                 "objects": [
                     {
@@ -335,6 +337,8 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     publish_call = next(params for method, params in search.calls if method == "search.index.publish.v2")
     assert publish_call["object_count"] == 1
     assert publish_call["event_count"] == 1
+    assert publish_call["hidden_from_default_timeline"] is True
+    assert publish_call["test_scope_visible"] is False
     complete_call = next(params for method, params in catalog.calls if method == "projector.state.complete.v2")
     assert complete_call["claim_token"] == claim_token
     assert complete_call["completed_revision"] == 7

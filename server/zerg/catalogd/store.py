@@ -9293,6 +9293,7 @@ class CatalogStore:
         """Page one immutable render-object set at a claimed projector revision."""
 
         session_table = StorageSession.__table__
+        thread_table = LiveSessionThread.__table__
         generation_table = RenderGeneration.__table__
         object_table = RenderObject.__table__
         tombstone = LiveSessionTombstone.__table__
@@ -9303,6 +9304,12 @@ class CatalogStore:
                 select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
             ).scalar_one_or_none()
             session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            primary_branch_kind = connection.execute(
+                select(thread_table.c.branch_kind).where(
+                    thread_table.c.session_id == session_key,
+                    thread_table.c.is_primary == 1,
+                )
+            ).scalar_one_or_none()
             current_generation = (
                 str(session_row["current_render_generation"])
                 if session_row is not None and session_row["current_render_generation"] is not None
@@ -9343,6 +9350,12 @@ class CatalogStore:
                 rows = list(connection.execute(statement.order_by(object_table.c.object_id.asc()).limit(limit + 1)).mappings().all())
             has_more = len(rows) > limit
             rows = rows[:limit]
+            session_dto = _storage_session_dto(session_row) if session_row is not None and deleted is None else None
+            if session_dto is not None:
+                # Searchd cannot infer worker lineage from the storage session
+                # row. Carry the canonical primary-thread fact in this frozen
+                # projection snapshot so test scope never promotes a worker.
+                session_dto["primary_thread_is_worker_only"] = primary_branch_kind == "subagent"
             return {
                 "found": session_row is not None and deleted is None,
                 "deleted": deleted is not None,
@@ -9352,7 +9365,7 @@ class CatalogStore:
                 "current_generation_id": current_generation,
                 "generation_id": selected_generation,
                 "generation": _render_generation_dto(generation_row) if generation_row is not None else None,
-                "session": _storage_session_dto(session_row) if session_row is not None and deleted is None else None,
+                "session": session_dto,
                 "snapshot_object_count": snapshot_object_count,
                 "snapshot_event_count": snapshot_event_count,
                 "objects": [_render_object_manifest_dto(row) for row in rows],

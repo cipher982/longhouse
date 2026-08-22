@@ -224,6 +224,36 @@ def test_filters_apply_before_top_k(tmp_path):
         connection.close()
 
 
+def test_include_test_dense_scope_never_promotes_worker_hidden_session(tmp_path):
+    rows = [
+        ("ordinary-test", 0, [1, 0, 0, 0], "42", "zerg", "claude", "test", "2026-07-01"),
+        ("worker-test", 0, [0.99, 0.01, 0, 0], "42", "zerg", "claude", "test", "2026-07-01"),
+    ]
+    index, connection = _index(tmp_path, rows)
+    try:
+        connection.execute(
+            "UPDATE session_index SET hidden_from_default_timeline = 1, test_scope_visible = 1 "
+            "WHERE session_id = 'ordinary-test'"
+        )
+        connection.execute(
+            "UPDATE session_index SET hidden_from_default_timeline = 1, test_scope_visible = 0 "
+            "WHERE session_id = 'worker-test'"
+        )
+        connection.commit()
+        index.load(connection)
+
+        assert index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=5) == []
+        included = index.search(
+            _unit([1, 0, 0, 0]),
+            owner_id="42",
+            limit=5,
+            include_test=True,
+        )
+        assert [hit["session_id"] for hit in included] == ["ordinary-test"]
+    finally:
+        connection.close()
+
+
 def test_project_provider_and_recency_filters(tmp_path):
     rows = [
         ("keep", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-20"),
