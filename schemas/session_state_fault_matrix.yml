@@ -94,7 +94,7 @@ scenarios:
       - server/tests_lite/test_catalogd_control_commands.py::test_catalogd_prepares_and_finishes_control_command_atomically
       - server/tests_lite/test_catalogd_control_commands.py::test_catalogd_control_prepare_rejects_unbound_legacy_identity
       - server/tests_lite/test_catalogd_control_commands.py::test_canonical_control_prepare_has_no_ingest_disable_kill_switch
-      - server/tests_lite/test_catalogd_control_commands.py::test_canonical_control_prepare_rejects_antigravity_as_unsupported
+      - server/tests_lite/test_catalogd_control_commands.py::test_canonical_control_prepare_rejects_antigravity_without_a_live_session
       - server/tests_lite/test_live_catalog_timeline.py::test_detail_read_has_no_legacy_serve_kill_switch
       - server/tests_lite/test_live_catalog_timeline.py::test_canonical_detail_projects_one_owner_scoped_snapshot
       - server/tests_lite/test_live_catalog_timeline.py::test_canonical_timeline_projects_all_rows_at_snapshot_commit
