@@ -4416,6 +4416,38 @@ mod tests {
     }
 
     #[test]
+    fn cursor_local_exit_receipt_does_not_suppress_matching_assistant_text() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let reply = "2222222222222222222222222222222222222222222222222222222222222222";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"generation-1","prompt":"do work"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"generation-1","text":"done"}}
+{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"generation-1","status":"completed"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"generation-2","prompt":"/exit"}}
+{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"generation-2","status":"completed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(rendered[1].role, "assistant");
+        assert_eq!(rendered[1].content_text.as_deref(), Some("done"));
+    }
+
+    #[test]
     fn cursor_repeated_prompt_without_unique_turn_alignment_is_raw_only() {
         let user_one = "1111111111111111111111111111111111111111111111111111111111111111";
         let reply_one = "2222222222222222222222222222222222222222222222222222222222222222";
