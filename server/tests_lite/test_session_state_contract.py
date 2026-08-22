@@ -322,6 +322,96 @@ def test_console_turn_before_first_provider_phase_is_still_open_and_explained(
     assert facts.presentation.access.key == "live_control"
 
 
+@pytest.mark.parametrize(
+    ("blocker", "machine_online", "adapter_available", "closed", "expected_key", "expected_label", "expected_tone"),
+    [
+        ("adapter_unavailable", True, False, False, "console_no_turn_path", "Can't send", "inactive"),
+        ("machine_offline", False, False, False, "machine_offline", "Machine offline", "degraded"),
+        ("execution_target_missing", True, True, False, "console_no_target", "No target", "inactive"),
+    ],
+)
+def test_console_access_names_the_turn_blocker_not_a_control_lease(
+    blocker,
+    machine_online,
+    adapter_available,
+    closed,
+    expected_key,
+    expected_label,
+    expected_tone,
+):
+    """Console dispatches turns; it has no lease to degrade.
+
+    Reporting "Control degraded" for a finished Console run on a reachable
+    machine that advertises no turn adapter read as a Longhouse fault and told
+    the user nothing actionable. Only an unreachable machine is an outage.
+    """
+
+    projection = project_console_control(
+        closed=closed,
+        execution_target_available=blocker != "execution_target_missing",
+        turn_state="idle",
+        machine_online=machine_online,
+        adapter_available=adapter_available,
+        interrupt_adapter_available=False,
+    )
+    assert projection.start_turn_blocked_by == blocker
+
+    facts = _facts(
+        runtime=_runtime(phase=None, terminal_state="run_completed"),
+        session=_session(origin_kind="console"),
+        capabilities=replace(
+            _capabilities(label="live", live=False, reattach=False),
+            control_owned=True,
+            can_start_turn=False,
+            start_turn_blocked_by=blocker,
+            console_control=projection,
+        ),
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.mode == "console"
+    assert facts.presentation.access is not None
+    assert facts.presentation.access.key == expected_key
+    assert facts.presentation.access.label == expected_label
+    assert facts.presentation.access.tone == expected_tone
+    assert facts.presentation.access.label != "Control degraded"
+
+
+def test_closed_console_session_shows_no_access_chip_beside_its_closed_headline():
+    """The primary label already says Closed; a second chip adds nothing.
+
+    The Helm ladder used to answer here, and it read the machine channel rather
+    than the session, so a closed Console session on a reachable machine
+    projected "Live control".
+    """
+
+    projection = project_console_control(
+        closed=True,
+        execution_target_available=True,
+        turn_state="idle",
+        machine_online=True,
+        adapter_available=True,
+        interrupt_adapter_available=False,
+    )
+    facts = _facts(
+        runtime=_runtime(phase=None, terminal_state="user_closed"),
+        session=_session(origin_kind="console", closed_at=NOW - timedelta(seconds=5)),
+        capabilities=replace(
+            _capabilities(label="live", live=False, reattach=False),
+            control_owned=True,
+            can_start_turn=False,
+            start_turn_blocked_by="session_closed",
+            console_control=projection,
+        ),
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.mode == "console"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.label == "Closed"
+    assert facts.presentation.access is None
+
+
 def test_process_gone_ends_run_but_does_not_close_session():
     facts = _facts(
         runtime=_runtime(phase=None, confidence="stale", terminal_state="process_gone"),

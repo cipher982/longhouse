@@ -48,6 +48,40 @@ export function getSessionInteractionCapabilities({
         : "unsupported";
   const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;
 
+  // Why sending is unavailable, from the blocker the server already typed.
+  // "until the engine reconnects" was asserted for every unavailable state,
+  // including Console sessions whose machine was connected the whole time and
+  // simply advertised no turn adapter.
+  const controlUnavailableDescription = (() => {
+    if (facts.mode === "console") {
+      switch (facts.control.actions.start_turn?.reason) {
+        case "machine_offline":
+          return `The machine running this ${providerLabel} session is offline. Sending resumes when it reconnects.`;
+        case "adapter_unavailable":
+          return `This session's machine isn't accepting new ${providerLabel} turns.`;
+        case "execution_target_missing":
+          return "Longhouse has no machine and folder recorded to run this in.";
+        default:
+          return `Longhouse cannot start a new ${providerLabel} turn on this session right now.`;
+      }
+    }
+    if (hostReattachAvailable) {
+      return `Longhouse isn't attached to this ${providerLabel} session. Reattach to steer it from here.`;
+    }
+    if (facts.host.state === "offline" || facts.host.state === "stale") {
+      return `The machine running this ${providerLabel} session is offline. Sending resumes when it reconnects.`;
+    }
+    switch (facts.control.connection) {
+      case "degraded":
+        return `Longhouse's control link to this ${providerLabel} session stopped answering.`;
+      case "disconnected":
+        return `Longhouse's control path to this ${providerLabel} session is closed.`;
+      default:
+        return `Longhouse can't confirm the control link to this ${providerLabel} session right now.`;
+    }
+  })();
+  const controlUnavailableTitle = facts.presentation.access?.label?.trim() || "Control is offline";
+
   const managedLaunchSuggestion =
     mode === "unsupported" && !isManagedLocalSession
       ? getManagedLaunchSuggestion(session.provider)
@@ -94,21 +128,21 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Message this live ${providerLabel} session from Longhouse.`
       : mode === "managed_local_unavailable"
-        ? `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`
+        ? controlUnavailableDescription
         : unsupportedCapabilityDescription;
 
   const title =
     mode === "managed_local"
       ? "Send to session"
       : mode === "managed_local_unavailable"
-        ? "Control is offline"
+        ? controlUnavailableTitle
         : "Search and inspect this session";
 
   const description =
     mode === "managed_local"
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
-        ? `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`
+        ? controlUnavailableDescription
         : unsupportedDescription;
 
   const serverPlaceholder = session.capabilities.composer_placeholder?.trim();
@@ -123,8 +157,8 @@ export function getSessionInteractionCapabilities({
   const notice =
     mode === "managed_local_unavailable"
         ? {
-            title: "Control is offline",
-            body: `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`,
+            title: controlUnavailableTitle,
+            body: controlUnavailableDescription,
           }
       : mode === "unsupported"
         ? {

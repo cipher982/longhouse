@@ -14,7 +14,8 @@ private extension SessionDetail {
         canSteer: Bool = false,
         canQueue: Bool = false,
         loopMode: SessionLoopMode = .assist,
-        executing: Bool = false
+        executing: Bool = false,
+        stateFactsJSON: String? = nil
     ) -> SessionDetail {
         let json = """
         {
@@ -59,7 +60,7 @@ private extension SessionDetail {
             "hostState": "online",
             "terminalReason": null
           },
-          "loopMode": "\(loopMode.rawValue)"
+          "loopMode": "\(loopMode.rawValue)"\(stateFactsJSON.map { ",\n          \"stateFacts\": \($0)" } ?? "")
         }
         """
         do {
@@ -253,6 +254,100 @@ private struct ComposerPreviewChrome: View {
         ),
         unexpectedStop: true
     )
+}
+
+
+// MARK: - Session-state facts for capability-chip previews
+
+/// Minimal facts payload for the dock's capability chip. Console blockers are
+/// the interesting cases: the chip has to name what is in the way without
+/// borrowing Helm's control-lease vocabulary.
+private func consoleBlockedFactsJSON(
+    startTurnReason: String,
+    controlConnection: String,
+    accessKey: String,
+    accessLabel: String,
+    accessTone: String
+) -> String {
+    """
+    {
+      "contractVersion": 2,
+      "presentationPolicyVersion": 2,
+      "mode": "console",
+      "dispositionState": "open",
+      "dispositionCloseReason": null,
+      "launchState": null,
+      "runLifecycle": "ended",
+      "activityState": "unknown",
+      "activityRawKind": null,
+      "activityTool": null,
+      "activitySource": null,
+      "activityObservedAt": null,
+      "activityValidUntil": null,
+      "controlOwnership": "owned",
+      "controlConnection": "\(controlConnection)",
+      "workingSet": "history",
+      "unread": false,
+      "lastResultAt": null,
+      "lastResultOutcome": null,
+      "startTurn": { "state": "unavailable", "reason": "\(startTurnReason)" },
+      "sendInput": { "state": "unavailable", "reason": "use_start_turn" },
+      "interrupt": { "state": "unavailable", "reason": "no_active_turn" },
+      "terminate": { "state": "unavailable", "reason": "unsupported" },
+      "reattach": { "state": "unavailable", "reason": "not_helm" },
+      "resume": { "state": "unavailable", "reason": "not_helm" },
+      "pendingInteractionKind": null,
+      "transcriptConvergence": "current",
+      "primary": { "key": "ended", "label": "Ended", "tone": "closed", "observedAt": null },
+      "access": { "key": "\(accessKey)", "label": "\(accessLabel)", "tone": "\(accessTone)", "observedAt": null },
+      "transcript": null,
+      "commitSeq": null
+    }
+    """
+}
+
+#Preview("Console · no turn adapter · Dark") {
+    ZStack {
+        Color(.systemBackground).ignoresSafeArea()
+        SessionRuntimeDock(detail: .mock(
+            provider: "codex",
+            headline: "Ended",
+            runtimeDetail: nil,
+            tone: "closed",
+            live: false,
+            stateFactsJSON: consoleBlockedFactsJSON(
+                startTurnReason: "adapter_unavailable",
+                controlConnection: "degraded",
+                accessKey: "console_no_turn_path",
+                accessLabel: "Can't send",
+                accessTone: "inactive"
+            )
+        ))
+        .padding()
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Console · machine offline · Dark") {
+    ZStack {
+        Color(.systemBackground).ignoresSafeArea()
+        SessionRuntimeDock(detail: .mock(
+            provider: "codex",
+            headline: "Ended",
+            runtimeDetail: nil,
+            tone: "closed",
+            live: false,
+            stateFactsJSON: consoleBlockedFactsJSON(
+                startTurnReason: "machine_offline",
+                controlConnection: "disconnected",
+                accessKey: "machine_offline",
+                accessLabel: "Machine offline",
+                accessTone: "degraded"
+            )
+        ))
+        .padding()
+    }
+    .preferredColorScheme(.dark)
 }
 
 // MARK: - Transcript load-state previews (M3: one shared overlay component)

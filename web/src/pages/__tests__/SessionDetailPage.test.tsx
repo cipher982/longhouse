@@ -651,10 +651,10 @@ describe("SessionDetailPage", () => {
     const continuationNotice = screen.getByTestId(
       "session-continuation-unavailable",
     );
-    expect(continuationNotice).toHaveTextContent("Control is offline");
+    expect(continuationNotice).toHaveTextContent("Reattach");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can see this Codex session, but cannot send prompts until the engine reconnects.",
+      "Longhouse isn't attached to this Codex session. Reattach to steer it from here.",
     );
   });
 

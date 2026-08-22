@@ -1,6 +1,6 @@
 schema_version: 1
 state_contract_version: 2
-presentation_policy_version: 1
+presentation_policy_version: 2
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
 # every product surface projects only these values.
@@ -64,6 +64,13 @@ presentation:
     - read_only
     - observe_only
     - search_only
+    # Console dispatches turns through the Machine Agent and holds no lease, so
+    # it answers "can Longhouse send here?" with the typed start_turn blocker
+    # instead of borrowing the Helm lease vocabulary.
+    - closed
+    - machine_offline
+    - console_no_turn_path
+    - console_no_target
   transcript_keys:
     - transcript_lagging
 

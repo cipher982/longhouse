@@ -960,11 +960,72 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         capabilities.canSteerActiveTurn ?? false
     }
 
-    var isControlOffline: Bool {
-        stateFacts.controlOwnership == "owned"
-            && !canSendLive
-            && ["degraded", "disconnected", "unknown"].contains(stateFacts.controlConnection)
+    /// Why Longhouse cannot send into this session right now, as an observation
+    /// rather than one collapsed "offline" guess. Helm and Console block for
+    /// different reasons, and only some of them are faults the user can act on:
+    /// a finished Console run on a machine that advertises no turn adapter is
+    /// ordinary, while an unreachable machine is an outage. Collapsing the two
+    /// produced an orange "Control degraded / until the host reconnects" on a
+    /// session whose host was connected the whole time.
+    enum ControlBlock: Equatable {
+        case none
+        case closed
+        case launching
+        /// The machine running this session is unreachable.
+        case machineOffline
+        /// Helm holds a control lease and it is not answering.
+        case controlUnhealthy
+        /// Control evidence expired; Longhouse does not know.
+        case controlUnknown
+        /// Console: the machine is reachable but advertises no turn adapter.
+        case noTurnPath
+        /// Console: no machine + working directory recorded to run in.
+        case noExecutionTarget
+        /// Helm: not attached, but the control plane can be reattached.
+        case reattachable
+        /// Helm: the control path is closed and there is nothing to reattach.
+        case controlClosed
+        /// Owned, reachable, but this control path never accepts typed input.
+        case readOnly
+        /// Not owned by Longhouse at all.
+        case imported
+
+        /// Only an outage earns the loud treatment. Everything else is a
+        /// capability statement, not an alarm.
+        var isFault: Bool {
+            switch self {
+            case .machineOffline, .controlUnhealthy, .controlUnknown:
+                return true
+            default:
+                return false
+            }
+        }
     }
+
+    var controlBlock: ControlBlock {
+        if canSendLive { return .none }
+        if isClosed { return .closed }
+        if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" { return .launching }
+        if stateFacts.controlOwnership != "owned" { return .imported }
+        if stateFacts.mode == "console" {
+            switch stateFacts.startTurn?.reason {
+            case "machine_offline": return .machineOffline
+            case "adapter_unavailable": return .noTurnPath
+            case "execution_target_missing": return .noExecutionTarget
+            default: return .readOnly
+            }
+        }
+        if stateFacts.reattach.isAvailable { return .reattachable }
+        if ["offline", "stale"].contains(runtimeDisplay.hostState) { return .machineOffline }
+        switch stateFacts.controlConnection {
+        case "degraded": return .controlUnhealthy
+        case "disconnected": return .controlClosed
+        case "unknown": return .controlUnknown
+        default: return .readOnly
+        }
+    }
+
+    var isControlOffline: Bool { controlBlock.isFault }
 
     var isReadOnly: Bool {
         !canSendLive && !isControlOffline
@@ -974,20 +1035,55 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimePhaseLabel: String { stateFacts.primary?.label ?? "" }
 
+    /// Nil rather than a placeholder, so copy can drop the word instead of
+    /// rendering "new new turns".
+    private var providerLabel: String? {
+        let name = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
     var controlHealthMessage: String? {
-        if isClosed { return "This session is closed." }
-        if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
+        switch controlBlock {
+        case .none:
+            return nil
+        case .closed:
+            return "This session is closed."
+        case .launching:
             return "Session is still starting."
+        case .machineOffline:
+            return "The machine running this session is offline. Sending resumes when it reconnects."
+        case .controlUnhealthy:
+            return "Longhouse's control link to this session stopped answering."
+        case .controlUnknown:
+            return "Longhouse can't confirm the control link right now."
+        case .noTurnPath:
+            guard let providerLabel else { return "This session's machine isn't accepting new turns." }
+            return "This session's machine isn't accepting new \(providerLabel) turns."
+        case .noExecutionTarget:
+            return "Longhouse has no machine and folder recorded to run this in."
+        case .reattachable:
+            return "Longhouse isn't attached to this session. Reattach to steer it from here."
+        case .controlClosed:
+            return "Longhouse's control path to this session is closed."
+        case .readOnly:
+            return "This managed session is read-only."
+        case .imported:
+            return "Read-only imported session."
         }
-        if isControlOffline {
-            return "Control is offline until the host reconnects."
+    }
+
+    var controlBlockIcon: String {
+        switch controlBlock {
+        case .machineOffline: return "wifi.slash"
+        case .controlUnhealthy, .controlUnknown: return "exclamationmark.triangle"
+        case .closed: return "archivebox"
+        case .launching: return "hourglass"
+        case .noTurnPath, .noExecutionTarget: return "nosign"
+        case .reattachable: return "arrow.triangle.2.circlepath"
+        case .controlClosed: return "bolt.slash"
+        default: return "eye"
         }
-        if isReadOnly {
-            return stateFacts.controlOwnership == "owned"
-                ? "This managed session is read-only."
-                : "Read-only imported session."
-        }
-        return nil
     }
 
     var runtimeCapabilityLabel: String {

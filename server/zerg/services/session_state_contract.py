@@ -31,7 +31,7 @@ from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 2
-PRESENTATION_POLICY_VERSION = 1
+PRESENTATION_POLICY_VERSION = 2
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -58,6 +58,13 @@ ACCESS_PRESENTATION_KEYS: tuple[str, ...] = (
     "read_only",
     "observe_only",
     "search_only",
+    # Console dispatches turns through the Machine Agent and holds no lease, so
+    # it answers "can Longhouse send here?" with the typed start_turn blocker
+    # rather than borrowing the Helm lease vocabulary.
+    "closed",
+    "machine_offline",
+    "console_no_turn_path",
+    "console_no_target",
 )
 TRANSCRIPT_PRESENTATION_KEYS: tuple[str, ...] = ("transcript_lagging",)
 
@@ -749,7 +756,7 @@ def assemble_session_state_facts(
         control=control,
         interaction=pending_interaction,
     )
-    access = _access(control=control, transcript=transcript)
+    access = _access(mode=mode, control=control, transcript=transcript)
     transcript_label = (
         SessionPresentationLabel(
             key="transcript_lagging",
@@ -925,7 +932,67 @@ def _primary(
     return None
 
 
-def _access(*, control: SessionControlFacts, transcript: SessionTranscriptFacts) -> SessionPresentationLabel | None:
+def _console_access(control: SessionControlFacts) -> SessionPresentationLabel | None:
+    """Console's access question is "can Longhouse dispatch a turn here?".
+
+    Console has no lease to degrade — it dispatches through the Machine Agent.
+    Answering with the Helm vocabulary produced "Control degraded" for the
+    ordinary case of a finished run on a machine that simply does not advertise
+    a turn adapter, which reads as a Longhouse fault and says nothing the user
+    can act on. `start_turn.reason` already carries the typed blocker, so name
+    that instead, and keep the alarming tone for the one blocker that is a real
+    outage (the machine is unreachable).
+    """
+
+    start_turn = control.actions.start_turn
+    if start_turn.state == "available":
+        return SessionPresentationLabel(
+            key="live_control",
+            label="Live control",
+            tone="live",
+            observed_at=control.observed_at,
+        )
+    reason = _clean(start_turn.reason)
+    if reason == "session_closed":
+        # The primary label already says Closed, and there is no access left to
+        # describe. Two "Closed" chips on one card is noise.
+        return None
+    if reason == "machine_offline":
+        return SessionPresentationLabel(
+            key="machine_offline",
+            label="Machine offline",
+            tone="degraded",
+            observed_at=control.observed_at,
+        )
+    if reason == "adapter_unavailable":
+        return SessionPresentationLabel(
+            key="console_no_turn_path",
+            label="Can't send",
+            tone="inactive",
+            observed_at=control.observed_at,
+        )
+    if reason == "execution_target_missing":
+        return SessionPresentationLabel(
+            key="console_no_target",
+            label="No target",
+            tone="inactive",
+            observed_at=control.observed_at,
+        )
+    return None
+
+
+def _access(
+    *,
+    mode: SessionMode,
+    control: SessionControlFacts,
+    transcript: SessionTranscriptFacts,
+) -> SessionPresentationLabel | None:
+    # Console never falls through to the Helm ladder: borrowing lease vocabulary
+    # for a dispatch path is exactly what produced "Control degraded" on a
+    # healthy machine, and the ladder would call a closed Console session
+    # "Live control" whenever its machine happened to be reachable.
+    if mode == "console":
+        return _console_access(control)
     live_actions = (
         control.actions.start_turn,
         control.actions.send_input,

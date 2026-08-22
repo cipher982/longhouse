@@ -642,21 +642,19 @@ struct SessionView: View {
     // invented state strings (canSendLive remains the hard gate upstream).
     private func unavailableComposerFooter(detail: SessionDetail) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: detail.isControlOffline ? "wifi.slash" : "eye")
-                    .font(.body)
-                    .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(detail.runtimeCapabilityLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    if let message = detail.controlHealthMessage {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            // The dock directly above already names this state. Repeating that
+            // label here as a heading said the same words twice and left the
+            // sentence — the only line that explains anything — as a subtitle.
+            if let message = detail.controlHealthMessage {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: detail.controlBlockIcon)
+                        .font(.body)
+                        .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
             if detail.stateFacts.resume.isAvailable {
                 Button {

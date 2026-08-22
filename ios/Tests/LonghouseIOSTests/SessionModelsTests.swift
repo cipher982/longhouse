@@ -1586,4 +1586,152 @@ struct SessionModelsTests {
         #expect(response.pendingInputCount == 0)
         #expect(response.visibleFailedInputCount == 0)
     }
+
+    /// A finished Console run on a reachable machine that advertises no turn
+    /// adapter is not an outage. It used to render as an orange "Control
+    /// degraded / Control is offline until the host reconnects" — a fault tone,
+    /// a control-plane word Console has no lease for, and a reconnect claim
+    /// about a host that never disconnected.
+    @Test
+    func consoleWithoutATurnAdapterExplainsItselfWithoutClaimingAnOutage() throws {
+        let detail = try makeConsoleDetail(
+            startTurnReason: "adapter_unavailable",
+            controlConnection: "degraded",
+            accessLabel: SessionStateLabel(
+                key: "console_no_turn_path",
+                label: "Can't send",
+                tone: "inactive",
+                observedAt: nil
+            )
+        )
+
+        #expect(!detail.canSendLive)
+        #expect(detail.controlBlock == .noTurnPath)
+        #expect(!detail.isControlOffline)
+        #expect(detail.runtimeCapabilityTone == "neutral")
+        #expect(detail.runtimeCapabilityLabel == "Can't send")
+        #expect(detail.controlHealthMessage == "This session's machine isn't accepting new Codex turns.")
+    }
+
+    /// The one Console blocker that IS an outage keeps the loud treatment and
+    /// the reconnect sentence, because here the host really is unreachable.
+    @Test
+    func consoleOnAnOfflineMachineStaysLoudAndSaysSo() throws {
+        let detail = try makeConsoleDetail(
+            startTurnReason: "machine_offline",
+            controlConnection: "disconnected",
+            accessLabel: SessionStateLabel(
+                key: "machine_offline",
+                label: "Machine offline",
+                tone: "degraded",
+                observedAt: nil
+            )
+        )
+
+        #expect(detail.controlBlock == .machineOffline)
+        #expect(detail.isControlOffline)
+        #expect(detail.runtimeCapabilityTone == "warning")
+        #expect(
+            detail.controlHealthMessage
+                == "The machine running this session is offline. Sending resumes when it reconnects."
+        )
+    }
+
+    private func makeConsoleDetail(
+        startTurnReason: String,
+        controlConnection: String,
+        accessLabel: SessionStateLabel
+    ) throws -> SessionDetail {
+        let json = """
+        {
+          "id": "session-console-blocked",
+          "provider": "codex",
+          "project": "provider-console-codex",
+          "cwd": "/w",
+          "git_branch": null,
+          "summary": null,
+          "summary_title": null,
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": null,
+          "origin_label": null,
+          "capabilities": {
+            "live_control_available": false,
+            "host_reattach_available": false,
+            "reply_to_live_session_available": false,
+            "input_mode": "console",
+            "default_input_intent": "none",
+            "composer_enabled": false,
+            "composer_disabled_reason": null,
+            "send_disabled_reason": "control_offline"
+          },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "closed",
+            "headline": "Ended",
+            "detail": null,
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "managed",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": "run_completed"
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+
+        let base = makeSessionStateFacts(activity: "unknown", mode: "console")
+        let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
+        let facts = SessionStateFacts(
+            contractVersion: base.contractVersion,
+            presentationPolicyVersion: base.presentationPolicyVersion,
+            mode: "console",
+            dispositionState: "open",
+            dispositionCloseReason: nil,
+            launchState: nil,
+            runLifecycle: "ended",
+            activityState: "unknown",
+            activityRawKind: nil,
+            activityTool: nil,
+            activitySource: nil,
+            activityObservedAt: nil,
+            activityValidUntil: nil,
+            controlOwnership: "owned",
+            controlConnection: controlConnection,
+            workingSet: "history",
+            unread: false,
+            lastResultAt: nil,
+            lastResultOutcome: nil,
+            startTurn: SessionStateAction(state: "unavailable", reason: startTurnReason),
+            sendInput: SessionStateAction(state: "unavailable", reason: "use_start_turn"),
+            interrupt: unavailable,
+            terminate: unavailable,
+            reattach: SessionStateAction(state: "unavailable", reason: "not_helm"),
+            resume: SessionStateAction(state: "unavailable", reason: "not_helm"),
+            pendingInteractionKind: nil,
+            transcriptConvergence: "current",
+            primary: SessionStateLabel(key: "ended", label: "Ended", tone: "closed", observedAt: nil),
+            access: accessLabel,
+            transcript: nil,
+            commitSeq: nil
+        )
+        let data = try addingSessionStateFacts(facts, to: json)
+        return try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
+    }
 }

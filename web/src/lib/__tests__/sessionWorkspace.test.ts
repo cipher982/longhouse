@@ -535,10 +535,13 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Reattach");
-    expect(capabilities.composerDisabledReason).toMatch(/cannot send prompts/i);
-    expect(capabilities.composerDisabledReason).toMatch(/engine reconnects/i);
+    // Reattach-available is not an outage: say what it is and what fixes it,
+    // rather than asserting a reconnect that is not what is missing.
+    expect(capabilities.composerDisabledReason).toMatch(/isn't attached/i);
+    expect(capabilities.composerDisabledReason).toMatch(/Reattach/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/engine reconnects/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
-    expect(capabilities.notice?.title).toBe("Control is offline");
+    expect(capabilities.notice?.title).toBe("Reattach");
   });
 
   it("prefers server-owned composer semantics when present", () => {

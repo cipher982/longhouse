@@ -497,6 +497,36 @@ def build_compat_runtime_display_response(
     )
 
 
+def _control_unavailable_sentence(session_state: SessionStateFacts) -> str:
+    """Say which blocker is in the way, not a reconnect that may not be the issue.
+
+    The old single sentence — "Control is unavailable until the host
+    reconnects." — was emitted for every unavailable state, including Console
+    sessions whose machine was connected throughout and simply advertised no
+    turn adapter, and Helm sessions that only needed a reattach.
+    """
+
+    actions = session_state.control.actions
+    if session_state.mode == "console":
+        reason = actions.start_turn.reason
+        if reason == "machine_offline":
+            return "The machine running this session is offline. Sending resumes when it reconnects."
+        if reason == "adapter_unavailable":
+            return "This session's machine isn't accepting new turns."
+        if reason == "execution_target_missing":
+            return "Longhouse has no machine and folder recorded to run this in."
+        return "Longhouse cannot start a new turn on this session right now."
+    if actions.reattach.state == "available":
+        return "Longhouse isn't attached to this session. Reattach to steer it from here."
+    if session_state.host.state in {"offline", "stale"}:
+        return "The machine running this session is offline. Sending resumes when it reconnects."
+    if session_state.control.connection == "degraded":
+        return "Longhouse's control link to this session stopped answering."
+    if session_state.control.connection == "disconnected":
+        return "Longhouse's control path to this session is closed."
+    return "Longhouse can't confirm the control link to this session right now."
+
+
 def project_compat_capabilities_from_state(
     capabilities: SessionCapabilitiesResponse,
     session_state: SessionStateFacts,
@@ -542,7 +572,7 @@ def project_compat_capabilities_from_state(
         if send_available
         else "This session is closed."
         if closed
-        else "Control is unavailable until the host reconnects."
+        else _control_unavailable_sentence(session_state)
         if control_offline
         else "This control path cannot accept typed input."
         if owned
