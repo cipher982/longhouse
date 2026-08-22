@@ -1188,7 +1188,12 @@ fn read_git_remote_url(git_config: &std::path::Path) -> Option<String> {
 /// (git root folder name) from a working directory path.
 ///
 /// Returns `(project, git_repo)` — either may be `None`.
-fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
+///
+/// Providers that keep their working directory outside the transcript stream
+/// (Cursor's sibling `meta.json`, Antigravity's conversation store) recover the
+/// cwd from their own sidecar and then call this, so that every provider lands
+/// on one project derivation instead of growing a parallel one.
+pub fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
     let git_dir = match find_git_dir(cwd) {
         Some(d) => d,
         None => {
@@ -1214,9 +1219,21 @@ fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
     (project, git_repo)
 }
 
+/// Directory basenames that name a container, not a project.
+///
+/// Providers and the provider factory run sessions inside generic scratch
+/// directories (`.../workspace`, `/run/lhq/sandbox-home/c/w`). Promoting that
+/// basename to a project name files unrelated sessions under one invented
+/// project, so every attribution path refuses it rather than each path growing
+/// its own rule. This is a heuristic over basenames — the durable fix is for
+/// ephemeral run directories to carry no project at all.
+pub fn is_generic_workspace_label(label: &str) -> bool {
+    matches!(label.trim(), "" | "workspace" | "ws" | "w")
+}
+
 fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
     let label = cwd.file_name().and_then(|s| s.to_str())?.trim();
-    if label.is_empty() || label == "workspace" {
+    if is_generic_workspace_label(label) {
         return None;
     }
     Some(label.to_string())

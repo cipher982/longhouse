@@ -44,7 +44,7 @@ pub struct OpenCodeRawSnapshot {
     pub part_record_start: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OpenCodeSessionRow {
     project_id: Option<String>,
     parent_id: Option<String>,
@@ -1069,12 +1069,25 @@ fn source_line_part_data(part_data: &Value) -> (Value, Vec<InlineImageRedaction>
 }
 
 fn project_label(session: &OpenCodeSessionRow) -> Option<String> {
+    // Basename-derived candidates go through the same generic-container refusal
+    // the transcript parser uses. `project_name` is OpenCode's own explicit
+    // name and is trusted as-is. Without this, an OpenCode session run in
+    // `.../provider-live-evidence/workspace` files itself under a project
+    // literally called `workspace`, which the parser path already refuses.
+    use crate::pipeline::parser::is_generic_workspace_label;
+    fn project_basename(value: &str) -> Option<String> {
+        let label = path_basename(value)?;
+        if is_generic_workspace_label(label) {
+            return None;
+        }
+        Some(label.to_string())
+    }
+
     session
         .project_worktree
         .as_deref()
         .filter(|value| value.trim() != "/")
-        .and_then(path_basename)
-        .map(str::to_string)
+        .and_then(project_basename)
         .or_else(|| {
             session
                 .project_name
@@ -1083,20 +1096,8 @@ fn project_label(session: &OpenCodeSessionRow) -> Option<String> {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         })
-        .or_else(|| {
-            session
-                .directory
-                .as_deref()
-                .and_then(path_basename)
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            session
-                .path
-                .as_deref()
-                .and_then(path_basename)
-                .map(str::to_string)
-        })
+        .or_else(|| session.directory.as_deref().and_then(project_basename))
+        .or_else(|| session.path.as_deref().and_then(project_basename))
         .or_else(|| session.title.clone())
 }
 
@@ -1651,6 +1652,39 @@ mod tests {
         };
 
         assert_eq!(project_label(&session).as_deref(), Some("longhouse"));
+    }
+
+    #[test]
+    fn project_label_refuses_generic_container_basenames() {
+        // The real corpus shape: a provider-live canary run whose every path
+        // ends in `workspace`. Filing 921 of these under a project literally
+        // called "workspace" is what this refusal prevents.
+        let canary = OpenCodeSessionRow {
+            project_id: None,
+            parent_id: None,
+            agent: None,
+            project_worktree: Some(
+                "/Users/davidrose/.longhouse/canaries/provider-live/opencode/workspace".to_string(),
+            ),
+            project_name: None,
+            directory: Some(
+                "/Users/davidrose/.longhouse/canaries/provider-live/opencode/workspace".to_string(),
+            ),
+            path: Some("/private/tmp/provider-live-evidence/workspace".to_string()),
+            title: None,
+            version: None,
+            time_created: 1_779_000_000_000_i64,
+            time_updated: 1_779_000_000_000_i64,
+        };
+        assert_eq!(project_label(&canary), None);
+
+        // An explicit OpenCode project name is authoritative and survives even
+        // when every basename around it is generic.
+        let named = OpenCodeSessionRow {
+            project_name: Some("g55".to_string()),
+            ..canary.clone()
+        };
+        assert_eq!(project_label(&named).as_deref(), Some("g55"));
     }
 
     #[test]

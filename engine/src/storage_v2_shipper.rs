@@ -2353,6 +2353,11 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         .with_context(|| format!("reading Cursor store metadata {}", db_path.display()))?;
     let store_incarnation = identity_from_metadata(&metadata_before)
         .context("Cursor store has no stable file incarnation")?;
+    // Cursor records its working directory in the sidecar beside the store, not
+    // in the transcript, so recover it here and let the shared project
+    // derivation do the rest. Absent or unreadable leaves the session
+    // unattributed, exactly as before.
+    let workspace_facts = cursor_store::cursor_workspace_facts(db_path);
     let mut store_snapshot = cursor_store::read_cursor_render_snapshot(db_path)?;
     let identity_after_render = identity_from_metadata(
         &db_path
@@ -2804,9 +2809,13 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             session: StorageV2SessionFacts {
                 provider_session_id: Some(snapshot.conversation_uuid.clone()),
                 environment: "local".to_string(),
-                project: None,
-                cwd: None,
-                git_repo: None,
+                project: workspace_facts
+                    .as_ref()
+                    .and_then(|(_, project, _)| project.clone()),
+                cwd: workspace_facts.as_ref().map(|(cwd, _, _)| cwd.clone()),
+                git_repo: workspace_facts
+                    .as_ref()
+                    .and_then(|(_, _, git_repo)| git_repo.clone()),
                 git_branch: None,
                 started_at: started_at.to_rfc3339(),
                 last_activity_at: observed_at.max(started_at).to_rfc3339(),

@@ -410,6 +410,31 @@ pub fn is_cursor_store_database_path(path: &Path) -> bool {
         .is_some_and(|value| value == "store.db")
 }
 
+/// Workspace facts for a Cursor session, read from the sidecar Cursor writes
+/// next to `store.db`.
+///
+/// Cursor keeps the working directory in `meta.json` beside the store rather
+/// than anywhere inside the transcript, so a parser that only reads `store.db`
+/// can never attribute the session. `{"schemaVersion":1,...,"cwd":"/abs/path"}`
+/// is the whole contract we depend on; anything else about the file is ignored.
+///
+/// Returns `(cwd, project, git_repo)`. A missing or malformed sidecar yields
+/// `None` rather than an error: an unattributed session is the status quo, and
+/// is preferable to failing an otherwise healthy ingest.
+pub fn cursor_workspace_facts(
+    db_path: &Path,
+) -> Option<(String, Option<String>, Option<String>)> {
+    let sidecar = db_path.parent()?.join("meta.json");
+    let raw = std::fs::read_to_string(&sidecar).ok()?;
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    let cwd = parsed.get("cwd")?.as_str()?.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+    let (project, git_repo) = crate::pipeline::parser::resolve_git_info(Path::new(cwd));
+    Some((cwd.to_string(), project, git_repo))
+}
+
 pub fn longhouse_session_id_for_cursor(conversation_uuid: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
@@ -667,6 +692,47 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn cursor_workspace_facts_reads_the_sidecar_cwd() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("chats/abc123/session-1");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let workspace = temp.path().join("git/g55");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            session_dir.join("meta.json"),
+            format!(
+                r#"{{"schemaVersion":1,"hasConversation":true,"cwd":"{}"}}"#,
+                workspace.display()
+            ),
+        )
+        .unwrap();
+
+        let facts = cursor_workspace_facts(&session_dir.join("store.db")).unwrap();
+        assert_eq!(facts.0, workspace.to_string_lossy());
+        // No git repo on disk, so the project falls back to the cwd basename
+        // through the shared derivation rather than a Cursor-specific rule.
+        assert_eq!(facts.1.as_deref(), Some("g55"));
+        assert_eq!(facts.2, None);
+    }
+
+    #[test]
+    fn cursor_workspace_facts_absent_sidecar_is_not_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("session-1");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        assert!(cursor_workspace_facts(&session_dir.join("store.db")).is_none());
+
+        std::fs::write(session_dir.join("meta.json"), "{\"schemaVersion\":1}").unwrap();
+        assert!(cursor_workspace_facts(&session_dir.join("store.db")).is_none());
+
+        std::fs::write(session_dir.join("meta.json"), "not json").unwrap();
+        assert!(cursor_workspace_facts(&session_dir.join("store.db")).is_none());
+
+        std::fs::write(session_dir.join("meta.json"), r#"{"cwd":"   "}"#).unwrap();
+        assert!(cursor_workspace_facts(&session_dir.join("store.db")).is_none());
     }
 
     #[test]
