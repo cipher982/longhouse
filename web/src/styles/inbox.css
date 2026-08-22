@@ -373,6 +373,12 @@
     background: color-mix(in srgb, var(--color-intent-warning) 15%, transparent);
   }
 
+  .inbox-row-control[data-tone="degraded"] {
+    color: var(--color-text-primary);
+    border-color: color-mix(in srgb, var(--color-intent-error) 42%, var(--color-border-muted));
+    background: color-mix(in srgb, var(--color-intent-error) 15%, transparent);
+  }
+
   .inbox-row-control[data-tone="observe"] {
     color: var(--color-text-primary);
     border-color: color-mix(in srgb, var(--color-brand-primary) 34%, var(--color-border-muted));

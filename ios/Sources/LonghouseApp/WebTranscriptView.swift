@@ -732,6 +732,9 @@ struct WebTranscriptView: UIViewRepresentable {
             }
         }
         private var userScrollInProgress = false
+        /// Invalidates deferred viewport reconciliation across height changes and
+        /// across WebView reuse.
+        private var viewportReconcileGeneration = 0
         private var dragStartOffsetY: CGFloat?
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
@@ -826,9 +829,17 @@ struct WebTranscriptView: UIViewRepresentable {
         /// Reconcile what a viewport height change breaks, from the one trigger
         /// UIKit guarantees. Deferred off the layout pass so the scroll writes
         /// do not re-enter `layoutSubviews`.
+        ///
+        /// Every deferred write is generation-guarded. Without that, a height
+        /// change followed within a runloop turn by a dismissal — keyboard down
+        /// then back, which is one gesture — lands the old session's offset on a
+        /// pooled WebView that is already showing the next session. The same
+        /// guard collapses a burst of changes to the last one.
         func viewportHeightDidChange(from previous: CGFloat, to height: CGFloat, on webView: WKWebView) {
+            viewportReconcileGeneration &+= 1
+            let generation = viewportReconcileGeneration
             DispatchQueue.main.async { [weak self, weak webView] in
-                guard let self, let webView else { return }
+                guard let self, let webView, generation == self.viewportReconcileGeneration else { return }
                 let scrollView = webView.scrollView
                 let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
                 // Unconditional and low-volume (real height changes only): this
@@ -850,13 +861,21 @@ struct WebTranscriptView: UIViewRepresentable {
                 // was visible, and a frame change alone does not re-send that —
                 // a scroll update does, which is why dragging "fixes" it. Send
                 // one and land back on the same offset, so it is invisible.
-                guard height > previous, maxOffset > 1 else { return }
+                //
+                // Never mid-drag. `keyboardDismissMode` is `.interactive`, so the
+                // gesture that produces these height changes IS a drag, and
+                // writing contentOffset under an active pan fights the recognizer.
+                // The clamp above is still allowed there: it only runs when the
+                // offset is genuinely out of range, which UIScrollView would
+                // rubber-band anyway.
+                guard height > previous, maxOffset > 1, !self.userScrollInProgress else { return }
                 let restore = scrollView.contentOffset
                 let nudged = restore.y > 1 ? restore.y - 1 : restore.y + 1
                 self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
                 scrollView.setContentOffset(CGPoint(x: restore.x, y: nudged), animated: false)
-                DispatchQueue.main.async {
-                    scrollView.setContentOffset(restore, animated: false)
+                DispatchQueue.main.async { [weak self, weak webView] in
+                    guard let self, let webView, generation == self.viewportReconcileGeneration else { return }
+                    webView.scrollView.setContentOffset(restore, animated: false)
                 }
             }
         }
@@ -910,6 +929,8 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func prepareForReuse() {
+            // Strands any deferred viewport write before the WebView is recycled.
+            viewportReconcileGeneration &+= 1
             (webView as? TranscriptWebView)?.prepareForTranscriptReuse()
             webView?.navigationDelegate = nil
             webView?.scrollView.delegate = nil

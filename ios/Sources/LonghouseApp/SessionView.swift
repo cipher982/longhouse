@@ -1491,20 +1491,26 @@ struct SessionRuntimeDock: View {
     }
 
     // Capability as monochrome text with a small live-dot — never colored words.
+    // Absent when the contract emitted no access label: the primary label
+    // already carries the whole story there, and a fabricated chip beside it
+    // claims something the server declined to claim.
+    @ViewBuilder
     private var capabilityPill: some View {
-        HStack(spacing: 4) {
-            if style.capability.showsLiveDot {
-                Circle().fill(TranscriptPalette.live).frame(width: 5, height: 5)
+        if let capabilityLabel {
+            HStack(spacing: 4) {
+                if style.capability.showsLiveDot {
+                    Circle().fill(TranscriptPalette.live).frame(width: 5, height: 5)
+                }
+                Text(capabilityLabel)
+                    .font(.caption2.weight(.medium))
+                    .lineLimit(1)
             }
-            Text(capabilityLabel)
-                .font(.caption2.weight(.medium))
-                .lineLimit(1)
+            .foregroundStyle(style.capability.color)
         }
-        .foregroundStyle(style.capability.color)
     }
 
-    private var capabilityLabel: String {
-        let label = detail.runtimeCapabilityLabel
+    private var capabilityLabel: String? {
+        guard let label = detail.runtimeCapabilityLabel else { return nil }
         let livePrefix = "Live on "
         if label.range(of: livePrefix, options: [.anchored, .caseInsensitive]) != nil {
             let hostStart = label.index(label.startIndex, offsetBy: livePrefix.count)

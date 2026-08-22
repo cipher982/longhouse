@@ -981,6 +981,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case noTurnPath
         /// Console: no machine + working directory recorded to run in.
         case noExecutionTarget
+        /// Console: blocked for a reason this build does not have copy for.
+        case consoleUnavailable
         /// Helm: not attached, but the control plane can be reattached.
         case reattachable
         /// Helm: the control path is closed and there is nothing to reattach.
@@ -1012,7 +1014,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             case "machine_offline": return .machineOffline
             case "adapter_unavailable": return .noTurnPath
             case "execution_target_missing": return .noExecutionTarget
-            default: return .readOnly
+            // Never .readOnly: Console has no typed-input path to be read-only
+            // about, and the server declines to label an unrecognized blocker
+            // rather than guessing. Match that instead of inventing a claim.
+            default: return .consoleUnavailable
             }
         }
         if stateFacts.reattach.isAvailable { return .reattachable }
@@ -1062,6 +1067,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return "This session's machine isn't accepting new \(providerLabel) turns."
         case .noExecutionTarget:
             return "Longhouse has no machine and folder recorded to run this in."
+        case .consoleUnavailable:
+            return "Longhouse can't start a new turn on this session right now."
         case .reattachable:
             return "Longhouse isn't attached to this session. Reattach to steer it from here."
         case .controlClosed:
@@ -1079,14 +1086,19 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case .controlUnhealthy, .controlUnknown: return "exclamationmark.triangle"
         case .closed: return "archivebox"
         case .launching: return "hourglass"
-        case .noTurnPath, .noExecutionTarget: return "nosign"
+        case .noTurnPath, .noExecutionTarget, .consoleUnavailable: return "nosign"
         case .reattachable: return "arrow.triangle.2.circlepath"
         case .controlClosed: return "bolt.slash"
         default: return "eye"
         }
     }
 
-    var runtimeCapabilityLabel: String {
+    /// Nil when the contract declined to emit an access label. The server drops
+    /// it when the primary label already carries the whole story — a closed
+    /// Console session, say — and falling back to "Read only" there put a chip
+    /// beside "Closed" that claimed something the server deliberately refused
+    /// to claim.
+    var runtimeCapabilityLabel: String? {
         if let label = stateFacts.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
@@ -1094,7 +1106,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return "Launching"
         }
         if isControlOffline { return "Control offline" }
-        return "Read only"
+        return nil
     }
 
     var runtimeCapabilityTone: String {

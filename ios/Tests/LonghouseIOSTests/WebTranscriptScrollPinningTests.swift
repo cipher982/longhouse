@@ -132,6 +132,54 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         try await assertNativePinnedToBottom("after the frame grew back")
     }
 
+    /// The paint half, which the offset assertions above cannot see.
+    ///
+    /// Growth with the offset already in range does no clamping, so nothing
+    /// moves and nothing tells WebKit its exposed region grew. The fix sends a
+    /// deliberate 1pt scroll and returns to the same offset. Assert the exact
+    /// detour, not merely "something scrolled" — WebKit syncs the offset on its
+    /// own during a resize and would satisfy a looser check.
+    func testGrowthSendsAScrollUpdateWhenNothingNeedsRepinning() async throws {
+        attachNativeViewportHook()
+        try await render(rowCount: 40, stick: true)
+
+        // Deliberately scrolled up, and far enough from both ends that neither
+        // viewport height clamps it.
+        let resting: CGFloat = 1000
+        nativeViewportCoordinator?.scrollViewWillBeginDragging(webView.scrollView)
+        webView.scrollView.setContentOffset(CGPoint(x: 0, y: resting), animated: false)
+        nativeViewportCoordinator?.scrollViewDidEndDragging(webView.scrollView, willDecelerate: false)
+        try await setStickToBottom(false)
+        try await resizeNativeFrameOnly(height: 240)
+        try await settle()
+        XCTAssertEqual(
+            webView.scrollView.contentOffset.y,
+            resting,
+            accuracy: 1,
+            "precondition: the shrink must not have moved an in-range offset"
+        )
+
+        var observed: [CGFloat] = []
+        let observation = webView.scrollView.observe(\.contentOffset, options: [.new]) { scrollView, _ in
+            observed.append(scrollView.contentOffset.y)
+        }
+        defer { observation.invalidate() }
+
+        try await resizeNativeFrameOnly(height: 400)
+        try await settle()
+
+        XCTAssertTrue(
+            observed.contains { abs($0 - (resting - 1)) < 0.01 },
+            "growth must send a scroll update so WebKit repaints the newly exposed strip; saw \(observed)"
+        )
+        XCTAssertEqual(
+            webView.scrollView.contentOffset.y,
+            resting,
+            accuracy: 1,
+            "the scroll update must land back where it started, so it is invisible"
+        )
+    }
+
     /// Wire the production `layoutSubviews` hook to a real coordinator.
     @discardableResult
     private func attachNativeViewportHook() -> WebTranscriptView.Coordinator {

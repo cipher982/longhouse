@@ -23,7 +23,7 @@ import { getProviderLabel } from "../../lib/providers";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
 
-type RowControlTone = "live" | "reattach" | "observe" | "search";
+type RowControlTone = "live" | "reattach" | "observe" | "degraded" | "search";
 
 export interface RowControlPresentation {
   label: string;
@@ -220,13 +220,18 @@ export function SessionRow({
 export function getRowControlPresentation(facts: SessionStateFacts): RowControlPresentation {
   const access = facts.presentation.access;
   if (!access) return searchOnlyPresentation();
+  // `machine_offline` is the one access state that is an outage rather than a
+  // capability statement, so it must not share the muted tone that means
+  // "searchable history". Every other key stays quiet by design.
   const tone: RowControlTone = access.key === "live_control"
     ? "live"
     : access.key === "reattach"
       ? "reattach"
-      : access.key === "observe_only"
-        ? "observe"
-        : "search";
+      : access.key === "machine_offline"
+        ? "degraded"
+        : access.key === "observe_only"
+          ? "observe"
+          : "search";
   return {
     label: access.label,
     tone,
