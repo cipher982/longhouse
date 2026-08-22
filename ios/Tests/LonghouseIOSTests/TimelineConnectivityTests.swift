@@ -57,8 +57,7 @@ struct TimelineConnectivityTests {
             reachability: .degraded,
             consecutiveSnapshotFailures: 2,
             lastUpdatedAt: now.addingTimeInterval(-300),
-            hasLoadedData: true,
-            recoveryActive: true
+            hasLoadedData: true
         )
 
         #expect(state.banner(at: now) == .degraded)
@@ -76,8 +75,7 @@ struct TimelineConnectivityTests {
             reachability: .reachable,
             consecutiveSnapshotFailures: 0,
             lastUpdatedAt: now.addingTimeInterval(-300),
-            hasLoadedData: true,
-            recoveryActive: false
+            hasLoadedData: true
         )
 
         state.apply(.snapshotFailed, now: now)
@@ -242,22 +240,20 @@ struct TimelineConnectivityTests {
     }
 
     @Test
-    func heartbeatDoesNotClearRecoveryWithoutFreshData() {
+    func singleSnapshotFailureOnStaleCacheStaysSilent() {
         var state = TimelineConnectivityState()
         let savedAt = now.addingTimeInterval(-300)
 
-        // Recovery is driven by a real product-health signal (a failed
-        // snapshot), never by transport churn. A stream disconnect alone
-        // must not set recovery (Rule 5).
+        // One failed snapshot is a retry, not a fault. There is no
+        // "Updating" strip to leak, and transport churn cannot escalate it.
         state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
         state.apply(.snapshotFailed, now: now.addingTimeInterval(1))
-        #expect(state.recoveryActive)
-        #expect(state.banner(at: now.addingTimeInterval(1)) == .updating)
+        #expect(state.reachability == .degraded)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .none)
 
         state.apply(.streamSignal(.heartbeat), now: now.addingTimeInterval(2))
 
-        #expect(state.recoveryActive)
-        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .none)
     }
 
     @Test
@@ -270,7 +266,7 @@ struct TimelineConnectivityTests {
 
         #expect(state.reachability == .degraded)
         #expect(state.consecutiveSnapshotFailures == 1)
-        #expect(state.banner(at: now.addingTimeInterval(1)) == .updating)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .none)
 
         state.apply(.snapshotFailed, now: now.addingTimeInterval(2))
 
@@ -282,8 +278,7 @@ struct TimelineConnectivityTests {
     @Test
     func streamDisconnectAloneNeverDrivesAVisibleBanner() {
         // The exact bug class: pure transport churn on a stale cache, before
-        // any snapshot has resolved, must stay silent. No recovery flip, no
-        // Updating strip.
+        // any snapshot has resolved, must stay silent.
         var state = TimelineConnectivityState()
         let savedAt = now.addingTimeInterval(-300)
 
@@ -293,7 +288,6 @@ struct TimelineConnectivityTests {
         for offset in [1.0, 2.0, 3.0] {
             state.apply(.streamDisconnected(.serverEOF), now: now.addingTimeInterval(offset))
             #expect(state.reachability == .unknown)
-            #expect(state.recoveryActive == false)
             #expect(state.banner(at: now.addingTimeInterval(offset)) == .none)
         }
     }
@@ -304,8 +298,7 @@ struct TimelineConnectivityTests {
             reachability: .reachable,
             consecutiveSnapshotFailures: 0,
             lastUpdatedAt: now.addingTimeInterval(-300),
-            hasLoadedData: true,
-            recoveryActive: true
+            hasLoadedData: true
         )
 
         state.apply(.streamSignal(.reconnected), now: now)
@@ -328,8 +321,7 @@ struct TimelineConnectivityTests {
             reachability: .reachable,
             consecutiveSnapshotFailures: 0,
             lastUpdatedAt: now.addingTimeInterval(-300),
-            hasLoadedData: true,
-            recoveryActive: false
+            hasLoadedData: true
         )
         stale.apply(.networkPathChanged(.unsatisfied), now: now)
         #expect(stale.reachability == .offline)
@@ -342,8 +334,7 @@ struct TimelineConnectivityTests {
             reachability: .authRequired,
             consecutiveSnapshotFailures: 0,
             lastUpdatedAt: now.addingTimeInterval(-300),
-            hasLoadedData: true,
-            recoveryActive: false
+            hasLoadedData: true
         )
 
         state.apply(.networkPathChanged(.unsatisfied), now: now)
@@ -353,13 +344,49 @@ struct TimelineConnectivityTests {
         #expect(state.banner(at: now.addingTimeInterval(1)) == .authRequired)
     }
 
+    @Test
+    func agingDataWhileSnapshotsFailNeverShowsAnUpdatingStrip() {
+        // The whole point of the rewrite: the timeline is a live stream, so
+        // the 90-180s window between "fresh" and "stale" is silence, not a
+        // yellow bar. Silence lasts until failures repeat on stale data.
+        var state = TimelineConnectivityState(
+            reachability: .degraded,
+            consecutiveSnapshotFailures: 1,
+            lastUpdatedAt: now.addingTimeInterval(-120),
+            hasLoadedData: true
+        )
+
+        #expect(state.freshness(at: now) == .aging)
+        #expect(state.banner(at: now) == .none)
+
+        state.apply(.snapshotFailed, now: now.addingTimeInterval(1))
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .none)
+
+        // Same failure count, but the data has now crossed into stale.
+        #expect(state.banner(at: now.addingTimeInterval(200)) == .degraded)
+    }
+
+    @Test
+    func offlineWithAgingDataSaysOfflineRatherThanGoingQuiet() {
+        // Offline is hard evidence. Once the data stops being fresh we name
+        // it instead of showing a frozen timeline with no explanation.
+        let state = TimelineConnectivityState(
+            reachability: .offline,
+            consecutiveSnapshotFailures: 2,
+            lastUpdatedAt: now.addingTimeInterval(-120),
+            hasLoadedData: true
+        )
+
+        #expect(state.freshness(at: now) == .aging)
+        #expect(state.banner(at: now) == .offline)
+    }
+
     private func loadedFreshState() -> TimelineConnectivityState {
         TimelineConnectivityState(
             reachability: .reachable,
             consecutiveSnapshotFailures: 0,
             lastUpdatedAt: now,
-            hasLoadedData: true,
-            recoveryActive: false
+            hasLoadedData: true
         )
     }
 }

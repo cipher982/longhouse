@@ -181,7 +181,6 @@ struct TimelineView: View {
                         Divider()
                         ForEach([
                             TimelineConnectivityBanner.none,
-                            .updating,
                             .degraded,
                             .offline,
                             .authRequired,
@@ -617,10 +616,11 @@ private struct CompactRuntimeLine: View {
     }
 }
 
-/// Slim status strip pinned below the nav bar via safeAreaInset.
-/// Healthy = invisible (the absence of a strip is the signal).
-/// Anything else paints a thin colored bar with text. Pull to refresh
-/// is the retry path; this view is purely informational.
+/// Slim fault strip. Healthy = invisible, and "healthy" includes every
+/// normal moment of a live stream: there is no "updating" state, because
+/// the timeline is always updating. The strip only ever names a fault
+/// (stale + failing, offline, signed out). Pull to refresh is the retry
+/// path; this view is purely informational.
 struct ConnectionStatusStrip: View {
     let banner: TimelineConnectivityBanner
 
@@ -655,10 +655,6 @@ struct ConnectionStatusStrip: View {
         switch banner {
         case .none:
             return nil
-        case .updating:
-            return Style(label: "Updating", symbol: "arrow.triangle.2.circlepath",
-                         foreground: .yellow,
-                         background: Color.yellow.opacity(0.18))
         case .degraded:
             return Style(label: "Connection degraded", symbol: "exclamationmark.triangle",
                          foreground: .orange,
@@ -679,7 +675,6 @@ struct ConnectionStatusStrip: View {
 private func label(for banner: TimelineConnectivityBanner) -> String {
     switch banner {
     case .none: return "Hidden"
-    case .updating: return "Updating"
     case .degraded: return "Degraded"
     case .offline: return "Offline"
     case .authRequired: return "Sign in required"

@@ -442,7 +442,6 @@ private func mockSession(
     )
     let cases: [(String, TimelineConnectivityBanner)] = [
         ("hidden", .none),
-        ("updating", .updating),
         ("degraded", .degraded),
         ("offline", .offline),
         ("sign in required", .authRequired),

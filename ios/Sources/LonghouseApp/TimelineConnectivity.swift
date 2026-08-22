@@ -17,7 +17,6 @@ enum TimelineFreshness: Equatable {
 
 enum TimelineConnectivityBanner: Equatable, Hashable {
     case none
-    case updating
     case degraded
     case offline
     case authRequired
@@ -69,7 +68,6 @@ struct TimelineConnectivityState: Equatable {
     var lastUpdatedAt: Date?
     var hasLoadedData = false
     var hasFreshnessEvidence = false
-    var recoveryActive = false
     var networkPathStatus: TimelineNetworkPathStatus = .unknown
 
     init(
@@ -78,7 +76,6 @@ struct TimelineConnectivityState: Equatable {
         lastUpdatedAt: Date? = nil,
         hasLoadedData: Bool = false,
         hasFreshnessEvidence: Bool? = nil,
-        recoveryActive: Bool = false,
         networkPathStatus: TimelineNetworkPathStatus = .unknown
     ) {
         self.reachability = reachability
@@ -86,7 +83,6 @@ struct TimelineConnectivityState: Equatable {
         self.lastUpdatedAt = lastUpdatedAt
         self.hasLoadedData = hasLoadedData
         self.hasFreshnessEvidence = hasFreshnessEvidence ?? hasLoadedData
-        self.recoveryActive = recoveryActive
         self.networkPathStatus = networkPathStatus
     }
 
@@ -98,34 +94,28 @@ struct TimelineConnectivityState: Equatable {
         return .stale
     }
 
+    /// There is no "updating" banner. The timeline is a live stream, so
+    /// "we are fetching" is the permanent steady state and saying it is
+    /// noise. Every visible banner names a fault the user can act on
+    /// (retry, reconnect, sign in); everything else is silence.
     func banner(at now: Date) -> TimelineConnectivityBanner {
-        let freshness = freshness(at: now)
         switch reachability {
         case .authRequired:
             return .authRequired
-        case .unknown:
-            if freshness == .stale && recoveryActive { return .updating }
-            return .none
-        case .reachable:
+        case .unknown, .reachable:
             return .none
         case .degraded:
-            switch freshness {
-            case .fresh, .unknown:
-                return .none
-            case .aging:
-                return .updating
-            case .stale:
-                return consecutiveSnapshotFailures >= Self.offlineAfterSnapshotFailures ? .degraded : .updating
-            }
+            // A single failed snapshot is a retry, not a fault. Stay silent
+            // until the data is genuinely stale AND failures have repeated.
+            guard freshness(at: now) == .stale,
+                  consecutiveSnapshotFailures >= Self.offlineAfterSnapshotFailures
+            else { return .none }
+            return .degraded
         case .offline:
-            switch freshness {
-            case .fresh:
-                return .none
-            case .aging:
-                return .updating
-            case .stale, .unknown:
-                return .offline
-            }
+            // Offline is hard evidence (OS path or sustained failure). Once
+            // the data stops being fresh, say so rather than showing a
+            // frozen timeline with no explanation.
+            return freshness(at: now) == .fresh ? .none : .offline
         }
     }
 
@@ -143,10 +133,8 @@ struct TimelineConnectivityState: Equatable {
             self.hasLoadedData = hasLoadedData
             hasFreshnessEvidence = true
             lastUpdatedAt = now
-            recoveryActive = false
         case .snapshotFailed:
             consecutiveSnapshotFailures += 1
-            recoveryActive = true
             if hasLoadedData {
                 reachability = .degraded
             } else if hasFreshnessEvidence && consecutiveSnapshotFailures < Self.offlineAfterSnapshotFailures {
@@ -158,24 +146,18 @@ struct TimelineConnectivityState: Equatable {
             }
         case .authFailed:
             reachability = .authRequired
-            recoveryActive = false
         case .streamSignal(let signal):
             applyStreamSignal(signal, now: now)
         case .streamDisconnected(let reason):
             // Rule 5: stream disconnects are diagnostics only and must not
             // alter snapshot reachability OR the user banner. Auth is the one
-            // terminal exception. A non-auth disconnect must NOT set
-            // `recoveryActive`, because in the `unknown + stale` cell that
-            // would surface an `Updating` strip from pure transport churn —
-            // exactly the false-health claim this model exists to kill.
-            // Recovery is owned by snapshot failures (real product-health
-            // evidence) and cleared by snapshot success / data-bearing events.
+            // terminal exception. Transport churn is not evidence of a
+            // product fault — snapshot failures are.
             if reason == .authFailure {
                 reachability = .authRequired
-                recoveryActive = false
             }
         case .lifecycleStopped:
-            recoveryActive = false
+            break
         case .networkPathChanged(let status):
             networkPathStatus = status
             applyNetworkPathStatus(status, now: now)
@@ -201,7 +183,6 @@ struct TimelineConnectivityState: Equatable {
             hasLoadedData = true
             hasFreshnessEvidence = true
             lastUpdatedAt = now
-            recoveryActive = false
         }
     }
 
