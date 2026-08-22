@@ -343,6 +343,15 @@ def _storage_title_obligation_clause(table):
     """Rows that should eventually receive an AI title."""
 
     factory_assurance = factory_title_assurance_session_clause(table)
+    worker_only = (
+        select(LiveSessionThread.__table__.c.id)
+        .where(
+            LiveSessionThread.__table__.c.session_id == table.c.session_id,
+            LiveSessionThread.__table__.c.is_primary == 1,
+            LiveSessionThread.__table__.c.branch_kind == "subagent",
+        )
+        .exists()
+    )
     return and_(
         table.c.user_messages > 0,
         or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
@@ -353,6 +362,7 @@ def _storage_title_obligation_clause(table):
         ~func.lower(func.coalesce(table.c.project, "")).in_(SYNTHETIC_BENCH_PROJECTS),
         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
         or_(factory_assurance, title_origin_eligible_clause(table)),
+        ~worker_only,
     )
 
 
@@ -4100,11 +4110,27 @@ class CatalogStore:
                 # from the empty/content gate used by timeline reads.
                 catalog.launch_actor = catalog.launch_actor or incoming_actor
                 catalog.launch_surface = catalog.launch_surface or incoming_surface
-                hidden_origin = str(catalog.origin_kind or resume.get("origin_kind") or "") in {
-                    "hatch_automation",
-                    "test_or_canary",
-                }
-                policy_hidden = bool(resume.get("hidden_from_default_timeline")) or hidden_origin or catalog.launch_actor == "automation"
+                catalog.origin_kind = catalog.origin_kind or str(resume.get("origin_kind") or "").strip() or None
+                storage_session = orm.get(StorageSession, session_id)
+                primary_thread = orm.get(LiveSessionThread, thread_id)
+                policy_hidden = evaluate_origin_visibility(
+                    SessionVisibilityFacts(
+                        provider=catalog.provider,
+                        project=catalog.project,
+                        environment=catalog.environment,
+                        origin_kind=catalog.origin_kind,
+                        launch_actor=catalog.launch_actor,
+                        launch_surface=catalog.launch_surface,
+                        cwd=storage_session.cwd if storage_session is not None else catalog.cwd,
+                        machine_id=storage_session.machine_id if storage_session is not None else catalog.device_id,
+                        first_user_message=(
+                            storage_session.first_user_message_preview
+                            if storage_session is not None
+                            else catalog.first_user_message_preview
+                        ),
+                        primary_thread_is_worker_only=bool(primary_thread and primary_thread.branch_kind == "subagent"),
+                    )
+                ).system_hidden
                 catalog.hidden_from_default_timeline = int(policy_hidden)
                 card = orm.get(LiveTimelineCard, session_id)
                 if card is not None:
@@ -4112,6 +4138,9 @@ class CatalogStore:
                     card.launch_surface = card.launch_surface or catalog.launch_surface
                     card.hidden_from_default_timeline = int(policy_hidden)
                     card.updated_at = observed_at
+                if primary_thread is not None:
+                    primary_thread.hidden_from_default_timeline = int(policy_hidden)
+                    primary_thread.updated_at = observed_at
                 open_run = (
                     orm.query(LiveSessionRun).filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None)).first()
                 )
@@ -4915,14 +4944,14 @@ class CatalogStore:
             if not include_automation:
                 legacy_where.append(
                     ~or_(
-                        effective_system_hidden_clause(card),
-                        effective_system_hidden_clause(catalog),
+                        effective_system_hidden_clause(card, include_test=include_test),
+                        effective_system_hidden_clause(catalog, include_test=include_test),
                     )
                 )
                 storage_where.append(
                     ~or_(
-                        effective_system_hidden_clause(storage),
-                        effective_system_hidden_clause(catalog),
+                        effective_system_hidden_clause(storage, include_test=include_test),
+                        effective_system_hidden_clause(catalog, include_test=include_test),
                     )
                 )
             if include_state_heads:
@@ -5729,23 +5758,30 @@ class CatalogStore:
             reason_counts: dict[str, int] = {}
             mirror_rows: list[dict[str, Any]] = []
             for session_id in session_ids:
+                catalog_present = session_id in catalogs
+                storage_present = session_id in storage
                 catalog_row = catalogs.get(session_id) or {}
                 storage_row = storage.get(session_id) or {}
                 card_row = cards.get(session_id) or {}
                 thread_row = primary_threads.get(session_id) or {}
+
+                # Provenance has one authority per generation.  A missing
+                # value on the authoritative row is unknown; it must not be
+                # replaced by a stale denormalized mirror that can keep a
+                # repaired human session classified as automation forever.
+                provenance = catalog_row if catalog_present else storage_row if storage_present else card_row
+                content = storage_row if storage_present else catalog_row if catalog_present else card_row
                 decision = evaluate_origin_visibility(
                     SessionVisibilityFacts(
-                        provider=catalog_row.get("provider") or storage_row.get("provider") or card_row.get("provider"),
-                        project=catalog_row.get("project") or storage_row.get("project") or card_row.get("project"),
-                        environment=catalog_row.get("environment") or storage_row.get("environment") or card_row.get("environment"),
-                        origin_kind=catalog_row.get("origin_kind") or storage_row.get("origin_kind") or card_row.get("origin_kind"),
-                        launch_actor=catalog_row.get("launch_actor") or storage_row.get("launch_actor") or card_row.get("launch_actor"),
-                        launch_surface=catalog_row.get("launch_surface")
-                        or storage_row.get("launch_surface")
-                        or card_row.get("launch_surface"),
-                        cwd=storage_row.get("cwd") or catalog_row.get("cwd") or card_row.get("cwd"),
-                        machine_id=storage_row.get("machine_id") or catalog_row.get("device_id") or card_row.get("device_id"),
-                        first_user_message=storage_row.get("first_user_message_preview") or catalog_row.get("first_user_message_preview"),
+                        provider=provenance.get("provider"),
+                        project=provenance.get("project"),
+                        environment=provenance.get("environment"),
+                        origin_kind=provenance.get("origin_kind"),
+                        launch_actor=provenance.get("launch_actor"),
+                        launch_surface=provenance.get("launch_surface"),
+                        cwd=content.get("cwd"),
+                        machine_id=content.get("machine_id") or provenance.get("device_id"),
+                        first_user_message=content.get("first_user_message_preview"),
                         primary_thread_is_worker_only=thread_row.get("branch_kind") == "subagent",
                     )
                 )
@@ -5758,13 +5794,13 @@ class CatalogStore:
                     actionable.append(session_id)
                     targets[session_id] = int(decision.system_hidden)
                 final_hidden = decision.system_hidden
-                user_hidden = bool(
-                    catalog_row.get("user_hidden_from_timeline")
-                    or storage_row.get("user_hidden_from_timeline")
-                    or card_row.get("user_hidden_from_timeline")
-                )
-                user_state = str(catalog_row.get("user_state") or storage_row.get("user_state") or "active")
-                if final_hidden or user_hidden or user_state not in {"active", "parked"}:
+                preferences = catalog_row if catalog_present else storage_row if storage_present else card_row
+                user_hidden = bool(preferences.get("user_hidden_from_timeline"))
+                user_state = str(preferences.get("user_state") or "active")
+                # A reveal is just as important as a hide.  Include every
+                # changed row so search/worklog projections can clear stale
+                # flags; non-default rows are included for idempotent repair.
+                if session_id in targets or final_hidden or user_hidden or user_state not in {"active", "parked"}:
                     mirror_rows.append(
                         {
                             "session_id": session_id,
@@ -5802,6 +5838,7 @@ class CatalogStore:
                         update(thread_table)
                         .where(
                             thread_table.c.session_id.in_(target_ids),
+                            thread_table.c.is_primary == 1,
                             func.coalesce(thread_table.c.hidden_from_default_timeline, 0) != target,
                         )
                         .values(hidden_from_default_timeline=target, updated_at=observed_at)
@@ -7039,10 +7076,6 @@ class CatalogStore:
                 session_values["launch_surface"] = live_console_session["launch_surface"]
                 session_values["hidden_from_default_timeline"] = int(live_console_session["hidden_from_default_timeline"] or 0)
                 session_values["ended_at"] = None
-            durable_content_added = bool(
-                render_manifest is not None
-                and any(int(render_manifest[field] or 0) > 0 for field in ("user_messages", "assistant_messages", "tool_calls"))
-            )
             if render_manifest is not None and int(render_manifest["assistant_messages"] or 0) > 0:
                 # The live bridge preview and storage-v2 render are two views
                 # of the same provider output. Once a render at least as new as
@@ -7065,43 +7098,6 @@ class CatalogStore:
                             preview_updated_at=commit_time,
                         )
                     )
-            if durable_content_added:
-                if live_console_session is not None and live_console_session["launch_actor"] != "automation":
-                    session_values["hidden_from_default_timeline"] = 0
-                human_catalog_shell = or_(
-                    live_session_catalog.c.launch_actor.in_(("user", "human_ui", "human_shell")),
-                    live_session_catalog.c.launch_surface.in_(("web", "ios", "console", "terminal", "api")),
-                )
-                human_card_shell = or_(
-                    live_timeline_card.c.launch_actor.in_(("user", "human_ui", "human_shell")),
-                    live_timeline_card.c.launch_surface.in_(("web", "ios", "console", "terminal", "api")),
-                )
-                connection.execute(
-                    update(live_session_catalog)
-                    .where(
-                        live_session_catalog.c.session_id == session_key,
-                        live_session_catalog.c.hidden_from_default_timeline == 1,
-                        human_catalog_shell,
-                        or_(
-                            live_session_catalog.c.origin_kind.is_(None),
-                            live_session_catalog.c.origin_kind.notin_(("hatch_automation", "test_or_canary")),
-                        ),
-                    )
-                    .values(hidden_from_default_timeline=0, updated_at=commit_time)
-                )
-                connection.execute(
-                    update(live_timeline_card)
-                    .where(
-                        live_timeline_card.c.session_id == session_key,
-                        live_timeline_card.c.hidden_from_default_timeline == 1,
-                        human_card_shell,
-                        or_(
-                            live_timeline_card.c.origin_kind.is_(None),
-                            live_timeline_card.c.origin_kind.notin_(("hatch_automation", "test_or_canary")),
-                        ),
-                    )
-                    .values(hidden_from_default_timeline=0, updated_at=commit_time)
-                )
             if hatch_automation and not retained_launch_provenance:
                 session_values.update(
                     origin_kind="hatch_automation",
@@ -7131,6 +7127,43 @@ class CatalogStore:
                         updated_at=commit_time,
                     )
                 )
+            primary_branch_kind = connection.execute(
+                select(live_session_thread.c.branch_kind).where(
+                    live_session_thread.c.session_id == session_key,
+                    live_session_thread.c.is_primary == 1,
+                )
+            ).scalar_one_or_none()
+            canonical_hidden = evaluate_origin_visibility(
+                SessionVisibilityFacts(
+                    provider=session_values.get("provider", provider),
+                    project=session_values.get("project"),
+                    environment=session_values.get("environment"),
+                    origin_kind=session_values.get("origin_kind"),
+                    launch_actor=session_values.get("launch_actor"),
+                    launch_surface=session_values.get("launch_surface"),
+                    cwd=session_values.get("cwd"),
+                    machine_id=machine_id,
+                    first_user_message=(
+                        session_values.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
+                    ),
+                    primary_thread_is_worker_only=primary_branch_kind == "subagent",
+                )
+            ).system_hidden
+            session_values["hidden_from_default_timeline"] = int(canonical_hidden)
+            for policy_table in (live_session_catalog, live_timeline_card):
+                connection.execute(
+                    update(policy_table)
+                    .where(policy_table.c.session_id == session_key)
+                    .values(hidden_from_default_timeline=int(canonical_hidden), updated_at=commit_time)
+                )
+            connection.execute(
+                update(live_session_thread)
+                .where(
+                    live_session_thread.c.session_id == session_key,
+                    live_session_thread.c.is_primary == 1,
+                )
+                .values(hidden_from_default_timeline=int(canonical_hidden), updated_at=commit_time)
+            )
             if existing_session is None:
                 connection.execute(
                     insert(storage_session).values(
@@ -8739,6 +8772,15 @@ class CatalogStore:
         card = LiveTimelineCard.__table__
         session_key = str(session_id)
         with _write_transaction(self.engine) as connection:
+            worker_only = (
+                select(LiveSessionThread.__table__.c.id)
+                .where(
+                    LiveSessionThread.__table__.c.session_id == session_key,
+                    LiveSessionThread.__table__.c.is_primary == 1,
+                    LiveSessionThread.__table__.c.branch_kind == "subagent",
+                )
+                .exists()
+            )
             existing = (
                 connection.execute(
                     select(
@@ -8746,7 +8788,8 @@ class CatalogStore:
                         or_(
                             factory_title_assurance_session_clause(table),
                             title_origin_eligible_clause(table),
-                        ).label("eligible"),
+                        ).label("origin_eligible"),
+                        worker_only.label("worker_only"),
                     ).where(table.c.session_id == session_key)
                 )
                 .mappings()
@@ -8760,7 +8803,7 @@ class CatalogStore:
                     "title": str(existing["anchor_title"]),
                     "commit_seq": str(_current_commit_seq(connection)),
                 }
-            if not bool(existing["eligible"]):
+            if not bool(existing["origin_eligible"]) or bool(existing["worker_only"]):
                 return {"changed": False, "title": title, "ineligible": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, completed_at)
             changed = connection.execute(
@@ -8772,6 +8815,7 @@ class CatalogStore:
                         factory_title_assurance_session_clause(table),
                         title_origin_eligible_clause(table),
                     ),
+                    ~worker_only,
                 )
                 .values(
                     anchor_title=title,
@@ -8920,7 +8964,6 @@ class CatalogStore:
         observed_at = datetime.now(UTC)
         statement = select(table).where(
             table.c.owner_id == owner_id,
-            table.c.hidden_from_default_timeline == 0,
             table.c.user_hidden_from_timeline == 0,
             table.c.user_state.notin_(("archived", "snoozed", "deleted")),
             ~select(tombstone.c.session_id).where(tombstone.c.session_id == table.c.session_id).exists(),
@@ -8930,10 +8973,8 @@ class CatalogStore:
         if provider is not None:
             statement = statement.where(table.c.provider == provider)
         if not include_test:
-            statement = statement.where(
-                table.c.environment.notin_(("test", "e2e")),
-                ~effective_system_hidden_clause(table),
-            )
+            statement = statement.where(table.c.environment.notin_(("test", "e2e")))
+        statement = statement.where(~effective_system_hidden_clause(table, include_test=include_test))
         if before_last_activity_at is not None and before_session_id is not None:
             statement = statement.where(
                 or_(

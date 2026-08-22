@@ -2072,3 +2072,59 @@ def test_reclassify_origin_rejects_unknown_kind(tmp_path):
         assert result["reclassified"] is False
     finally:
         connection.close()
+
+
+def test_visibility_reconcile_ignores_stale_source_commit_sequence(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    try:
+        connection.execute(
+            """
+            INSERT INTO session_index (
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages,
+                assistant_messages, tool_calls, is_sidechain, project, provider,
+                environment, started_at, published_at, source_commit_seq
+            ) VALUES (?, 'generation', '42', 1, 1, 1, 'hash', 1, 1, 0, 0, 0,
+                      'longhouse', 'codex', 'local', '2026-01-01T00:00:00Z',
+                      '2026-01-01T00:00:00Z', 0)
+            """,
+            (session_id,),
+        )
+        store.reconcile_session_visibility(
+            session_id=session_id,
+            system_hidden=True,
+            user_hidden_from_timeline=False,
+            user_state="active",
+            source_commit_seq=10,
+        )
+        stale = store.reconcile_session_visibility(
+            session_id=session_id,
+            system_hidden=False,
+            user_hidden_from_timeline=False,
+            user_state="active",
+            source_commit_seq=9,
+        )
+        row = connection.execute(
+            "SELECT hidden_from_default_timeline, source_commit_seq FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        assert stale["rows_changed"] == 0
+        assert tuple(row) == (1, 10)
+
+        fresh = store.reconcile_session_visibility(
+            session_id=session_id,
+            system_hidden=False,
+            user_hidden_from_timeline=False,
+            user_state="active",
+            source_commit_seq=11,
+        )
+        row = connection.execute(
+            "SELECT hidden_from_default_timeline, source_commit_seq FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        assert fresh["rows_changed"] == 1
+        assert tuple(row) == (0, 11)
+    finally:
+        connection.close()

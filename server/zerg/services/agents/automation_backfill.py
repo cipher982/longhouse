@@ -116,7 +116,14 @@ def reconcile_legacy_session_visibility(db: Session, *, apply: bool) -> Visibili
                 card = db.get(TimelineCard, session.id)
                 if card is not None:
                     card.hidden_from_default_timeline = target
-        if decision.system_hidden or bool(session.user_hidden_from_timeline) or session.user_state not in {"active", "parked"}:
+        # Changed visible rows must be mirrored too; otherwise searchd retains
+        # the stale hidden bit even though the source store was repaired.
+        if (
+            str(session.id) in actionable
+            or decision.system_hidden
+            or bool(session.user_hidden_from_timeline)
+            or session.user_state not in {"active", "parked"}
+        ):
             derived_visibility_rows.append(
                 {
                     "session_id": str(session.id),

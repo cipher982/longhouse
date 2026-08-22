@@ -2122,8 +2122,9 @@ class SearchStore:
                     f"""
                     UPDATE {table}
                     SET hidden_from_default_timeline = ?, user_hidden_from_timeline = ?,
-                        user_state = ?, source_commit_seq = MAX(source_commit_seq, ?)
+                        user_state = ?, source_commit_seq = ?
                     WHERE session_id = ?
+                      AND source_commit_seq <= ?
                       AND (COALESCE(hidden_from_default_timeline, 0) != ?
                            OR COALESCE(user_hidden_from_timeline, 0) != ?
                            OR COALESCE(user_state, 'active') != ?
@@ -2135,6 +2136,7 @@ class SearchStore:
                         user_state,
                         source_commit_seq,
                         session_id,
+                        source_commit_seq,
                         target,
                         int(user_hidden_from_timeline),
                         user_state,

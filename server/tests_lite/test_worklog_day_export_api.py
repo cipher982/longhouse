@@ -349,7 +349,7 @@ def test_worklog_day_export_drops_test_sessions_by_default(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_worklog_day_export_derives_sidechain_from_session_thread(tmp_path):
+def test_worklog_day_export_excludes_worker_only_primary_thread(tmp_path):
     client, factory = _make_client(tmp_path)
     try:
         _seed_session(
@@ -366,7 +366,7 @@ def test_worklog_day_export_derives_sidechain_from_session_thread(tmp_path):
         )
 
         assert response.status_code == 200, response.text
-        assert response.json()["sessions"][0]["is_sidechain"] is True
+        assert response.json()["sessions"] == []
     finally:
         api_app.dependency_overrides.clear()
 

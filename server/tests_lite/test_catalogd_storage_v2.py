@@ -400,11 +400,75 @@ def test_visibility_reconcile_clears_stale_hidden_projection(tmp_path):
 
     applied = store.reconcile_all_session_visibility(apply=True, observed_at=now + timedelta(seconds=2))
     assert applied["changed_rows"] >= 3
+    assert applied["mirror_rows"] == [
+        {
+            "session_id": str(session_id),
+            "system_hidden": False,
+            "user_hidden_from_timeline": False,
+            "user_state": "active",
+        }
+    ]
     with Session(engine) as db:
         catalog = db.get(LiveSessionCatalog, str(session_id))
         assert catalog.hidden_from_default_timeline == 0
         assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 0
         assert db.get(LiveSessionThread, catalog.primary_thread_id).hidden_from_default_timeline == 0
+    engine.dispose()
+
+
+def test_worker_only_primary_thread_never_enters_or_completes_title_debt(tmp_path):
+    database_path = tmp_path / "catalog.db"
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(
+            StorageSession(
+                session_id=str(session_id),
+                tenant_id="default",
+                owner_id="42",
+                provider="cursor",
+                environment="local",
+                machine_id="cinder",
+                project="longhouse",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                first_user_message_preview="Review the parent session implementation",
+                raw_state="durable",
+                render_state="ready",
+                media_state="complete",
+                commit_seq=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionThread(
+                id=str(uuid4()),
+                session_id=str(session_id),
+                provider="cursor",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                branch_kind="subagent",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    store = CatalogStore(engine)
+    assert store.list_storage_title_candidates(limit=10)["sessions"] == []
+    completed = store.complete_storage_title(
+        session_id=session_id,
+        title="Incorrect Worker Title",
+        completed_at=now + timedelta(seconds=1),
+    )
+    assert completed["changed"] is False
+    assert completed["ineligible"] is True
     engine.dispose()
 
 
@@ -713,7 +777,7 @@ async def test_typed_factory_title_assurance_preserves_hidden_console_provenance
             "provider-factory-resume",
             "Review the deployment plan",
             None,
-            0,
+            1,
             "human_shell",
             "terminal",
         ),
@@ -725,7 +789,7 @@ async def test_typed_factory_title_assurance_preserves_hidden_console_provenance
             "cinder",
             "Hatch execution contract:\nThis is a single bounded, non-interactive run.",
             None,
-            0,
+            1,
             "human_shell",
             "terminal",
         ),
@@ -978,7 +1042,7 @@ async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_auto
 
 
 @pytest.mark.asyncio
-async def test_hatch_execution_contract_does_not_override_console_storage_ingest(daemon_paths):
+async def test_hatch_execution_contract_hides_console_without_overwriting_provenance(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
@@ -1023,7 +1087,7 @@ async def test_hatch_execution_contract_does_not_override_console_storage_ingest
         session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert session["session"]["origin_kind"] == "console"
         assert session["session"]["launch_surface"] == "console"
-        assert session["session"]["hidden_from_default_timeline"] is False
+        assert session["session"]["hidden_from_default_timeline"] is True
     finally:
         await client.close()
         await daemon.close()

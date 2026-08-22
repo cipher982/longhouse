@@ -142,7 +142,7 @@ def test_provider_reply_exact_marker_sets_hidden_canary_origin(tmp_path):
     assert card.hidden_from_default_timeline == 1
 
 
-def test_provider_reply_exact_marker_does_not_reclassify_console_origin(tmp_path):
+def test_provider_reply_exact_marker_hides_without_reclassifying_console_origin(tmp_path):
     store, db = _make_store(tmp_path)
     session_id = uuid4()
     db.add(
@@ -168,7 +168,7 @@ def test_provider_reply_exact_marker_does_not_reclassify_console_origin(tmp_path
     assert session is not None
     assert session.environment == "production"
     assert session.origin_kind == "console"
-    assert session.hidden_from_default_timeline == 0
+    assert session.hidden_from_default_timeline == 1
 
 
 def test_malformed_reply_exact_marker_remains_ordinary_user_text(tmp_path):

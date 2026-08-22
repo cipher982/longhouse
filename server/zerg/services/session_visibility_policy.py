@@ -89,7 +89,7 @@ def evaluate_origin_visibility(facts: SessionVisibilityFacts) -> OriginVisibilit
     )
 
 
-def known_hidden_evidence_clause(model):
+def known_hidden_evidence_clause(model, *, include_test: bool = False):
     """SQL twin for scalar evidence available on a denormalized session row."""
 
     from zerg.services.internal_sessions import provider_proof_session_clause
@@ -106,7 +106,7 @@ def known_hidden_evidence_clause(model):
 
     if origin_kind is not None:
         clauses.append(func.lower(func.coalesce(origin_kind, "")).in_(HIDDEN_ORIGIN_KINDS))
-    if environment is not None:
+    if environment is not None and not include_test:
         clauses.append(func.lower(func.coalesce(environment, "")).in_(HIDDEN_ENVIRONMENTS))
     if launch_actor is not None:
         clauses.append(func.lower(func.coalesce(launch_actor, "")) == "automation")
@@ -133,24 +133,37 @@ def known_hidden_evidence_clause(model):
     return or_(*clauses) if clauses else false()
 
 
-def effective_system_hidden_clause(model):
+def effective_system_hidden_clause(model, *, include_test: bool = False):
     """Stored projection plus defensive positive evidence for default reads."""
 
     columns = getattr(model, "c", model)
     persisted = _column(columns, "hidden_from_default_timeline")
-    evidence = known_hidden_evidence_clause(model)
+    evidence = known_hidden_evidence_clause(model, include_test=include_test)
     if persisted is None:
         return evidence
-    return or_(func.coalesce(persisted, 0) != 0, evidence)
+    if not include_test:
+        return or_(func.coalesce(persisted, 0) != 0, evidence)
+    environment = _column(columns, "environment")
+    if environment is None:
+        return or_(func.coalesce(persisted, 0) != 0, evidence)
+    # The projection does not retain a reason bitset. In explicit test scope,
+    # discount a persisted bit on a test/e2e row, then re-apply every stronger
+    # automation/proof marker. This reveals ordinary test sessions without
+    # leaking Hatch, provider proof, canaries, or automation actors.
+    persisted_non_test = and_(
+        func.coalesce(persisted, 0) != 0,
+        ~func.lower(func.coalesce(environment, "")).in_(HIDDEN_ENVIRONMENTS),
+    )
+    return or_(persisted_non_test, evidence)
 
 
-def default_visible_clause(model, *, include_system_hidden: bool = False):
+def default_visible_clause(model, *, include_system_hidden: bool = False, include_test: bool = False):
     """Default product visibility over fields present on a session/card row."""
 
     columns = getattr(model, "c", model)
     clauses = []
     if not include_system_hidden:
-        clauses.append(~effective_system_hidden_clause(model))
+        clauses.append(~effective_system_hidden_clause(model, include_test=include_test))
     user_hidden = _column(columns, "user_hidden_from_timeline")
     if user_hidden is not None:
         clauses.append(func.coalesce(user_hidden, 0) == 0)

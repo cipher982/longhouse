@@ -50,7 +50,8 @@ def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
         session = db.get(LiveSessionCatalog, str(session_id))
         thread = db.get(LiveSessionThread, str(thread_id))
         assert session.primary_thread_id == str(thread_id)
-        assert session.hidden_from_default_timeline == 1
+        # Empty/content admission is a timeline concern, not an origin bit.
+        assert session.hidden_from_default_timeline == 0
         assert thread.device_id == "cinder"
         assert thread.cwd == "/tmp/longhouse"
         assert db.query(LiveSessionRun).count() == 0

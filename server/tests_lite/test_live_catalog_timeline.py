@@ -921,7 +921,9 @@ def test_default_timeline_hides_provider_proof_rows_with_bad_legacy_provenance(t
     assert default_snapshot["rows"][0]["facts"]["catalog"]["session_id"] == human_id
     assert debug_snapshot["total"] == 2
     assert [row["session_id"] for row in default_storage["sessions"]] == [human_id]
-    assert {row["session_id"] for row in debug_storage["sessions"]} == {proof_id, human_id}
+    # include_test broadens only the environment axis. Provider-proof
+    # automation still requires the explicit automation/debug scope.
+    assert [row["session_id"] for row in debug_storage["sessions"]] == [human_id]
 
 
 def test_hidden_factory_assurance_projection_preserves_launch_tuple(tmp_path):

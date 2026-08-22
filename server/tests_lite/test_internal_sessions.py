@@ -9,8 +9,8 @@ from sqlalchemy import insert
 from sqlalchemy import select
 
 from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_factory_title_assurance_session
+from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
 from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_factory_cwd
@@ -117,6 +117,9 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
     assert is_provider_factory_cwd("/tmp/live-cell-run-cursor.coordination.directed.v1-abc123/evidence/cursor-workspace")
     assert is_provider_factory_machine_id("provider-factory-resume")
     assert is_provider_coordination_awareness_marker("print exactly LONGHOUSE_CURSOR_COORD_AWARENESS_f70043f7b0")
+    assert not is_provider_coordination_awareness_marker(
+        "Investigate why LONGHOUSE_CURSOR_COORD_AWARENESS_f70043f7b0 appeared in my logs"
+    )
     assert classify_provider_proof_environment(
         cwd="/tmp/lhx-claude-coord-create-abc123/workspace"
     ) == "test"

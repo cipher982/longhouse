@@ -21,6 +21,7 @@ from zerg.config import get_settings
 from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
+from zerg.models.agents import SessionThread
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
@@ -32,6 +33,8 @@ from zerg.services.notification_policy import recent_visible_web_client_exists
 from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
 from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
@@ -483,7 +486,13 @@ def prepare_session_attention_push(
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         return None
-    if int(session.hidden_from_default_timeline or 0) == 1:
+    primary = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).first()
+    if evaluate_origin_visibility(
+        facts_from_row(
+            session,
+            primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
+        )
+    ).system_hidden:
         return None
 
     last_attention_push_at = _as_aware_utc(session.last_attention_push_at)

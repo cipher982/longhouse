@@ -371,7 +371,7 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="claude",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -524,7 +524,7 @@ def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -615,7 +615,7 @@ def test_attention_resolution_clears_legacy_needs_user_push(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=t0,
                 loop_mode="assist",
@@ -665,7 +665,7 @@ def test_presence_blocked_reminder_sends_once_and_resolves_events(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -764,7 +764,7 @@ def test_presence_blocked_reminder_failure_restores_original_stamp(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -858,7 +858,7 @@ def test_runtime_blocked_events_record_notification_event_and_reminder(tmp_path)
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -976,7 +976,7 @@ def test_runtime_pause_request_sends_needs_answer_attention_and_resolves(tmp_pat
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1149,7 +1149,7 @@ def test_pending_pause_request_wins_over_blocked_attention(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1290,7 +1290,7 @@ def test_presence_widget_push_hash_ignores_ephemeral_runtime_state(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1408,7 +1408,7 @@ def test_presence_widget_push_requires_widget_token(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1472,7 +1472,7 @@ def test_presence_widget_push_send_failure_clears_stamp(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1538,7 +1538,7 @@ def test_presence_widget_push_missing_state_table_degrades(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1612,7 +1612,7 @@ def test_archive_presence_does_not_invent_live_activity_state(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1690,7 +1690,7 @@ def test_archive_needs_user_does_not_invent_live_activity_idle(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1753,7 +1753,7 @@ def test_archive_presence_leaves_live_activity_stamp_clear(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1819,7 +1819,7 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="codex",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",
@@ -1926,7 +1926,7 @@ def test_presence_attention_push_respects_user_mute(tmp_path):
             AgentSession(
                 id=session_id,
                 provider="claude",
-                environment="test",
+                environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 loop_mode="assist",

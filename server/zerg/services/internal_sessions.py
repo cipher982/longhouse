@@ -36,7 +36,10 @@ PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
     r"| on the first line and nothing else\."
     r"| and nothing else\.(?: Do not use (?:any )?tools\.)?)?$"
 )
-PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(r"LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}", re.IGNORECASE)
+PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(
+    r"^(?:print|reply)(?: with)? exactly LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}\.?$",
+    re.IGNORECASE,
+)
 HATCH_EXECUTION_CONTRACT_RE = re.compile(
     r"^Hatch execution contract:\nThis is a single bounded, non-interactive run(?:\.| with a time budget\b)"
 )
@@ -137,7 +140,7 @@ def factory_title_assurance_session_clause(model):
 
 
 def is_provider_coordination_awareness_marker(text: str | None) -> bool:
-    return bool(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.search(str(text or "").strip()))
+    return bool(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
 
 
 def is_provider_noreply_marker(text: str | None) -> bool:
@@ -206,8 +209,7 @@ def provider_proof_session_clause(model):
     product_marker = first_user.op("REGEXP")(PROVIDER_PRODUCT_CANARY_MARKER_RE.pattern)
     noreply_marker = first_user.op("REGEXP")(PROVIDER_NOREPLY_MARKER_RE.pattern)
     reply_exact_marker = first_user.op("REGEXP")(PROVIDER_REPLY_EXACT_MARKER_RE.pattern)
-    six_hex = "[0-9a-f]" * 6
-    coordination_awareness_marker = func.lower(first_user).op("GLOB")("*longhouse_cursor_coord_awareness_" + six_hex + "*")
+    coordination_awareness_marker = first_user.op("REGEXP")(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.pattern)
     metadata_markers = [coordination_awareness_marker]
     if machine_id_column is not None:
         metadata_markers.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)

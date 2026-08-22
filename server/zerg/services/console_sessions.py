@@ -15,6 +15,8 @@ from zerg.models.agents import AgentSession
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import set_thread_execution_target
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.session_visibility_policy import SessionVisibilityFacts
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,18 @@ async def create_empty_console_session(
         if not exact:
             raise ValueError("Console session identity was reused with different attributes")
         return CreatedConsoleSession(session_id=session_id, thread_id=thread_id, created=False)
+    system_hidden = evaluate_origin_visibility(
+        SessionVisibilityFacts(
+            provider=provider,
+            project=data["project"],
+            environment="test" if launch_actor == "automation" else "development",
+            origin_kind="console",
+            launch_actor=launch_actor,
+            launch_surface=launch_surface,
+            cwd=cwd,
+            machine_id=device_id,
+        )
+    ).system_hidden
     session = AgentSession(
         id=session_id,
         provider=provider,
@@ -105,7 +119,7 @@ async def create_empty_console_session(
         assistant_messages=0,
         tool_calls=0,
         loop_mode="assist",
-        hidden_from_default_timeline=int(launch_actor == "automation"),
+        hidden_from_default_timeline=int(system_hidden),
         launch_actor=launch_actor,
         launch_surface=launch_surface,
         origin_kind="console",

@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
@@ -31,6 +32,8 @@ from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_title import freeze_anchor_title
 from zerg.services.session_title import sanitize_timeline_title
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +44,16 @@ _PLACEHOLDER_TITLE = "Untitled Session"
 # replicas from concurrently calling the LLM for the same session.
 _summary_lock_instance = f"{socket.gethostname()}:{os.getpid()}"
 _SUMMARY_LOCK_STALE_SECONDS = 300  # 5 min: stale locks auto-expire
+
+
+def _title_origin_eligible(db: Session, session: AgentSession) -> bool:
+    primary = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).first()
+    return evaluate_origin_visibility(
+        facts_from_row(
+            session,
+            primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
+        )
+    ).title_origin_eligible
 
 
 def _claim_summary_lock(db: Session, session_id: str) -> bool:
@@ -384,13 +397,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             return False
         if sanitize_timeline_title(session.anchor_title):
             return False
-        if session.environment in {"test", "e2e"}:
-            return False
-        if classify_provider_proof_environment(
-            cwd=session.cwd,
-            machine_id=session.device_id,
-            first_user_text=session.first_user_message_preview,
-        ):
+        if not _title_origin_eligible(db, session):
             return False
 
         first_user_message = (session.first_user_message_preview or "").strip()
@@ -483,6 +490,11 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 if not target:
                     return 0
                 if sanitize_timeline_title(target.anchor_title):
+                    return 0
+                # The provider call raced ongoing ingest. Re-evaluate the
+                # canonical origin immediately before the write so a row that
+                # became automation/worker-only never acquires AI title debt.
+                if not _title_origin_eligible(write_db, target):
                     return 0
                 target.summary_title = title
                 target.anchor_title = freeze_anchor_title(title)

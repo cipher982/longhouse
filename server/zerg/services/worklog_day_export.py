@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
@@ -26,6 +27,8 @@ from zerg.services.provider_interaction_semantics import semantic_projection_fac
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
 from zerg.utils.time import UTCBaseModel
 
 WORKLOG_DAY_SOURCE = "longhouse-worklog-api-v1"
@@ -72,7 +75,6 @@ SELECT
 FROM active_sessions active
 JOIN sessions s ON s.id = active.session_id
 WHERE (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
-  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
   AND COALESCE(s.user_hidden_from_timeline, 0) = 0
   AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
 ORDER BY COALESCE(active.first_message_at, active.first_event_at), s.started_at, s.id
@@ -99,7 +101,6 @@ WHERE e.timestamp >= :window_start_utc AND e.timestamp < :window_end_utc
   AND e.role IN ('user', 'assistant')
   AND e.content_text IS NOT NULL
   AND (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
-  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
   AND COALESCE(s.user_hidden_from_timeline, 0) = 0
   AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
 ORDER BY e.session_id, e.timestamp, e.id
@@ -127,7 +128,6 @@ WHERE e.session_id = :session_id
   AND e.role IN ('user', 'assistant')
   AND e.content_text IS NOT NULL
   AND (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
-  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
   AND COALESCE(s.user_hidden_from_timeline, 0) = 0
   AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
 ORDER BY e.timestamp DESC, e.id DESC
@@ -235,6 +235,31 @@ def _sidechain_map(db: Session, session_ids: list[str]) -> dict[str, bool]:
     return out
 
 
+def _worklog_visible_session_ids(db: Session, session_ids: set[str], *, include_test: bool) -> set[str]:
+    if not session_ids:
+        return set()
+    sessions = db.query(AgentSession).filter(AgentSession.id.in_(session_ids)).all()
+    primary_threads = {
+        str(thread.session_id): thread
+        for thread in db.query(SessionThread).filter(SessionThread.session_id.in_(session_ids), SessionThread.is_primary == 1).all()
+    }
+    visible: set[str] = set()
+    for session in sessions:
+        primary = primary_threads.get(str(session.id))
+        decision = evaluate_origin_visibility(
+            facts_from_row(
+                session,
+                primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
+            )
+        )
+        reasons = set(decision.reason_keys)
+        if include_test:
+            reasons.discard("test_environment")
+        if not reasons and not bool(session.user_hidden_from_timeline) and (session.user_state or "active") in {"active", "parked"}:
+            visible.add(str(session.id))
+    return visible
+
+
 def build_worklog_day_export(
     db: Session,
     *,
@@ -251,6 +276,10 @@ def build_worklog_day_export(
     }
     session_rows = list(db.execute(text(WORKLOG_DAY_SESSIONS_SQL), params).mappings().all())
     message_rows = [dict(row) for row in db.execute(text(WORKLOG_DAY_MESSAGE_SQL), params).mappings().all()]
+    candidate_ids = {str(row["id"]) for row in session_rows} | {str(row["session_id"]) for row in message_rows}
+    visible_ids = _worklog_visible_session_ids(db, candidate_ids, include_test=include_test)
+    session_rows = [row for row in session_rows if str(row["id"]) in visible_ids]
+    message_rows = [row for row in message_rows if str(row["session_id"]) in visible_ids]
     boundary_rows: list[dict[str, object]] = []
     for session_id in {str(row["session_id"]) for row in message_rows}:
         boundary_params = {**params, "session_id": session_id}

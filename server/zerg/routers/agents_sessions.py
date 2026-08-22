@@ -40,6 +40,7 @@ from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.routers.agents_search import read_search_coverage
 from zerg.routers.agents_search import search_storage_v2_semantic_sessions
@@ -143,6 +144,8 @@ from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import project_machine_session
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
 from zerg.services.session_workspace import build_session_workspace
 from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
@@ -1522,11 +1525,26 @@ def list_active_sessions(
             unique_live_candidate_ids = list(dict.fromkeys(live_candidate_ids))
             hydrated_live_sessions = store.get_sessions_ordered(unique_live_candidate_ids)
             hydrated_live_ids = {session.id for session in hydrated_live_sessions}
+            primary_threads = {
+                thread.session_id: thread
+                for thread in db.query(SessionThread)
+                .filter(SessionThread.session_id.in_(hydrated_live_ids), SessionThread.is_primary == 1)
+                .all()
+            }
             missing_live_candidate_count = len(
                 [session_id for session_id in unique_live_candidate_ids if session_id not in hydrated_live_ids]
             )
             for session in hydrated_live_sessions:
-                if not include_automation and int(session.hidden_from_default_timeline or 0) == 1:
+                primary = primary_threads.get(session.id)
+                if (
+                    not include_automation
+                    and evaluate_origin_visibility(
+                        facts_from_row(
+                            session,
+                            primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
+                        )
+                    ).system_hidden
+                ):
                     continue
                 if int(session.user_hidden_from_timeline or 0) == 1:
                     continue

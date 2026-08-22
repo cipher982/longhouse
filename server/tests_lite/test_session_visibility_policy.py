@@ -155,3 +155,51 @@ def test_graph_worker_evidence_remains_a_store_level_input():
     assert decision.system_hidden is True
     assert decision.reason_keys == ("worker_only",)
     assert decision.title_origin_eligible is False
+
+
+def test_include_test_discounts_only_the_test_environment_projection():
+    metadata = MetaData()
+    sessions = Table(
+        "sessions",
+        metadata,
+        Column("session_id", String, primary_key=True),
+        Column("provider", String),
+        Column("project", String),
+        Column("environment", String),
+        Column("origin_kind", String),
+        Column("launch_actor", String),
+        Column("cwd", String),
+        Column("machine_id", String),
+        Column("first_user_message_preview", String),
+        Column("hidden_from_default_timeline", Integer),
+    )
+    engine = create_engine("sqlite://")
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(sessions),
+            [
+                {
+                    "session_id": "ordinary-test",
+                    "provider": "codex",
+                    "environment": "test",
+                    "launch_actor": "human_shell",
+                    "hidden_from_default_timeline": 1,
+                },
+                {
+                    "session_id": "automated-test",
+                    "provider": "codex",
+                    "environment": "test",
+                    "launch_actor": "automation",
+                    "hidden_from_default_timeline": 1,
+                },
+            ],
+        )
+        results = dict(
+            connection.execute(
+                select(sessions.c.session_id, effective_system_hidden_clause(sessions, include_test=True))
+            ).all()
+        )
+
+    assert bool(results["ordinary-test"]) is False
+    assert bool(results["automated-test"]) is True

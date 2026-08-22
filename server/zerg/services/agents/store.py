@@ -84,6 +84,8 @@ from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_session_observation
 from zerg.services.session_observations import record_source_line_observation
 from zerg.services.session_visibility_policy import effective_system_hidden_clause
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import is_generic_environment_label
 from zerg.session_execution_home import normalize_session_label
@@ -3023,6 +3025,16 @@ class AgentsStore:
             )
             if provider_proof_environment and session_obj.environment not in {"test", "e2e"}:
                 session_obj.environment = provider_proof_environment
+            primary = self.db.query(SessionThread).filter(SessionThread.session_id == session_obj.id, SessionThread.is_primary == 1).first()
+            decision = evaluate_origin_visibility(
+                facts_from_row(
+                    session_obj,
+                    primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
+                )
+            )
+            session_obj.hidden_from_default_timeline = int(decision.system_hidden)
+            if primary is not None:
+                primary.hidden_from_default_timeline = int(decision.system_hidden)
             upsert_timeline_card_from_session(self.db, session_obj)
         _record_stage("session_projection", stage_started)
 
@@ -4030,7 +4042,7 @@ class AgentsStore:
             stmt = stmt.where(time_anchor <= until)
 
         if not include_automation and not is_internal_canary_provider_filter(provider):
-            stmt = stmt.where(~effective_system_hidden_clause(AgentSession))
+            stmt = stmt.where(~effective_system_hidden_clause(AgentSession, include_test=include_test))
 
         stmt = stmt.where(
             or_(
@@ -4103,7 +4115,7 @@ class AgentsStore:
             stmt = stmt.where(time_anchor <= until)
 
         if not include_automation and not is_internal_canary_provider_filter(provider):
-            stmt = stmt.where(~effective_system_hidden_clause(TimelineCard))
+            stmt = stmt.where(~effective_system_hidden_clause(TimelineCard, include_test=include_test))
 
         stmt = stmt.where(
             or_(

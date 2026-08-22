@@ -22,6 +22,8 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.services.managed_provider_contracts import require_contract_for_provider
+from zerg.services.session_visibility_policy import SessionVisibilityFacts
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
 
 LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
 
@@ -42,6 +44,20 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
     launch_actor = str(data.get("launch_actor") or "user").strip().lower()
     launch_surface = str(data.get("launch_surface") or "console").strip().lower()
     environment = "test" if launch_actor == "automation" else "development"
+    system_hidden = int(
+        evaluate_origin_visibility(
+            SessionVisibilityFacts(
+                provider=provider,
+                project=project,
+                environment=environment,
+                origin_kind="console",
+                launch_actor=launch_actor,
+                launch_surface=launch_surface,
+                cwd=cwd,
+                machine_id=device_id,
+            )
+        ).system_hidden
+    )
     session = db.get(LiveSessionCatalog, session_id)
     if session is None:
         session = LiveSessionCatalog(
@@ -63,7 +79,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
             primary_thread_id=thread_id,
             loop_mode="assist",
             permission_mode="bypass",
-            hidden_from_default_timeline=1,
+            hidden_from_default_timeline=system_hidden,
             launch_actor=launch_actor,
             launch_surface=launch_surface,
             origin_kind="console",
@@ -119,7 +135,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
         "archive_state": "pending",
         "archive_lag_records": 0,
         "origin_kind": "console",
-        "hidden_from_default_timeline": 1,
+        "hidden_from_default_timeline": system_hidden,
         "launch_actor": launch_actor,
         "launch_surface": launch_surface,
         "derived_state": "idle",
@@ -338,6 +354,21 @@ def create_live_launch_catalog_shell(
     session_key = str(session_id)
     thread_key = str(thread_id)
     run_key = str(run_id) if run_id is not None else None
+    hidden_from_default_timeline = int(
+        evaluate_origin_visibility(
+            SessionVisibilityFacts(
+                provider=provider,
+                project=project,
+                environment=environment,
+                origin_kind=origin_kind,
+                launch_actor=launch_actor,
+                launch_surface=launch_surface,
+                cwd=cwd,
+                machine_id=device_id,
+                first_user_message=initial_prompt,
+            )
+        ).system_hidden
+    )
     session = db.get(LiveSessionCatalog, session_key)
     if session is None:
         session = LiveSessionCatalog(

@@ -563,6 +563,8 @@ def db_reconcile_session_visibility(
 ) -> None:
     """Evaluate every session against the canonical presentation policy."""
 
+    from sqlalchemy import inspect
+
     from zerg.catalogd.client import CatalogRemoteError
     from zerg.catalogd.client import CatalogUnavailable
     from zerg.database import make_sessionmaker
@@ -570,56 +572,67 @@ def db_reconcile_session_visibility(
     from zerg.services.agents.automation_backfill import reconcile_derived_visibility
     from zerg.services.agents.automation_backfill import reconcile_legacy_session_visibility
 
+    stores: list[dict[str, object]] = []
+    legacy_payload: dict[str, object] | None = None
     try:
-        payload = reconcile_catalogd_all_visibility(apply=apply_changes)
-    except (CatalogUnavailable, CatalogRemoteError, RuntimeError, OSError):
-        payload = None
-    if payload is not None:
-        payload = {
-            "status": "ok" if not payload["derived_failures"] else "partial",
-            "database_url": "catalogd",
-            **payload,
-        }
-        if json_output:
-            typer.echo(json.dumps(payload, indent=2, sort_keys=True))
-        else:
-            typer.echo(
-                f"Evaluated {payload['evaluated']} catalog session(s); actionable={payload['actionable_count']}; "
-                f"unresolved={payload['unresolved_hidden_count']}."
-            )
-            if apply_changes:
-                typer.echo(
-                    f"Changed {payload['changed_rows']} catalog row(s); mirrored {payload['derived_applied_count']} search session(s)."
-                )
-        return
+        engine, resolved_database_url = _resolve_db_engine(database_url)
+        if inspect(engine).has_table("sessions"):
+            SessionLocal = make_sessionmaker(engine)
+            db = SessionLocal()
+            try:
+                result = reconcile_legacy_session_visibility(db, apply=apply_changes)
+            finally:
+                db.close()
+            derived = {"applied": [], "failed": []}
+            if apply_changes and result.derived_visibility_rows:
+                derived = reconcile_derived_visibility(result.derived_visibility_rows)
+            legacy_payload = {
+                "status": "ok" if not derived["failed"] else "partial",
+                "database_url": resolved_database_url,
+                "mode": "apply" if apply_changes else "dry_run",
+                **result.to_dict(),
+                "derived_applied_count": len(derived["applied"]),
+                "derived_failures": derived["failed"],
+            }
+            stores.append({"store": "legacy", **legacy_payload})
+    except (RuntimeError, OSError, typer.Exit):
+        legacy_payload = None
 
-    engine, resolved_database_url = _resolve_db_engine(database_url)
-    SessionLocal = make_sessionmaker(engine)
-    db = SessionLocal()
+    # Catalogd runs last because it owns the current source commit sequence;
+    # its mirror must be the final write when both generations coexist.
     try:
-        result = reconcile_legacy_session_visibility(db, apply=apply_changes)
-    finally:
-        db.close()
-    derived = {"applied": [], "failed": []}
-    if apply_changes and result.derived_visibility_rows:
-        derived = reconcile_derived_visibility(result.derived_visibility_rows)
+        catalog_result = reconcile_catalogd_all_visibility(apply=apply_changes)
+    except (CatalogUnavailable, CatalogRemoteError, RuntimeError, OSError):
+        catalog_result = None
+    catalog_payload: dict[str, object] | None = None
+    if catalog_result is not None:
+        catalog_payload = {
+            "status": "ok" if not catalog_result["derived_failures"] else "partial",
+            "database_url": "catalogd",
+            **catalog_result,
+        }
+        stores.append({"store": "catalogd", **catalog_payload})
+
+    payload = catalog_payload or legacy_payload
+    if payload is None:
+        raise typer.Exit(code=2)
     payload = {
-        "status": "ok" if not derived["failed"] else "partial",
-        "database_url": resolved_database_url,
-        "mode": "apply" if apply_changes else "dry_run",
-        **result.to_dict(),
-        "derived_applied_count": len(derived["applied"]),
-        "derived_failures": derived["failed"],
+        **payload,
+        "status": "partial" if any(store.get("status") != "ok" for store in stores) else "ok",
+        "stores": stores,
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     typer.echo(
-        f"Evaluated {result.evaluated} session(s); actionable={len(result.actionable_session_ids)}; "
-        f"unresolved={len(result.unresolved_hidden_session_ids)}."
+        f"Evaluated {payload['evaluated']} session(s); actionable={payload['actionable_count']}; "
+        f"unresolved={payload['unresolved_hidden_count']}."
     )
     if apply_changes:
-        typer.echo(f"Mirrored {len(derived['applied'])} correction(s); failures={len(derived['failed'])}.")
+        typer.echo(
+            f"Reconciled {len(stores)} store(s); mirrored {payload['derived_applied_count']} correction(s); "
+            f"failures={len(payload['derived_failures'])}."
+        )
 
 
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
