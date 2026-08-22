@@ -4877,6 +4877,8 @@ class CatalogStore:
             elif not include_test:
                 legacy_where.append(card.c.environment.notin_(("test", "e2e")))
                 storage_where.append(storage_environment.notin_(("test", "e2e")))
+                legacy_where.append(~provider_proof_session_clause(card))
+                storage_where.append(~provider_proof_session_clause(storage))
             if device_id is not None:
                 legacy_where.append(card.c.device_id == device_id)
                 storage_where.append(storage_device == device_id)
@@ -6794,6 +6796,8 @@ class CatalogStore:
                     launch_actor=live_catalog_session["launch_actor"],
                     launch_surface=live_catalog_session["launch_surface"],
                 )
+                if live_catalog_session["launch_actor"] == "automation":
+                    session_values["environment"] = "test"
             elif retained_test_policy:
                 # Older canaries may predate launch provenance. Preserve their
                 # already-retained policy even when a later transcript no
@@ -6876,7 +6880,7 @@ class CatalogStore:
                         )
                     )
             if durable_content_added:
-                if live_console_session is not None:
+                if live_console_session is not None and live_console_session["launch_actor"] != "automation":
                     session_values["hidden_from_default_timeline"] = 0
                 human_catalog_shell = or_(
                     live_session_catalog.c.launch_actor.in_(("user", "human_ui", "human_shell")),
@@ -8713,7 +8717,10 @@ class CatalogStore:
         if provider is not None:
             statement = statement.where(table.c.provider == provider)
         if not include_test:
-            statement = statement.where(table.c.environment.notin_(("test", "e2e")))
+            statement = statement.where(
+                table.c.environment.notin_(("test", "e2e")),
+                ~provider_proof_session_clause(table),
+            )
         if before_last_activity_at is not None and before_session_id is not None:
             statement = statement.where(
                 or_(

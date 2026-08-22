@@ -287,6 +287,65 @@ async def test_first_durable_content_reveals_hidden_console_shell(daemon_paths):
 
 
 @pytest.mark.asyncio
+async def test_first_durable_content_keeps_automation_console_hidden(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    CatalogStore(engine).create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(uuid4()),
+            "owner_id": 42,
+            "provider": "codex",
+            "device_id": "provider-factory-resume",
+            "cwd": "/workspace/longhouse",
+            "project": "provider-console-codex",
+            "provider_config": {},
+            "launch_actor": "automation",
+            "launch_surface": "test",
+            "started_at": now,
+        }
+    )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        epoch = uuid4()
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=10,
+            records=(b"user",),
+            sealed_at=now,
+            machine_id="provider-factory-resume",
+        )
+        raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), source_epoch=epoch),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        stored = db.get(StorageSession, str(session_id))
+        assert stored.environment == "test"
+        assert stored.hidden_from_default_timeline == 1
+        assert stored.launch_actor == "automation"
+        assert db.get(LiveSessionCatalog, str(session_id)).hidden_from_default_timeline == 1
+        assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 1
+        engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_storage_commit_rejects_existing_session_owner_mismatch(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

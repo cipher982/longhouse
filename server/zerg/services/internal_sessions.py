@@ -25,11 +25,16 @@ PROVIDER_EVIDENCE_CWD_SEGMENT = "/evidence/raw/"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
 PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
 PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
+# ``LH_`` / ``lh-`` exact-response tokens are reserved for Longhouse QA. The
+# full-prompt anchor keeps ordinary sessions that merely mention a token visible.
 PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
     r"^Reply (?:with )?exactly "
     r"(?:LONGHOUSE_(?:CODEX|OPENCODE|CURSOR|CLAUDE|AGY)_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_[0-9a-f]{6,}"
+    r"|LH_[A-Za-z0-9_-]{6,}|lh-[a-z0-9-]{6,}"
     r"|FRESH_AFTER_CANCEL_OK|CLEAN_EXIT_ORIGINAL_COMPLETE|WARM_IDLE_OK)"
-    r"(?:\.| and nothing else\.)?$"
+    r"(?:\."
+    r"| on the first line and nothing else\."
+    r"| and nothing else\.(?: Do not use (?:any )?tools\.)?)?$"
 )
 PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(r"LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}", re.IGNORECASE)
 HATCH_EXECUTION_CONTRACT_RE = re.compile(

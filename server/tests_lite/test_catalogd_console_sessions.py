@@ -62,6 +62,36 @@ def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
     assert replay["exact_replay"] is True
 
 
+def test_catalog_test_console_session_retains_automation_provenance(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog-automation.db")
+    initialize_catalog_schema(engine)
+    session_id = uuid4()
+    thread_id = uuid4()
+
+    CatalogStore(engine).create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "codex",
+            "device_id": "provider-factory-resume",
+            "cwd": "/tmp/provider-factory",
+            "project": "provider-console-codex",
+            "launch_actor": "automation",
+            "launch_surface": "test",
+            "started_at": datetime.now(UTC),
+        }
+    )
+
+    with Session(engine) as db:
+        session = db.get(LiveSessionCatalog, str(session_id))
+        assert session.environment == "test"
+        assert session.origin_kind == "console"
+        assert session.hidden_from_default_timeline == 1
+        assert session.launch_actor == "automation"
+        assert session.launch_surface == "test"
+
+
 def test_console_create_outbox_is_exact_fail_closed_owner_evidence(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-console-owner.db")
     initialize_catalog_schema(engine)

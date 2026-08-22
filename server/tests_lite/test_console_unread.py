@@ -261,3 +261,39 @@ def test_read_session_leaves_the_union(tmp_path):
         context_mode="forensic",
     )
     assert _unread_thread_rows(db, params=params, exclude=()) == ()
+
+
+def test_provider_proof_unread_session_cannot_bypass_default_filters(tmp_path):
+    from zerg.services.timeline_session_listing import TimelineSessionListParams
+    from zerg.services.timeline_session_listing import _unread_thread_rows
+
+    db = _db(tmp_path)
+    session = _session(db)
+    session.environment = "local"
+    session.device_id = "provider-factory-resume"
+    session.first_user_message_preview = (
+        "Reply with exactly LH_CODEX_CONSOLE_5bc00d062a0444ea8450f0a3ff822a45 and nothing else."
+    )
+    session.origin_kind = "console"
+    session.hidden_from_default_timeline = 0
+    session.launch_actor = "user"
+    session.launch_surface = "test"
+    _run_console_turn_to(db, session, outcome="completed")
+    db.commit()
+
+    params = TimelineSessionListParams(
+        project=None,
+        provider=None,
+        environment=None,
+        include_test=False,
+        hide_autonomous=False,
+        device_id=None,
+        days_back=7,
+        query=None,
+        limit=20,
+        offset=0,
+        sort=None,
+        mode=None,
+        context_mode="forensic",
+    )
+    assert _unread_thread_rows(db, params=params, exclude=()) == ()

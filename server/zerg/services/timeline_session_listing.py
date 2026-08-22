@@ -16,6 +16,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.services.agents import AgentsStore
+from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
@@ -202,9 +203,17 @@ def _unread_thread_rows(
     if params.environment is not None:
         query = query.filter(AgentSession.environment == params.environment)
     elif not params.include_test:
-        query = query.filter(AgentSession.environment.notin_(("test", "e2e")))
+        query = query.filter(
+            AgentSession.environment.notin_(("test", "e2e")),
+            ~provider_proof_session_clause(AgentSession),
+        )
     if params.device_id is not None:
         query = query.filter(AgentSession.device_id == params.device_id)
+    if not params.include_automation:
+        query = query.filter(
+            AgentSession.hidden_from_default_timeline.is_not(True),
+        )
+    query = query.filter(AgentSession.user_hidden_from_timeline.is_not(True))
 
     seen_sessions = {session_id for _thread_id, session_id, _anchor in exclude}
     seen_threads = {thread_id for thread_id, _session_id, _anchor in exclude}

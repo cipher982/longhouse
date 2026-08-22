@@ -43,6 +43,8 @@ async def create_empty_console_session(
     provider = str(provider or "").strip().lower()
     device_id = str(device_id or "").strip()
     cwd = str(cwd or "").strip()
+    launch_surface = str(launch_surface or "").strip().lower() or "console"
+    launch_actor = "automation" if launch_surface == "test" else "user"
     if not provider or not device_id or not cwd.startswith("/"):
         raise ValueError("provider, device_id, and absolute cwd are required")
     session_id = session_id or uuid4()
@@ -58,6 +60,7 @@ async def create_empty_console_session(
         "project": str(project or "").strip() or cwd.rstrip("/").rsplit("/", 1)[-1] or "console",
         "display_name": str(display_name or "").strip() or None,
         "provider_config": dict(provider_config or {"permission_mode": "bypass"}),
+        "launch_actor": launch_actor,
         "launch_surface": launch_surface,
         "started_at": now.isoformat(),
     }
@@ -91,7 +94,7 @@ async def create_empty_console_session(
     session = AgentSession(
         id=session_id,
         provider=provider,
-        environment="development",
+        environment="test" if launch_actor == "automation" else "development",
         project=data["project"],
         device_id=device_id,
         device_name=device_id,
@@ -102,7 +105,8 @@ async def create_empty_console_session(
         assistant_messages=0,
         tool_calls=0,
         loop_mode="assist",
-        launch_actor="user",
+        hidden_from_default_timeline=int(launch_actor == "automation"),
+        launch_actor=launch_actor,
         launch_surface=launch_surface,
         origin_kind="console",
     )

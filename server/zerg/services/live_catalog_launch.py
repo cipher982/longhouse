@@ -39,12 +39,15 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
     started_at = data["started_at"]
     project = str(data.get("project") or "console")
     display_name = str(data.get("display_name") or "").strip() or None
+    launch_actor = str(data.get("launch_actor") or "user").strip().lower()
+    launch_surface = str(data.get("launch_surface") or "console").strip().lower()
+    environment = "test" if launch_actor == "automation" else "development"
     session = db.get(LiveSessionCatalog, session_id)
     if session is None:
         session = LiveSessionCatalog(
             session_id=session_id,
             provider=provider,
-            environment="development",
+            environment=environment,
             project=project,
             device_id=device_id,
             device_name=str(data.get("machine_name") or device_id),
@@ -61,8 +64,8 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
             loop_mode="assist",
             permission_mode="bypass",
             hidden_from_default_timeline=1,
-            launch_actor="user",
-            launch_surface=str(data.get("launch_surface") or "console"),
+            launch_actor=launch_actor,
+            launch_surface=launch_surface,
             origin_kind="console",
             created_at=started_at,
             updated_at=started_at,
@@ -102,7 +105,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
     card_values = {
         "session_id": session_id,
         "provider": provider,
-        "environment": "development",
+        "environment": environment,
         "project": project,
         "device_id": device_id,
         "cwd": cwd,
@@ -117,8 +120,8 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
         "archive_lag_records": 0,
         "origin_kind": "console",
         "hidden_from_default_timeline": 1,
-        "launch_actor": "user",
-        "launch_surface": str(data.get("launch_surface") or "console"),
+        "launch_actor": launch_actor,
+        "launch_surface": launch_surface,
         "derived_state": "idle",
         "derived_revision": "0",
         "parser_revision": LIVE_CATALOG_CARD_REVISION,

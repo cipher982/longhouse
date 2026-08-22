@@ -822,6 +822,7 @@ def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path
                 StorageSession(
                     session_id=session_id,
                     tenant_id="default",
+                    owner_id="42",
                     provider="cursor",
                     environment="local",
                     machine_id="provider-factory-resume" if session_id == canary_id else "cinder",
@@ -846,6 +847,79 @@ def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path
 
     assert snapshot["total"] == 1
     assert [row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]] == [human_id]
+
+
+def test_default_timeline_hides_provider_proof_rows_with_bad_legacy_provenance(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'provider-proof-filter.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    proof_id = str(uuid4())
+    human_id = str(uuid4())
+
+    with LiveSession() as db:
+        for session_id, machine_id, prompt in (
+            (
+                proof_id,
+                "provider-factory-resume",
+                "Reply with exactly LH_CODEX_CONSOLE_5bc00d062a0444ea8450f0a3ff822a45 and nothing else.",
+            ),
+            (human_id, "cinder", "Fix the timeline filtering bug"),
+        ):
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    owner_id="42",
+                    provider="codex",
+                    environment="local",
+                    machine_id=machine_id,
+                    project="longhouse",
+                    started_at=now,
+                    last_activity_at=now,
+                    first_user_message_preview=prompt,
+                    user_messages=1,
+                    assistant_messages=1,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    origin_kind="console" if session_id == proof_id else None,
+                    hidden_from_default_timeline=0,
+                    launch_actor="user" if session_id == proof_id else "human_shell",
+                    launch_surface="test" if session_id == proof_id else "terminal",
+                    commit_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        db.commit()
+
+        default_snapshot = _snapshot(db, _params())
+        debug_snapshot = _snapshot(db, _params(include_test=True, include_automation=True))
+
+    default_storage = CatalogStore(engine).list_storage_sessions(
+        owner_id="42",
+        before_last_activity_at=None,
+        before_session_id=None,
+        project=None,
+        provider=None,
+        include_test=False,
+        limit=20,
+    )
+    debug_storage = CatalogStore(engine).list_storage_sessions(
+        owner_id="42",
+        before_last_activity_at=None,
+        before_session_id=None,
+        project=None,
+        provider=None,
+        include_test=True,
+        limit=20,
+    )
+    assert default_snapshot["total"] == 1
+    assert default_snapshot["rows"][0]["facts"]["catalog"]["session_id"] == human_id
+    assert debug_snapshot["total"] == 2
+    assert [row["session_id"] for row in default_storage["sessions"]] == [human_id]
+    assert {row["session_id"] for row in debug_storage["sessions"]} == {proof_id, human_id}
 
 
 def test_hidden_factory_assurance_projection_preserves_launch_tuple(tmp_path):

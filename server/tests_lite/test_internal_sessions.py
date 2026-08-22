@@ -39,8 +39,25 @@ def test_provider_reply_exact_marker_is_bounded_to_longhouse_canary_shapes():
     assert classify_provider_proof_environment(first_user_text=marker) == "test"
     assert is_provider_reply_exact_marker("Reply exactly LONGHOUSE_CODEX_COLD_RESUME_SEED_8ee711c900c448f18c7762b3fa0c649c")
     assert is_provider_reply_exact_marker("Reply exactly FRESH_AFTER_CANCEL_OK.")
+    assert is_provider_reply_exact_marker(
+        "Reply with exactly LH_CODEX_CONSOLE_5bc00d062a0444ea8450f0a3ff822a45 and nothing else."
+    )
+    assert is_provider_reply_exact_marker(
+        "Reply with exactly LH_CURSOR_CONSOLE_CANARY_e2fe0989b70f433ab3724ef10ba84690 and nothing else. Do not use tools."
+    )
+    assert is_provider_reply_exact_marker(
+        "Reply with exactly LH_PROBE_CODEX_MANAGED_latency-b2c-dbclean-4x-20260803T031500Z-i01 and nothing else."
+    )
+    assert is_provider_reply_exact_marker("Reply with exactly lh-hosted-claude-stress-01-deadbeef")
+    assert is_provider_reply_exact_marker(
+        "Reply with exactly LH_TMUX_TURN_1_31455 on the first line and nothing else."
+    )
+    assert is_provider_reply_exact_marker(
+        "Reply with exactly lh-claude-stress-01-582a5e64 and nothing else. Do not use any tools."
+    )
     assert not is_provider_reply_exact_marker("Reply exactly OK")
     assert not is_provider_reply_exact_marker("Please reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123")
+    assert not is_provider_reply_exact_marker("Please investigate LH_PROBE_CODEX_MANAGED_deadbeef")
 
 
 def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
@@ -58,6 +75,7 @@ def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
         "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef\f",
         "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_91b38069e7",
         "LONGHOUSE_CLAUDE_NOREPLY_74694349fb694c97af560ac98572f989",
+        "Reply with exactly LH_CLAUDE_CONSOLE_57384914d8ed4467b545f0e0cf9b0bd3 and nothing else.",
     )
     metadata = MetaData()
     sessions = Table(

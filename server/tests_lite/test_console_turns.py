@@ -85,6 +85,27 @@ async def test_create_empty_console_session_has_target_but_no_run(tmp_path):
     assert db.query(SessionRun).count() == 0
 
 
+@pytest.mark.asyncio
+async def test_test_surface_console_session_is_automation_hidden(tmp_path):
+    db = _db(tmp_path)
+
+    created = await create_empty_console_session(
+        db,
+        owner_id=1,
+        provider="codex",
+        device_id="provider-factory-resume",
+        cwd="/tmp/provider-factory",
+        launch_surface="test",
+    )
+
+    session = db.get(AgentSession, created.session_id)
+    assert session.environment == "test"
+    assert session.origin_kind == "console"
+    assert session.hidden_from_default_timeline == 1
+    assert session.launch_actor == "automation"
+    assert session.launch_surface == "test"
+
+
 def test_enqueue_console_turn_creates_linked_input_and_turn_atomically(tmp_path):
     db = _db(tmp_path)
     session = _session(db)
