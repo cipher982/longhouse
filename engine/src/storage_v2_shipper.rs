@@ -42,7 +42,10 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v5-receipt-lifecycle";
+// v6: session facts now carry the workspace recovered from Cursor's sibling
+// `meta.json`, so every previously-shipped Cursor source must replay to pick up
+// a cwd and project it was ingested without.
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v6-workspace-facts";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
