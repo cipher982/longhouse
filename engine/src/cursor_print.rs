@@ -1228,6 +1228,60 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_cursor_exit_reaps_owned_helper_group() {
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+        }
+
+        let stdout_path = temp.path().join("stdout.jsonl");
+        let stderr_path = temp.path().join("stderr.log");
+        let stdout = File::create(&stdout_path).unwrap();
+        let stderr = File::create(&stderr_path).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(r#"sleep 0.2; printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done"}'; sleep 30 & exit 0"#)
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let process_group_id = child.id().unwrap() as i32;
+        assert!(crate::process_group::group_is_alive(process_group_id));
+
+        let sink = CursorPrintSink {
+            session_id: Uuid::new_v4().to_string(),
+            thread_id: Uuid::new_v4().to_string(),
+            turn_id: None,
+            run_id: Uuid::new_v4().to_string(),
+            client_request_id: None,
+            provider_thread_id: Uuid::new_v4().to_string(),
+            launch_id: Uuid::new_v4().to_string(),
+            process_group_id: Some(process_group_id),
+            machine_name: "cursor-print-test".to_string(),
+            local_db_path: None,
+            runtime_events_outbox_dir: temp.path().join("runtime-events-outbox"),
+        };
+        let lock = File::create(temp.path().join("lock")).unwrap();
+        monitor_cursor_print(&mut child, &stdout_path, &stderr_path, sink, lock).await;
+
+        assert!(!crate::process_group::group_is_alive(process_group_id));
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+    }
+
     #[test]
     fn prompt_receipt_promotes_only_the_exact_pending_binding() {
         let temp = tempfile::tempdir().unwrap();

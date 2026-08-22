@@ -4374,20 +4374,20 @@ mod tests {
 
     #[test]
     fn cursor_injected_user_context_does_not_shift_receipt_alignment() {
-        let injected = "1111111111111111111111111111111111111111111111111111111111111111";
-        let user = "2222222222222222222222222222222222222222222222222222222222222222";
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let injected = "2222222222222222222222222222222222222222222222222222222222222222";
         let reply = "3333333333333333333333333333333333333333333333333333333333333333";
         let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
             (
                 injected,
                 serde_json::json!({
                     "role":"user",
                     "content":[{"type":"text","text":"<user_info>workspace context</user_info><rules>runtime guidance</rules>"}]
                 }),
-            ),
-            (
-                user,
-                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
             ),
             (
                 reply,
@@ -4408,9 +4408,9 @@ mod tests {
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
 
         assert_eq!(rendered.len(), 3);
-        assert_eq!(rendered[0].role, "system");
-        assert_eq!(rendered[1].role, "user");
-        assert_eq!(rendered[1].content_text.as_deref(), Some("do work"));
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(rendered[0].content_text.as_deref(), Some("do work"));
+        assert_eq!(rendered[1].role, "system");
         assert_eq!(rendered[2].role, "assistant");
         assert_eq!(rendered[2].content_text.as_deref(), Some("done"));
     }

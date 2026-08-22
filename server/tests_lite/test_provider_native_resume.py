@@ -2169,18 +2169,6 @@ def test_wait_state_excludes_existing_state_paths(tmp_path: Path) -> None:
     state_dir.mkdir(parents=True)
     stale = state_dir / "stale.json"
     fresh = state_dir / "fresh.json"
-    stale.write_text(
-        json.dumps(
-            {
-                "session_id": "11111111-1111-4111-8111-111111111111",
-                "provider_session_id": "provider-stale",
-                "provider": "cursor",
-                "run_id": "run-stale",
-                "connection_id": "connection-stale",
-                "cursor_pid": 101,
-            }
-        )
-    )
     fresh.write_text(
         json.dumps(
             {
@@ -2193,11 +2181,31 @@ def test_wait_state_excludes_existing_state_paths(tmp_path: Path) -> None:
             }
         )
     )
+    stale.write_text(
+        json.dumps(
+            {
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "provider_session_id": "provider-stale",
+                "provider": "cursor",
+                "run_id": "run-stale",
+                "connection_id": "connection-stale",
+                "cursor_pid": 101,
+            }
+        )
+    )
 
     state = _wait_state(SPECS["cursor"], home, timeout=0.1, exclude_paths={stale})
 
     assert state["state_path"] == str(fresh)
     assert state["session_id"] == "22222222-2222-4222-8222-222222222222"
+
+    with pytest.raises(RuntimeError, match="state did not expose"):
+        _wait_state(
+            SPECS["cursor"],
+            home,
+            timeout=0.01,
+            exclude_paths={stale, fresh},
+        )
 
 
 def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
