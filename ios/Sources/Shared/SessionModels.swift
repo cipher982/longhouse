@@ -276,9 +276,16 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return provider.prefix(1).uppercased() + provider.dropFirst()
     }
 
-    var projectLabel: String {
-        guard let project, !project.isEmpty else { return "Unknown project" }
-        return project
+    /// The session's project, or `nil` when Longhouse never resolved one.
+    ///
+    /// Absence is rendered by omitting the label, not by inventing one. A
+    /// session whose provider keeps its working directory outside the
+    /// transcript has no project attribution at all, and "Unknown project"
+    /// asserted a fact the timeline does not have.
+    var projectLabel: String? {
+        guard let project else { return nil }
+        let trimmed = project.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     var timelineMachineLabel: String? {

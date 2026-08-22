@@ -441,10 +441,12 @@ struct TimelineSessionCardRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(session.projectLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let project = session.projectLabel {
+                        Text(project)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     if let machine = session.timelineMachineLabel {
                         Text("· \(machine)")
                             .font(.caption2.weight(.medium))
@@ -543,10 +545,12 @@ private struct TimelineSearchResultRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(session.projectLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let project = session.projectLabel {
+                        Text(project)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     if let machine = session.timelineMachineLabel {
                         Text("· \(machine)")
                             .font(.caption2.weight(.medium))

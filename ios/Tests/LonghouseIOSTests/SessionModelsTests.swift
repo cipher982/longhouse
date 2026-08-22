@@ -245,6 +245,33 @@ struct SessionModelsTests {
     }
 
     @Test
+    func projectLabelIsAbsentRatherThanInvented() {
+        let base = timelineSummary(activityRecency: "none")
+
+        func summary(project: String?) -> SessionSummary {
+            SessionSummary(
+                id: base.id,
+                title: base.title,
+                presenceState: base.presenceState,
+                provider: base.provider,
+                project: project,
+                lastActivityAt: base.lastActivityAt,
+                runtimeDisplay: base.runtimeDisplay,
+                timelineCard: base.timelineCard,
+                stateFacts: base.stateFacts
+            )
+        }
+
+        // A session whose provider keeps cwd outside the transcript has no
+        // project at all. The timeline omits the label; it never asserts one.
+        #expect(summary(project: nil).projectLabel == nil)
+        #expect(summary(project: "").projectLabel == nil)
+        #expect(summary(project: "   ").projectLabel == nil)
+        #expect(summary(project: "g55").projectLabel == "g55")
+        #expect(summary(project: " g55 ").projectLabel == "g55")
+    }
+
+    @Test
     func sessionDetailDecodesActivePauseRequest() throws {
         let pauseRequestJSON = """
         {

@@ -853,7 +853,9 @@ export function SessionChat({
               </button>
             )}
             <div className="session-chat-titles">
-              <span className="session-chat-title">{session.project || "Session"}</span>
+              {session.project ? (
+                <span className="session-chat-title">{session.project}</span>
+              ) : null}
               <span className="session-chat-provider">
                 <ProviderGlyph provider={session.provider} size={16} />
                 {getProviderLabel(session.provider)}
