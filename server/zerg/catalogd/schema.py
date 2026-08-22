@@ -42,6 +42,7 @@ from zerg.models.live_store import LiveBase
 
 CATALOG_SCHEMA_VERSION = 4
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
+STORAGE_TELEMETRY_ACCOUNTING_GENERATION = "storage-telemetry-v1"
 
 
 class CatalogSchemaError(RuntimeError):
@@ -99,6 +100,10 @@ storage_telemetry_counters = Table(
     Column("search_projector_lagging", BigInteger, nullable=False, server_default=text("0")),
     Column("search_projector_failed", BigInteger, nullable=False, server_default=text("0")),
     Column("search_projector_claimed", BigInteger, nullable=False, server_default=text("0")),
+    # The aggregate scan is O(catalog size), so normal restarts trust the
+    # transactionally maintained counters only when the trigger generation
+    # that maintained them is explicit and complete.
+    Column("accounting_generation", Text, nullable=True),
     Column("updated_at", Text, nullable=False),
     CheckConstraint("singleton = 1", name="ck_storage_telemetry_counters_singleton"),
 )
@@ -610,10 +615,52 @@ def _migrate_catalog_schema(engine: Engine, *, from_version: int) -> None:
 
 
 def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
-    """Reconcile once at startup, then maintain O(1) counters transactionally."""
+    """Reconcile only when ownership is uncertain, then maintain O(1) counters."""
 
     now = datetime.now(UTC).isoformat()
+    trigger_names = (
+        "storage_telemetry_raw_insert",
+        "storage_telemetry_raw_update",
+        "storage_telemetry_raw_delete",
+        "storage_telemetry_render_insert",
+        "storage_telemetry_render_update",
+        "storage_telemetry_render_delete",
+        "storage_telemetry_media_insert",
+        "storage_telemetry_media_update",
+        "storage_telemetry_media_delete",
+        "storage_telemetry_projector_insert",
+        "storage_telemetry_projector_update",
+        "storage_telemetry_projector_delete",
+    )
     with engine.begin() as connection:
+        counter = (
+            connection.execute(
+                select(
+                    storage_telemetry_counters.c.singleton,
+                    storage_telemetry_counters.c.accounting_generation,
+                ).where(storage_telemetry_counters.c.singleton == 1)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        installed_triggers = {str(row[0]) for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+        trigger_set_complete = set(trigger_names).issubset(installed_triggers)
+        if counter is not None and trigger_set_complete:
+            generation = counter["accounting_generation"]
+            if generation == STORAGE_TELEMETRY_ACCOUNTING_GENERATION:
+                return
+            if generation is None:
+                # Upgrade the only legacy implementation of this table. That
+                # implementation rebuilt these counters at every boot and
+                # installed this exact named trigger set in the same
+                # transaction, so a complete set is durable ownership proof.
+                connection.execute(
+                    storage_telemetry_counters.update()
+                    .where(storage_telemetry_counters.c.singleton == 1)
+                    .values(accounting_generation=STORAGE_TELEMETRY_ACCOUNTING_GENERATION)
+                )
+                return
+
         connection.execute(storage_telemetry_counters.delete().where(storage_telemetry_counters.c.singleton == 1))
         connection.exec_driver_sql(
             """
@@ -621,7 +668,7 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
                 singleton, raw_count, raw_bytes, render_count, render_bytes,
                 media_count, media_bytes, search_projector_rows,
                 search_projector_lagging, search_projector_failed,
-                search_projector_claimed, updated_at
+                search_projector_claimed, accounting_generation, updated_at
             )
             SELECT
                 1,
@@ -638,25 +685,12 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
                     WHERE projector = 'search-v2' AND status IN ('failed', 'quarantined')),
                 (SELECT COUNT(*) FROM projector_state
                     WHERE projector = 'search-v2' AND claim_token IS NOT NULL),
+                ?,
                 ?
             """,
-            (now,),
+            (STORAGE_TELEMETRY_ACCOUNTING_GENERATION, now),
         )
 
-        trigger_names = (
-            "storage_telemetry_raw_insert",
-            "storage_telemetry_raw_update",
-            "storage_telemetry_raw_delete",
-            "storage_telemetry_render_insert",
-            "storage_telemetry_render_update",
-            "storage_telemetry_render_delete",
-            "storage_telemetry_media_insert",
-            "storage_telemetry_media_update",
-            "storage_telemetry_media_delete",
-            "storage_telemetry_projector_insert",
-            "storage_telemetry_projector_update",
-            "storage_telemetry_projector_delete",
-        )
         for trigger_name in trigger_names:
             connection.exec_driver_sql(f"DROP TRIGGER IF EXISTS {trigger_name}")
 

@@ -1097,7 +1097,13 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     // provider with no lease adopter means launch readiness can expire to
     // orphaned while the TUI is still running.
     let mut launch_transaction = response.as_ref().map(|response| {
-        ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
+        ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        )
     });
     let deferred_notices = DeferredNotices::default();
     let confirm_agent_dir = managed_launch_agent_dir();
@@ -1385,16 +1391,21 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         payload["session_id"] = json!(Uuid::new_v4().to_string());
         payload["provider_session_id"] = json!(Uuid::new_v4().to_string());
     }
-    let mut degraded_registration: Option<managed_launch_lifecycle::ManagedRegistrationRetry> = None;
+    let mut degraded_registration: Option<managed_launch_lifecycle::ManagedRegistrationRetry> =
+        None;
     // Deferred degradation/recovery notices: the retry thread must not write
     // directly to the caller's terminal while the provider TUI owns the
     // alternate screen, so route them through a buffer drained only after the
     // child exits and the terminal is restored.
     let deferred_notices = DeferredNotices::default();
     let expected_session_id = if resume_target.is_some() {
-        resume_target.as_ref().map(|target| target.session_id.as_str())
+        resume_target
+            .as_ref()
+            .map(|target| target.session_id.as_str())
     } else {
-        payload.get("session_id").and_then(serde_json::Value::as_str)
+        payload
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
     };
     let registration = register_managed_launch_with_timeout(
         &runtime,
@@ -1413,7 +1424,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         Ok(response) => Some(response),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Claude unregistered ({}); registration continues in the background",
+                "Longhouse: {}; starting Claude locally. Managed registration will retry while Claude is running.",
                 managed_launch_lifecycle::registration_failure_summary(
                     &error,
                     managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
@@ -1463,7 +1474,12 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let session_id = response
         .as_ref()
         .map(|response| response.session_id.clone())
-        .or_else(|| payload.get("session_id").and_then(|value| value.as_str()).map(str::to_owned))
+        .or_else(|| {
+            payload
+                .get("session_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
         .context("degraded Claude launch has no session identity")?;
     let run_id = response
         .as_ref()
@@ -1475,14 +1491,17 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             )
             .to_string()
         });
-    let provider_session_id = resolve_claude_provider_session_id(
-        response.as_ref(),
-        resume_target.as_ref(),
-        &payload,
-    )
-        .context("Longhouse did not return a Claude provider session")?;
+    let provider_session_id =
+        resolve_claude_provider_session_id(response.as_ref(), resume_target.as_ref(), &payload)
+            .context("Longhouse did not return a Claude provider session")?;
     let mut launch_transaction = response.as_ref().map(|response| {
-        ManagedLaunchTransaction::new(&runtime, &url, &token, &response.session_id, &response.run_id)
+        ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        )
     });
     let permission_mode = response
         .as_ref()
@@ -1589,10 +1608,16 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
     }
+    let registration_summary = degraded_registration
+        .as_ref()
+        .map(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // The child has exited and the terminal is restored; surface any deferred
     // degradation/recovery notices now, in normal scrollback.
     for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
+    if let Some(message) = registration_summary {
         eprintln!("{message}");
     }
     if let Err(error) = record_claude_terminal_event(
@@ -1697,7 +1722,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         Err(error) if resume_target.is_some() => return Err(error),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting OpenCode unregistered ({}); registration continues in the background",
+                "Longhouse: {}; starting OpenCode locally. Managed registration will retry while OpenCode is running.",
                 managed_launch_lifecycle::registration_failure_summary(
                     &error,
                     managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
@@ -1769,8 +1794,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             } else {
                 "detached"
             },
-        ])
-        ;
+        ]);
     match coordination_token.as_deref() {
         Some(value) => start.env("LONGHOUSE_COORDINATION_TOKEN", value),
         None => start.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
@@ -1859,9 +1883,15 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         registration.provider_alive.store(false, Ordering::Release);
     }
     let stop_result = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+    let registration_summary = degraded_registration
+        .as_ref()
+        .map(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // Printed only after the provider released the terminal.
     for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
+    if let Some(message) = registration_summary {
         eprintln!("{message}");
     }
     let exit = run_result?;
@@ -2332,7 +2362,9 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
     // the machine agent dispatches pi_print after a console turn enqueues
     // `session.turn.start` with the prompt.
     if response.is_some() {
-        if let Err(error) = enqueue_pi_console_turn(&runtime, &url, &token, &session_id, &args.prompt) {
+        if let Err(error) =
+            enqueue_pi_console_turn(&runtime, &url, &token, &session_id, &args.prompt)
+        {
             eprintln!("Longhouse warning: Pi turn enqueue failed ({error:#})");
         }
     }
@@ -2440,7 +2472,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         Ok(response) => Some(response),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Codex unregistered ({}); registration continues in the background",
+                "Longhouse: {}; starting Codex locally. Managed registration will retry while Codex is running.",
                 managed_launch_lifecycle::registration_failure_summary(
                     &error,
                     managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
@@ -2490,9 +2522,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
                 .unwrap_or_else(|_| PathBuf::from(".")),
         )),
     };
-    let mut launch_transaction = degraded_registration.is_none().then(|| {
-        ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &run_id)
-    });
+    let mut launch_transaction = degraded_registration
+        .is_none()
+        .then(|| ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &run_id));
     let attach = args.attach && !args.no_attach && interactive_stdio();
     let launch_mode = if attach { "tui" } else { "detached_ui" };
     let engine = paired_engine_path()?;
@@ -2557,11 +2589,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             .as_deref()
             .is_none_or(|thread| thread.trim().is_empty())
     {
-        let _ = stop_codex_bridge(
-            &session_id,
-            Some(run_id.as_str()),
-            "bridge_start_failed",
-        );
+        let _ = stop_codex_bridge(&session_id, Some(run_id.as_str()), "bridge_start_failed");
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
     if let Some(transaction) = launch_transaction.as_mut() {
@@ -2583,10 +2611,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         if args.attach && !args.no_attach {
             eprintln!("Skipping auto-attach because stdin/stdout are not TTYs.");
         }
-        println!(
-            "Attach: longhouse codex attach --session-id {}",
-            session_id
-        );
+        println!("Attach: longhouse codex attach --session-id {}", session_id);
         if let Some(registration) = &degraded_registration {
             registration.abandon();
             eprintln!(
@@ -2629,9 +2654,15 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         Some(run_id.as_str()),
         Some(&machine_name),
     );
+    let registration_summary = degraded_registration
+        .as_ref()
+        .map(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // Printed only now: the provider owned the alternate screen until here.
     for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
+    if let Some(message) = registration_summary {
         eprintln!("{message}");
     }
     outcome
@@ -3344,9 +3375,8 @@ fn wait_for_child_or_signal(
             }
 
             let mut raw_status = 0;
-            let waited = unsafe {
-                libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED)
-            };
+            let waited =
+                unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::WUNTRACED) };
             if waited == pid {
                 if libc::WIFEXITED(raw_status) {
                     return Ok(libc::WEXITSTATUS(raw_status));
@@ -3408,10 +3438,7 @@ fn terminate_child(child: &mut std::process::Child, process_group: Option<libc::
 }
 
 #[cfg(unix)]
-fn terminate_and_reap_child(
-    child: &mut std::process::Child,
-    process_group: Option<libc::pid_t>,
-) {
+fn terminate_and_reap_child(child: &mut std::process::Child, process_group: Option<libc::pid_t>) {
     terminate_child(child, process_group);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -3514,9 +3541,7 @@ fn run_managed_provider_trampoline(args: ManagedProviderTrampolineArgs) -> anyho
 }
 
 #[cfg(not(unix))]
-fn run_managed_provider_trampoline(
-    _args: ManagedProviderTrampolineArgs,
-) -> anyhow::Result<()> {
+fn run_managed_provider_trampoline(_args: ManagedProviderTrampolineArgs) -> anyhow::Result<()> {
     anyhow::bail!("managed provider terminal handoff is unsupported on this platform")
 }
 
@@ -3562,10 +3587,7 @@ fn run_foreground_command_after_spawn(
     let child_release_write = release_fds[1];
 
     let program = command.get_program().to_os_string();
-    let provider_args = command
-        .get_args()
-        .map(OsString::from)
-        .collect::<Vec<_>>();
+    let provider_args = command.get_args().map(OsString::from).collect::<Vec<_>>();
     let provider_env = command
         .get_envs()
         .map(|(key, value)| (key.to_os_string(), value.map(OsString::from)))
@@ -4268,7 +4290,10 @@ mod tests {
         assert!(notices.drain().is_empty());
         notices.push("first".to_string());
         notices.push("second".to_string());
-        assert_eq!(notices.drain(), vec!["first".to_string(), "second".to_string()]);
+        assert_eq!(
+            notices.drain(),
+            vec!["first".to_string(), "second".to_string()]
+        );
         assert!(notices.drain().is_empty());
     }
 
@@ -4872,7 +4897,10 @@ mod tests {
                 );
                 assert_eq!(payload["permission_mode"], "bypass");
                 assert_eq!(payload["run_id"], "33333333-3333-4333-8333-333333333333");
-                assert_eq!(payload["connection_id"], "44444444-4444-4444-8444-444444444444");
+                assert_eq!(
+                    payload["connection_id"],
+                    "44444444-4444-4444-8444-444444444444"
+                );
                 assert_eq!(payload["control"]["kind"], "claude_channel_bridge");
                 assert!(path.exists());
             },

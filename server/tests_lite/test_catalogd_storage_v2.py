@@ -29,6 +29,7 @@ from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
@@ -285,6 +286,78 @@ async def test_first_durable_content_reveals_hidden_console_shell(daemon_paths):
         assert db.get(LiveSessionCatalog, str(session_id)).hidden_from_default_timeline == 0
         assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 0
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_managed_registration_converges_when_transcript_ingest_arrives_first(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    provider_session_id = "claude-ingest-first"
+    raw = _raw_params(
+        epoch=uuid4(),
+        session_id=session_id,
+        start=0,
+        end=6,
+        records=(b"hello\n",),
+        sealed_at=now,
+        provider="claude",
+    )
+    raw["owner_id"] = "7"
+    raw["session_facts"]["provider_session_id"] = provider_session_id
+    launch = {
+        "owner_id": 7,
+        "git_repo": "cipher982/longhouse",
+        "git_branch": "main",
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+        "plan": {
+            "session_id": str(session_id),
+            "provider": "claude",
+            "provider_session_id": provider_session_id,
+            "source_name": "cinder",
+            "source_runner_id": None,
+            "cwd": "/workspace/longhouse",
+            "project": "longhouse",
+            "display_name": "Managed local",
+            "managed_session_name": "claude-managed-ingest-first",
+            "loop_mode": "assist",
+            "permission_mode": "bypass",
+            "launch_actor": "human_ui",
+            "launch_surface": "cli",
+            "managed_transport": "claude_channel",
+            "attach_command": f"longhouse claude --resume {provider_session_id}",
+            "provider_config": {},
+        },
+    }
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        assert committed["created"] is True
+        registered = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert registered["created"] is True
+        assert registered["provider_session_id"] == provider_session_id
+        replay = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert replay["exact_replay"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        assert db.query(StorageSession).filter_by(session_id=str(session_id)).count() == 1
+        assert db.query(LiveSessionCatalog).filter_by(session_id=str(session_id)).count() == 1
+        assert db.query(LiveSessionLaunchAttempt).filter_by(session_id=str(session_id)).count() == 1
+        aliases = (
+            db.query(LiveSessionThreadAlias)
+            .filter_by(provider="claude", alias_kind="provider_session_id", alias_value=provider_session_id)
+            .all()
+        )
+        assert len(aliases) == 1
+    engine.dispose()
 
 
 @pytest.mark.asyncio

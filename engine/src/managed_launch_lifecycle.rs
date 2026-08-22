@@ -14,6 +14,24 @@ use anyhow::Context;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+#[derive(Debug)]
+struct ManagedRegistrationHttpError {
+    provider_name: String,
+    status: reqwest::StatusCode,
+}
+
+impl std::fmt::Display for ManagedRegistrationHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "managed {} launch failed: Runtime Host returned HTTP {}",
+            self.provider_name, self.status
+        )
+    }
+}
+
+impl std::error::Error for ManagedRegistrationHttpError {}
+
 /// What registering a launch is actually allowed to cost
 /// (`server/zerg/catalogd/client.py::MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS`).
 ///
@@ -65,11 +83,6 @@ const RECOVERY_MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// ends this wait, and a bridge that is merely slow to come up must not be
 /// mistaken for one that failed.
 const PROVIDER_READY_WAIT_CAP: Duration = Duration::from_secs(300);
-
-/// Safety stop for a recovery thread whose cancel signal never arrives. At the
-/// backoff cap this is several hours, far beyond any real launch; it exists so a
-/// leaked thread cannot poll forever, not as a recovery policy.
-const RECOVERY_MAX_ATTEMPTS: u32 = 240;
 
 /// Gap before retrying after `attempt` consecutive failures.
 ///
@@ -135,12 +148,12 @@ fn runtime_host_client() -> reqwest::Client {
 /// report itself as an outage.
 pub fn registration_failure_summary(error: &anyhow::Error, deadline: Duration) -> String {
     for cause in error.chain() {
+        if let Some(http_error) = cause.downcast_ref::<ManagedRegistrationHttpError>() {
+            return format!("Runtime Host returned HTTP {}", http_error.status);
+        }
         if let Some(request_error) = cause.downcast_ref::<reqwest::Error>() {
             if request_error.is_timeout() {
-                return format!(
-                    "Runtime Host did not answer within {}s",
-                    deadline.as_secs()
-                );
+                return format!("Runtime Host did not answer within {}s", deadline.as_secs());
             }
             if request_error.is_connect() {
                 return "Runtime Host is unreachable".to_string();
@@ -156,6 +169,17 @@ pub fn registration_failure_summary(error: &anyhow::Error, deadline: Duration) -
         return "Runtime Host timed out its own request".to_string();
     }
     format!("registration failed ({text})")
+}
+
+fn registration_failure_is_retryable(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ManagedRegistrationHttpError>())
+        .is_none_or(|http_error| {
+            http_error.status.is_server_error()
+                || http_error.status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || http_error.status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        })
 }
 
 /// Directory scanned by native local health (`device::collect_managed_launch_recovery`)
@@ -186,29 +210,100 @@ fn registration_retry_path(
 /// Record that a launch started without Runtime Host registration and is
 /// retrying. `exhausted` flips the receipt to a terminal state so health can
 /// distinguish "recovering" from "gave up".
-pub fn record_registration_retry(
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RegistrationRetryOutcome {
+    Recovering,
+    Recovered,
+    Exhausted,
+    Stopped,
+}
+
+impl RegistrationRetryOutcome {
+    fn as_wire(&self) -> &'static str {
+        match self {
+            Self::Recovering => "recovering",
+            Self::Recovered => "recovered",
+            Self::Exhausted => "exhausted",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RegistrationRetryState {
+    outcome: RegistrationRetryOutcome,
+    attempts: u32,
+    started_at: String,
+    last_attempt_at: Option<String>,
+    last_error: Option<String>,
+    recovered_at: Option<String>,
+    stopped_at: Option<String>,
+}
+
+impl RegistrationRetryState {
+    fn new() -> Self {
+        Self {
+            outcome: RegistrationRetryOutcome::Recovering,
+            attempts: 0,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            last_attempt_at: None,
+            last_error: None,
+            recovered_at: None,
+            stopped_at: None,
+        }
+    }
+
+    fn exhausted(&self) -> bool {
+        matches!(
+            self.outcome,
+            RegistrationRetryOutcome::Exhausted | RegistrationRetryOutcome::Stopped
+        )
+    }
+}
+
+fn record_registration_retry_state(
     agent_dir: &std::path::Path,
     session_id: &str,
     provider: &str,
-    exhausted: bool,
+    state: &RegistrationRetryState,
 ) -> anyhow::Result<()> {
     let path = registration_retry_path(agent_dir, session_id)?;
     if let Some(directory) = path.parent() {
         prune_stale_retry_receipts(directory);
     }
     let payload = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "session_id": session_id,
         "provider": provider,
-        "recovery_exhausted": exhausted,
+        "registration_state": state.outcome.as_wire(),
+        "recovery_exhausted": state.exhausted(),
+        "attempt_count": state.attempts,
+        "last_attempt_at": state.last_attempt_at,
+        "last_error": state.last_error,
+        "recovered_at": state.recovered_at,
+        "stopped_at": state.stopped_at,
         // Coordination authority is minted by the Runtime Host at registration.
         // A degraded launch never had one, and this receipt does not imply the
         // running provider acquires it later.
         "coordination_state": "unavailable",
-        "created_at": chrono::Utc::now().to_rfc3339(),
+        "created_at": state.started_at,
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&payload)?)
         .with_context(|| format!("write managed launch recovery receipt {}", path.display()))
+}
+
+pub fn record_registration_retry(
+    agent_dir: &std::path::Path,
+    session_id: &str,
+    provider: &str,
+    exhausted: bool,
+) -> anyhow::Result<()> {
+    let mut state = RegistrationRetryState::new();
+    if exhausted {
+        state.outcome = RegistrationRetryOutcome::Exhausted;
+        state.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+    }
+    record_registration_retry_state(agent_dir, session_id, provider, &state)
 }
 
 /// Drop the receipt once registration succeeds, so health stops reporting
@@ -533,16 +628,16 @@ pub fn register_managed_launch_with_timeout(
             .await
             .with_context(|| format!("register managed {provider_name} launch"))?;
         let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow::Error::new(ManagedRegistrationHttpError {
+                provider_name: provider_name.to_string(),
+                status,
+            }));
+        }
         let body = response
             .text()
             .await
             .with_context(|| format!("read managed {provider_name} registration response"))?;
-        if !status.is_success() {
-            anyhow::bail!(
-                "managed {provider_name} launch failed ({status}): {}",
-                truncate(body.trim(), 500)
-            );
-        }
         serde_json::from_str::<ManagedLaunchResponse>(&body)
             .with_context(|| format!("decode managed {provider_name} registration response"))
     })?;
@@ -713,18 +808,24 @@ mod tests {
     /// later found nothing still trying.
     #[test]
     fn recovery_keeps_trying_for_the_life_of_a_session() {
-        assert!(recovery_backoff(0) <= Duration::from_secs(1), "react fast to a blip");
-        assert!(recovery_backoff(1) > recovery_backoff(0), "back off under sustained failure");
+        assert!(
+            recovery_backoff(0) <= Duration::from_secs(1),
+            "react fast to a blip"
+        );
+        assert!(
+            recovery_backoff(1) > recovery_backoff(0),
+            "back off under sustained failure"
+        );
         assert_eq!(
             recovery_backoff(u32::MAX),
             RECOVERY_MAX_BACKOFF,
             "a long outage must settle into a slow poll, not an ever-growing gap"
         );
 
-        let covered: Duration = (0..RECOVERY_MAX_ATTEMPTS).map(recovery_backoff).sum();
-        assert!(
-            covered >= Duration::from_secs(60 * 60),
-            "recovery spans {covered:?}, far short of a working session"
+        assert_eq!(
+            recovery_backoff(10_000),
+            RECOVERY_MAX_BACKOFF,
+            "recovery must remain safe to run for the provider's whole lifetime"
         );
     }
 
@@ -756,7 +857,10 @@ mod tests {
                             .to_string(),
                     )
                 } else {
-                    ("503 Service Unavailable", r#"{"detail":"writer busy"}"#.to_string())
+                    (
+                        "503 Service Unavailable",
+                        r#"{"detail":"writer busy"}"#.to_string(),
+                    )
                 };
                 let _ = sender.send(request);
                 let _ = stream.write_all(
@@ -839,8 +943,7 @@ mod tests {
                 DeferredNotices::default(),
                 agent_dir.path().to_path_buf(),
             );
-            let payload: Value =
-                serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+            let payload: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
             assert_eq!(payload["recovery_exhausted"], json!(false));
         }
 
@@ -888,6 +991,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn http_failure_summary_never_exposes_the_response_body() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            let body = "<!DOCTYPE html>\n<html>private proxy detail</html>";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        });
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = register_managed_launch_with_timeout(
+            &runtime,
+            &format!("http://{address}"),
+            "device-token",
+            "Claude",
+            &json!({"session_id": "session-http"}),
+            Some("session-http"),
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+
+        let summary = registration_failure_summary(&error, Duration::from_secs(2));
+        assert_eq!(summary, "Runtime Host returned HTTP 502 Bad Gateway");
+        assert!(!summary.contains('<'));
+        assert!(!summary.contains('\n'));
+    }
+
     /// Accept connections and never answer, so the client hits its own deadline.
     fn spawn_stalled_server() -> (String, std::sync::mpsc::Sender<()>) {
         use std::net::TcpListener;
@@ -910,7 +1053,10 @@ mod tests {
     #[test]
     fn stale_receipts_are_pruned_and_recent_ones_survive() {
         let agent_dir = tempfile::tempdir().unwrap();
-        let directory = agent_dir.path().join("managed-local").join("registration-retries");
+        let directory = agent_dir
+            .path()
+            .join("managed-local")
+            .join("registration-retries");
         std::fs::create_dir_all(&directory).unwrap();
 
         let write = |name: &str, created_at: chrono::DateTime<chrono::Utc>| {
@@ -1013,7 +1159,10 @@ mod tests {
             .join("managed-local")
             .join("registration-retries")
             .join("session-late.json");
-        assert!(receipt.exists(), "degradation must be visible while it lasts");
+        assert!(
+            receipt.exists(),
+            "degradation must be visible while it lasts"
+        );
 
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         while receipt.exists() && std::time::Instant::now() < deadline {
@@ -1033,6 +1182,10 @@ mod tests {
         assert!(
             confirmed,
             "a recovered registration must still confirm its launch"
+        );
+        assert_eq!(
+            retry.provider_exit_summary(),
+            "Longhouse: Codex managed registration recovered while it was running."
         );
         drop(retry);
     }
@@ -1260,6 +1413,7 @@ impl DeferredNotices {
 pub struct ManagedRegistrationRetry {
     pub provider_alive: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
+    state: Arc<Mutex<RegistrationRetryState>>,
     // Identify the receipt this handle is responsible for settling, from both
     // `abandon` (used by the facade's detached launch paths) and `Drop`.
     agent_dir: PathBuf,
@@ -1268,24 +1422,77 @@ pub struct ManagedRegistrationRetry {
 }
 
 impl ManagedRegistrationRetry {
+    fn stop_recovery(&self) {
+        self.cancel.store(true, Ordering::Release);
+        if let Ok(mut state) = self.state.lock() {
+            if state.outcome == RegistrationRetryOutcome::Recovering {
+                state.outcome = RegistrationRetryOutcome::Stopped;
+                state.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+                let _ = record_registration_retry_state(
+                    &self.agent_dir,
+                    &self.session_id,
+                    &self.provider,
+                    &state,
+                );
+            }
+        }
+    }
+
+    /// Render the current recovery result after the provider has released the
+    /// terminal. Unlike a deferred string, this describes the state now.
+    pub fn provider_exit_summary(&self) -> String {
+        self.stop_recovery();
+        let state = self
+            .state
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_else(|_| {
+                let mut state = RegistrationRetryState::new();
+                state.outcome = RegistrationRetryOutcome::Stopped;
+                state
+            });
+        match state.outcome {
+            RegistrationRetryOutcome::Recovered => format!(
+                "Longhouse: {} managed registration recovered while it was running.",
+                self.provider
+            ),
+            RegistrationRetryOutcome::Exhausted => format!(
+                "Longhouse: {} ran without managed registration; recovery stopped after {} attempt{}.{}",
+                self.provider,
+                state.attempts,
+                if state.attempts == 1 { "" } else { "s" },
+                state
+                    .last_error
+                    .as_deref()
+                    .map(|error| format!(" Last attempt: {error}."))
+                    .unwrap_or_default(),
+            ),
+            RegistrationRetryOutcome::Recovering | RegistrationRetryOutcome::Stopped => format!(
+                "Longhouse: {} exited before managed registration recovered; retries have stopped after {} attempt{}.{}",
+                self.provider,
+                state.attempts,
+                if state.attempts == 1 { "" } else { "s" },
+                state
+                    .last_error
+                    .as_deref()
+                    .map(|error| format!(" Last attempt: {error}."))
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+
     /// Give up on recovery from the launcher side. A detached launch returns
     /// immediately and takes the retry thread with it, so the receipt must be
     /// settled here rather than left reporting a recovery that is not running.
     #[allow(dead_code)]
     pub fn abandon(&self) {
-        self.cancel.store(true, Ordering::Release);
-        let _ = record_registration_retry(
-            &self.agent_dir,
-            &self.session_id,
-            &self.provider,
-            true,
-        );
+        self.stop_recovery();
     }
 }
 
 impl Drop for ManagedRegistrationRetry {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        self.stop_recovery();
         // The recovery thread is detached and only observes `cancel` between
         // attempts, so a process exiting mid-request kills it with the receipt
         // still reading "recovering" — a durable claim about a thread that no
@@ -1296,13 +1503,6 @@ impl Drop for ManagedRegistrationRetry {
         // interleavings are benign — if the thread already cleared the receipt
         // there is nothing to settle, and if it is still running its own
         // terminal write supersedes this one.
-        let already_settled = registration_retry_path(&self.agent_dir, &self.session_id)
-            .map(|path| !path.is_file())
-            .unwrap_or(true);
-        if !already_settled {
-            let _ =
-                record_registration_retry(&self.agent_dir, &self.session_id, &self.provider, true);
-        }
     }
 }
 
@@ -1327,8 +1527,10 @@ pub fn spawn_managed_registration_retry(
     let session_id = session_id.to_string();
     let provider_alive = Arc::new(AtomicBool::new(false));
     let cancel = Arc::new(AtomicBool::new(false));
+    let state = Arc::new(Mutex::new(RegistrationRetryState::new()));
     let provider_alive_for_thread = Arc::clone(&provider_alive);
     let cancel_for_thread = Arc::clone(&cancel);
+    let state_for_thread = Arc::clone(&state);
     let retry_agent_dir = agent_dir.clone();
     let retry_session_id = session_id.clone();
     let retry_provider = provider.clone();
@@ -1336,44 +1538,52 @@ pub fn spawn_managed_registration_retry(
     // Local health runs in a different process, so it can only see this launch
     // as degraded through a durable receipt; process liveness is not proof that
     // control exists.
+    let initial_state = state
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_else(|_| RegistrationRetryState::new());
     if let Err(error) =
-        record_registration_retry(
-            &agent_dir,
-            &session_id,
-            &provider,
-            false,
-        )
+        record_registration_retry_state(&agent_dir, &session_id, &provider, &initial_state)
     {
         notices.push(format!(
             "Longhouse warning: could not record {provider} launch recovery state: {error:#}"
         ));
     }
     std::thread::spawn(move || {
-        // Every terminal path below must settle the receipt: cleared when
-        // control is genuinely established, exhausted otherwise. Leaving it
-        // active would report recovery that is no longer running.
-        let settle_exhausted = |session_id: &str, provider: &str| {
-            let _ = record_registration_retry(
-                &agent_dir, session_id, provider, true,
-            );
+        let settle = |outcome: RegistrationRetryOutcome, error: Option<String>| {
+            if let Ok(mut state) = state_for_thread.lock() {
+                state.outcome = outcome;
+                if error.is_some() {
+                    state.last_error = error;
+                }
+                state.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+                let _ = record_registration_retry_state(&agent_dir, &session_id, &provider, &state);
+            }
         };
-        let started_at = std::time::Instant::now();
-        let mut reported_first_failure = false;
         // Recovery lasts as long as the provider does. The old loop gave up
         // after five attempts inside ~15 seconds, which is shorter than a single
         // slow write on this route — so a host that answered a minute later, or
         // a session that outlived a brief blip, was stranded unregistered for
         // its whole life with nothing left running to converge it.
-        for attempt in 0..RECOVERY_MAX_ATTEMPTS {
+        let mut attempt = 0_u32;
+        loop {
             if cancel_for_thread.load(Ordering::Acquire) {
-                settle_exhausted(&session_id, &provider);
+                settle(RegistrationRetryOutcome::Stopped, None);
                 return;
             }
             let Ok(runtime) = tokio::runtime::Runtime::new() else {
-                settle_exhausted(&session_id, &provider);
+                settle(
+                    RegistrationRetryOutcome::Exhausted,
+                    Some("could not create the local retry runtime".to_string()),
+                );
                 return;
             };
-            match register_managed_launch_with_timeout(
+            if let Ok(mut state) = state_for_thread.lock() {
+                state.attempts = attempt.saturating_add(1);
+                state.last_attempt_at = Some(chrono::Utc::now().to_rfc3339());
+                let _ = record_registration_retry_state(&agent_dir, &session_id, &provider, &state);
+            }
+            let result = register_managed_launch_with_timeout(
                 &runtime,
                 &url,
                 &token,
@@ -1381,10 +1591,17 @@ pub fn spawn_managed_registration_retry(
                 &payload,
                 Some(&session_id),
                 RECOVERY_REGISTRATION_TIMEOUT,
-            ) {
+            );
+            if cancel_for_thread.load(Ordering::Acquire) {
+                settle(RegistrationRetryOutcome::Stopped, None);
+                return;
+            }
+            match result {
                 Ok(response) => {
                     if response.provider_session_id.as_deref()
-                        != payload.get("provider_session_id").and_then(|value| value.as_str())
+                        != payload
+                            .get("provider_session_id")
+                            .and_then(|value| value.as_str())
                     {
                         notices.push(format!(
                             "Longhouse warning: degraded {provider} registration returned a different provider identity"
@@ -1396,7 +1613,10 @@ pub fn spawn_managed_registration_retry(
                             &response.session_id,
                             &response.run_id,
                         );
-                        settle_exhausted(&session_id, &provider);
+                        settle(
+                            RegistrationRetryOutcome::Exhausted,
+                            Some("Runtime Host returned a different provider identity".to_string()),
+                        );
                     } else {
                         let mut transaction = ManagedLaunchTransaction::new(
                             &runtime,
@@ -1414,7 +1634,7 @@ pub fn spawn_managed_registration_retry(
                         let mut waited = Duration::ZERO;
                         while waited < PROVIDER_READY_WAIT_CAP {
                             if cancel_for_thread.load(Ordering::Acquire) {
-                                settle_exhausted(&session_id, &provider);
+                                settle(RegistrationRetryOutcome::Stopped, None);
                                 return;
                             }
                             if provider_alive_for_thread.load(Ordering::Acquire) {
@@ -1426,6 +1646,10 @@ pub fn spawn_managed_registration_retry(
                                 // is running, which is what dropping this
                                 // transaction unconfirmed would have posted.
                                 transaction.confirm_or_degrade(&provider, &agent_dir, &notices);
+                                if let Ok(mut state) = state_for_thread.lock() {
+                                    state.outcome = RegistrationRetryOutcome::Recovered;
+                                    state.recovered_at = Some(chrono::Utc::now().to_rfc3339());
+                                }
                                 clear_registration_retry(&agent_dir, &session_id);
                                 return;
                             }
@@ -1435,19 +1659,27 @@ pub fn spawn_managed_registration_retry(
                         notices.push(format!(
                             "Longhouse warning: {provider} never became ready after its registration recovered"
                         ));
-                        settle_exhausted(&session_id, &provider);
+                        settle(
+                            RegistrationRetryOutcome::Exhausted,
+                            Some(
+                                "provider never became ready after registration recovered"
+                                    .to_string(),
+                            ),
+                        );
                     }
                     return;
                 }
-                Err(error) if attempt + 1 < RECOVERY_MAX_ATTEMPTS => {
-                    // Say what actually happened, once, before the first sleep.
-                    // Repeating it every attempt would bury the launch output.
-                    if !reported_first_failure {
-                        reported_first_failure = true;
-                        notices.push(format!(
-                            "Longhouse warning: {}; {provider} is running locally and registration keeps retrying in the background",
-                            registration_failure_summary(&error, RECOVERY_REGISTRATION_TIMEOUT)
-                        ));
+                Err(error) if registration_failure_is_retryable(&error) => {
+                    let summary =
+                        registration_failure_summary(&error, RECOVERY_REGISTRATION_TIMEOUT);
+                    if let Ok(mut state) = state_for_thread.lock() {
+                        state.last_error = Some(summary);
+                        let _ = record_registration_retry_state(
+                            &agent_dir,
+                            &session_id,
+                            &provider,
+                            &state,
+                        );
                     }
                     let backoff = recovery_backoff(attempt);
                     let mut slept = Duration::ZERO;
@@ -1456,20 +1688,22 @@ pub fn spawn_managed_registration_retry(
                             // The provider exited mid-backoff. Settle the
                             // receipt: returning without it left health reading
                             // a recovery that no longer had a thread behind it.
-                            settle_exhausted(&session_id, &provider);
+                            settle(RegistrationRetryOutcome::Stopped, None);
                             return;
                         }
                         std::thread::sleep(Duration::from_millis(200));
                         slept += Duration::from_millis(200);
                     }
+                    attempt = attempt.saturating_add(1);
                 }
                 Err(error) => {
-                    notices.push(format!(
-                        "Longhouse warning: could not recover {provider} Helm registration after {} attempts over {}s: {error:#}",
-                        attempt + 1,
-                        started_at.elapsed().as_secs()
-                    ));
-                    settle_exhausted(&session_id, &provider);
+                    settle(
+                        RegistrationRetryOutcome::Exhausted,
+                        Some(registration_failure_summary(
+                            &error,
+                            RECOVERY_REGISTRATION_TIMEOUT,
+                        )),
+                    );
                 }
             }
         }
@@ -1477,6 +1711,7 @@ pub fn spawn_managed_registration_retry(
     ManagedRegistrationRetry {
         provider_alive,
         cancel,
+        state,
         agent_dir: retry_agent_dir,
         session_id: retry_session_id,
         provider: retry_provider,

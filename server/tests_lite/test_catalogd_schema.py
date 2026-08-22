@@ -65,6 +65,50 @@ def test_initialize_is_idempotent_and_preserves_catalog_identity(tmp_path):
         assert connection.execute(text("SELECT COUNT(*) FROM catalog_meta")).scalar_one() == 1
 
 
+def test_normal_catalog_restart_does_not_rescan_storage_objects(tmp_path):
+    database = tmp_path / "longhouse-live.db"
+    engine = create_catalog_engine(database)
+    initialize_catalog_schema(engine)
+    statements: list[str] = []
+
+    def capture_sql(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture_sql)
+    try:
+        initialize_catalog_schema(engine)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_sql)
+
+    assert not any("SUM(compressed_size)" in statement for statement in statements)
+    with engine.connect() as connection:
+        generation = connection.exec_driver_sql(
+            "SELECT accounting_generation FROM storage_telemetry_counters WHERE singleton = 1"
+        ).scalar_one()
+    assert generation == catalog_schema.STORAGE_TELEMETRY_ACCOUNTING_GENERATION
+
+
+def test_missing_storage_telemetry_trigger_forces_reconciliation(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("UPDATE storage_telemetry_counters SET raw_count = 99 WHERE singleton = 1")
+        connection.exec_driver_sql("DROP TRIGGER storage_telemetry_raw_insert")
+
+    initialize_catalog_schema(engine)
+
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql(
+            "SELECT raw_count, accounting_generation FROM storage_telemetry_counters WHERE singleton = 1"
+        ).one()
+        trigger_exists = connection.exec_driver_sql(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'storage_telemetry_raw_insert'"
+        ).scalar_one()
+    assert row.raw_count == 0
+    assert row.accounting_generation == catalog_schema.STORAGE_TELEMETRY_ACCOUNTING_GENERATION
+    assert trigger_exists == 1
+
+
 def test_feature_marker_refuses_to_heal_an_incomplete_reducer_schema(tmp_path):
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)

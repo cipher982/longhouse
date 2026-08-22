@@ -17,11 +17,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::{
-    collections::BTreeMap,
-    process::Stdio,
-    time::Duration,
-};
+use std::{collections::BTreeMap, process::Stdio, time::Duration};
 
 use anyhow::Context;
 use chrono::Utc;
@@ -985,7 +981,7 @@ fn register(
         Err(error) if resume_provider_thread_id.is_some() => Err(error),
         Err(error) => {
             eprintln!(
-                "Longhouse warning: starting Cursor unregistered ({}); registration continues in the background",
+                "Longhouse: {}; starting Cursor locally. Managed registration will retry while Cursor is running.",
                 crate::managed_launch_lifecycle::registration_failure_summary(
                     &error,
                     crate::managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
@@ -1702,10 +1698,16 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         registration.provider_alive.store(false, Ordering::Release);
     }
     drop(terminal);
+    let registration_summary = degraded_registration
+        .as_ref()
+        .map(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // Only now that the terminal is restored: raw text would otherwise land
     // inside cursor-agent's alternate screen.
     for message in deferred_notices.drain() {
+        eprintln!("{message}");
+    }
+    if let Some(message) = registration_summary {
         eprintln!("{message}");
     }
     stop.store(true, Ordering::Relaxed);
