@@ -22,6 +22,7 @@ mod cursor_helm_launcher;
 mod cursor_hooks;
 mod cursor_launch_binding;
 mod antigravity_print;
+mod antigravity_workspace;
 mod cursor_print;
 mod cursor_store;
 mod cursor_visibility;

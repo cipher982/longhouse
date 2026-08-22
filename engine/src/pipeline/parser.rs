@@ -16,6 +16,7 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -1232,6 +1233,15 @@ pub fn is_generic_workspace_label(label: &str) -> bool {
 }
 
 fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
+    // A session started in the home directory is not a session about a project
+    // called after the user. Antigravity resolves eight of its sessions to
+    // `$HOME`, and "davidrose" is not a project.
+    if std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .is_some_and(|home| home == cwd)
+    {
+        return None;
+    }
     let label = cwd.file_name().and_then(|s| s.to_str())?.trim();
     if is_generic_workspace_label(label) {
         return None;
@@ -1356,15 +1366,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     if metadata.session_id.is_empty() {
         metadata.session_id = session_id.to_string();
     }
-    if let Some(ref cwd) = metadata.cwd {
-        let (project, git_repo) = resolve_git_info(Path::new(cwd));
-        metadata.project = project;
-        // Only use disk-resolved git_repo if session_meta didn't already
-        // provide one (e.g. Codex sessions carry it in the payload).
-        if metadata.git_repo.is_none() {
-            metadata.git_repo = git_repo;
-        }
-    }
+    finalize_workspace_metadata(&mut metadata, path);
 
     Ok(ParseResult {
         events,
@@ -1477,15 +1479,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     if metadata.session_id.is_empty() {
         metadata.session_id = session_id.to_string();
     }
-    if let Some(ref cwd) = metadata.cwd {
-        let (project, git_repo) = resolve_git_info(Path::new(cwd));
-        metadata.project = project;
-        // Only use disk-resolved git_repo if session_meta didn't already
-        // provide one (e.g. Codex sessions carry it in the payload).
-        if metadata.git_repo.is_none() {
-            metadata.git_repo = git_repo;
-        }
-    }
+    finalize_workspace_metadata(&mut metadata, path);
 
     Ok(ParseResult {
         events,
@@ -1500,6 +1494,39 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 // ---------------------------------------------------------------------------
 // Shared extraction logic
 // ---------------------------------------------------------------------------
+
+/// Resolve `project` and `git_repo` once every record has been read.
+///
+/// Providers that never write a working directory into the transcript get one
+/// last chance here, from their own sidecars, before the session is filed with
+/// no project at all. Recovery feeds `metadata.cwd` and then goes through the
+/// same `resolve_git_info` every other provider uses, so there is one project
+/// derivation rather than one per provider.
+fn finalize_workspace_metadata(metadata: &mut SessionMetadata, path: &Path) {
+    if metadata.cwd.is_none() {
+        if let Some(conversation_id) = antigravity_session_id_from_path(path) {
+            if let Some(workspace) =
+                crate::antigravity_workspace::antigravity_workspace(path, &conversation_id)
+            {
+                metadata.cwd = Some(workspace.cwd);
+                if metadata.git_repo.is_none() {
+                    metadata.git_repo = workspace.git_repo;
+                }
+            }
+        }
+    }
+
+    let Some(ref cwd) = metadata.cwd else {
+        return;
+    };
+    let (project, git_repo) = resolve_git_info(Path::new(cwd));
+    metadata.project = project;
+    // Only use disk-resolved git_repo if the transcript or a sidecar already
+    // provided one (e.g. Codex carries it in session_meta).
+    if metadata.git_repo.is_none() {
+        metadata.git_repo = git_repo;
+    }
+}
 
 fn collect_metadata(
     obj: &RawLine,
@@ -3926,6 +3953,59 @@ mod tests {
         );
         // project derived from cwd basename
         assert_eq!(result.metadata.project.as_deref(), Some("zorb"));
+    }
+
+    #[test]
+    fn antigravity_transcript_recovers_its_workspace_from_the_sidecar() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = "5f62a636-1412-4afe-9cfd-a5079e0a0366";
+        let transcript = temp
+            .path()
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        // A real antigravity record: no cwd anywhere in the stream.
+        std::fs::write(
+            &transcript,
+            r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-08-22T20:48:39Z","content":"hello"}
+"#,
+        )
+        .unwrap();
+        let workspace = temp.path().join("g55");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            temp.path().join("history.jsonl"),
+            format!(
+                r#"{{"display":"hello","workspace":"{}","conversationId":"{id}"}}"#,
+                workspace.display()
+            ),
+        )
+        .unwrap();
+
+        let result = parse_session_file(&transcript, 0).unwrap();
+        assert_eq!(result.metadata.cwd.as_deref(), Some(workspace.to_string_lossy().as_ref()));
+        assert_eq!(result.metadata.project.as_deref(), Some("g55"));
+    }
+
+    #[test]
+    fn a_home_directory_session_has_no_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("someuser");
+        std::fs::create_dir_all(&home).unwrap();
+        let previous = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        let (project, git_repo) = resolve_git_info(&home);
+        match previous {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        // Without this the session files itself under a project named after
+        // the user, which is what Antigravity's $HOME sessions would produce.
+        assert_eq!(project, None);
+        assert_eq!(git_repo, None);
     }
 
     #[test]
