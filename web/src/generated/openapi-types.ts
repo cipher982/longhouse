@@ -5063,6 +5063,8 @@ export interface components {
             project?: string | null;
             /** Display Name */
             display_name?: string | null;
+            /** Model */
+            model?: string | null;
             /**
              * Launch Surface
              * @default api
