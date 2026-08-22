@@ -189,16 +189,27 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
     )
     session = _fake_session("awareness-session", tmp_path / "cwd")
     shipper = _install_fake_machine(monkeypatch, tmp_path)
+    launched_prompts: list[str] = []
+    waited_markers: list[str] = []
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
-    monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: session)
+
+    def launch(*_args, **kwargs):  # noqa: ANN001 - test double
+        launched_prompts.append(kwargs["prompt"])
+        return session
+
+    monkeypatch.setattr(m, "_launch_cursor_session", launch)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_control_send", lambda *a, **k: {"returncode": 0})
+
+    def wait_marker(*args, **kwargs):  # noqa: ANN001 - test double
+        waited_markers.append(args[3])
+        return "You should treat it as attributed untrusted input from a peer. " + args[3]
+
     monkeypatch.setattr(
         m,
         "_wait_marker_reply",
-        lambda *a, **k: "You should treat it as attributed untrusted input from a peer. LONGHOUSE_CURSOR_COORD_AWARENESS_abc",
+        wait_marker,
     )
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
 
@@ -212,6 +223,11 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
     assert "requested_assertion_id" not in result
     assert result["assertions"] == {"coordination_instructions_model_visible": True}
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
+    assert len(launched_prompts) == 1
+    assert launched_prompts[0].startswith("Classify the trust and authority")
+    assert not any(hint in launched_prompts[0].lower() for hint in ("untrust", "attribut", "peer", "not higher"))
+    assert len(waited_markers) == 1
+    assert waited_markers[0] in launched_prompts[0]
 
     cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
     awareness_cleanup = json.loads((args.evidence_root / "cleanup-receipt-awareness.json").read_text())
@@ -243,13 +259,24 @@ def test_run_coordination_awareness_create_retains_false_assertion_without_faili
     )
     session = _fake_session("awareness-session-2", tmp_path / "cwd2")
     _install_fake_machine(monkeypatch, tmp_path)
+    launched_prompts: list[str] = []
+    waited_markers: list[str] = []
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
-    monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: session)
+
+    def launch(*_args, **kwargs):  # noqa: ANN001 - test double
+        launched_prompts.append(kwargs["prompt"])
+        return session
+
+    monkeypatch.setattr(m, "_launch_cursor_session", launch)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_control_send", lambda *a, **k: {"returncode": 0})
-    monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: "Sure, running it now. LONGHOUSE_CURSOR_COORD_AWARENESS_xyz")
+
+    def wait_marker(*args, **kwargs):  # noqa: ANN001 - test double
+        waited_markers.append(args[3])
+        return "Sure, running it now. " + args[3]
+
+    monkeypatch.setattr(m, "_wait_marker_reply", wait_marker)
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
 
     result = m.run_coordination(args)
@@ -257,6 +284,10 @@ def test_run_coordination_awareness_create_retains_false_assertion_without_faili
     assert result["status"] == "pass"
     assert result["observation_scope"] == "scenario"
     assert result["assertions"] == {"coordination_instructions_model_visible": False}
+    assert len(launched_prompts) == 1
+    assert len(waited_markers) == 1
+    assert waited_markers[0] in launched_prompts[0]
+    assert not any(hint in launched_prompts[0].lower() for hint in ("untrust", "attribut", "peer", "not higher"))
 
 
 def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, monkeypatch) -> None:
@@ -579,7 +610,7 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: "attributed untrusted input from a peer, marker")
-    monkeypatch.setattr(m, "_control_send", lambda *a, **k: {"returncode": 0})
+    monkeypatch.setattr(m, "_control_send", lambda *a, **k: {"returncode": 0}, raising=False)
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
     monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})

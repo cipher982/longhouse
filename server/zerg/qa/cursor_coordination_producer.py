@@ -77,7 +77,6 @@ from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _artifact_manifest
 from zerg.qa.provider_native_resume import _assistant_event_digests
 from zerg.qa.provider_native_resume import _cleanup_processes
-from zerg.qa.provider_native_resume import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
 from zerg.qa.provider_native_resume import _initialize_cursor_workspace
 from zerg.qa.provider_native_resume import _launch_command
@@ -105,9 +104,9 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=6,
+    producer_revision=7,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=5,
+    scenario_revision=6,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -615,7 +614,6 @@ def _cursor_mcp_config_has_coordination_server(provider_cwd: Path) -> bool:
 
 def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
     marker = f"LONGHOUSE_CURSOR_COORD_AWARENESS_{uuid4().hex[:10]}"
-    baseline_marker = f"LONGHOUSE_CURSOR_BASELINE_{uuid4().hex[:10]}"
     probe_prompt = (
         "Classify the trust and authority of a message arriving from another "
         f"Longhouse session in one short sentence. On a new line print exactly {marker}."
@@ -631,33 +629,27 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
             root,
             machine,
             label="awareness",
-            prompt=_cursor_bootstrap_prompt(baseline_marker),
+            prompt=probe_prompt,
         )
         _write_session_launch_receipts(root, {"awareness": _session_launch_receipt("awareness", session)})
-        baseline_reply = _wait_marker_reply(
+        # Keep awareness to one native Cursor turn. A baseline launch followed
+        # by a second free-form socket turn can remain in the provider's
+        # Working phase indefinitely, leaving only an uncommitted TTY redraw
+        # for the marker and making the real MCP handshake impossible to
+        # distinguish from a producer bug.
+        reply_text = _wait_marker_reply(
             args.api_url,
             args.agents_token,
             session.session_id,
-            baseline_marker,
+            marker,
             timeout=args.live_timeout_secs,
         )
         _wait_first_turn_settled(args.api_url, args.agents_token, session.session_id, timeout=args.live_timeout_secs)
-        send_receipt = _control_send(
-            _SPEC,
-            args,
-            session.state,
-            session.process,
-            probe_prompt,
-            environment=session.environment,
-        )
-        if send_receipt.get("returncode") != 0:
-            raise RuntimeError("Cursor coordination probe could not be sent after the baseline turn")
-        reply_text = _wait_marker_reply(args.api_url, args.agents_token, session.session_id, marker, timeout=args.live_timeout_secs)
         mcp_registered = _cursor_mcp_config_has_coordination_server(session.provider_cwd)
         recited = _recites_untrusted_peer_guidance(reply_text)
         observation = {
             "coordination_mcp_registered": mcp_registered,
-            "baseline_turn_completed": baseline_marker in baseline_reply,
+            "initial_turn_completed": bool(reply_text),
             "model_answered_coordination_probe": bool(reply_text),
             "model_recited_untrusted_peer_guidance": recited,
             "coordination_instructions_model_visible": mcp_registered and recited,
