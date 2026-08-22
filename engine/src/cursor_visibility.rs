@@ -325,6 +325,17 @@ pub(crate) fn parse_cursor_visibility_evidence(
             if prompt.is_empty() {
                 continue;
             }
+            // Cursor emits lifecycle receipts for local TUI commands too.
+            // They change provider state but are not model turns and have no
+            // corresponding message in the Cursor store. Keeping them out of
+            // the turn sequence prevents teardown/reset commands from making
+            // an otherwise unique transcript alignment look ambiguous.
+            if matches!(
+                prompt,
+                "/exit" | "/clear" | "/new" | "/new-chat" | "/newchat"
+            ) {
+                continue;
+            }
             if let Some(index) = indices.get(generation_id).copied() {
                 ambiguous |= turns.get(index).is_some_and(|turn| turn.prompt != prompt);
                 continue;
@@ -437,6 +448,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(evidence.turns.len(), 1);
+        assert_eq!(evidence.turns[0].response_text.as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn local_cursor_commands_do_not_shift_provider_turn_alignment() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"world"}}
+{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"/exit"}}
+{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g2","status":"completed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+        assert!(!evidence.ambiguous);
+        assert_eq!(evidence.turns.len(), 1);
+        assert_eq!(evidence.turns[0].prompt, "hello");
         assert_eq!(evidence.turns[0].response_text.as_deref(), Some("world"));
     }
 
