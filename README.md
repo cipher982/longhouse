@@ -1,15 +1,10 @@
 # Longhouse
 
-Longhouse gives you one web, iOS, and CLI interface for the coding agents you
-already use. It puts real Claude Code, Codex, Antigravity, OpenCode, and Cursor
-sessions into one searchable timeline across the machines you own.
+**Remote control for your coding agents.**
 
-When Longhouse launches work, the installed provider client still executes on
-the selected machine with its existing authentication, subscription, tools,
-configuration, and repository access. Longhouse adds a shared control and
-observation layer; it does not replace those clients with another agent runtime.
-The available controls follow each provider's native seams rather than a
-pretend one-size-fits-all wrapper.
+→ **[longhouse.ai](https://longhouse.ai)** · [Download for macOS](https://longhouse.ai/download/macos) · [Hosted](https://control.longhouse.ai/signup) · [Docs](https://longhouse.ai/docs)
+
+Watch any Claude Code, Codex, Cursor, or OpenCode session live from the web or your iPhone. Search everything they've done. Send your next instruction while the agent keeps running in its real terminal on your machine. Apache-2.0 open core.
 
 ![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
 
@@ -21,8 +16,7 @@ Longhouse fixes that:
 
 - **Find any past session in seconds** — one timeline + full-text search across every provider and machine.
 - **Control live work remotely** — launch a session through Longhouse, then send, interrupt, steer, or resume it later when that provider supports the operation.
-- **Own your history** — Longhouse stores its archive in SQLite on your Runtime
-  Host. The provider client still makes its normal requests to its provider.
+- **Own your history** — Longhouse stores its archive in SQLite on your Runtime Host. The provider client still makes its normal requests to its provider.
 
 Longhouse does not replace a provider with its own agent runtime or terminal UI. A bare provider CLI stays observable through its native archive. A managed launch such as `longhouse claude` keeps the stock terminal experience while adding Longhouse's provider-specific control path. The timeline exposes the controls a session can actually perform instead of assuming every provider can steer a live turn.
 
@@ -69,11 +63,19 @@ longhouse-server recall "that auth refresh bug from last week"
 longhouse-server tail <session-id>
 ```
 
-## Durable Self-Host
+## Durability
 
 A laptop runtime stops when the laptop sleeps. For real durability, run the Runtime Host on an always-on box (VPS, homelab, Mac mini) and point your dev machines at it.
 
-**On the always-on box** — a public bind requires auth, so set it up first:
+| | Self-host | Hosted |
+|---|---|---|
+| You operate | Runtime Host on a VPS, homelab, or Mac mini | Nothing — we run it |
+| Cost | Free (Apache-2.0) | $5/mo |
+| Setup | `longhouse-server serve` (steps below) | [control.longhouse.ai/signup](https://control.longhouse.ai/signup) |
+| Always-on | Up to you | Yes |
+| iOS push on `needs_user` | Yes (APNs config required) | Yes |
+
+**Self-host — on the always-on box:**
 
 ```bash
 export LONGHOUSE_PASSWORD_HASH="$(longhouse-server hash-password)"   # prompts for a password
@@ -93,8 +95,6 @@ longhouse machine repair --repair-service
 
 Binding beyond localhost without auth is refused by default — `longhouse-server serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
 
-Or skip running the box — hosted (we run the Runtime Host for you) is available at <https://control.longhouse.ai/signup>.
-
 ## Repair
 
 ```bash
@@ -106,25 +106,33 @@ longhouse machine repair --repair-service              # install/repair its nati
 
 `longhouse --help` lists every subcommand. Full docs: <https://longhouse.ai/docs>.
 
+## What makes Longhouse different
+
+Other tools spin up sandboxed cloud agents or wrap a single vendor's dashboard. Longhouse unifies the sessions you already run, on hardware you own, across providers. You keep using the official clients and provider plans you already have instead of buying access to another model-backed coding agent.
+
+## Status
+
+Actively developed pre-release. All five major providers sync into one searchable timeline today:
+
+| Provider | Search | Launch | Interrupt | Mid-turn steer | Resume |
+|---|---|---|---|---|---|
+| Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Codex CLI | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Cursor Agent | ✓ | ✓ | ✓ | — | ✓ |
+| OpenCode | ✓ | ✓ | ✓ | — | ✓ |
+| Antigravity | ✓ | ✓ | — | — | — |
+
+iOS companion ships APNs push on `needs_user`. See [RELEASE.md](RELEASE.md) for what's changed.
+
+Built and maintained by [David W. Rose](https://drose.io/)
+([cipher982](https://github.com/cipher982)). Apache-2.0.
+
 ## Architecture
+
 - **Machine Agent** — Rust engine on each dev machine. Ships session events.
 - **Runtime Host** — FastAPI + bundled web UI + SQLite. Lives where durability should live.
 
-On a laptop both run together for trial use. But you will want a VPS you self host or just pay me $5 and i will do it. See `VISION.md` for the full product thesis.
-
-## How It Compares
-
-There are great tools for spinning up sandboxed cloud agents, and the model labs
-ship their own single-vendor dashboards. Longhouse unifies the sessions you
-already run, on hardware you own, across providers. You keep using the official
-clients and provider plans you already have instead of buying access to another
-model-backed coding agent.
-
-## Self-host (free) vs Hosted (paid)
-
-The Apache-2.0 core in this repo is fully usable on your own machines.
-
-Hosted (<https://control.longhouse.ai/signup>) exists for people who don't want to run an always-on box. We run the Runtime Host for you: always-on durability, zero-setup multi-machine sync, and iOS push when a session needs you, the things a sleeping laptop can't do. Same product but we just operate the box.
+On a laptop both run together for trial use. For the full system map, component detail, and a glossary of the project's nouns (Shadow/Helm/Console, wall, recall, peers, …) see [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`VISION.md`](VISION.md).
 
 ## Contributing
 
@@ -137,16 +145,15 @@ make test       # unit tests
 make test-e2e   # end-to-end
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, test tiers, and the codegen flow, and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the system map and a glossary of the project's nouns (managed vs unmanaged, Machine Agent vs Runtime Host, wall, recall, …).
+Good entry points: web timeline UI, additional provider-CLI ingest parsers, CLI subcommand UX, and docs. Look for [`good first issue`](https://github.com/cipher982/longhouse/labels/good%20first%20issue) labels.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, test tiers, the codegen flow, and the open-core boundary. [`EDITIONS.md`](EDITIONS.md) has the line between the Apache-2.0 core and Longhouse Cloud.
 
 Issues: <https://github.com/cipher982/longhouse/issues>
 
-## Status
+---
 
-Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Native Helm supports Claude, Codex, Cursor, and OpenCode; Antigravity remains Shadow-only. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
-
-Built and maintained by [David W. Rose](https://drose.io/)
-([cipher982](https://github.com/cipher982)). Apache-2.0.
+→ **[longhouse.ai](https://longhouse.ai)**
 
 <!-- readme-test: verifies install from source and health endpoint -->
 ```readme-test
