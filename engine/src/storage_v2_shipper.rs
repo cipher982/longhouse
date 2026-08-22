@@ -1980,16 +1980,31 @@ fn unique_cursor_turn_alignment(
     store_turns: &[CursorStoreTurn],
     receipt_turns: &[crate::cursor_visibility::CursorProviderTurn],
 ) -> Option<Vec<(usize, usize)>> {
-    if receipt_turns.is_empty() {
+    // Cursor can emit lifecycle receipts for provider-internal prompts that
+    // are not persisted as user messages in store.db.  Those receipts cannot
+    // authorize or suppress any stored assistant text, so exclude them from
+    // the alignment sequence.  Receipts whose prompt does match a stored
+    // turn remain subject to the same unique-path check; repeated prompts are
+    // still rejected as ambiguous rather than guessed.
+    let relevant_receipts = receipt_turns
+        .iter()
+        .enumerate()
+        .filter(|(_, receipt_turn)| {
+            store_turns
+                .iter()
+                .any(|store_turn| store_turn.prompt.trim() == receipt_turn.prompt.trim())
+        })
+        .collect::<Vec<_>>();
+    if relevant_receipts.is_empty() {
         return Some(Vec::new());
     }
     let mut states = HashMap::<usize, (u8, Vec<usize>)>::new();
     for (store_index, store_turn) in store_turns.iter().enumerate() {
-        if store_turn.prompt.trim() == receipt_turns[0].prompt.trim() {
+        if store_turn.prompt.trim() == relevant_receipts[0].1.prompt.trim() {
             states.insert(store_index, (1, vec![store_index]));
         }
     }
-    for receipt_turn in receipt_turns.iter().skip(1) {
+    for (_, receipt_turn) in relevant_receipts.iter().skip(1) {
         let mut next = HashMap::<usize, (u8, Vec<usize>)>::new();
         for (previous_index, (path_count, path)) in &states {
             for (store_index, store_turn) in
@@ -2015,7 +2030,14 @@ fn unique_cursor_turn_alignment(
         return None;
     }
     let (_, path) = states.into_values().find(|(count, _)| *count == 1)?;
-    Some(path.into_iter().enumerate().map(|(e, s)| (s, e)).collect())
+    Some(
+        path.into_iter()
+            .enumerate()
+            .map(|(relevant_index, store_index)| {
+                (store_index, relevant_receipts[relevant_index].0)
+            })
+            .collect(),
+    )
 }
 
 fn unique_cursor_receipt_path(
@@ -4413,6 +4435,48 @@ mod tests {
         assert_eq!(rendered[1].role, "system");
         assert_eq!(rendered[2].role, "assistant");
         assert_eq!(rendered[2].content_text.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn cursor_unstored_provider_receipt_does_not_shift_turn_alignment() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let reply = "2222222222222222222222222222222222222222222222222222222222222222";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![
+                crate::cursor_visibility::CursorProviderTurn {
+                    generation_id: "generation-internal".to_string(),
+                    prompt: "provider internal setup".to_string(),
+                    response_text: Some("setup complete".to_string()),
+                    stop_status: Some("completed".to_string()),
+                    stop_observed_at: None,
+                },
+                crate::cursor_visibility::CursorProviderTurn {
+                    generation_id: "generation-user".to_string(),
+                    prompt: "do work".to_string(),
+                    response_text: Some("done".to_string()),
+                    stop_status: Some("completed".to_string()),
+                    stop_observed_at: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(rendered[1].role, "assistant");
+        assert_eq!(rendered[1].content_text.as_deref(), Some("done"));
     }
 
     #[test]
