@@ -555,6 +555,47 @@ def db_classify_automation(
         typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
 
 
+@db_app.command(name="reconcile-session-visibility")
+def db_reconcile_session_visibility(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override (defaults to env)."),
+    apply_changes: bool = typer.Option(False, "--apply", help="Persist proven visibility corrections."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Evaluate every session against the canonical presentation policy."""
+
+    from zerg.database import make_sessionmaker
+    from zerg.services.agents.automation_backfill import reconcile_derived_visibility
+    from zerg.services.agents.automation_backfill import reconcile_legacy_session_visibility
+
+    engine, resolved_database_url = _resolve_db_engine(database_url)
+    SessionLocal = make_sessionmaker(engine)
+    db = SessionLocal()
+    try:
+        result = reconcile_legacy_session_visibility(db, apply=apply_changes)
+    finally:
+        db.close()
+    derived = {"applied": [], "failed": []}
+    if apply_changes and result.derived_visibility_rows:
+        derived = reconcile_derived_visibility(result.derived_visibility_rows)
+    payload = {
+        "status": "ok" if not derived["failed"] else "partial",
+        "database_url": resolved_database_url,
+        "mode": "apply" if apply_changes else "dry_run",
+        **result.to_dict(),
+        "derived_applied_count": len(derived["applied"]),
+        "derived_failures": derived["failed"],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    typer.echo(
+        f"Evaluated {result.evaluated} session(s); actionable={len(result.actionable_session_ids)}; "
+        f"unresolved historical hidden={len(result.unresolved_hidden_session_ids)}."
+    )
+    if apply_changes:
+        typer.echo(f"Mirrored {len(derived['applied'])} correction(s); failures={len(derived['failed'])}.")
+
+
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")

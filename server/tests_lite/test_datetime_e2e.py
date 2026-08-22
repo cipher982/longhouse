@@ -8,15 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 from fastapi.testclient import TestClient
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 from zerg.models.models import User
-from zerg.models.agents import AgentSession, AgentEvent
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,6 +38,7 @@ def _seed_session(db):
     """Seed a test session with naive UTC datetimes (simulating SQLite storage)."""
     import uuid
     from datetime import timedelta
+
     session_id = str(uuid.uuid4())
 
     # Use recent timestamps so days_back filter doesn't exclude them
@@ -81,7 +84,8 @@ def _seed_user(db):
 def _make_client(db_session):
     """Create a TestClient with DB override."""
     from zerg.dependencies.auth import require_admin
-    from zerg.main import api_app, app
+    from zerg.main import api_app
+    from zerg.main import app
 
     _seed_user(db_session)
 
@@ -145,7 +149,7 @@ def test_sessions_endpoint_datetime_has_z_suffix(tmp_path):
         client, api_app_ref = _make_client(db)
 
         try:
-            response = client.get("/api/agents/sessions?include_test=true")
+            response = client.get("/api/agents/sessions?include_test=true&include_automation=true")
             assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
             data = response.json()
@@ -162,7 +166,7 @@ def test_sessions_endpoint_datetime_has_z_suffix(tmp_path):
                 if not value.endswith("Z"):
                     failures.append(f"{path} = {value} (missing Z suffix)")
 
-            assert not failures, f"Found datetime fields without Z suffix:\n" + "\n".join(failures)
+            assert not failures, "Found datetime fields without Z suffix:\n" + "\n".join(failures)
 
         finally:
             api_app_ref.dependency_overrides = {}
@@ -194,7 +198,7 @@ def test_session_detail_endpoint_datetime_has_z_suffix(tmp_path):
                 if not value.endswith("Z"):
                     failures.append(f"{path} = {value} (missing Z suffix)")
 
-            assert not failures, f"Found datetime fields without Z suffix:\n" + "\n".join(failures)
+            assert not failures, "Found datetime fields without Z suffix:\n" + "\n".join(failures)
 
         finally:
             api_app_ref.dependency_overrides = {}

@@ -15,6 +15,8 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
 from zerg.services.internal_sessions import is_hatch_execution_contract
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.services.session_visibility_policy import facts_from_row
 
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
@@ -48,6 +50,93 @@ class AutomationBackfillResult:
             "heuristic_candidate_count": len(self.heuristic_candidates),
             "heuristic_candidates": self.heuristic_candidates,
         }
+
+
+@dataclass(frozen=True)
+class VisibilityReconcileResult:
+    evaluated: int
+    actionable_session_ids: list[str]
+    proven_hidden_session_ids: list[str]
+    derived_visibility_rows: list[dict[str, Any]]
+    unresolved_hidden_session_ids: list[str]
+    reason_counts: dict[str, int]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evaluated": self.evaluated,
+            "actionable_count": len(self.actionable_session_ids),
+            "actionable_session_ids": self.actionable_session_ids,
+            "proven_hidden_count": len(self.proven_hidden_session_ids),
+            "proven_hidden_session_ids": self.proven_hidden_session_ids,
+            "derived_visibility_count": len(self.derived_visibility_rows),
+            "unresolved_hidden_count": len(self.unresolved_hidden_session_ids),
+            "unresolved_hidden_session_ids": self.unresolved_hidden_session_ids,
+            "reason_counts": self.reason_counts,
+        }
+
+
+def reconcile_legacy_session_visibility(db: Session, *, apply: bool) -> VisibilityReconcileResult:
+    """Evaluate every legacy session and persist only proven policy outcomes.
+
+    Positive evidence may safely hide a stale row. A historical hidden flag
+    without current evidence is reported for review rather than silently
+    cleared: old data may predate facts that can reconstruct its origin.
+    """
+
+    sessions = db.query(AgentSession).order_by(AgentSession.started_at.asc(), AgentSession.id.asc()).all()
+    primary_threads = {thread.session_id: thread for thread in db.query(SessionThread).filter(SessionThread.is_primary == 1).all()}
+    actionable: list[str] = []
+    proven_hidden: list[str] = []
+    derived_visibility_rows: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+    reason_counts: dict[str, int] = {}
+    for session in sessions:
+        if not session.first_user_message_preview:
+            session.first_user_message_preview = _event_preview(db, session.id) or None
+        primary = primary_threads.get(session.id)
+        decision = evaluate_origin_visibility(
+            facts_from_row(
+                session,
+                primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
+            )
+        )
+        for reason in decision.reason_keys:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if decision.system_hidden and not bool(session.hidden_from_default_timeline):
+            proven_hidden.append(str(session.id))
+            actionable.append(str(session.id))
+            if apply:
+                session.hidden_from_default_timeline = 1
+                for thread in db.query(SessionThread).filter(SessionThread.session_id == session.id).all():
+                    thread.hidden_from_default_timeline = 1
+                card = db.get(TimelineCard, session.id)
+                if card is not None:
+                    card.hidden_from_default_timeline = 1
+        elif decision.system_hidden:
+            proven_hidden.append(str(session.id))
+        elif bool(session.hidden_from_default_timeline):
+            unresolved.append(str(session.id))
+        if decision.system_hidden or bool(session.user_hidden_from_timeline) or session.user_state not in {"active", "parked"}:
+            derived_visibility_rows.append(
+                {
+                    "session_id": str(session.id),
+                    "system_hidden": decision.system_hidden,
+                    "user_hidden_from_timeline": bool(session.user_hidden_from_timeline),
+                    "user_state": str(session.user_state or "active"),
+                }
+            )
+    if apply:
+        db.commit()
+    else:
+        db.rollback()
+    return VisibilityReconcileResult(
+        evaluated=len(sessions),
+        actionable_session_ids=actionable,
+        proven_hidden_session_ids=proven_hidden,
+        derived_visibility_rows=derived_visibility_rows,
+        unresolved_hidden_session_ids=unresolved,
+        reason_counts=reason_counts,
+    )
 
 
 def _normalize_session_id(value: str | UUID) -> UUID:
@@ -330,3 +419,62 @@ def reclassify_catalogd_origins(
         "failed_catalogd_session_ids": failed,
         "searchd_failed_session_ids": searchd_failed,
     }
+
+
+def reconcile_derived_visibility(
+    rows: list[dict[str, Any]],
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Mirror a proven policy decision through catalogd and searchd."""
+
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.client import call_catalogd_sync
+    from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.services.searchd_supervisor import searchd_paths
+
+    try:
+        _, catalogd_socket = catalogd_paths()
+    except (RuntimeError, OSError) as exc:
+        return {"applied": [], "failed": [{"session_id": "", "error": f"catalogd unavailable: {exc}"}]}
+    try:
+        _, searchd_socket = searchd_paths()
+    except (RuntimeError, OSError):
+        searchd_socket = None
+    applied: list[str] = []
+    failed: list[dict[str, str]] = []
+    for row in rows:
+        session_id = str(row["session_id"])
+        system_hidden = bool(row["system_hidden"])
+        observed_at = datetime.now(UTC).isoformat()
+        try:
+            catalog_result = call_catalogd_sync(
+                catalogd_socket,
+                "catalogd.session.reconcile_visibility.v2",
+                params={"session_id": session_id, "system_hidden": system_hidden, "observed_at": observed_at},
+                timeout_seconds=timeout_seconds,
+            )
+            if catalog_result.get("reconciled") is not True:
+                failed.append({"session_id": session_id, "error": "catalogd session not found"})
+                continue
+            if searchd_socket is not None:
+                call_catalogd_sync(
+                    searchd_socket,
+                    "search.session.reconcile_visibility.v2",
+                    params={
+                        "session_id": session_id,
+                        "system_hidden": system_hidden,
+                        "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
+                        "user_state": str(row["user_state"]),
+                        "source_commit_seq": int(catalog_result.get("commit_seq") or 0),
+                    },
+                    timeout_seconds=timeout_seconds,
+                )
+            applied.append(session_id)
+        except (CatalogUnavailable, CatalogRemoteError, ValueError) as exc:
+            failed.append({"session_id": session_id, "error": str(exc)})
+    return {"applied": applied, "failed": failed}

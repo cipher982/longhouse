@@ -608,7 +608,11 @@ def test_cross_session_search_ignores_live_preview_text(tmp_path):
             )
         )
 
-        durable_sessions, durable_total = store.list_sessions(include_test=True, query="searchable")
+        durable_sessions, durable_total = store.list_sessions(
+            include_test=True,
+            include_automation=True,
+            query="searchable",
+        )
 
     assert durable_total == 1
     assert [session.id for session in durable_sessions] == [session.id]

@@ -33,6 +33,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.agents.automation_backfill import classify_reviewed_hatch_automation_sessions
+from zerg.services.agents.automation_backfill import reconcile_legacy_session_visibility
 from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.session_coordination import query_wall_sessions
@@ -130,16 +131,46 @@ def _hatch_payload(
     )
 
 
+def test_visibility_reconcile_evaluates_all_rows_and_preserves_raw_facts(tmp_path):
+    SessionLocal = _session_factory(tmp_path, "visibility-reconcile.db")
+    prompt = "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_root_payload(text=prompt))
+        session = db.get(AgentSession, PARENT_ID)
+        session.hidden_from_default_timeline = 0
+        session.launch_actor = "user"
+        session.launch_surface = "terminal"
+        session.origin_kind = None
+        card = db.get(TimelineCard, PARENT_ID)
+        card.hidden_from_default_timeline = 0
+        primary = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
+        primary.hidden_from_default_timeline = 0
+        db.commit()
+
+        preview = reconcile_legacy_session_visibility(db, apply=False)
+        assert preview.evaluated == 1
+        assert preview.actionable_session_ids == [str(PARENT_ID)]
+        assert db.get(AgentSession, PARENT_ID).hidden_from_default_timeline == 0
+
+        applied = reconcile_legacy_session_visibility(db, apply=True)
+        assert applied.actionable_session_ids == [str(PARENT_ID)]
+        db.refresh(session)
+        assert session.hidden_from_default_timeline == 1
+        assert session.launch_actor == "user"
+        assert session.launch_surface == "terminal"
+        assert session.origin_kind is None
+
+        converged = reconcile_legacy_session_visibility(db, apply=False)
+        assert converged.actionable_session_ids == []
+
+
 def test_hatch_automation_ingest_persists_sticky_hidden_origin_and_edge(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:
         store = AgentsStore(db)
         store.ingest_session(_root_payload())
-        parent_thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        parent_thread = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
 
         result = store.ingest_session(
             _hatch_payload(
@@ -155,11 +186,7 @@ def test_hatch_automation_ingest_persists_sticky_hidden_origin_and_edge(tmp_path
         assert hatch_session.origin_kind == "hatch_automation"
         assert hatch_session.hidden_from_default_timeline == 1
 
-        hatch_thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == HATCH_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        hatch_thread = db.query(SessionThread).filter(SessionThread.session_id == HATCH_ID, SessionThread.is_primary == 1).one()
         assert hatch_thread.branch_kind == "root"
         assert hatch_thread.origin_kind == "hatch_automation"
         assert hatch_thread.hidden_from_default_timeline == 1
@@ -225,10 +252,7 @@ def test_hatch_automation_ingest_persists_sticky_hidden_origin_and_edge(tmp_path
 
 def test_hatch_execution_contract_ingest_recovers_missing_origin_metadata(tmp_path):
     SessionLocal = _session_factory(tmp_path, name="hatch-contract-origin.db")
-    contract = (
-        "Hatch execution contract:\n"
-        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
-    )
+    contract = "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
     with SessionLocal() as db:
         store = AgentsStore(db)
         initial_payload = _root_payload(
@@ -369,11 +393,7 @@ def test_provider_subagent_lineage_wins_when_hatch_origin_is_also_present(tmp_pa
         store = AgentsStore(db)
         store.ingest_session(_root_payload(provider_session_id="ses_parent"))
         parent = db.get(AgentSession, PARENT_ID)
-        parent_thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        parent_thread = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
 
         result = store.ingest_session(
             _hatch_payload(
@@ -399,11 +419,7 @@ def test_provider_subagent_lineage_wins_when_hatch_origin_is_also_present(tmp_pa
         assert parent.hidden_from_default_timeline == 0
         assert db.get(TimelineCard, PARENT_ID).hidden_from_default_timeline == 0
 
-        child_thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == PARENT_ID, SessionThread.branch_kind == "subagent")
-            .one()
-        )
+        child_thread = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.branch_kind == "subagent").one()
         assert child_thread.parent_thread_id == parent_thread.id
         assert child_thread.origin_kind == "hatch_automation"
         assert child_thread.hidden_from_default_timeline == 1
@@ -455,11 +471,7 @@ def test_historical_hatch_backfill_reports_candidates_but_only_hides_reviewed_id
         assert db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline == 1
         assert db.get(TimelineCard, HATCH_ID).launch_actor == "automation"
         assert db.get(TimelineCard, HATCH_ID).launch_surface == "hatch"
-        hatch_thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == HATCH_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        hatch_thread = db.query(SessionThread).filter(SessionThread.session_id == HATCH_ID, SessionThread.is_primary == 1).one()
         assert hatch_thread.hidden_from_default_timeline == 1
 
         hatch_session.launch_actor = None
@@ -523,6 +535,42 @@ def test_db_classify_automation_cli_applies_reviewed_session_ids(tmp_path):
     with SessionLocal() as db:
         assert db.get(AgentSession, HATCH_ID).origin_kind == "hatch_automation"
         assert db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline == 1
+
+
+def test_db_reconcile_visibility_cli_reports_every_session_without_mutation(tmp_path):
+    from zerg.cli.main import app as cli_app
+
+    db_path = tmp_path / "visibility-reconcile-cli.db"
+    db_url = f"sqlite:///{db_path}"
+    engine = make_engine(db_url).execution_options(schema_translate_map={"agents": None})
+    initialize_database(engine)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+    with SessionLocal() as db:
+        AgentsStore(db).ingest_session(
+            _root_payload(
+                session_id=HATCH_ID,
+                text=(
+                    "Hatch execution contract:\n"
+                    "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
+                ),
+            )
+        )
+        session = db.get(AgentSession, HATCH_ID)
+        session.hidden_from_default_timeline = 0
+        db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline = 0
+        db.commit()
+
+    result = CliRunner().invoke(
+        cli_app,
+        ["db", "reconcile-session-visibility", "--database-url", db_url, "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["evaluated"] == 1
+    assert payload["actionable_session_ids"] == [str(HATCH_ID)]
+    with SessionLocal() as db:
+        assert db.get(AgentSession, HATCH_ID).hidden_from_default_timeline == 0
 
 
 def test_db_classify_automation_cli_applies_reviewed_test_or_canary_ids(tmp_path):

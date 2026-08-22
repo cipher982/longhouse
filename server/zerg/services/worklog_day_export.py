@@ -72,6 +72,9 @@ SELECT
 FROM active_sessions active
 JOIN sessions s ON s.id = active.session_id
 WHERE (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
+  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+  AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+  AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
 ORDER BY COALESCE(active.first_message_at, active.first_event_at), s.started_at, s.id
 """
 
@@ -96,6 +99,9 @@ WHERE e.timestamp >= :window_start_utc AND e.timestamp < :window_end_utc
   AND e.role IN ('user', 'assistant')
   AND e.content_text IS NOT NULL
   AND (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
+  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+  AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+  AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
 ORDER BY e.session_id, e.timestamp, e.id
 """
 
@@ -121,6 +127,9 @@ WHERE e.session_id = :session_id
   AND e.role IN ('user', 'assistant')
   AND e.content_text IS NOT NULL
   AND (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
+  AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+  AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+  AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
 ORDER BY e.timestamp DESC, e.id DESC
 LIMIT {_WORKLOG_BOUNDARY_CONTEXT_ROWS}
 """

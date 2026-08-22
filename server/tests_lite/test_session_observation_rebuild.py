@@ -220,6 +220,7 @@ def _product_surface_snapshot(db, session_id) -> dict:
     export_result = store.export_session_jsonl(session_id)
     query_sessions, query_total = store.list_sessions(
         include_test=True,
+        include_automation=True,
         project="observation-rebuild",
         provider="codex",
         query="durable",
@@ -233,6 +234,7 @@ def _product_surface_snapshot(db, session_id) -> dict:
                 provider="codex",
                 environment=None,
                 include_test=True,
+                include_automation=True,
                 hide_autonomous=True,
                 device_id=None,
                 days_back=90,
@@ -297,7 +299,7 @@ def _product_surface_snapshot(db, session_id) -> dict:
 def _api_surface_snapshot(client: TestClient, session_id) -> dict:
     headers = {"X-Agents-Token": "dev"}
     list_response = client.get(
-        "/agents/sessions?include_test=true&hide_autonomous=false&project=observation-rebuild&provider=codex&query=durable&days_back=90&limit=10",
+        "/agents/sessions?include_test=true&include_automation=true&hide_autonomous=false&project=observation-rebuild&provider=codex&query=durable&days_back=90&limit=10",
         headers=headers,
     )
     detail_response = client.get(f"/agents/sessions/{session_id}", headers=headers)

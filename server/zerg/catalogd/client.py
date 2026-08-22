@@ -139,6 +139,7 @@ _SAFE_RETRY_METHODS = {
     "worklog.snapshot.release.v2",
     "search.session.delete.v2",
     "search.session.reclassify_origin.v2",
+    "search.session.reconcile_visibility.v2",
 }
 
 # speed-of-light-database.md separates the 250 ms p95 performance target from

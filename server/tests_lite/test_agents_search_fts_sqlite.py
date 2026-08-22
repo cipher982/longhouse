@@ -63,7 +63,7 @@ def test_agents_search_fts_sqlite(tmp_path):
         assert rows
 
         # Search via store API (should return the session)
-        sessions, total = store.list_sessions(include_test=True, query="grep")
+        sessions, total = store.list_sessions(include_test=True, include_automation=True, query="grep")
         assert total == 1
         assert len(sessions) == 1
 
@@ -378,10 +378,7 @@ def test_agents_fts_large_append_restores_triggers_after_error(tmp_path):
         trigger_names = {
             row[0]
             for row in db.execute(
-                text(
-                    "SELECT name FROM sqlite_master "
-                    "WHERE type='trigger' AND name IN ('events_ai', 'events_ad', 'events_au')"
-                )
+                text("SELECT name FROM sqlite_master WHERE type='trigger' AND name IN ('events_ai', 'events_ad', 'events_au')")
             ).fetchall()
         }
         assert trigger_names == {"events_ai", "events_ad", "events_au"}

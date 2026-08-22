@@ -75,6 +75,9 @@ _ARCHIVE_SEARCH_SQL = """
      AND m.object_id = e.source_object_id
     WHERE events_fts MATCH ? AND s.owner_id = ?
       AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
+      AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+      AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
+      AND COALESCE(s.tombstoned, 0) = 0
       AND (? IS NULL OR s.project = ?)
       AND (? IS NULL OR s.provider = ?)
       AND (? IS NULL OR s.environment = ?)
@@ -111,6 +114,9 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = """
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
           AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
+          AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+          AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
+          AND COALESCE(s.tombstoned, 0) = 0
           AND (? IS NULL OR s.project = ?)
           AND (? IS NULL OR s.provider = ?)
           AND (? IS NULL OR s.environment = ?)
@@ -156,6 +162,9 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
           AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0)
+          AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+          AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
+          AND COALESCE(s.tombstoned, 0) = 0
           AND (? IS NULL OR s.project = ?)
           AND (? IS NULL OR s.provider = ?)
           AND (? IS NULL OR s.environment = ?)
@@ -212,6 +221,9 @@ _SEARCHABLE_SEARCH_SQL = """
         JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
         WHERE searchable_fts MATCH ? AND e.owner_id = ?
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0)
+          AND COALESCE(e.user_hidden_from_timeline, 0) = 0
+          AND COALESCE(e.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
+          AND COALESCE(e.tombstoned, 0) = 0
           AND (? IS NULL OR e.project = ?)
           AND (? IS NULL OR e.provider = ?)
           AND (? IS NULL OR e.environment = ?)
@@ -435,10 +447,18 @@ def _add_missing_visibility_columns(connection: sqlite3.Connection) -> None:
     as "not hidden". ``origin_kind`` is carried for diagnostics only.
     """
 
+    additive = {
+        "hidden_from_default_timeline": "INTEGER",
+        "user_hidden_from_timeline": "INTEGER NOT NULL DEFAULT 0",
+        "user_state": "TEXT NOT NULL DEFAULT 'active'",
+        "source_commit_seq": "INTEGER NOT NULL DEFAULT 0",
+        "tombstoned": "INTEGER NOT NULL DEFAULT 0",
+    }
     for table in ("session_index", "searchable_events"):
         columns = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
-        if "hidden_from_default_timeline" not in columns:
-            connection.execute(f"ALTER TABLE {table} ADD COLUMN hidden_from_default_timeline INTEGER")
+        for name, declaration in additive.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
     columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(session_index)").fetchall()}
     if "origin_kind" not in columns:
         connection.execute("ALTER TABLE session_index ADD COLUMN origin_kind TEXT")
@@ -560,7 +580,11 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             title_eligible INTEGER NOT NULL DEFAULT 0,
             indexed_through INTEGER NOT NULL,
             event_count INTEGER NOT NULL,
-            hidden_from_default_timeline INTEGER
+            hidden_from_default_timeline INTEGER,
+            user_hidden_from_timeline INTEGER NOT NULL DEFAULT 0,
+            user_state TEXT NOT NULL DEFAULT 'active',
+            source_commit_seq INTEGER NOT NULL DEFAULT 0,
+            tombstoned INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS searchable_text (
             source_event_id INTEGER PRIMARY KEY,
@@ -612,6 +636,10 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             tool_calls INTEGER NOT NULL,
             is_sidechain INTEGER NOT NULL,
             hidden_from_default_timeline INTEGER,
+            user_hidden_from_timeline INTEGER NOT NULL DEFAULT 0,
+            user_state TEXT NOT NULL DEFAULT 'active',
+            source_commit_seq INTEGER NOT NULL DEFAULT 0,
+            tombstoned INTEGER NOT NULL DEFAULT 0,
             project TEXT,
             provider TEXT NOT NULL,
             environment TEXT NOT NULL,
@@ -1384,6 +1412,10 @@ class SearchStore:
         started_at: str,
         hidden_from_default_timeline: bool = False,
         origin_kind: str | None = None,
+        user_hidden_from_timeline: bool = False,
+        user_state: str = "active",
+        source_commit_seq: int = 0,
+        tombstoned: bool = False,
     ) -> dict[str, object]:
         now = datetime.now(UTC).isoformat()
         self.connection.execute("BEGIN IMMEDIATE")
@@ -1420,8 +1452,9 @@ class SearchStore:
                     object_count, object_set_hash, event_count,
                     user_messages, assistant_messages, tool_calls, is_sidechain,
                     hidden_from_default_timeline, origin_kind,
+                    user_hidden_from_timeline, user_state, source_commit_seq, tombstoned,
                     project, provider, environment, cwd, git_repo, started_at, published_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     generation_id=excluded.generation_id,
                     owner_id=excluded.owner_id,
@@ -1436,6 +1469,10 @@ class SearchStore:
                     is_sidechain=excluded.is_sidechain,
                     hidden_from_default_timeline=excluded.hidden_from_default_timeline,
                     origin_kind=excluded.origin_kind,
+                    user_hidden_from_timeline=excluded.user_hidden_from_timeline,
+                    user_state=excluded.user_state,
+                    source_commit_seq=excluded.source_commit_seq,
+                    tombstoned=excluded.tombstoned,
                     project=excluded.project,
                     provider=excluded.provider,
                     environment=excluded.environment,
@@ -1459,6 +1496,10 @@ class SearchStore:
                     int(aggregates["is_sidechain"] or 0),
                     1 if hidden_from_default_timeline else 0,
                     origin_kind,
+                    1 if user_hidden_from_timeline else 0,
+                    user_state,
+                    source_commit_seq,
+                    1 if tombstoned else 0,
                     project,
                     provider,
                     environment,
@@ -1510,6 +1551,10 @@ class SearchStore:
                 environment=environment,
                 event_count=event_count,
                 hidden_from_default_timeline=hidden_from_default_timeline,
+                user_hidden_from_timeline=user_hidden_from_timeline,
+                user_state=user_state,
+                source_commit_seq=source_commit_seq,
+                tombstoned=tombstoned,
             )
             self.connection.execute("COMMIT")
         except BaseException:
@@ -1535,6 +1580,10 @@ class SearchStore:
         environment: str,
         event_count: int,
         hidden_from_default_timeline: bool = False,
+        user_hidden_from_timeline: bool = False,
+        user_state: str = "active",
+        source_commit_seq: int = 0,
+        tombstoned: bool = False,
     ) -> None:
         """Atomically replace one session's published, recent discovery corpus."""
 
@@ -1546,13 +1595,14 @@ class SearchStore:
                 order_time_us, session_id, generation_id, source_object_id,
                 record_ordinal, event_id, role, tool_name,
                 interaction_kind, title_eligible,
-                indexed_through, event_count, hidden_from_default_timeline
+                indexed_through, event_count, hidden_from_default_timeline,
+                user_hidden_from_timeline, user_state, source_commit_seq, tombstoned
             )
             SELECT e.id, ?, ?, ?, ?,
                    e.order_time_us, e.session_id, e.generation_id, e.source_object_id,
                    e.record_ordinal, e.event_id, e.role, e.tool_name,
                    e.interaction_kind, e.title_eligible,
-                   ?, ?, ?
+                   ?, ?, ?, ?, ?, ?, ?
             FROM events e
             JOIN projection_membership m ON m.object_id = e.source_object_id
             WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
@@ -1567,6 +1617,10 @@ class SearchStore:
                 desired_revision,
                 event_count,
                 1 if hidden_from_default_timeline else 0,
+                1 if user_hidden_from_timeline else 0,
+                user_state,
+                source_commit_seq,
+                1 if tombstoned else 0,
                 session_id,
                 generation_id,
                 desired_revision,
@@ -1884,6 +1938,9 @@ class SearchStore:
                   AND e.order_time_us >= ? AND e.order_time_us < ?
                   AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
                   AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+                  AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+                  AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
+                  AND COALESCE(s.tombstoned, 0) = 0
                 GROUP BY e.session_id
             )
             SELECT s.session_id, s.project, s.provider, s.cwd, s.git_repo, s.started_at,
@@ -1945,6 +2002,9 @@ class SearchStore:
                    AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
               AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
               AND COALESCE(s.hidden_from_default_timeline, 0) = 0
+              AND COALESCE(s.user_hidden_from_timeline, 0) = 0
+              AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
+              AND COALESCE(s.tombstoned, 0) = 0
               AND (? IS NULL OR
                    (e.session_id, e.order_time_us, e.machine_id, e.provider,
                     e.opaque_source_id, e.source_epoch, e.source_position,
@@ -2041,6 +2101,52 @@ class SearchStore:
             self.connection.execute("ROLLBACK")
             raise
         return {"reclassified": True, "rows_changed": changed_rows, "observed_at": now}
+
+    def reconcile_session_visibility(
+        self,
+        *,
+        session_id: str,
+        system_hidden: bool,
+        user_hidden_from_timeline: bool,
+        user_state: str,
+        source_commit_seq: int,
+    ) -> dict[str, object]:
+        """Converge visibility metadata in the disposable search mirror."""
+
+        target = int(system_hidden)
+        changed_rows = 0
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for table in ("session_index", "searchable_events"):
+                cursor = self.connection.execute(
+                    f"""
+                    UPDATE {table}
+                    SET hidden_from_default_timeline = ?, user_hidden_from_timeline = ?,
+                        user_state = ?, source_commit_seq = MAX(source_commit_seq, ?)
+                    WHERE session_id = ?
+                      AND (COALESCE(hidden_from_default_timeline, 0) != ?
+                           OR COALESCE(user_hidden_from_timeline, 0) != ?
+                           OR COALESCE(user_state, 'active') != ?
+                           OR source_commit_seq < ?)
+                    """,
+                    (
+                        target,
+                        int(user_hidden_from_timeline),
+                        user_state,
+                        source_commit_seq,
+                        session_id,
+                        target,
+                        int(user_hidden_from_timeline),
+                        user_state,
+                        source_commit_seq,
+                    ),
+                )
+                changed_rows += int(cursor.rowcount or 0)
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        return {"reconciled": True, "rows_changed": changed_rows, "system_hidden": system_hidden}
 
 
 def canonical_json(value: object) -> str:

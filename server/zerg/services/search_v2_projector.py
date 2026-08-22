@@ -283,6 +283,10 @@ class SearchV2Projector:
                 "started_at": session["started_at"],
                 "hidden_from_default_timeline": bool(session.get("hidden_from_default_timeline", False)),
                 "origin_kind": session.get("origin_kind"),
+                "user_hidden_from_timeline": bool(session.get("user_hidden_from_timeline", False)),
+                "user_state": str(session.get("user_state") or "active"),
+                "source_commit_seq": int(session.get("commit_seq") or 0),
+                "tombstoned": False,
             },
         )
         if published.get("published") is not True:

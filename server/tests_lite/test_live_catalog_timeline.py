@@ -843,7 +843,7 @@ def test_timeline_uses_live_canary_provenance_over_cursor_storage_facts(tmp_path
             )
         db.commit()
 
-        snapshot = _snapshot(db, _params(provider="cursor", include_test=True, include_automation=True))
+        snapshot = _snapshot(db, _params(provider="cursor", include_test=True, include_automation=False))
 
     assert snapshot["total"] == 1
     assert [row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]] == [human_id]

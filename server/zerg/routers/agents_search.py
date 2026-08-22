@@ -335,6 +335,7 @@ async def search_storage_v2_rows(
     limit: int,
     timeout_seconds: float | None = None,
     include_snippets: bool = True,
+    include_origin_hidden: bool = False,
 ) -> list[dict[str, object]]:
     """Search the disposable v2 index without opening the retired archive DB."""
 
@@ -356,7 +357,7 @@ async def search_storage_v2_rows(
             "window_end_us": None,
             "limit": min(200, max(1, limit)),
             "include_snippets": include_snippets,
-            "include_origin_hidden": False,
+            "include_origin_hidden": include_origin_hidden,
         }
         if timeout_seconds is None:
             result = await search.call("search.query.v2", params)
@@ -473,6 +474,7 @@ async def search_storage_v2_episode_embeddings(
     exclude_environments: list[str] | None = None,
     since_iso: str | None = None,
     environment: str | None = None,
+    include_origin_hidden: bool = False,
 ) -> _DenseQueryPayload:
     """Query the derived dense index through searchd, never its SQLite file.
 
@@ -499,6 +501,7 @@ async def search_storage_v2_episode_embeddings(
             "environment": environment,
             "exclude_environments": exclude_environments,
             "since_iso": since_iso,
+            "include_origin_hidden": include_origin_hidden,
         },
         timeout_seconds=timeout_seconds,
     )
@@ -528,6 +531,7 @@ async def search_storage_v2_sessions(
         environment=environment,
         days_back=days_back,
         limit=200,
+        include_origin_hidden=include_automation,
     )
     best_rows: dict[str, dict[str, object]] = {}
     for row in rows:
@@ -694,6 +698,7 @@ async def _semantic_recall(
             environment=environment,
             exclude_environments=exclude_environments or None,
             since_iso=since_iso,
+            include_origin_hidden=include_automation,
         )
         if dense_payload.coverage.stale:
             # Catalog advancement precedes the searchd mutation, so a second
@@ -991,6 +996,7 @@ async def _lexical_recall_matches(
         limit=min(200, candidate_depth),
         timeout_seconds=timeout_seconds,
         include_snippets=False,
+        include_origin_hidden=include_automation,
     )
     matches: list[RecallMatch] = []
     seen: set[str] = set()

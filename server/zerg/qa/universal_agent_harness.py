@@ -4544,6 +4544,7 @@ def ingest_canonical_events_into_longhouse_db(
         export_result = store.export_session_jsonl(session_id)
         query_sessions, query_total = store.list_sessions(
             include_test=True,
+            include_automation=True,
             project="universal-agent-harness",
             provider=provider,
             query=expected_query_marker,
@@ -4558,6 +4559,7 @@ def ingest_canonical_events_into_longhouse_db(
                     provider=provider,
                     environment=None,
                     include_test=True,
+                    include_automation=True,
                     hide_autonomous=False,
                     device_id=None,
                     # Provider fixtures use stable historical timestamps; the
@@ -4806,7 +4808,11 @@ def opencode_lineage_projection(package: EvidencePackage) -> dict[str, Any]:
         fork_thread = db.query(SessionThread).filter(SessionThread.session_id == fork_id, SessionThread.branch_kind == "fork").one()  # noqa: E501
         child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode child work").one()
         orphan_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode orphan child work").one()
-        visible_total, visible_rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+        visible_total, visible_rows = store.list_timeline_thread_page(
+            hide_autonomous=True,
+            include_test=True,
+            include_automation=True,
+        )
 
     snapshot = {
         "db_path": str(db_path),
@@ -5047,7 +5053,11 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         aliases = db.query(SessionThreadAlias).all()
         edges = db.query(SessionEdge).order_by(SessionEdge.created_at.asc(), SessionEdge.id.asc()).all()
         graph_projection = build_session_graph_projection(db, parent_id)
-        visible_total, visible_rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+        visible_total, visible_rows = store.list_timeline_thread_page(
+            hide_autonomous=True,
+            include_test=True,
+            include_automation=True,
+        )
 
     opencode_matrix = _provider_action_coverage_table("opencode")
     capability_states = {capability: entry.get("state") for capability, entry in opencode_matrix.items()}

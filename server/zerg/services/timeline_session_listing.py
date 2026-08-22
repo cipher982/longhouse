@@ -16,7 +16,6 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.services.agents import AgentsStore
-from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
@@ -24,6 +23,7 @@ from zerg.services.session_response_projection import build_session_response_map
 from zerg.services.session_response_projection import has_real_sessions
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
+from zerg.services.session_visibility_policy import effective_system_hidden_clause
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -194,7 +194,7 @@ def _unread_thread_rows(
             AgentSession.last_read_at.is_(None),
             AgentSession.last_console_result_at > AgentSession.last_read_at,
         ),
-        AgentSession.user_state.notin_(("archived", "snoozed")),
+        AgentSession.user_state.notin_(("archived", "snoozed", "deleted")),
     )
     if params.project is not None:
         query = query.filter(AgentSession.project == params.project)
@@ -202,18 +202,15 @@ def _unread_thread_rows(
         query = query.filter(AgentSession.provider == params.provider)
     if params.environment is not None:
         query = query.filter(AgentSession.environment == params.environment)
-    elif not params.include_test:
-        query = query.filter(
-            AgentSession.environment.notin_(("test", "e2e")),
-            ~provider_proof_session_clause(AgentSession),
-        )
+    elif not params.include_test and not params.include_automation:
+        query = query.filter(AgentSession.environment.notin_(("test", "e2e")))
     if params.device_id is not None:
         query = query.filter(AgentSession.device_id == params.device_id)
     if not params.include_automation:
-        query = query.filter(
-            AgentSession.hidden_from_default_timeline.is_not(True),
-        )
+        query = query.filter(~effective_system_hidden_clause(AgentSession))
     query = query.filter(AgentSession.user_hidden_from_timeline.is_not(True))
+    if params.hide_autonomous:
+        query = query.filter(or_(AgentSession.user_messages > 0, AgentSession.ended_at.is_(None)))
 
     seen_sessions = {session_id for _thread_id, session_id, _anchor in exclude}
     seen_threads = {thread_id for thread_id, _session_id, _anchor in exclude}

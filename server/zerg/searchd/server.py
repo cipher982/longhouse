@@ -427,6 +427,36 @@ class SearchDaemon:
                         observed_at=params["observed_at"],
                     ),
                 )
+            if request.method == "search.session.reconcile_visibility.v2":
+                _exact_keys(
+                    request.params,
+                    {
+                        "session_id",
+                        "system_hidden",
+                        "user_hidden_from_timeline",
+                        "user_state",
+                        "source_commit_seq",
+                    },
+                )
+                params = dict(request.params)
+                if type(params["system_hidden"]) is not bool:
+                    raise ValueError("system_hidden must be a boolean")
+                if type(params["user_hidden_from_timeline"]) is not bool:
+                    raise ValueError("user_hidden_from_timeline must be a boolean")
+                params["user_state"] = _text(params["user_state"], "user_state", 32)
+                if type(params["source_commit_seq"]) is not int or params["source_commit_seq"] < 0:
+                    raise ValueError("source_commit_seq is invalid")
+                return self._result(
+                    request,
+                    await self._run(
+                        self._store.reconcile_session_visibility,
+                        session_id=_uuid(params["session_id"], "session_id"),
+                        system_hidden=params["system_hidden"],
+                        user_hidden_from_timeline=params["user_hidden_from_timeline"],
+                        user_state=params["user_state"],
+                        source_commit_seq=params["source_commit_seq"],
+                    ),
+                )
             if request.method == "search.session.delete.v2":
                 _exact_keys(request.params, {"session_id"})
                 return self._result(
@@ -855,7 +885,7 @@ def _index_object_params(value: dict) -> dict:
 
 
 def _publish_params(value: dict) -> dict:
-    expected = {
+    required = {
         "session_id",
         "generation_id",
         "owner_id",
@@ -872,12 +902,25 @@ def _publish_params(value: dict) -> dict:
         "hidden_from_default_timeline",
         "origin_kind",
     }
-    _exact_keys(value, expected)
+    optional = {"user_hidden_from_timeline", "user_state", "source_commit_seq", "tombstoned"}
+    if not required.issubset(value) or not set(value).issubset(required | optional):
+        raise ValueError("request fields do not match the searchd contract")
+    value = {
+        "user_hidden_from_timeline": False,
+        "user_state": "active",
+        "source_commit_seq": 0,
+        "tombstoned": False,
+        **value,
+    }
     for field in ("object_count", "event_count"):
         if type(value[field]) is not int or not 0 <= value[field] <= 1_000_000_000:
             raise ValueError(f"{field} is invalid")
     if type(value["hidden_from_default_timeline"]) is not bool:
         raise ValueError("hidden_from_default_timeline must be a boolean")
+    if type(value["user_hidden_from_timeline"]) is not bool or type(value["tombstoned"]) is not bool:
+        raise ValueError("search visibility booleans are invalid")
+    if type(value["source_commit_seq"]) is not int or value["source_commit_seq"] < 0:
+        raise ValueError("source_commit_seq is invalid")
     object_set_hash = value["object_set_hash"]
     if not isinstance(object_set_hash, str) or _HASH.fullmatch(object_set_hash) is None:
         raise ValueError("object_set_hash must be a lowercase SHA-256 hash")
@@ -900,6 +943,10 @@ def _publish_params(value: dict) -> dict:
         "started_at": _text(value["started_at"], "started_at", 64),
         "hidden_from_default_timeline": value["hidden_from_default_timeline"],
         "origin_kind": _text(value["origin_kind"], "origin_kind", 64, optional=True),
+        "user_hidden_from_timeline": value["user_hidden_from_timeline"],
+        "user_state": _text(value["user_state"], "user_state", 32),
+        "source_commit_seq": value["source_commit_seq"],
+        "tombstoned": value["tombstoned"],
     }
 
 
@@ -1063,21 +1110,22 @@ def _embedding_source_params(value: dict) -> dict:
 
 
 def _embedding_query_params(value: dict) -> dict:
-    _exact_keys(
-        value,
-        {
-            "model",
-            "owner_id",
-            "dims",
-            "query_embedding",
-            "limit",
-            "project",
-            "provider",
-            "environment",
-            "exclude_environments",
-            "since_iso",
-        },
-    )
+    required = {
+        "model",
+        "owner_id",
+        "dims",
+        "query_embedding",
+        "limit",
+        "project",
+        "provider",
+        "environment",
+        "exclude_environments",
+        "since_iso",
+    }
+    optional = {"include_origin_hidden"}
+    if not required.issubset(value) or not set(value).issubset(required | optional):
+        raise ValueError("request fields do not match the searchd contract")
+    value = {"include_origin_hidden": False, **value}
     dims = value["dims"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("embedding query dimensions or limit are invalid")
@@ -1089,6 +1137,8 @@ def _embedding_query_params(value: dict) -> dict:
         raise ValueError("query embedding dimensions do not match payload")
     if not np.isfinite(np.frombuffer(query_embedding, dtype=np.float32)).all():
         raise ValueError("query embedding must be finite")
+    if type(value["include_origin_hidden"]) is not bool:
+        raise ValueError("include_origin_hidden is invalid")
     exclude_environments = value["exclude_environments"]
     if exclude_environments is not None:
         if not isinstance(exclude_environments, list) or len(exclude_environments) > 16:
@@ -1105,6 +1155,7 @@ def _embedding_query_params(value: dict) -> dict:
         "environment": _text(value["environment"], "environment", 32, optional=True),
         "exclude_environments": exclude_environments,
         "since_iso": _text(value["since_iso"], "since_iso", 64, optional=True),
+        "include_origin_hidden": value["include_origin_hidden"],
     }
 
 

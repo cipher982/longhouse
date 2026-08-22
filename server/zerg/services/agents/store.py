@@ -55,10 +55,8 @@ from zerg.services.agents.session_graph_writes import resolve_thread_by_provider
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
-from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
 from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
@@ -85,6 +83,7 @@ from zerg.services.session_observations import SOURCE_DOMAIN_SERVER
 from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_session_observation
 from zerg.services.session_observations import record_source_line_observation
+from zerg.services.session_visibility_policy import effective_system_hidden_clause
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import is_generic_environment_label
 from zerg.session_execution_home import normalize_session_label
@@ -4009,17 +4008,13 @@ class AgentsStore:
     ):
         if environment:
             stmt = stmt.where(AgentSession.environment == environment)
-        elif not include_test:
+        elif not include_test and not include_automation:
             stmt = stmt.where(AgentSession.environment.notin_(["test", "e2e"]))
 
         if project:
             stmt = stmt.where(AgentSession.project.ilike(f"%{project}%"))
         if provider:
             stmt = stmt.where(AgentSession.provider == provider)
-        if not is_internal_canary_provider_filter(provider):
-            stmt = stmt.where(~internal_canary_session_clause(AgentSession))
-        if not include_test:
-            stmt = stmt.where(~provider_proof_session_clause(AgentSession))
         if device_id:
             # Strictly scope to device_id. Do NOT fall back to matching
             # `environment`: a renamed machine leaves ghost rows whose dead
@@ -4034,13 +4029,8 @@ class AgentsStore:
         if until:
             stmt = stmt.where(time_anchor <= until)
 
-        if not include_automation:
-            stmt = stmt.where(
-                or_(
-                    AgentSession.hidden_from_default_timeline.is_(None),
-                    AgentSession.hidden_from_default_timeline == 0,
-                )
-            )
+        if not include_automation and not is_internal_canary_provider_filter(provider):
+            stmt = stmt.where(~effective_system_hidden_clause(AgentSession))
 
         stmt = stmt.where(
             or_(
@@ -4098,17 +4088,13 @@ class AgentsStore:
     ):
         if environment:
             stmt = stmt.where(TimelineCard.environment == environment)
-        elif not include_test:
+        elif not include_test and not include_automation:
             stmt = stmt.where(TimelineCard.environment.notin_(["test", "e2e"]))
 
         if project:
             stmt = stmt.where(TimelineCard.project.ilike(f"%{project}%"))
         if provider:
             stmt = stmt.where(TimelineCard.provider == provider)
-        if not is_internal_canary_provider_filter(provider):
-            stmt = stmt.where(~internal_canary_session_clause(TimelineCard))
-        if not include_test:
-            stmt = stmt.where(~provider_proof_session_clause(TimelineCard))
         if device_id:
             stmt = stmt.where(TimelineCard.device_id == device_id)
         if since:
@@ -4116,13 +4102,8 @@ class AgentsStore:
         if until:
             stmt = stmt.where(time_anchor <= until)
 
-        if not include_automation:
-            stmt = stmt.where(
-                or_(
-                    TimelineCard.hidden_from_default_timeline.is_(None),
-                    TimelineCard.hidden_from_default_timeline == 0,
-                )
-            )
+        if not include_automation and not is_internal_canary_provider_filter(provider):
+            stmt = stmt.where(~effective_system_hidden_clause(TimelineCard))
 
         stmt = stmt.where(
             or_(

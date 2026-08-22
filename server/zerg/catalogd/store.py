@@ -100,15 +100,15 @@ from zerg.services.codex_launch_visibility_repair import plan_codex_launch_visib
 from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import factory_title_assurance_session_clause
-from zerg.services.internal_sessions import hatch_automation_session_clause
 from zerg.services.internal_sessions import is_factory_title_assurance_session
 from zerg.services.internal_sessions import is_hatch_execution_contract
-from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_title import RESUME_SEED_TOKEN
 from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
+from zerg.services.session_visibility_policy import effective_system_hidden_clause
+from zerg.services.session_visibility_policy import title_origin_eligible_clause
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_MAX_PAGES
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE
 from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
@@ -328,15 +328,7 @@ def _storage_title_obligation_clause(table):
         ~table.c.first_user_message_preview.contains(RESUME_SEED_TOKEN, autoescape=True),
         ~func.lower(func.coalesce(table.c.project, "")).in_(SYNTHETIC_BENCH_PROJECTS),
         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
-        or_(
-            factory_assurance,
-            and_(
-                table.c.environment.notin_(("test", "e2e")),
-                func.lower(func.coalesce(table.c.launch_actor, "")) != "automation",
-                ~provider_proof_session_clause(table),
-            ),
-        ),
-        ~hatch_automation_session_clause(table),
+        or_(factory_assurance, title_origin_eligible_clause(table)),
     )
 
 
@@ -4819,14 +4811,12 @@ class CatalogStore:
             )
             legacy_where = [
                 or_(func.coalesce(card.c.last_activity_at, card.c.started_at) >= since, legacy_unread),
-                card.c.hidden_from_default_timeline == 0,
                 card.c.user_hidden_from_timeline == 0,
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
                 or_(storage.c.last_activity_at >= since, storage_unread),
-                func.coalesce(catalog.c.hidden_from_default_timeline, storage.c.hidden_from_default_timeline) == 0,
                 storage.c.user_hidden_from_timeline == 0,
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
@@ -4874,11 +4864,9 @@ class CatalogStore:
             if environment is not None:
                 legacy_where.append(card.c.environment == environment)
                 storage_where.append(storage_environment == environment)
-            elif not include_test:
+            elif not include_test and not include_automation:
                 legacy_where.append(card.c.environment.notin_(("test", "e2e")))
                 storage_where.append(storage_environment.notin_(("test", "e2e")))
-                legacy_where.append(~provider_proof_session_clause(card))
-                storage_where.append(~provider_proof_session_clause(storage))
             if device_id is not None:
                 legacy_where.append(card.c.device_id == device_id)
                 storage_where.append(storage_device == device_id)
@@ -4901,10 +4889,18 @@ class CatalogStore:
                     )
                 )
             if not include_automation:
-                hidden_origin_kinds = ("hatch_automation", "test_or_canary")
-                legacy_where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind.notin_(hidden_origin_kinds)))
-                storage_origin_kind = func.coalesce(catalog.c.origin_kind, storage.c.origin_kind)
-                storage_where.append(or_(storage_origin_kind.is_(None), storage_origin_kind.notin_(hidden_origin_kinds)))
+                legacy_where.append(
+                    ~or_(
+                        effective_system_hidden_clause(card),
+                        effective_system_hidden_clause(catalog),
+                    )
+                )
+                storage_where.append(
+                    ~or_(
+                        effective_system_hidden_clause(storage),
+                        effective_system_hidden_clause(catalog),
+                    )
+                )
             if include_state_heads:
                 if owner_id is None:
                     raise ValueError("canonical timeline projection requires owner_id")
@@ -5636,6 +5632,50 @@ class CatalogStore:
             changed_rows += int(thread_result.rowcount or 0)
             commit_seq = _advance_commit_seq(connection, observed_at)
         return {"reclassified": changed_rows > 0, "rows_changed": changed_rows, "commit_seq": str(commit_seq)}
+
+    def reconcile_session_visibility(
+        self,
+        *,
+        session_id: str,
+        system_hidden: bool,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Converge the denormalized system flag without rewriting raw facts."""
+
+        session_key = str(session_id)
+        target = int(system_hidden)
+        with _write_transaction(self.engine) as connection:
+            changed_rows = 0
+            found = False
+            for table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__, StorageSession.__table__):
+                present = connection.execute(select(table.c.session_id).where(table.c.session_id == session_key)).first()
+                found = found or present is not None
+                result = connection.execute(
+                    update(table)
+                    .where(
+                        table.c.session_id == session_key,
+                        table.c.hidden_from_default_timeline != target,
+                    )
+                    .values(hidden_from_default_timeline=target, updated_at=observed_at)
+                )
+                changed_rows += int(result.rowcount or 0)
+            result = connection.execute(
+                update(LiveSessionThread.__table__)
+                .where(
+                    LiveSessionThread.__table__.c.session_id == session_key,
+                    LiveSessionThread.__table__.c.hidden_from_default_timeline != target,
+                )
+                .values(hidden_from_default_timeline=target, updated_at=observed_at)
+            )
+            changed_rows += int(result.rowcount or 0)
+            commit_seq = _advance_commit_seq(connection, observed_at) if changed_rows else _current_commit_seq(connection)
+        return {
+            "found": found,
+            "reconciled": found,
+            "rows_changed": changed_rows,
+            "system_hidden": system_hidden,
+            "commit_seq": str(commit_seq),
+        }
 
     def update_session_preferences(
         self,
@@ -8553,13 +8593,40 @@ class CatalogStore:
         card = LiveTimelineCard.__table__
         session_key = str(session_id)
         with _write_transaction(self.engine) as connection:
-            existing = connection.execute(select(table.c.anchor_title).where(table.c.session_id == session_key)).scalar_one_or_none()
-            if existing:
-                return {"changed": False, "title": str(existing), "commit_seq": str(_current_commit_seq(connection))}
+            existing = (
+                connection.execute(
+                    select(
+                        table.c.anchor_title,
+                        or_(
+                            factory_title_assurance_session_clause(table),
+                            title_origin_eligible_clause(table),
+                        ).label("eligible"),
+                    ).where(table.c.session_id == session_key)
+                )
+                .mappings()
+                .first()
+            )
+            if existing is None:
+                return {"changed": False, "title": title, "missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if existing["anchor_title"]:
+                return {
+                    "changed": False,
+                    "title": str(existing["anchor_title"]),
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            if not bool(existing["eligible"]):
+                return {"changed": False, "title": title, "ineligible": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, completed_at)
             changed = connection.execute(
                 update(table)
-                .where(table.c.session_id == session_key, or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""))
+                .where(
+                    table.c.session_id == session_key,
+                    or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
+                    or_(
+                        factory_title_assurance_session_clause(table),
+                        title_origin_eligible_clause(table),
+                    ),
+                )
                 .values(
                     anchor_title=title,
                     summary_title=title,
@@ -8719,7 +8786,7 @@ class CatalogStore:
         if not include_test:
             statement = statement.where(
                 table.c.environment.notin_(("test", "e2e")),
-                ~provider_proof_session_clause(table),
+                ~effective_system_hidden_clause(table),
             )
         if before_last_activity_at is not None and before_session_id is not None:
             statement = statement.where(
