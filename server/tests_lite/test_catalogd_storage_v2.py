@@ -29,6 +29,7 @@ from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
@@ -309,7 +310,6 @@ async def test_first_durable_content_keeps_automation_console_hidden(daemon_path
         }
     )
     engine.dispose()
-
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -362,6 +362,49 @@ async def test_first_durable_content_keeps_automation_console_hidden(daemon_path
     with Session(engine) as db:
         assert db.get(StorageSession, str(session_id)).hidden_from_default_timeline == 1
         assert db.get(LiveSessionCatalog, str(session_id)).launch_actor == "automation"
+    engine.dispose()
+
+
+def test_visibility_reconcile_clears_stale_hidden_projection(tmp_path):
+    database_path = tmp_path / "catalog.db"
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(uuid4()),
+            "owner_id": 42,
+            "provider": "codex",
+            "device_id": "cinder",
+            "cwd": "/Users/davidrose/git/user-repo",
+            "project": "user-repo",
+            "provider_config": {},
+            "launch_actor": "human_ui",
+            "launch_surface": "web",
+            "started_at": now,
+        }
+    )
+    with Session(engine) as db:
+        catalog = db.get(LiveSessionCatalog, str(session_id))
+        catalog.hidden_from_default_timeline = 1
+        db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline = 1
+        db.get(LiveSessionThread, catalog.primary_thread_id).hidden_from_default_timeline = 1
+        db.commit()
+
+    preview = store.reconcile_all_session_visibility(apply=False, observed_at=now + timedelta(seconds=1))
+    assert preview["actionable_session_ids"] == [str(session_id)]
+    assert preview["unresolved_hidden_count"] == 0
+
+    applied = store.reconcile_all_session_visibility(apply=True, observed_at=now + timedelta(seconds=2))
+    assert applied["changed_rows"] >= 3
+    with Session(engine) as db:
+        catalog = db.get(LiveSessionCatalog, str(session_id))
+        assert catalog.hidden_from_default_timeline == 0
+        assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 0
+        assert db.get(LiveSessionThread, catalog.primary_thread_id).hidden_from_default_timeline == 0
     engine.dispose()
 
 

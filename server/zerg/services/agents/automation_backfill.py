@@ -76,11 +76,12 @@ class VisibilityReconcileResult:
 
 
 def reconcile_legacy_session_visibility(db: Session, *, apply: bool) -> VisibilityReconcileResult:
-    """Evaluate every legacy session and persist only proven policy outcomes.
+    """Evaluate every legacy session and replace the derived projection.
 
-    Positive evidence may safely hide a stale row. A historical hidden flag
-    without current evidence is reported for review rather than silently
-    cleared: old data may predate facts that can reconstruct its origin.
+    ``hidden_from_default_timeline`` is an output of the policy, never an
+    input.  Reconciliation therefore repairs stale false positives as well as
+    stale false negatives while leaving raw provenance and user preferences
+    untouched.
     """
 
     sessions = db.query(AgentSession).order_by(AgentSession.started_at.asc(), AgentSession.id.asc()).all()
@@ -102,20 +103,19 @@ def reconcile_legacy_session_visibility(db: Session, *, apply: bool) -> Visibili
         )
         for reason in decision.reason_keys:
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
-        if decision.system_hidden and not bool(session.hidden_from_default_timeline):
+        current_hidden = bool(session.hidden_from_default_timeline)
+        if decision.system_hidden:
             proven_hidden.append(str(session.id))
+        if decision.system_hidden != current_hidden:
             actionable.append(str(session.id))
             if apply:
-                session.hidden_from_default_timeline = 1
+                target = int(decision.system_hidden)
+                session.hidden_from_default_timeline = target
                 for thread in db.query(SessionThread).filter(SessionThread.session_id == session.id).all():
-                    thread.hidden_from_default_timeline = 1
+                    thread.hidden_from_default_timeline = target
                 card = db.get(TimelineCard, session.id)
                 if card is not None:
-                    card.hidden_from_default_timeline = 1
-        elif decision.system_hidden:
-            proven_hidden.append(str(session.id))
-        elif bool(session.hidden_from_default_timeline):
-            unresolved.append(str(session.id))
+                    card.hidden_from_default_timeline = target
         if decision.system_hidden or bool(session.user_hidden_from_timeline) or session.user_state not in {"active", "parked"}:
             derived_visibility_rows.append(
                 {

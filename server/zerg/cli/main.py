@@ -558,7 +558,7 @@ def db_classify_automation(
 @db_app.command(name="reconcile-session-visibility")
 def db_reconcile_session_visibility(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override (defaults to env)."),
-    apply_changes: bool = typer.Option(False, "--apply", help="Persist proven visibility corrections."),
+    apply_changes: bool = typer.Option(False, "--apply", help="Persist canonical visibility corrections."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Evaluate every session against the canonical presentation policy."""
@@ -585,7 +585,7 @@ def db_reconcile_session_visibility(
         else:
             typer.echo(
                 f"Evaluated {payload['evaluated']} catalog session(s); actionable={payload['actionable_count']}; "
-                f"unresolved historical hidden={payload['unresolved_hidden_count']}."
+                f"unresolved={payload['unresolved_hidden_count']}."
             )
             if apply_changes:
                 typer.echo(
@@ -616,7 +616,7 @@ def db_reconcile_session_visibility(
         return
     typer.echo(
         f"Evaluated {result.evaluated} session(s); actionable={len(result.actionable_session_ids)}; "
-        f"unresolved historical hidden={len(result.unresolved_hidden_session_ids)}."
+        f"unresolved={len(result.unresolved_hidden_session_ids)}."
     )
     if apply_changes:
         typer.echo(f"Mirrored {len(derived['applied'])} correction(s); failures={len(derived['failed'])}.")

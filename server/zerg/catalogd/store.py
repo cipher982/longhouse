@@ -5702,6 +5702,7 @@ class CatalogStore:
             }
             session_ids = sorted(set(catalogs) | set(cards) | set(storage) | set(primary_threads))
             actionable: list[str] = []
+            targets: dict[str, int] = {}
             unresolved: list[str] = []
             reason_counts: dict[str, int] = {}
             mirror_rows: list[dict[str, Any]] = []
@@ -5728,14 +5729,13 @@ class CatalogStore:
                 )
                 for reason in decision.reason_keys:
                     reason_counts[reason] = reason_counts.get(reason, 0) + 1
-                current_hidden = any(
-                    bool(row.get("hidden_from_default_timeline")) for row in (catalog_row, card_row, storage_row, thread_row)
-                )
-                if decision.system_hidden and not current_hidden:
+                current_values = [
+                    bool(row.get("hidden_from_default_timeline")) for row in (catalog_row, card_row, storage_row, thread_row) if row
+                ]
+                if any(value != decision.system_hidden for value in current_values):
                     actionable.append(session_id)
-                elif current_hidden and not decision.system_hidden:
-                    unresolved.append(session_id)
-                final_hidden = decision.system_hidden or current_hidden
+                    targets[session_id] = int(decision.system_hidden)
+                final_hidden = decision.system_hidden
                 user_hidden = bool(
                     catalog_row.get("user_hidden_from_timeline")
                     or storage_row.get("user_hidden_from_timeline")
@@ -5756,31 +5756,35 @@ class CatalogStore:
             commit_seq = _current_commit_seq(connection)
             if apply and actionable:
                 commit_seq = _advance_commit_seq(connection, observed_at)
-                for table in (catalog_table, card_table, storage_table):
-                    values: dict[str, Any] = {
-                        "hidden_from_default_timeline": 1,
-                        "updated_at": observed_at,
-                    }
-                    if table is storage_table:
-                        values["commit_seq"] = commit_seq
-                    result = connection.execute(
-                        update(table)
-                        .where(
-                            table.c.session_id.in_(actionable),
-                            table.c.hidden_from_default_timeline == 0,
+                for target in (0, 1):
+                    target_ids = [session_id for session_id, value in targets.items() if value == target]
+                    if not target_ids:
+                        continue
+                    for table in (catalog_table, card_table, storage_table):
+                        values: dict[str, Any] = {
+                            "hidden_from_default_timeline": target,
+                            "updated_at": observed_at,
+                        }
+                        if table is storage_table:
+                            values["commit_seq"] = commit_seq
+                        result = connection.execute(
+                            update(table)
+                            .where(
+                                table.c.session_id.in_(target_ids),
+                                func.coalesce(table.c.hidden_from_default_timeline, 0) != target,
+                            )
+                            .values(**values)
                         )
-                        .values(**values)
+                        changed_rows += int(result.rowcount or 0)
+                    result = connection.execute(
+                        update(thread_table)
+                        .where(
+                            thread_table.c.session_id.in_(target_ids),
+                            func.coalesce(thread_table.c.hidden_from_default_timeline, 0) != target,
+                        )
+                        .values(hidden_from_default_timeline=target, updated_at=observed_at)
                     )
                     changed_rows += int(result.rowcount or 0)
-                result = connection.execute(
-                    update(thread_table)
-                    .where(
-                        thread_table.c.session_id.in_(actionable),
-                        thread_table.c.hidden_from_default_timeline == 0,
-                    )
-                    .values(hidden_from_default_timeline=1, updated_at=observed_at)
-                )
-                changed_rows += int(result.rowcount or 0)
 
             return {
                 "mode": "apply" if apply else "dry_run",
