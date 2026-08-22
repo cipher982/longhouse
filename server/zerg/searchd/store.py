@@ -1475,13 +1475,31 @@ class SearchStore:
                     assistant_messages=excluded.assistant_messages,
                     tool_calls=excluded.tool_calls,
                     is_sidechain=excluded.is_sidechain,
-                    hidden_from_default_timeline=excluded.hidden_from_default_timeline,
-                    test_scope_visible=excluded.test_scope_visible,
-                    origin_kind=excluded.origin_kind,
-                    user_hidden_from_timeline=excluded.user_hidden_from_timeline,
-                    user_state=excluded.user_state,
-                    source_commit_seq=excluded.source_commit_seq,
-                    tombstoned=excluded.tombstoned,
+                    hidden_from_default_timeline=CASE
+                        WHEN excluded.source_commit_seq >= session_index.source_commit_seq
+                        THEN excluded.hidden_from_default_timeline
+                        ELSE session_index.hidden_from_default_timeline END,
+                    test_scope_visible=CASE
+                        WHEN excluded.source_commit_seq >= session_index.source_commit_seq
+                        THEN excluded.test_scope_visible
+                        ELSE session_index.test_scope_visible END,
+                    origin_kind=CASE
+                        WHEN excluded.source_commit_seq >= session_index.source_commit_seq
+                        THEN excluded.origin_kind
+                        ELSE session_index.origin_kind END,
+                    user_hidden_from_timeline=CASE
+                        WHEN excluded.source_commit_seq >= session_index.source_commit_seq
+                        THEN excluded.user_hidden_from_timeline
+                        ELSE session_index.user_hidden_from_timeline END,
+                    user_state=CASE
+                        WHEN excluded.source_commit_seq >= session_index.source_commit_seq
+                        THEN excluded.user_state
+                        ELSE session_index.user_state END,
+                    source_commit_seq=MAX(session_index.source_commit_seq, excluded.source_commit_seq),
+                    tombstoned=CASE
+                        WHEN excluded.source_commit_seq >= session_index.source_commit_seq
+                        THEN excluded.tombstoned
+                        ELSE session_index.tombstoned END,
                     project=excluded.project,
                     provider=excluded.provider,
                     environment=excluded.environment,
@@ -1551,6 +1569,14 @@ class SearchStore:
                 """,
                 (session_id, session_id),
             )
+            effective_visibility = self.connection.execute(
+                """
+                SELECT hidden_from_default_timeline, test_scope_visible,
+                       user_hidden_from_timeline, user_state, source_commit_seq, tombstoned
+                FROM session_index WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
             self._replace_searchable_session(
                 session_id=session_id,
                 generation_id=generation_id,
@@ -1560,12 +1586,12 @@ class SearchStore:
                 provider=provider,
                 environment=environment,
                 event_count=event_count,
-                hidden_from_default_timeline=hidden_from_default_timeline,
-                test_scope_visible=test_scope_visible,
-                user_hidden_from_timeline=user_hidden_from_timeline,
-                user_state=user_state,
-                source_commit_seq=source_commit_seq,
-                tombstoned=tombstoned,
+                hidden_from_default_timeline=bool(effective_visibility["hidden_from_default_timeline"]),
+                test_scope_visible=bool(effective_visibility["test_scope_visible"]),
+                user_hidden_from_timeline=bool(effective_visibility["user_hidden_from_timeline"]),
+                user_state=str(effective_visibility["user_state"]),
+                source_commit_seq=int(effective_visibility["source_commit_seq"]),
+                tombstoned=bool(effective_visibility["tombstoned"]),
             )
             self.connection.execute("COMMIT")
         except BaseException:
@@ -2079,6 +2105,7 @@ class SearchStore:
         session_id: str,
         origin_kind: str,
         observed_at: str | None = None,
+        source_commit_seq: int = 0,
     ) -> dict[str, object]:
         """Reclassify a session's hidden origin in the derived worklog/search index.
 
@@ -2099,11 +2126,15 @@ class SearchStore:
                 cursor = self.connection.execute(
                     f"""
                     UPDATE {table}
-                    SET hidden_from_default_timeline = 1
+                    SET hidden_from_default_timeline = 1,
+                        test_scope_visible = 0,
+                        source_commit_seq = MAX(source_commit_seq, ?)
                     WHERE session_id = ?
-                      AND COALESCE(hidden_from_default_timeline, 0) = 0
+                      AND (COALESCE(hidden_from_default_timeline, 0) != 1
+                           OR COALESCE(test_scope_visible, 0) != 0
+                           OR source_commit_seq < ?)
                     """,
-                    (str(session_id),),
+                    (source_commit_seq, str(session_id), source_commit_seq),
                 )
                 changed_rows += int(cursor.rowcount or 0)
             cursor = self.connection.execute(

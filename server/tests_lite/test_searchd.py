@@ -91,6 +91,7 @@ def _publish_visibility_fixture(
     hidden: bool,
     test_scope_visible: bool,
     order_time_us: int,
+    source_commit_seq: int = 0,
 ) -> None:
     generation_id = str(uuid4())
     object_id = str(uuid4())
@@ -127,6 +128,7 @@ def _publish_visibility_fixture(
         started_at=datetime.fromtimestamp(order_time_us / 1_000_000, UTC).isoformat(),
         hidden_from_default_timeline=hidden,
         test_scope_visible=test_scope_visible,
+        source_commit_seq=source_commit_seq,
     )["published"] is True
 
 
@@ -2151,6 +2153,48 @@ def test_reclassify_origin_flips_hidden_across_index_and_searchable_corpus(tmp_p
         connection.close()
 
 
+def test_reclassify_origin_clears_test_scope_visibility(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=session_id,
+            environment="test",
+            hidden=True,
+            test_scope_visible=True,
+            order_time_us=now_us,
+        )
+        assert [
+            row["session_id"]
+            for row in store.search(**_search_params("scope needle"), include_test=True)["results"]
+        ] == [session_id]
+
+        result = store.reclassify_session_origin(
+            session_id=session_id,
+            origin_kind="hatch_automation",
+            source_commit_seq=10,
+        )
+        assert result["reclassified"] is True
+        assert store.search(**_search_params("scope needle"), include_test=True)["results"] == []
+        index_row = connection.execute(
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
+            "FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        event_row = connection.execute(
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
+            "FROM searchable_events WHERE session_id = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        assert tuple(index_row) == (1, 0, 10)
+        assert tuple(event_row) == (1, 0, 10)
+    finally:
+        connection.close()
+
+
 def test_reclassify_origin_rejects_unknown_kind(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
@@ -2217,5 +2261,66 @@ def test_visibility_reconcile_ignores_stale_source_commit_sequence(tmp_path):
         ).fetchone()
         assert fresh["rows_changed"] == 1
         assert tuple(row) == (0, 11)
+    finally:
+        connection.close()
+
+
+def test_delayed_publish_preserves_newer_reconciled_visibility(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=session_id,
+            environment="test",
+            hidden=True,
+            test_scope_visible=True,
+            order_time_us=now_us,
+            source_commit_seq=5,
+        )
+        store.reconcile_session_visibility(
+            session_id=session_id,
+            system_hidden=True,
+            test_scope_visible=False,
+            user_hidden_from_timeline=False,
+            user_state="active",
+            source_commit_seq=10,
+        )
+        row = connection.execute("SELECT * FROM session_index WHERE session_id = ?", (session_id,)).fetchone()
+
+        delayed = store.publish_generation(
+            session_id=session_id,
+            generation_id=str(row["generation_id"]),
+            owner_id="42",
+            desired_revision=int(row["desired_revision"]),
+            object_count=int(row["object_count"]),
+            object_set_hash=str(row["object_set_hash"]),
+            event_count=int(row["event_count"]),
+            project="longhouse",
+            provider="codex",
+            environment="test",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=str(row["started_at"]),
+            hidden_from_default_timeline=True,
+            test_scope_visible=True,
+            source_commit_seq=5,
+        )
+        assert delayed["published"] is True
+        index_row = connection.execute(
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
+            "FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        event_row = connection.execute(
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
+            "FROM searchable_events WHERE session_id = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        assert tuple(index_row) == (1, 0, 10)
+        assert tuple(event_row) == (1, 0, 10)
+        assert store.search(**_search_params("scope needle"), include_test=True)["results"] == []
     finally:
         connection.close()

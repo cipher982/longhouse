@@ -412,12 +412,14 @@ class SearchDaemon:
                     ),
                 )
             if request.method == "search.session.reclassify_origin.v2":
-                _exact_keys(request.params, {"session_id", "origin_kind", "observed_at"})
-                params = dict(request.params)
+                params = {"source_commit_seq": 0, **request.params}
+                _exact_keys(params, {"session_id", "origin_kind", "observed_at", "source_commit_seq"})
                 if params["origin_kind"] not in ("hatch_automation", "test_or_canary"):
                     raise ValueError("origin_kind must be hatch_automation or test_or_canary")
                 if params["observed_at"] is not None and not isinstance(params["observed_at"], str):
                     raise ValueError("observed_at must be a string or null")
+                if type(params["source_commit_seq"]) is not int or params["source_commit_seq"] < 0:
+                    raise ValueError("source_commit_seq is invalid")
                 return self._result(
                     request,
                     await self._run(
@@ -425,6 +427,7 @@ class SearchDaemon:
                         session_id=_uuid(params["session_id"], "session_id"),
                         origin_kind=params["origin_kind"],
                         observed_at=params["observed_at"],
+                        source_commit_seq=params["source_commit_seq"],
                     ),
                 )
             if request.method == "search.session.reconcile_visibility.v2":

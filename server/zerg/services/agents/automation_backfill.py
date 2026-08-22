@@ -416,6 +416,7 @@ def reclassify_catalogd_origins(
                         "session_id": session_id,
                         "origin_kind": origin_kind,
                         "observed_at": datetime.now(UTC).isoformat(),
+                        "source_commit_seq": int(result.get("commit_seq") or 0),
                     },
                     timeout_seconds=timeout_seconds,
                 )
