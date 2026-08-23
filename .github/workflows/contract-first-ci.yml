@@ -61,7 +61,9 @@ jobs:
     if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     name: "Validation"
-    timeout-minutes: 15
+    # Must exceed the sum of the step budgets below, or the job kills a healthy
+    # run before any step reaches its own limit.
+    timeout-minutes: 35
 
     steps:
     - uses: actions/checkout@v6
@@ -92,50 +94,21 @@ jobs:
     - name: Ensure make available
       run: ./scripts/ci/ensure-make.sh
 
-    - name: Validate WebSocket contract
-      timeout-minutes: 3
-      run: make validate-ws
-
-    - name: Validate SDK drift
-      timeout-minutes: 8
-      run: make validate-sdk
-
-    - name: Validate iOS API DTO drift
-      timeout-minutes: 2
-      run: make validate-ios-api
-
-    - name: Validate Makefile metadata
-      timeout-minutes: 2
-      run: make validate-makefile
-
-    - name: Validate build identity
-      timeout-minutes: 2
-      run: make validate-build-identity
-
-    - name: Validate managed Codex contract
-      timeout-minutes: 3
-      run: make validate-managed-codex-contract
-
-    - name: Validate managed session contract
-      timeout-minutes: 4
-      run: make validate-managed-session-contract
-
-    - name: Validate generated provider contract manifest
-      timeout-minutes: 3
-      # The engine include_str!s this generated JSON, so the whole Rust-side
-      # provider authority rests on it matching schemas/managed_providers.yml.
-      # The generator's --check had no caller anywhere in the repo.
-      run: make validate-managed-provider-contracts
-
-    - name: Validate generated web provider capabilities
-      timeout-minutes: 3
-      run: make validate-provider-capabilities
-
-    - name: Validate provider literal census
-      timeout-minutes: 3
-      # This target existed in the Makefile and no workflow ever invoked it, so
-      # the census artifact sat stale and nothing noticed.
-      run: make validate-provider-census
+    - name: Validate contracts
+      timeout-minutes: 10
+      # One step, because two lists drift. This job used to enumerate a subset
+      # of `make validate` by hand, and twelve of its members -- including
+      # validate-session-state-contract, the drift check for the very
+      # vocabulary a Console phase mismatch went dark on -- ran in no workflow
+      # at all, reachable only by manual dispatch. Add a target to `validate`
+      # and CI runs it; there is no second list to remember.
+      #
+      # Members worth knowing about when this fails: the engine include_str!s
+      # the generated provider contract JSON, so the Rust-side provider
+      # authority rests on validate-managed-provider-contracts matching
+      # schemas/managed_providers.yml; and validate-provider-census keeps the
+      # census artifact from silently going stale.
+      run: make validate
 
     - name: Managed launch lifecycle against a real Runtime Host
       timeout-minutes: 15
@@ -144,10 +117,6 @@ jobs:
       # Runtime Host answers every request identically and therefore cannot
       # catch a provider gate -- the exact hole the cursor outage fell through.
       run: make test-managed-launch-lifecycle
-
-    - name: Validate provider CLI canaries
-      timeout-minutes: 8
-      run: make validate-provider-cli-canaries
 
     - name: Produce executable provider capability proof bundle
       timeout-minutes: 3
@@ -179,17 +148,6 @@ jobs:
         if-no-files-found: ignore
         retention-days: 7
 
-    - name: Validate ship monitor
-      timeout-minutes: 2
-      run: make validate-ship-monitor
-
-    - name: Validate dogfood runtime helper
-      timeout-minutes: 2
-      run: make validate-dogfood-runtime
-
-    - name: Lint test patterns
-      timeout-minutes: 2
-      run: make lint-test-patterns
 
   backend-tests:
     timeout-minutes: 30
