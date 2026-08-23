@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::shipping::client::ShipperClient;
+use crate::shipping::client::{JsonPostError, ShipperClient};
 use crate::state::session_phase::{PhaseSource, SessionPhaseSignal, SessionPhaseStore};
 use crate::state::unmanaged_process_binding::{
     UnmanagedProcessBindingSignal, UnmanagedProcessBindingStore,
@@ -34,6 +34,7 @@ const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRESENCE_POST_CONCURRENCY: usize = 8;
 const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(3);
 const RUNTIME_EVENT_BATCH_LIMIT: usize = 128;
+const RUNTIME_EVENT_DEAD_LETTER_DIR: &str = "dead-letter";
 
 #[derive(Debug, Clone, Deserialize)]
 struct PresenceOutboxPayload {
@@ -115,6 +116,7 @@ pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
     file.sync_all()?;
     drop(file);
     std::fs::rename(&temporary, &ready)?;
+    sync_directory(dir)?;
     Ok(())
 }
 
@@ -366,7 +368,12 @@ pub fn collect_runtime_event_outbox(dir: &Path) -> Vec<PendingRuntimeEventPost> 
             None => continue,
         };
         if !file_name.ends_with(".json") || file_name.starts_with('.') {
-            prune_stale_dot_file(&entry, &path, now);
+            // The dead-letter directory lives here too. Pruning targets stale
+            // temp files, and remove_file on a directory merely fails, but say
+            // so rather than relying on that.
+            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                prune_stale_dot_file(&entry, &path, now);
+            }
             continue;
         }
 
@@ -402,7 +409,7 @@ pub async fn post_pending_runtime_event_files(
             }
         };
         match client
-            .post_json_with_timeout(
+            .post_json_with_timeout_classified(
                 "/api/agents/runtime/events/batch",
                 body,
                 Some(RUNTIME_EVENT_POST_TIMEOUT),
@@ -415,12 +422,137 @@ pub async fn post_pending_runtime_event_files(
                 }
                 sent += chunk.len();
             }
-            Err(_) => {
+            Err(error) if error.permanent_status_code().is_some() => {
+                let (chunk_sent, chunk_kept) =
+                    isolate_permanent_runtime_event_rejection(client, chunk).await;
+                sent += chunk_sent;
+                kept += chunk_kept;
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, event_count = chunk.len(), "Runtime event batch kept for retry");
                 kept += chunk.len();
             }
         }
     }
     (sent, kept)
+}
+
+async fn isolate_permanent_runtime_event_rejection(
+    client: &ShipperClient,
+    chunk: &[PendingRuntimeEventPost],
+) -> (usize, usize) {
+    let mut sent = 0usize;
+    let mut kept = 0usize;
+    for post in chunk {
+        let body = match serde_json::to_vec(&serde_json::json!({
+            "events": [post.event.clone()],
+        })) {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::warn!(
+                    path = %post.path.display(),
+                    error = %error,
+                    "Runtime event could not be serialized for rejection isolation"
+                );
+                kept += 1;
+                continue;
+            }
+        };
+
+        match client
+            .post_json_with_timeout_classified(
+                "/api/agents/runtime/events/batch",
+                body,
+                Some(RUNTIME_EVENT_POST_TIMEOUT),
+            )
+            .await
+        {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&post.path);
+                sent += 1;
+            }
+            Err(error) if error.permanent_status_code().is_some() => {
+                let status = error
+                    .permanent_status_code()
+                    .expect("permanent JSON POST errors have a status code");
+                let response_body = error.response_body().unwrap_or_default();
+                match dead_letter_runtime_event(post, status, response_body, &error) {
+                    Ok(path) => {
+                        tracing::error!(
+                            source = %post.path.display(),
+                            dead_letter = %path.display(),
+                            status,
+                            "Runtime event permanently rejected and dead-lettered"
+                        );
+                    }
+                    Err(dead_letter_error) => {
+                        tracing::warn!(
+                            source = %post.path.display(),
+                            error = %dead_letter_error,
+                            "Runtime event rejection could not be dead-lettered; keeping for retry"
+                        );
+                        kept += 1;
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    path = %post.path.display(),
+                    error = %error,
+                    "Runtime event rejection isolation hit a transient failure"
+                );
+                kept += 1;
+            }
+        }
+    }
+    (sent, kept)
+}
+
+fn dead_letter_runtime_event(
+    post: &PendingRuntimeEventPost,
+    status: u16,
+    response_body: &str,
+    error: &JsonPostError,
+) -> anyhow::Result<PathBuf> {
+    let parent = post
+        .path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("runtime event path has no parent"))?;
+    let dead_letter_dir = parent.join(RUNTIME_EVENT_DEAD_LETTER_DIR);
+    std::fs::create_dir_all(&dead_letter_dir)?;
+    let nonce = uuid::Uuid::new_v4();
+    let temporary = dead_letter_dir.join(format!(".{nonce}.tmp"));
+    let ready = dead_letter_dir.join(format!("{nonce}.json"));
+    let evidence = serde_json::json!({
+        "schema": "runtime_event_dead_letter.v1",
+        "dead_lettered_at": Utc::now().to_rfc3339(),
+        "source_file": post.path,
+        "status_code": status,
+        "error": error.to_string(),
+        "response_body": response_body,
+        "event": post.event,
+    });
+    let bytes = serde_json::to_vec_pretty(&evidence)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temporary, &ready)?;
+    sync_directory(&dead_letter_dir)?;
+    std::fs::remove_file(&post.path)?;
+    sync_directory(parent)?;
+    Ok(ready)
+}
+
+fn sync_directory(dir: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        OpenOptions::new().read(true).open(dir)?.sync_all()?;
+    }
+    Ok(())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -574,8 +706,17 @@ mod tests {
     }
 
     fn write_runtime_event(dir: &Path, name: &str, session_id: &str) -> PathBuf {
+        write_runtime_event_with_tool_name(dir, name, session_id, None).0
+    }
+
+    fn write_runtime_event_with_tool_name(
+        dir: &Path,
+        name: &str,
+        session_id: &str,
+        tool_name: Option<&str>,
+    ) -> (PathBuf, Value) {
         let path = dir.join(name);
-        let json = serde_json::json!({
+        let mut json = serde_json::json!({
             "runtime_key": format!("claude:{}", session_id),
             "session_id": session_id,
             "provider": "claude",
@@ -592,8 +733,11 @@ mod tests {
                 "exit_code": 0
             }
         });
+        if let Some(tool_name) = tool_name {
+            json["tool_name"] = Value::String(tool_name.to_string());
+        }
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
-        path
+        (path, json)
     }
 
     // ShipperClient can't be easily constructed without a real config, so
@@ -778,6 +922,92 @@ mod tests {
         (addr, paths, handle)
     }
 
+    /// Simulate Runtime Host validation: a batch containing an over-length
+    /// tool_name is rejected with 422, while a valid batch is accepted.
+    async fn spawn_runtime_validation_server() -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::Mutex<Vec<(u16, Value)>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests: Arc<Mutex<Vec<(u16, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = requests.clone();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+
+                let mut request = Vec::with_capacity(4096);
+                let header_end = loop {
+                    let mut buf = [0u8; 4096];
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(position) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(position + 4);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_len = headers
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+                    .and_then(|line| line.split(':').nth(1))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while request.len().saturating_sub(header_end) < content_len {
+                    let mut buf = [0u8; 4096];
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+
+                let body_end = header_end.saturating_add(content_len).min(request.len());
+                let body = serde_json::from_slice::<Value>(&request[header_end..body_end])
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let rejects = body
+                    .get("events")
+                    .and_then(Value::as_array)
+                    .is_some_and(|events| {
+                        events.iter().any(|event| {
+                            event
+                                .get("tool_name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|tool_name| tool_name.chars().count() > 128)
+                        })
+                    });
+                let status = if rejects { 422 } else { 204 };
+                requests_clone.lock().unwrap().push((status, body));
+                let response_body = if rejects {
+                    r#"{"detail":[{"loc":["body","events",0,"tool_name"],"msg":"String should have at most 128 characters","type":"string_too_long"}]}"#
+                } else {
+                    ""
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                    response_body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (addr, requests, handle)
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn test_drain_outbox_success_deletes_file() {
         use crate::config::ShipperConfig;
@@ -857,6 +1087,82 @@ mod tests {
         assert!(f.exists(), "runtime event file must remain for retry");
 
         server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_runtime_event_poison_pill_does_not_wedge_valid_terminal() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, requests, server) = spawn_runtime_validation_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let (poison, poison_event) = write_runtime_event_with_tool_name(
+            dir.path(),
+            "rte.poison.json",
+            "sess-poison",
+            Some(&"x".repeat(129)),
+        );
+        let (terminal, terminal_event) = write_runtime_event_with_tool_name(
+            dir.path(),
+            "rte.terminal.json",
+            "sess-terminal",
+            None,
+        );
+
+        let url = format!("http://{addr}");
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_runtime_event_outbox(dir.path(), &client).await;
+        server.abort();
+        let requests = requests.lock().unwrap().clone();
+
+        assert_eq!(
+            sent,
+            1,
+            "reproduction: permanently rejected event wedged valid event (sent={sent}, kept={kept}, requests={requests:?})"
+        );
+        assert_eq!(kept, 0);
+        assert!(
+            !terminal.exists(),
+            "valid terminal must be removed after delivery"
+        );
+        assert!(!poison.exists(), "poison event must leave the ready queue");
+        let dead_letters = fs::read_dir(dir.path().join(RUNTIME_EVENT_DEAD_LETTER_DIR))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+            .collect::<Vec<_>>();
+        assert_eq!(dead_letters.len(), 1, "poison event must be dead-lettered");
+        let evidence: Value = serde_json::from_slice(&fs::read(&dead_letters[0]).unwrap()).unwrap();
+        assert_eq!(evidence["event"], poison_event);
+        assert_eq!(evidence["status_code"], 422);
+        assert_eq!(
+            evidence["response_body"],
+            r#"{"detail":[{"loc":["body","events",0,"tool_name"],"msg":"String should have at most 128 characters","type":"string_too_long"}]}"#
+        );
+        assert!(
+            requests.iter().any(|(status, body)| {
+                *status == 204
+                    && body
+                        .get("events")
+                        .and_then(Value::as_array)
+                        .is_some_and(|events| events == std::slice::from_ref(&terminal_event))
+            }),
+            "the valid terminal must reach the server in its own accepted request"
+        );
+        assert!(
+            requests.iter().any(|(status, body)| {
+                *status == 422
+                    && body
+                        .get("events")
+                        .and_then(Value::as_array)
+                        .is_some_and(|events| events.contains(&poison_event))
+            }),
+            "the server must observe the actual validation rejection"
+        );
     }
 
     #[test]

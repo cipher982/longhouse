@@ -76,6 +76,21 @@ impl FlightRecorder {
 }
 
 pub fn outbox_snapshot(dir: &Path) -> Value {
+    snapshot_files(dir, |_| true)
+}
+
+/// Snapshot ready runtime-event files without counting atomic-write temps or
+/// nested dead-letter evidence as pending queue depth.
+pub fn runtime_event_outbox_snapshot(dir: &Path) -> Value {
+    snapshot_files(dir, |entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with(".json") && !name.starts_with('.'))
+    })
+}
+
+fn snapshot_files(dir: &Path, include: impl Fn(&std::fs::DirEntry) -> bool) -> Value {
     let mut count = 0_u64;
     let mut bytes = 0_u64;
     let mut oldest_age_ms: Option<u64> = None;
@@ -104,6 +119,9 @@ pub fn outbox_snapshot(dir: &Path) -> Value {
             continue;
         };
         if !metadata.is_file() {
+            continue;
+        }
+        if !include(&entry) {
             continue;
         }
         count += 1;
@@ -371,5 +389,21 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(3)
         );
+    }
+
+    #[test]
+    fn runtime_event_outbox_snapshot_reports_ready_depth_and_age() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("runtime.json"), b"{}{}").unwrap();
+        fs::write(dir.path().join(".runtime.tmp"), b"ignored").unwrap();
+        fs::create_dir(dir.path().join("dead-letter")).unwrap();
+        fs::write(dir.path().join("dead-letter").join("rejected.json"), b"ignored").unwrap();
+
+        let snapshot = runtime_event_outbox_snapshot(dir.path());
+
+        assert_eq!(snapshot["status"], "ok");
+        assert_eq!(snapshot["count"], 1);
+        assert_eq!(snapshot["bytes"], 4);
+        assert!(snapshot["oldest_age_ms"].is_number());
     }
 }

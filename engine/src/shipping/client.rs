@@ -201,6 +201,41 @@ pub enum ShipResult {
     ConnectError(ConnectErrorDetail),
 }
 
+/// Failure from a small JSON POST where callers need to distinguish a
+/// permanent HTTP rejection from a retryable transport failure.
+#[derive(Debug)]
+pub enum JsonPostError {
+    Transport(String),
+    Http { status: u16, body: String },
+}
+
+impl JsonPostError {
+    pub fn permanent_status_code(&self) -> Option<u16> {
+        match self {
+            Self::Http { status, .. } if (400..=499).contains(status) => Some(*status),
+            Self::Transport(_) | Self::Http { .. } => None,
+        }
+    }
+
+    pub fn response_body(&self) -> Option<&str> {
+        match self {
+            Self::Http { body, .. } => Some(body),
+            Self::Transport(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for JsonPostError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(error) => write!(formatter, "POST failed: {error}"),
+            Self::Http { status, body } => write!(formatter, "POST returned {status}: {body}"),
+        }
+    }
+}
+
+impl std::error::Error for JsonPostError {}
+
 /// HTTP client with connection pooling and retry logic.
 #[derive(Clone)]
 pub struct ShipperClient {
@@ -394,6 +429,40 @@ impl ShipperClient {
             );
         }
         anyhow::bail!("POST returned {status}: {body}");
+    }
+
+    /// POST JSON while preserving whether a failure came from HTTP or the
+    /// transport. Runtime-event outbox callers use 4xx as a dead-letter
+    /// decision and keep 5xx/transport failures queued for retry.
+    pub async fn post_json_with_timeout_classified(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> std::result::Result<(), JsonPostError> {
+        let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
+        let mut request = self
+            .client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .body(body);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| JsonPostError::Transport(error.to_string()))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let body = response.text().await.unwrap_or_default();
+        Err(JsonPostError::Http {
+            status: status.as_u16(),
+            body,
+        })
     }
 
     /// POST JSON and decode a JSON response with an optional request timeout.
