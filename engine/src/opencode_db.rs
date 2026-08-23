@@ -225,7 +225,17 @@ fn pending_console_binding_blocks_shadow_from_claims(
 }
 
 pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandidate>> {
-    list_opencode_sessions_inner(db_path, None)
+    list_opencode_sessions_inner(db_path, None, true)
+}
+
+/// List cheap change watermarks without hashing every message and part.
+///
+/// The daemon calls this on every provider DB wake. Fingerprints are computed
+/// only for candidates whose watermark moved (or an explicit reconciliation
+/// pass), keeping an idle tick proportional to the changed sessions rather
+/// than the provider's lifetime corpus.
+pub fn list_opencode_session_watermarks(db_path: &Path) -> Result<Vec<OpenCodeSessionCandidate>> {
+    list_opencode_sessions_inner(db_path, None, false)
 }
 
 pub fn list_opencode_sessions_page(
@@ -236,23 +246,34 @@ pub fn list_opencode_sessions_page(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    list_opencode_sessions_inner(db_path, Some((limit, offset)))
+    list_opencode_sessions_inner(db_path, Some((limit, offset)), true)
 }
 
 fn list_opencode_sessions_inner(
     db_path: &Path,
     page: Option<(usize, usize)>,
+    include_fingerprints: bool,
 ) -> Result<Vec<OpenCodeSessionCandidate>> {
     let conn = open_readonly(db_path)?;
     let has_agent_column = sqlite_column_exists(&conn, "session", "agent")?;
+    let version_expression = if include_fingerprints {
+        "MAX(\
+            s.time_updated, \
+            COALESCE((SELECT MAX(m.time_updated) FROM message m WHERE m.session_id = s.id), 0), \
+            COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)\
+        )"
+    } else {
+        // OpenCode advances session.time_updated for normal message/part
+        // writes. The periodic durability reconciliation fingerprints every
+        // session and repairs a provider bug or hand-edited DB that violates
+        // that watermark contract. Keeping the hot wake path on the session
+        // table is what makes an idle database scan proportional to sessions,
+        // not to every message and part ever written.
+        "s.time_updated"
+    };
     let sql = format!(
         r#"
-        SELECT s.id,
-               MAX(
-                   s.time_updated,
-                   COALESCE((SELECT MAX(m.time_updated) FROM message m WHERE m.session_id = s.id), 0),
-                   COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)
-        ) AS version_ms
+        SELECT s.id, {version_expression} AS version_ms
         FROM session s
         ORDER BY version_ms DESC, s.id ASC
         {}
@@ -285,11 +306,27 @@ fn list_opencode_sessions_inner(
     let mut sessions = Vec::new();
     while let Some(row) = rows.next()? {
         let mut candidate = map_row(row)?;
-        candidate.fingerprint =
-            session_fingerprint(&conn, &candidate.provider_session_id, has_agent_column)?;
+        if include_fingerprints {
+            candidate.fingerprint =
+                session_fingerprint(&conn, &candidate.provider_session_id, has_agent_column)?;
+        }
         sessions.push(candidate);
     }
     Ok(sessions)
+}
+
+pub fn opencode_session_fingerprints(
+    db_path: &Path,
+    provider_session_ids: &[String],
+) -> Result<Vec<String>> {
+    let conn = open_readonly(db_path)?;
+    let has_agent_column = sqlite_column_exists(&conn, "session", "agent")?;
+    provider_session_ids
+        .iter()
+        .map(|provider_session_id| {
+            session_fingerprint(&conn, provider_session_id, has_agent_column)
+        })
+        .collect()
 }
 
 fn opencode_state_roots() -> Vec<PathBuf> {
@@ -487,10 +524,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             .then(left.uuid.cmp(&right.uuid))
     });
 
-    let session_version = list_opencode_sessions(db_path)?
-        .into_iter()
-        .find(|candidate| candidate.provider_session_id == provider_session_id)
-        .map(|candidate| candidate.version)
+    let session_version = opencode_session_version(&conn, provider_session_id)?
         .unwrap_or_else(|| last_source_offset.saturating_add(1));
 
     let task_child = match session.parent_id.as_deref() {
@@ -1370,6 +1404,23 @@ fn session_fingerprint(
     Ok(format!("{:016x}", hash.finish()))
 }
 
+fn opencode_session_version(conn: &Connection, provider_session_id: &str) -> Result<Option<u64>> {
+    let version_ms = conn.query_row(
+        r#"
+            SELECT MAX(
+                s.time_updated,
+                COALESCE((SELECT MAX(m.time_updated) FROM message m WHERE m.session_id = s.id), 0),
+                COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)
+            )
+            FROM session s
+            WHERE s.id = ?1
+            "#,
+        params![provider_session_id],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    Ok(version_ms.map(version_from_ms))
+}
+
 #[derive(Debug)]
 struct Fnv1a64(u64);
 
@@ -2077,6 +2128,31 @@ mod tests {
         assert_eq!(sessions[0].provider_session_id, "ses_test");
         assert!(sessions[0].source_key.ends_with("#opencode:ses_test"));
         assert!(sessions[0].version > 0);
+    }
+
+    #[test]
+    fn session_watermarks_do_not_hash_lifetime_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let fingerprints =
+            opencode_session_fingerprints(&db_path, &["ses_test".to_string()]).unwrap();
+        assert!(!fingerprints[0].is_empty());
+
+        // Make accidental message/part access impossible, rather than merely
+        // hoping a timing assertion notices a full-corpus scan on a tiny
+        // fixture.
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("DROP TABLE message; DROP TABLE part;")
+            .unwrap();
+        drop(conn);
+
+        let sessions = list_opencode_session_watermarks(&db_path).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].provider_session_id, "ses_test");
+        assert!(sessions[0].version > 0);
+        assert!(sessions[0].fingerprint.is_empty());
     }
 
     #[test]

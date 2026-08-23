@@ -2257,7 +2257,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                 }
-                if outbox_collect_tasks.is_empty() {
+                // Files remain durable while a POST is in flight. Do not scan,
+                // parse, and persist them again every 100ms until that attempt
+                // has either removed them or made them eligible for retry.
+                if outbox_collect_tasks.is_empty()
+                    && outbox_post_tasks.is_empty()
+                    && runtime_outbox_post_tasks.is_empty()
+                {
                     let outbox_dir = outbox_dir.clone();
                     let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     let db_path = config.shipper_config.db_path.clone();

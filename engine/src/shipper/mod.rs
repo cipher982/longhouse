@@ -266,24 +266,31 @@ pub(crate) async fn ship_opencode_database_with_trace(
     ensure_opencode_sqlite_state_table(conn)?;
     ensure_opencode_source_line_durability_table(conn)?;
     ensure_opencode_reconciliation_attempt_table(conn)?;
-    let sessions = opencode_db::list_opencode_sessions(path)?;
+    let sessions = opencode_db::list_opencode_session_watermarks(path)?;
     let mut sessions_shipped = 0usize;
     let mut events_shipped = 0usize;
     let mut reconciliation_sessions = 0usize;
     let mut reconciliation_pending = false;
 
+    let mut candidates = Vec::new();
     for candidate in sessions {
-        if opencode_db::managed_longhouse_session_id_for_opencode(&candidate.provider_session_id)
-            .is_none()
-            && opencode_db::pending_console_binding_blocks_shadow(&candidate.provider_session_id)
-        {
-            tracing::debug!(
-                provider_session_id = %candidate.provider_session_id,
-                "Deferring unbound OpenCode archive row while a Console binding is pending"
-            );
+        let current_offset = file_state.get_offset(&candidate.source_key)?;
+        if candidate.version <= current_offset && mode == OpenCodeShipMode::ChangedOnly {
             continue;
         }
-        let current_offset = file_state.get_offset(&candidate.source_key)?;
+        candidates.push((candidate, current_offset));
+    }
+    let provider_session_ids = candidates
+        .iter()
+        .map(|(candidate, _)| candidate.provider_session_id.clone())
+        .collect::<Vec<_>>();
+    let fingerprints =
+        opencode_db::opencode_session_fingerprints(path, &provider_session_ids)?;
+
+    for ((mut candidate, current_offset), fingerprint) in
+        candidates.into_iter().zip(fingerprints)
+    {
+        candidate.fingerprint = fingerprint;
         let current_fingerprint = get_opencode_sqlite_fingerprint(conn, &candidate.source_key)?;
         let persisted_longhouse_session_id =
             get_opencode_sqlite_longhouse_session_id(conn, &candidate.source_key)?;
@@ -306,6 +313,16 @@ pub(crate) async fn ship_opencode_database_with_trace(
             }
             reconciliation_sessions += 1;
             record_opencode_reconciliation_attempt(conn, &candidate.source_key)?;
+        }
+        if opencode_db::managed_longhouse_session_id_for_opencode(&candidate.provider_session_id)
+            .is_none()
+            && opencode_db::pending_console_binding_blocks_shadow(&candidate.provider_session_id)
+        {
+            tracing::debug!(
+                provider_session_id = %candidate.provider_session_id,
+                "Deferring unbound OpenCode archive row while a Console binding is pending"
+            );
+            continue;
         }
 
         let parse_result =

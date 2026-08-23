@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
+use futures_util::stream::{self, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use tracing::warn;
@@ -30,6 +31,7 @@ use crate::state::unmanaged_process_binding::{
 /// Maximum age for an outbox file before it is considered stale and deleted.
 const STALE_SECS: u64 = 600; // 10 minutes
 const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
+const PRESENCE_POST_CONCURRENCY: usize = 8;
 const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(3);
 const RUNTIME_EVENT_BATCH_LIMIT: usize = 128;
 
@@ -432,23 +434,28 @@ async fn post_pending_presence_files_with_timeout(
     posts: Vec<PendingPresencePost>,
     request_timeout: Duration,
 ) -> (usize, usize) {
-    let mut sent = 0usize;
-    let mut kept = 0usize;
-    for post in posts {
+    // A disconnected Runtime Host used to turn N queued signals into N * 3s
+    // of serial timeout. During that window the 100ms collector kept rescanning
+    // and reparsing the same files. Presence is independent per session, so a
+    // small fixed fan-out bounds recovery latency without creating an
+    // unbounded request burst.
+    let outcomes = stream::iter(posts.into_iter().map(|post| async move {
         match client
             .post_json_with_timeout("/api/agents/presence", post.bytes, Some(request_timeout))
             .await
         {
             Ok(_) => {
                 let _ = std::fs::remove_file(&post.path);
-                sent += 1;
+                true
             }
-            Err(_) => {
-                // Keep for retry next tick.
-                kept += 1;
-            }
+            Err(_) => false,
         }
-    }
+    }))
+    .buffer_unordered(PRESENCE_POST_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    let sent = outcomes.iter().filter(|sent| **sent).count();
+    let kept = outcomes.len().saturating_sub(sent);
     (sent, kept)
 }
 
@@ -1005,17 +1012,34 @@ mod tests {
         let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
 
         let dir = tempfile::tempdir().unwrap();
-        let f = write_hook_style(dir.path(), "SLOW123", "sess-slow", "thinking");
+        let files = (0..8)
+            .map(|index| {
+                write_hook_style(
+                    dir.path(),
+                    &format!("SLOW{index}"),
+                    &format!("sess-slow-{index}"),
+                    "thinking",
+                )
+            })
+            .collect::<Vec<_>>();
         let db_path = dir.path().join("state.db");
         let posts = collect_outbox_with_local_state_result(dir.path(), Some(&db_path)).posts;
 
+        let started = std::time::Instant::now();
         let (sent, kept) =
             post_pending_presence_files_with_timeout(&client, posts, Duration::from_millis(50))
                 .await;
 
         assert_eq!(sent, 0);
-        assert_eq!(kept, 1, "slow presence POST should be retried later");
-        assert!(f.exists(), "file must remain after a presence POST timeout");
+        assert_eq!(kept, 8, "slow presence POSTs should be retried later");
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "timeouts must be concurrent rather than queued file by file"
+        );
+        assert!(
+            files.iter().all(|file| file.exists()),
+            "files must remain after a presence POST timeout"
+        );
 
         server.abort();
     }
