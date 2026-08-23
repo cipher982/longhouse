@@ -201,6 +201,14 @@ pub enum ShipResult {
     ConnectError(ConnectErrorDetail),
 }
 
+/// 4xx statuses that a later attempt can still satisfy.
+const RETRYABLE_CLIENT_STATUS: &[u16] = &[
+    401, // token refreshed between queue and drain
+    403, // transient authorization, same shape as 401 here
+    408, // server-side request timeout
+    429, // rate limited
+];
+
 /// Failure from a small JSON POST where callers need to distinguish a
 /// permanent HTTP rejection from a retryable transport failure.
 #[derive(Debug)]
@@ -210,8 +218,15 @@ pub enum JsonPostError {
 }
 
 impl JsonPostError {
+    /// A rejection is permanent only when retrying cannot change the outcome.
+    ///
+    /// Rate limits, auth refreshes, and request timeouts are 4xx but transient:
+    /// dead-lettering them loses events exactly when the outbox is busiest, which
+    /// is the failure this classification exists to prevent. This module already
+    /// retries 429 with backoff on the archive path; the runtime lane must agree.
     pub fn permanent_status_code(&self) -> Option<u16> {
         match self {
+            Self::Http { status, .. } if RETRYABLE_CLIENT_STATUS.contains(status) => None,
             Self::Http { status, .. } if (400..=499).contains(status) => Some(*status),
             Self::Transport(_) | Self::Http { .. } => None,
         }
@@ -747,7 +762,9 @@ fn parse_storage_v2_backpressure(
     // not recognised here, so a moment of catalog contention under load failed
     // the whole ship rather than backing off and trying again.
     let catalog_unavailable = body.contains("catalog_unavailable");
-    if status_code != 503 || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_unavailable) {
+    if status_code != 503
+        || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_unavailable)
+    {
         return None;
     }
     Some(StorageV2Backpressure {
@@ -1029,7 +1046,9 @@ mod tests {
         // Still scoped: a non-503, and a 503 that is neither condition, are not
         // silently retried.
         assert!(parse_storage_v2_backpressure(500, &headers, body, "live").is_none());
-        assert!(parse_storage_v2_backpressure(503, &headers, r#"{"detail":"nope"}"#, "live").is_none());
+        assert!(
+            parse_storage_v2_backpressure(503, &headers, r#"{"detail":"nope"}"#, "live").is_none()
+        );
     }
 
     #[test]

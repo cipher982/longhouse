@@ -1165,6 +1165,48 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn rate_limited_runtime_events_are_retried_not_dead_lettered() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        // 429 is a 4xx, but a later attempt succeeds. Dead-lettering it would
+        // lose terminal signals exactly when the outbox is busiest -- the same
+        // class of loss that poison isolation exists to prevent.
+        let (addr, _paths, server) = spawn_http_server(429).await;
+        let dir = tempfile::tempdir().unwrap();
+        let event = write_runtime_event(dir.path(), "rte.rate-limited.json", "sess-throttled");
+
+        let url = format!("http://{addr}");
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_runtime_event_outbox(dir.path(), &client).await;
+        server.abort();
+
+        assert_eq!(sent, 0);
+        assert_eq!(kept, 1, "a rate-limited event must stay queued for retry");
+        assert!(event.exists(), "rate-limited event must remain on disk");
+
+        let dead_letter_dir = dir.path().join(RUNTIME_EVENT_DEAD_LETTER_DIR);
+        let dead_letters = fs::read_dir(&dead_letter_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.extension().and_then(|value| value.to_str()) == Some("json")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dead_letters, 0,
+            "a rate limit must never dead-letter an event"
+        );
+    }
+
     #[test]
     fn test_collect_runtime_event_outbox_deletes_malformed_files() {
         let dir = tempfile::tempdir().unwrap();
