@@ -418,6 +418,40 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+  it("fully refreshes the workspace when the SSE stream reports a replay gap", () => {
+    let onReplayGap:
+      | ((data: {
+          session_id: string;
+          requested_seq: number;
+          earliest_seq: number | null;
+          latest_seq: number;
+          reason: string;
+        }) => void)
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      onReplayGap = nextHandlers.onReplayGap;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      onReplayGap?.({
+        session_id: baseSession.id,
+        requested_seq: 3,
+        earliest_seq: 8,
+        latest_seq: 12,
+        reason: "cursor_too_old",
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
   it("keeps runtime wakes off transcript query families", () => {
     let handlers:
       | {

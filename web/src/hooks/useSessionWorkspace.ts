@@ -264,6 +264,9 @@ export function useSessionWorkspace(
           recordServerClockSkew(data?.server_now_ms);
           setStreamConnected(true);
         },
+        onReplayGap: () => {
+          refreshWorkspaceQueries(true);
+        },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
           if (data.catalog_commit_seq != null && data.catalog_commit_seq > 0) {

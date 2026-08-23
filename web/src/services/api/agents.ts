@@ -842,6 +842,14 @@ export interface SessionWorkspaceStreamConnected {
   server_now_ms?: number;
 }
 
+export interface SessionWorkspaceStreamReplayGap {
+  session_id: string;
+  requested_seq: number;
+  earliest_seq: number | null;
+  latest_seq: number;
+  reason: string;
+}
+
 export interface SessionWorkspaceStreamChange {
   session_id: string;
   change_kind?: string | null;
@@ -858,6 +866,7 @@ export interface SessionWorkspaceStreamChange {
 
 export interface SessionWorkspaceStreamHandlers {
   onConnected?: (data: SessionWorkspaceStreamConnected) => void;
+  onReplayGap?: (data: SessionWorkspaceStreamReplayGap) => void;
   onWorkspaceChanged?: (data: SessionWorkspaceStreamChange) => void;
   onHeartbeat?: (timestamp: string) => void;
   onError?: (error: Event) => void;
@@ -915,6 +924,13 @@ export function connectSessionWorkspaceStream(
         transcript_preview_text_length: data.transcript_preview?.text?.length ?? null,
       });
       handlers.onWorkspaceChanged?.(data);
+    }
+  });
+
+  eventSource.addEventListener("replay_gap", (event: MessageEvent) => {
+    const data = parseStreamEventData<SessionWorkspaceStreamReplayGap>(event);
+    if (data) {
+      handlers.onReplayGap?.(data);
     }
   });
 

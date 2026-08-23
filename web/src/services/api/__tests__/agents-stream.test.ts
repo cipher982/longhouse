@@ -204,4 +204,27 @@ describe("Timeline session stream", () => {
     window.removeEventListener("longhouse:timeline-stream", onTimelineStreamEvent);
     nowSpy.mockRestore();
   });
+
+  it("routes replay gaps to the workspace stream handler", () => {
+    const onReplayGap = vi.fn();
+    const disconnect = connectSessionWorkspaceStream("session-1", { onReplayGap });
+
+    MockEventSource.instances[0].emit("replay_gap", {
+      session_id: "session-1",
+      requested_seq: 3,
+      earliest_seq: 8,
+      latest_seq: 12,
+      reason: "cursor_too_old",
+    });
+
+    expect(onReplayGap).toHaveBeenCalledWith({
+      session_id: "session-1",
+      requested_seq: 3,
+      earliest_seq: 8,
+      latest_seq: 12,
+      reason: "cursor_too_old",
+    });
+
+    disconnect();
+  });
 });
