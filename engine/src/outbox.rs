@@ -99,10 +99,33 @@ pub struct PendingRuntimeEventPost {
     event: Value,
 }
 
+/// Is this event's phase one an adapter is allowed to ship?
+///
+/// Only `phase_signal` is constrained. A terminal or binding signal carries its
+/// meaning in the payload and legitimately ships `finished`, which the contract
+/// marks local-health-only.
+fn runtime_event_phase_is_shippable(event: &Value) -> bool {
+    if event.get("kind").and_then(Value::as_str) != Some("phase_signal") {
+        return true;
+    }
+    match event.get("phase").and_then(Value::as_str) {
+        None => true,
+        Some(phase) => crate::managed_phase_contract::is_wire_phase(phase),
+    }
+}
+
 /// Durably enqueue one runtime event for the daemon's shared retrying outbox.
 /// Writers never POST directly: an atomic rename makes an event visible to the
 /// drain loop only after its complete JSON payload reaches disk.
 pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
+    // Ingest rejects a phase_signal outside the contract, which dead-letters it.
+    // Refuse at the producer instead, so the bug surfaces as a local error rather
+    // than a 422 in production. This is deliberately an error and not a
+    // debug_assert: the engine ships and tests in release, where debug assertions
+    // are compiled out and the guard would never fire.
+    if !runtime_event_phase_is_shippable(event) {
+        anyhow::bail!("phase_signal carries a phase outside the managed phase contract: {event}");
+    }
     std::fs::create_dir_all(dir)?;
     let bytes = serde_json::to_vec(event)?;
     let nonce = uuid::Uuid::new_v4();
@@ -668,6 +691,7 @@ fn unmanaged_binding_signal_for_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1163,6 +1187,37 @@ mod tests {
             }),
             "the server must observe the actual validation rejection"
         );
+    }
+
+    #[test]
+    fn a_phase_signal_outside_the_contract_never_reaches_the_outbox() {
+        // `tool` is the phase codex_exec actually shipped. Ingest now rejects it,
+        // which dead-letters the event, so the producer must fail here first.
+        let dir = tempfile::tempdir().unwrap();
+        let event = json!({"kind": "phase_signal", "phase": "tool", "session_id": "sess"});
+        let outcome = enqueue_runtime_event(dir.path(), &event);
+        assert!(
+            outcome.is_err(),
+            "a phase outside the contract must be refused at the producer"
+        );
+        let queued = fs::read_dir(dir.path()).unwrap().flatten().count();
+        assert_eq!(queued, 0, "a refused event must not reach the queue");
+    }
+
+    #[test]
+    fn contract_phases_and_state_bearing_kinds_still_enqueue() {
+        let dir = tempfile::tempdir().unwrap();
+        for phase in crate::managed_phase_contract::WIRE_PHASES {
+            let event = json!({"kind": "phase_signal", "phase": phase, "session_id": "sess"});
+            enqueue_runtime_event(dir.path(), &event).unwrap();
+        }
+        // A terminal legitimately ships `finished`, which is local-health-only.
+        let terminal =
+            json!({"kind": "terminal_signal", "phase": "finished", "session_id": "sess"});
+        enqueue_runtime_event(dir.path(), &terminal).unwrap();
+        // And a terminal is never gated on vocabulary at all.
+        let odd = json!({"kind": "terminal_signal", "phase": "tool", "session_id": "sess"});
+        enqueue_runtime_event(dir.path(), &odd).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

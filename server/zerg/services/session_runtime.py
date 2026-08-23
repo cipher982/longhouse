@@ -18,6 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import model_validator
 from sqlalchemy.orm import Session
 
 from zerg.managed_phase_contract import is_known_raw_phase
@@ -216,6 +217,28 @@ class RuntimeEventIngest(BaseModel):
     freshness_ms: int | None = Field(None, ge=0, le=7 * 24 * 60 * 60 * 1000)
     dedupe_key: str = Field(..., min_length=1, max_length=255)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _reject_uninterpretable_phase_signal(self) -> "RuntimeEventIngest":
+        """Refuse a phase_signal whose phase is outside the managed contract.
+
+        Scope is deliberately narrow. A rejected event is dead-lettered by the
+        engine's poison isolation, so rejecting on vocabulary is only safe where
+        the event is worthless without it and something else supersedes it. A
+        phase_signal is exactly that: its entire meaning is the phase, and the
+        next one replaces it.
+
+        State-bearing kinds are never rejected here. A terminal_signal carries
+        its meaning in the payload -- it legitimately ships `finished`, which the
+        contract marks local-health-only -- and losing one is the failure this
+        whole effort exists to prevent.
+        """
+        if self.kind == "phase_signal" and self.phase is not None and not is_known_raw_phase(self.phase):
+            raise ValueError(
+                f"phase_signal carries a phase outside the managed phase contract: {self.phase!r}. "
+                "Adapters must emit a phase from engine/src/managed_phase_contract.rs."
+            )
+        return self
 
 
 class RuntimeEventBatchIngest(BaseModel):
@@ -1168,7 +1191,7 @@ def _apply_runtime_event(
         # always a producer bug rather than a session state worth serving.
         if not is_known_raw_phase(next_phase):
             logger.warning(
-                "runtime phase_signal outside the managed phase contract: " "phase=%s provider=%s source=%s session=%s",
+                "runtime phase_signal outside the managed phase contract: phase=%s provider=%s source=%s session=%s",
                 next_phase,
                 event.provider,
                 event.source,
