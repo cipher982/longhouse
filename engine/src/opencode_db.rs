@@ -2137,7 +2137,9 @@ mod tests {
         let before = list_opencode_session_watermarks(&db_path).unwrap();
         let conn = Connection::open(&db_path).unwrap();
         conn.execute(
-            "UPDATE part SET time_updated = time_updated + 1 WHERE id = 'prt_assistant'",
+            "UPDATE part
+             SET time_updated = (SELECT MAX(time_updated) FROM session) + 1
+             WHERE id = 'prt_text'",
             [],
         )
         .unwrap();
