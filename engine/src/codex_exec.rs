@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -29,6 +29,7 @@ const CONSOLE_WARM_POOL_TARGET: usize = 1;
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
 const DEFAULT_CONSOLE_SANDBOX: &str = "workspace-write";
+pub const CODEX_EXEC_ADAPTER: &str = "codex_exec";
 
 struct AppServerRpc {
     stdin: ChildStdin,
@@ -771,6 +772,180 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         pid,
         process_group_id,
         argv,
+    })
+}
+
+/// Reconcile Codex Console claims left behind by an engine restart.
+///
+/// Codex app-server has no stdout file that can be replayed. A claim is
+/// terminalized only when process identity proves that the recorded worker is
+/// gone. A matching live worker is an orphan from the previous engine and is
+/// deliberately left alone: this engine has no stdio handles with which to
+/// observe or safely take it over. Missing identity evidence is also left
+/// alone; silence is not completion.
+pub async fn recover_codex_exec_turns(
+    machine_name: &str,
+    _local_db_path: Option<PathBuf>,
+) -> Result<usize> {
+    let registry = crate::turn_claims::default_registry()?;
+    let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
+    let process_facts = crate::process_identity::try_collect_process_facts_by_pid();
+    reconcile_codex_exec_claims(&registry, &outbox_dir, machine_name, process_facts)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CodexExecProcessIdentity {
+    Alive,
+    Gone(&'static str),
+    Unknown(&'static str),
+}
+
+fn reconcile_codex_exec_claims(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    machine_name: &str,
+    process_facts: Option<std::collections::HashMap<u32, crate::process_identity::ProcessFact>>,
+) -> Result<usize> {
+    let claims = registry.list_nonterminal()?;
+    // One coherent inventory for the whole pass. `try_collect_process_fact` per
+    // claim cannot tell an absent pid from a `ps` that failed to run or parse,
+    // and this is a caller reconciling durable state -- exactly what
+    // `try_collect_process_facts_by_pid`'s own doc comment warns about. Getting
+    // that wrong terminates live turns, and a terminal is an actuator: it
+    // settles the console FIFO and dispatches the next queued turn, so a false
+    // "gone" runs turn N+1 concurrently with a turn N that never stopped.
+    let Some(process_facts) = process_facts else {
+        tracing::warn!(
+            "Process inventory unavailable; leaving Codex Console turn claims for a later scan"
+        );
+        return Ok(0);
+    };
+    let mut recovered = 0;
+    for claim in claims {
+        if claim.adapter.as_deref() != Some(CODEX_EXEC_ADAPTER) || claim.state != "spawned" {
+            continue;
+        }
+        match codex_exec_process_identity(&claim, &process_facts) {
+            CodexExecProcessIdentity::Alive => {
+                tracing::warn!(
+                    run_id = %claim.run_id,
+                    pid = claim.pid.unwrap_or_default(),
+                    "Leaving live orphaned Codex Console turn claim for a future recovery scan"
+                );
+            }
+            CodexExecProcessIdentity::Unknown(reason) => {
+                tracing::warn!(
+                    run_id = %claim.run_id,
+                    pid = claim.pid.unwrap_or_default(),
+                    reason,
+                    "Could not establish Codex Console process identity; leaving turn claim active"
+                );
+            }
+            CodexExecProcessIdentity::Gone(reason) => {
+                let detail = format!(
+                    "Codex Console process is gone ({reason}); terminalized during engine recovery"
+                );
+                let event = codex_exec_recovery_terminal_event(
+                    &claim,
+                    machine_name,
+                    "process_gone",
+                    &detail,
+                );
+                // Publish the durable runtime fact before changing the claim.
+                // If this write fails, the claim remains non-terminal so the
+                // next engine start can retry rather than hiding the outage.
+                if let Err(error) = crate::outbox::enqueue_runtime_event(outbox_dir, &event) {
+                    tracing::warn!(
+                        %error,
+                        run_id = %claim.run_id,
+                        "Failed to enqueue recovered Codex Console terminal event"
+                    );
+                    continue;
+                }
+                if let Err(error) =
+                    registry.mark_terminal(&claim.run_id, "process_gone", Some(detail))
+                {
+                    tracing::warn!(
+                        %error,
+                        run_id = %claim.run_id,
+                        "Failed to mark recovered Codex Console turn terminal"
+                    );
+                    continue;
+                }
+                recovered += 1;
+            }
+        }
+    }
+    Ok(recovered)
+}
+
+fn codex_exec_process_identity(
+    claim: &crate::turn_claims::TurnClaim,
+    process_facts: &std::collections::HashMap<u32, crate::process_identity::ProcessFact>,
+) -> CodexExecProcessIdentity {
+    let Some(pid) = claim.pid else {
+        return CodexExecProcessIdentity::Unknown("claim has no recorded pid");
+    };
+    let Some(fact) = process_facts.get(&pid) else {
+        return CodexExecProcessIdentity::Gone("recorded pid is no longer running");
+    };
+    let Some(recorded_boot_id) = claim.boot_id.as_deref() else {
+        return CodexExecProcessIdentity::Unknown("claim has no recorded boot id");
+    };
+    let Some(current_boot_id) = crate::heartbeat::machine_boot_id() else {
+        return CodexExecProcessIdentity::Unknown("current machine boot id is unavailable");
+    };
+    if recorded_boot_id != current_boot_id {
+        return CodexExecProcessIdentity::Gone("machine boot id changed");
+    }
+    let Some(recorded_start_raw) = claim.process_start_time.as_deref() else {
+        return CodexExecProcessIdentity::Unknown("claim has no recorded process start time");
+    };
+    let Some(recorded_start) = crate::process_identity::parse_lstart(recorded_start_raw) else {
+        return CodexExecProcessIdentity::Unknown("recorded process start time is invalid");
+    };
+    if !crate::process_identity::command_contains_basename(&fact.command, "codex") {
+        return CodexExecProcessIdentity::Gone("pid now names a non-Codex process");
+    }
+    if !crate::process_identity::started_before_or_near_recorded(&fact, Some(recorded_start)) {
+        return CodexExecProcessIdentity::Gone("process start time is newer than the claim");
+    }
+    if fact.lstart.trim() != recorded_start_raw.trim() {
+        return CodexExecProcessIdentity::Gone("process start time changed");
+    }
+    CodexExecProcessIdentity::Alive
+}
+
+fn codex_exec_recovery_terminal_event(
+    claim: &crate::turn_claims::TurnClaim,
+    machine_name: &str,
+    terminal_state: &str,
+    detail: &str,
+) -> Value {
+    json!({
+        "runtime_key": format!("codex:{}", claim.session_id),
+        "session_id": claim.session_id,
+        "run_id": claim.run_id,
+        "thread_id": claim.thread_id,
+        "provider": "codex",
+        "device_id": machine_name,
+        "source": CODEX_EXEC_RUNTIME_SOURCE,
+        "kind": "terminal_signal",
+        "phase": Value::Null,
+        "tool_name": Value::Null,
+        "occurred_at": Utc::now().to_rfc3339(),
+        "dedupe_key": format!("codex-exec:{}:{}:terminal", claim.session_id, claim.run_id),
+        "payload": {
+            "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
+            "execution_lifetime": "one_shot",
+            "terminal_state": terminal_state,
+            "terminal_reason": terminal_state,
+            "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
+            "exit_code": Value::Null,
+            "stderr_tail": detail,
+            "turn_id": claim.turn_id,
+            "client_request_id": claim.client_request_id,
+        }
     })
 }
 
@@ -1865,6 +2040,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::thread;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, UnixListener};
     use tokio::sync::mpsc;
@@ -2595,5 +2771,293 @@ for line in sys.stdin:
             find_codex_rollout_path(temp.path(), thread_id),
             Some(rollout)
         );
+    }
+
+    #[test]
+    fn codex_exec_process_gone_claim_is_reconciled_at_registry_and_outbox() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let run_id = "22222222-2222-4222-8222-222222222222";
+        registry
+            .claim(
+                run_id,
+                "11111111-1111-4111-8111-111111111111",
+                "44444444-4444-4444-8444-444444444444",
+                Some("55555555-5555-4555-8555-555555555555"),
+                None,
+                "codex",
+            )
+            .unwrap();
+        registry
+            .mark_spawned(
+                run_id,
+                Some(u32::MAX),
+                Some(i32::MAX),
+                Some("Mon Jan  1 00:00:00 2024".to_string()),
+                "codex_exec",
+                json!({"transport": "codex_app_server"}),
+            )
+            .unwrap();
+
+        assert_eq!(
+            reconcile_codex_exec_claims(
+                &registry,
+                &outbox,
+                "cinder",
+                crate::process_identity::try_collect_process_facts_by_pid(),
+            )
+            .unwrap(),
+            1
+        );
+        let claim = registry.read(run_id).unwrap();
+        assert_eq!(claim.state, "terminal");
+        assert_eq!(claim.result.unwrap()["terminal_state"], "process_gone");
+        let event_path = fs::read_dir(&outbox)
+            .unwrap()
+            .flatten()
+            .find(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+            .expect("recovered terminal must be durably queued")
+            .path();
+        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["kind"], "terminal_signal");
+        assert_eq!(event["payload"]["terminal_state"], "process_gone");
+    }
+
+    fn spawn_fake_codex_process(temp: &Path) -> (std::process::Child, String) {
+        let fake_codex = temp.join("codex");
+        std::os::unix::fs::symlink("/bin/sleep", &fake_codex).unwrap();
+        let child = std::process::Command::new(&fake_codex)
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let start = (0..20)
+            .find_map(|_| {
+                let start = crate::turn_claims::process_start_time_for_pid(Some(child.id()));
+                if start.is_none() {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                start
+            })
+            .expect("fake Codex process must expose a start time");
+        (child, start)
+    }
+
+    fn seed_codex_claim(
+        registry: &crate::turn_claims::TurnClaimRegistry,
+        run_id: &str,
+        pid: Option<u32>,
+        process_start_time: Option<String>,
+    ) {
+        registry
+            .claim(
+                run_id,
+                "11111111-1111-4111-8111-111111111111",
+                "44444444-4444-4444-8444-444444444444",
+                Some("55555555-5555-4555-8555-555555555555"),
+                None,
+                "codex",
+            )
+            .unwrap();
+        registry
+            .mark_spawned(
+                run_id,
+                pid,
+                pid.and_then(|value| i32::try_from(value).ok()),
+                process_start_time,
+                CODEX_EXEC_ADAPTER,
+                json!({"transport": CODEX_EXEC_RUNTIME_SOURCE}),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn live_codex_exec_claim_is_left_active_without_re_adoption() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let (mut child, start) = spawn_fake_codex_process(temp.path());
+        seed_codex_claim(
+            &registry,
+            "22222222-2222-4222-8222-222222222222",
+            Some(child.id()),
+            Some(start),
+        );
+
+        assert_eq!(
+            reconcile_codex_exec_claims(
+                &registry,
+                &outbox,
+                "cinder",
+                crate::process_identity::try_collect_process_facts_by_pid(),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            registry
+                .read("22222222-2222-4222-8222-222222222222")
+                .unwrap()
+                .state,
+            "spawned"
+        );
+        assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn rebooted_codex_exec_claim_is_process_gone_even_if_pid_is_alive() {
+        let temp = tempfile::tempdir().unwrap();
+        let claims_dir = temp.path().join("claims");
+        let registry = crate::turn_claims::TurnClaimRegistry::new(claims_dir.clone());
+        let outbox = temp.path().join("outbox");
+        let (mut child, start) = spawn_fake_codex_process(temp.path());
+        let run_id = "22222222-2222-4222-8222-222222222222";
+        seed_codex_claim(&registry, run_id, Some(child.id()), Some(start));
+
+        let path = claims_dir.join(format!("{run_id}.json"));
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["boot_id"] = json!("different-boot");
+        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        assert_eq!(
+            reconcile_codex_exec_claims(
+                &registry,
+                &outbox,
+                "cinder",
+                crate::process_identity::try_collect_process_facts_by_pid(),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(registry.read(run_id).unwrap().state, "terminal");
+        assert_eq!(
+            registry.read(run_id).unwrap().result.unwrap()["terminal_state"],
+            "process_gone"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn recycled_codex_exec_pid_is_process_gone_when_start_time_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let (mut child, _actual_start) = spawn_fake_codex_process(temp.path());
+        seed_codex_claim(
+            &registry,
+            "22222222-2222-4222-8222-222222222222",
+            Some(child.id()),
+            Some("Mon Jan  1 00:00:00 2024".to_string()),
+        );
+
+        assert_eq!(
+            reconcile_codex_exec_claims(
+                &registry,
+                &outbox,
+                "cinder",
+                crate::process_identity::try_collect_process_facts_by_pid(),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            registry
+                .read("22222222-2222-4222-8222-222222222222")
+                .unwrap()
+                .result
+                .unwrap()["terminal_state"],
+            "process_gone"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    /// A terminal is an actuator: settling a console turn dispatches the next
+    /// queued one. So an inventory we could not read must never read as "gone",
+    /// or one failed `ps` at daemon start runs turn N+1 against a turn N that
+    /// never stopped.
+    #[test]
+    fn unreadable_process_inventory_never_terminalizes_a_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let run_id = "88888888-8888-4888-8888-888888888888";
+        registry
+            .claim(
+                run_id,
+                "11111111-1111-4111-8111-111111111111",
+                "44444444-4444-4444-8444-444444444444",
+                Some("55555555-5555-4555-8555-555555555555"),
+                None,
+                "codex",
+            )
+            .unwrap();
+        registry
+            .mark_spawned(
+                run_id,
+                Some(u32::MAX),
+                Some(i32::MAX),
+                Some("Mon Jan  1 00:00:00 2024".to_string()),
+                "codex_exec",
+                json!({"transport": "codex_app_server"}),
+            )
+            .unwrap();
+
+        // `None` is what `try_collect_process_facts_by_pid` returns when `ps`
+        // fails to run or returns an incoherent scan -- not when the machine
+        // genuinely has no such process.
+        assert_eq!(
+            reconcile_codex_exec_claims(&registry, &outbox, "cinder", None).unwrap(),
+            0,
+            "an unreadable inventory must recover nothing"
+        );
+
+        let claims = registry.list_nonterminal().unwrap();
+        assert!(
+            claims.iter().any(|claim| claim.run_id == run_id),
+            "the claim must survive for a later scan"
+        );
+        assert!(
+            crate::outbox::collect_runtime_event_outbox(&outbox).is_empty(),
+            "no terminal may be published from an unreadable inventory"
+        );
+    }
+
+    #[test]
+    fn codex_exec_claim_without_start_identity_is_left_ambiguous() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let (mut child, _start) = spawn_fake_codex_process(temp.path());
+        seed_codex_claim(
+            &registry,
+            "22222222-2222-4222-8222-222222222222",
+            Some(child.id()),
+            None,
+        );
+
+        assert_eq!(
+            reconcile_codex_exec_claims(
+                &registry,
+                &outbox,
+                "cinder",
+                crate::process_identity::try_collect_process_facts_by_pid(),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            registry
+                .read("22222222-2222-4222-8222-222222222222")
+                .unwrap()
+                .state,
+            "spawned"
+        );
+        assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }

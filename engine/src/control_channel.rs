@@ -602,6 +602,18 @@ pub fn spawn_control_channel(
     status.set_disconnected(None, None, None, None);
 
     Some(tokio::spawn(async move {
+        match crate::codex_exec::recover_codex_exec_turns(
+            &config.machine_name,
+            config.db_path.clone(),
+        )
+        .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Recovered Codex Console turn monitors")
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Failed to reconcile Codex Console turn claims"),
+        }
         match crate::cursor_print::recover_cursor_print_turns(
             &config.machine_name,
             config.db_path.clone(),
