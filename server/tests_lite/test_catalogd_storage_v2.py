@@ -3115,10 +3115,15 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:
         table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
+        projector_indexes = {
+            str(row[1])
+            for row in connection.exec_driver_sql("PRAGMA index_list('projector_state')")
+        }
     engine.dispose()
 
     assert metadata.schema_version == CATALOG_SCHEMA_VERSION
     assert set(CatalogBase.metadata.tables).issubset(table_names)
+    assert "ix_projector_state_claim_order" in projector_indexes
 
 
 @pytest.mark.asyncio

@@ -538,6 +538,7 @@ def health_check(request: Request):
                 "schema_version": catalog_ping.get("schema_version"),
                 "schema_generation": catalog_ping.get("schema_generation"),
                 "commit_seq": catalog_ping.get("commit_seq"),
+                "writer_admission": catalog_ping.get("writer_admission"),
             }
             if not compatible:
                 health_status["status"] = "unhealthy"

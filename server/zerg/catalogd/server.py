@@ -16,6 +16,7 @@ import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from contextvars import ContextVar
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -48,10 +49,14 @@ CATALOG_INTERACTIVE_READ_WORKERS = 8
 # names operations that can push a caller past it, rather than narrating normal
 # work.
 CATALOG_WRITER_SLOW_MS_DEFAULT = 250.0
+CATALOG_WRITER_MAX_DEPTH_DEFAULT = 128
+TITLE_HEALTH_CACHE_SECONDS = 10.0
 
 # Rolling window per label. Bounded so a long-lived daemon cannot grow memory,
 # large enough that a percentile over it means something.
 _WRITER_HISTOGRAM_WINDOW = 256
+
+_REQUEST_DEADLINE_NS: ContextVar[int | None] = ContextVar("catalogd_request_deadline_ns", default=None)
 
 
 class CatalogWriterStats:
@@ -72,11 +77,14 @@ class CatalogWriterStats:
         self._peak_depth = 0
         self._active_label: str | None = None
         self._active_since: float | None = None
+        self._rejected_busy = 0
+        self._expired_before_execution = 0
         self._lock = threading.Lock()
 
     @property
     def depth(self) -> int:
-        return self._depth
+        with self._lock:
+            return self._depth
 
     def record_enqueue(self) -> None:
         with self._lock:
@@ -86,6 +94,14 @@ class CatalogWriterStats:
     def record_dequeue(self) -> None:
         with self._lock:
             self._depth = max(0, self._depth - 1)
+
+    def record_rejected_busy(self) -> None:
+        with self._lock:
+            self._rejected_busy += 1
+
+    def record_expired_before_execution(self) -> None:
+        with self._lock:
+            self._expired_before_execution += 1
 
     def mark_active(self, label: str, _queue_wait_ms: float) -> None:
         with self._lock:
@@ -127,11 +143,21 @@ class CatalogWriterStats:
                 "peak_depth": self._peak_depth,
                 "active_label": self._active_label,
                 "active_age_ms": active_age_ms,
+                "rejected_busy": self._rejected_busy,
+                "expired_before_execution": self._expired_before_execution,
                 "labels": labels,
             }
 
 
 class CatalogDaemonError(RuntimeError):
+    pass
+
+
+class CatalogWriterBusy(CatalogDaemonError):
+    pass
+
+
+class CatalogWriterExpired(CatalogDaemonError):
     pass
 
 
@@ -164,9 +190,26 @@ class CatalogDaemon:
         self._maintenance_executor: ThreadPoolExecutor | None = None
         self._writer_stats = CatalogWriterStats()
         self._writer_slow_ms = float(os.getenv("CATALOGD_WRITER_SLOW_MS", str(CATALOG_WRITER_SLOW_MS_DEFAULT)))
+        self._writer_max_depth = max(
+            1,
+            int(os.getenv("CATALOGD_WRITER_MAX_DEPTH", str(CATALOG_WRITER_MAX_DEPTH_DEFAULT))),
+        )
         self._wal_reclaim_bytes = int(os.getenv("CATALOGD_WAL_RECLAIM_BYTES", str(256 * 1024 * 1024)))
+        self._title_health_cache: tuple[float, dict] | None = None
 
     async def start(self) -> CatalogMeta:
+        startup_started = time.perf_counter()
+
+        def log_stage(stage: str, started: float, **dimensions) -> None:
+            suffix = " ".join(f"{key}={value}" for key, value in sorted(dimensions.items()))
+            logger.info(
+                "catalogd startup stage=%s elapsed_ms=%.2f%s",
+                stage,
+                (time.perf_counter() - started) * 1000.0,
+                f" {suffix}" if suffix else "",
+            )
+
+        stage_started = time.perf_counter()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         socket_parent = self.socket_path.parent.lstat()
@@ -177,9 +220,14 @@ class CatalogDaemon:
         if stat.S_IMODE(socket_parent.st_mode) & 0o077:
             raise CatalogDaemonError("catalog socket parent must not be group/world accessible")
         self._acquire_lock()
+        log_stage("prepare_paths_and_lock", stage_started)
         try:
+            stage_started = time.perf_counter()
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
+            log_stage("initialize_schema", stage_started)
+
+            stage_started = time.perf_counter()
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
             self._read_executor = ThreadPoolExecutor(
                 max_workers=CATALOG_INTERACTIVE_READ_WORKERS,
@@ -193,17 +241,25 @@ class CatalogDaemon:
             # checkpoints from overlapping each other.
             self._maintenance_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-maintenance")
             self._store = CatalogStore(self._engine)
-            self._store.retire_archive_outbox()
+            log_stage("initialize_executors", stage_started)
+
+            stage_started = time.perf_counter()
+            retired_outbox = self._store.retire_archive_outbox()
+            log_stage("retire_archive_outbox", stage_started, **retired_outbox)
             # Reap before ensuring, so a generation retired by this build's
             # config is gone before its replacement's rows are created.
+            stage_started = time.perf_counter()
             reaped = self._store.reap_retired_projector_states()
+            log_stage("reap_retired_projectors", stage_started, rows=reaped["reaped_rows"])
             if reaped["reaped_rows"]:
                 logger.info(
                     "Reaped retired projector generations projectors=%s rows=%d",
                     ",".join(reaped["reaped_projectors"]),
                     reaped["reaped_rows"],
                 )
-            self._store.ensure_known_projector_states()
+            stage_started = time.perf_counter()
+            ensured = self._store.ensure_known_projector_states()
+            log_stage("ensure_projector_states", stage_started, **ensured)
             # A Runtime Host replacement cannot retain claim ownership, but a
             # child-only catalogd restart must preserve work still running in
             # the same host process. The shared boot id distinguishes them.
@@ -216,10 +272,14 @@ class CatalogDaemon:
                     f"embeddings-v2:{self._runtime_boot_id}",
                 )
             )
-            self._store.release_projector_claims_on_startup(
+            stage_started = time.perf_counter()
+            released = self._store.release_projector_claims_on_startup(
                 active_worker_ids=active_workers,
                 observed_at=datetime.now(UTC),
             )
+            log_stage("release_stale_projector_claims", stage_started, released=released["released"])
+
+            stage_started = time.perf_counter()
             self._meta = read_catalog_meta(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)
@@ -238,6 +298,8 @@ class CatalogDaemon:
                     self._checkpoint_loop(),
                     name="catalogd-checkpoint",
                 )
+            log_stage("publish_socket", stage_started)
+            log_stage("total", startup_started)
             return self._meta
         except BaseException:
             await self.close()
@@ -325,7 +387,25 @@ class CatalogDaemon:
                 if not isinstance(message, CatalogRpcRequest):
                     raise ProtocolError("invalid_request", "catalogd accepts request frames only")
                 try:
-                    response = await self._dispatch(message)
+                    deadline_token = _REQUEST_DEADLINE_NS.set(int(message.deadline_mono_ns))
+                    try:
+                        response = await self._dispatch(message)
+                    finally:
+                        _REQUEST_DEADLINE_NS.reset(deadline_token)
+                except CatalogWriterBusy:
+                    response = self._error(
+                        message,
+                        "resource_exhausted",
+                        "catalog writer queue is full",
+                        retryable=True,
+                    )
+                except CatalogWriterExpired:
+                    response = self._error(
+                        message,
+                        "deadline_exceeded",
+                        "request expired before reaching the catalog writer",
+                        retryable=True,
+                    )
                 except Exception:
                     logger.exception("catalogd operation failed method=%s", message.method)
                     response = self._error(
@@ -594,6 +674,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_read_store(read_catalog_meta, self._engine)
         if request.method == "ping.v2":
+            writer = self._writer_stats.snapshot()
             return CatalogRpcResponse(
                 id=request.id,
                 result={
@@ -603,6 +684,15 @@ class CatalogDaemon:
                     "commit_seq": str(metadata.commit_seq),
                     "pid": os.getpid(),
                     "ready": True,
+                    "writer_admission": {
+                        "depth": writer["depth"],
+                        "max_depth": self._writer_max_depth,
+                        "peak_depth": writer["peak_depth"],
+                        "active_label": writer["active_label"],
+                        "active_age_ms": writer["active_age_ms"],
+                        "rejected_busy": writer["rejected_busy"],
+                        "expired_before_execution": writer["expired_before_execution"],
+                    },
                 },
             )
         if request.method == "schema.v2":
@@ -1799,7 +1889,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "request_key must contain 1 to 255 characters")
         assert self._store is not None
         await self._run_store(self._store.expire_due_interactions, now=datetime.now(UTC), session_id=params["session_id"])
-        result = await self._run_store(self._store.read_interaction_decision, **params)
+        result = await self._run_read_store(self._store.read_interaction_decision, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_queued_input_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -1809,7 +1899,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 100:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
         assert self._store is not None
-        result = await self._run_store(self._store.list_queued_input_sessions, limit=limit)
+        result = await self._run_read_store(self._store.list_queued_input_sessions, limit=limit)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -1897,7 +1987,7 @@ class CatalogDaemon:
             if not _is_canonical_uuid(request.params[field]):
                 return self._error(request, "invalid_request", f"{field} must be a canonical UUID")
         assert self._store is not None
-        result = await self._run_store(self._store.read_input_attachment, **request.params)
+        result = await self._run_read_store(self._store.read_input_attachment, **request.params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -1913,7 +2003,7 @@ class CatalogDaemon:
         if not _is_string(client_request_id, maximum=255):
             return self._error(request, "invalid_request", "client_request_id must contain 1 to 255 characters")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.read_input_receipt,
             owner_id=owner_id,
             session_id=session_id,
@@ -1925,7 +2015,7 @@ class CatalogDaemon:
         if set(request.params) != {"session_id"} or not _is_canonical_uuid(request.params.get("session_id")):
             return self._error(request, "invalid_request", "session.input.recent.list.v2 requires a canonical session_id")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.list_recent_input_receipts,
             session_id=request.params["session_id"],
         )
@@ -2002,7 +2092,7 @@ class CatalogDaemon:
         owner_id = request.params.get("owner_id")
         if owner_id is not None and (type(owner_id) is not int or owner_id <= 0):
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
-        result = await self._run_store(self._store.read_session, session_id=session_id, owner_id=owner_id)
+        result = await self._run_read_store(self._store.read_session, session_id=session_id, owner_id=owner_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_shadow_session_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2045,7 +2135,7 @@ class CatalogDaemon:
         if len(set(session_ids)) != len(session_ids) or any(not _is_canonical_uuid(value) for value in session_ids):
             return self._error(request, "invalid_request", "session_ids must be unique canonical UUIDs")
         assert self._store is not None
-        result = await self._run_store(self._store.read_sessions, session_ids=session_ids)
+        result = await self._run_read_store(self._store.read_sessions, session_ids=session_ids)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _update_session_preferences(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2105,7 +2195,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.list_active_session_ids,
             limit=limit,
             days_back=days_back,
@@ -2125,7 +2215,7 @@ class CatalogDaemon:
         ):
             return self._error(request, "invalid_request", "prefix must be 1 to 36 lowercase UUID characters")
         assert self._store is not None
-        result = await self._run_store(self._store.resolve_session_prefix, prefix=prefix)
+        result = await self._run_read_store(self._store.resolve_session_prefix, prefix=prefix)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_alias(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2141,7 +2231,7 @@ class CatalogDaemon:
         ):
             return self._error(request, "invalid_request", "provider_session_id must be a trimmed string of 1 to 256 characters")
         assert self._store is not None
-        result = await self._run_store(self._store.resolve_session_alias, provider_session_id=provider_session_id)
+        result = await self._run_read_store(self._store.resolve_session_alias, provider_session_id=provider_session_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_enrollments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2151,7 +2241,7 @@ class CatalogDaemon:
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         assert self._store is not None
-        result = await self._run_store(self._store.list_machine_enrollments, owner_id=owner_id)
+        result = await self._run_read_store(self._store.list_machine_enrollments, owner_id=owner_id)
         if result.get("limit_exceeded") is True:
             return self._error(request, "resource_exhausted", "machine enrollment list exceeds the catalog bound")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -2347,7 +2437,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.read_source_epoch_manifest,
             source_epoch=source_epoch,
             after_position=after_position,
@@ -2363,7 +2453,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.raw_objects_exist_batch, envelope_ids=envelope_ids)
+        result = await self._run_read_store(self._store.raw_objects_exist_batch, envelope_ids=envelope_ids)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2408,7 +2498,7 @@ class CatalogDaemon:
         if set(request.params) != {"limit"} or type(request.params["limit"]) is not int or not 1 <= request.params["limit"] <= 100:
             return self._error(request, "invalid_request", "title candidates require limit from 1 through 100")
         assert self._store is not None
-        result = await self._run_store(self._store.list_storage_title_candidates, limit=request.params["limit"])
+        result = await self._run_read_store(self._store.list_storage_title_candidates, limit=request.params["limit"])
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _complete_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2422,6 +2512,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.complete_storage_title, session_id=session_id, title=title, completed_at=completed_at)
+        self._title_health_cache = None
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _fail_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2435,6 +2526,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.fail_storage_title, session_id=session_id, reason=reason, failed_at=failed_at)
+        self._title_health_cache = None
         return CatalogRpcResponse(id=request.id, result=result)
 
     def _storage_title_dependency_identity(self, params: dict) -> dict:
@@ -2456,6 +2548,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.reconcile_storage_title_dependency, **params)
+        self._title_health_cache = None
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _acquire_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2484,6 +2577,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.acquire_storage_title_dependency, **params)
+        self._title_health_cache = None
         if result.get("dependency_missing") or result.get("session_missing"):
             return self._error(request, "not_found", "title dependency or session does not exist")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -2516,6 +2610,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.fail_storage_title_dependency, **params)
+        self._title_health_cache = None
         if result.get("dependency_missing"):
             return self._error(request, "not_found", "title dependency does not exist")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -2541,6 +2636,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.recover_storage_title_dependency, **params)
+        self._title_health_cache = None
         if result.get("dependency_missing"):
             return self._error(request, "not_found", "title dependency does not exist")
         if result.get("claim_conflict"):
@@ -2551,7 +2647,12 @@ class CatalogDaemon:
         if request.params:
             return self._error(request, "invalid_request", "title dependency health takes no parameters")
         assert self._store is not None
+        now = time.monotonic()
+        cached = self._title_health_cache
+        if cached is not None and now - cached[0] < TITLE_HEALTH_CACHE_SECONDS:
+            return CatalogRpcResponse(id=request.id, result=cached[1])
         result = await self._run_read_store(self._store.read_storage_title_dependency_health)
+        self._title_health_cache = (now, result)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _delete_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2670,7 +2771,7 @@ class CatalogDaemon:
         if type(include_test) is not bool or type(limit) is not int or not 1 <= limit <= 100:
             return self._error(request, "invalid_request", "include_test/limit are invalid")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.list_storage_sessions,
             owner_id=owner_id,
             before_last_activity_at=parsed_time,
@@ -2929,7 +3030,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.read_media_object,
             media_hash=media_hash,
             session_id=session_id,
@@ -2945,7 +3046,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.media_objects_exist_batch, media_hashes=media_hashes)
+        result = await self._run_read_store(self._store.media_objects_exist_batch, media_hashes=media_hashes)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2975,7 +3076,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.read_legacy_migration_run, run_id=run_id)
+        result = await self._run_read_store(self._store.read_legacy_migration_run, run_id=run_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _register_migration_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3156,7 +3257,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.summarize_legacy_migration_run, run_id=run_id)
+        result = await self._run_read_store(self._store.summarize_legacy_migration_run, run_id=run_id)
         if result.get("run_missing"):
             return self._error(request, "not_found", "migration run does not exist")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -3196,7 +3297,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.list_legacy_migration_gaps, run_id=run_id, after_session_id=after_session_id, limit=limit
         )
         if result.get("run_missing"):
@@ -3379,6 +3480,9 @@ class CatalogDaemon:
     async def _run_store(self, operation, *args, **kwargs):
         if self._executor is None:
             raise CatalogDaemonError("catalog executor is not ready")
+        if self._writer_stats.depth >= self._writer_max_depth:
+            self._writer_stats.record_rejected_busy()
+            raise CatalogWriterBusy("catalog writer queue is full")
         loop = asyncio.get_running_loop()
         # Everything serialized here shares one thread, so a caller's latency is
         # mostly other callers' execution. Recording only total time would keep
@@ -3388,18 +3492,25 @@ class CatalogDaemon:
         # "who blocked me, and for how long".
         label = getattr(operation, "__name__", "unknown")
         enqueued_at = time.perf_counter()
+        deadline_ns = _REQUEST_DEADLINE_NS.get()
         self._writer_stats.record_enqueue()
         try:
-            result = await loop.run_in_executor(self._executor, lambda: self._run_store_timed(label, enqueued_at, operation, args, kwargs))
+            result = await loop.run_in_executor(
+                self._executor,
+                lambda: self._run_store_timed(label, enqueued_at, deadline_ns, operation, args, kwargs),
+            )
         finally:
             self._writer_stats.record_dequeue()
         return result
 
-    def _run_store_timed(self, label, enqueued_at, operation, args, kwargs):
+    def _run_store_timed(self, label, enqueued_at, deadline_ns, operation, args, kwargs):
         started_at = time.perf_counter()
         queue_wait_ms = (started_at - enqueued_at) * 1000.0
         self._writer_stats.mark_active(label, queue_wait_ms)
         try:
+            if deadline_ns is not None and time.monotonic_ns() > deadline_ns:
+                self._writer_stats.record_expired_before_execution()
+                raise CatalogWriterExpired("request expired in the catalog writer queue")
             return operation(*args, **kwargs)
         finally:
             exec_ms = (time.perf_counter() - started_at) * 1000.0
@@ -3548,9 +3659,11 @@ class CatalogDaemon:
                 if stats["labels"]:
                     worst = max(stats["labels"].items(), key=lambda item: item[1]["exec_ms"]["p99"])
                     logger.info(
-                        "catalogd writer depth=%d peak=%d slowest=%s exec_p99=%.0fms queue_wait_p99=%.0fms",
+                        "catalogd writer depth=%d peak=%d rejected=%d expired=%d slowest=%s exec_p99=%.0fms queue_wait_p99=%.0fms",
                         stats["depth"],
                         stats["peak_depth"],
+                        stats["rejected_busy"],
+                        stats["expired_before_execution"],
                         worst[0],
                         worst[1]["exec_ms"]["p99"],
                         worst[1]["queue_wait_ms"]["p99"],

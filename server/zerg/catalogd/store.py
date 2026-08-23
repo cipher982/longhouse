@@ -27,6 +27,7 @@ from sqlalchemy import cast
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
+from sqlalchemy import literal
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import tuple_
@@ -724,74 +725,88 @@ class CatalogStore:
                 ).rowcount
                 or 0
             )
-            eligible = connection.execute(
-                select(
-                    sessions.c.session_id,
-                    sessions.c.commit_seq,
-                    sessions.c.provider,
-                    sessions.c.semantic_projection_version,
-                ).where(
-                    sessions.c.user_state != "deleted",
-                    sessions.c.current_render_generation.is_not(None),
-                    sessions.c.render_state == "ready",
-                )
-            ).all()
-            existing = {
-                (str(row.projector), str(row.session_id)): int(row.desired_revision)
-                for row in connection.execute(
-                    select(states.c.projector, states.c.session_id, states.c.desired_revision).where(
-                        states.c.projector.in_(KNOWN_PROJECTORS)
-                    )
-                )
-            }
-            missing: dict[tuple[str, str], int] = {}
-            for session_id, session_revision, provider, semantic_projection_version in eligible:
-                session_key = str(session_id)
-                semantic_key = (SEMANTIC_PROJECTOR_ID, session_key)
-                search_key = ("search-v2", session_key)
-                embedding_key = (EMBEDDING_PROJECTOR_ID, session_key)
-                search_revision = existing.get(search_key, int(session_revision))
-                if (
-                    str(provider or "").strip().lower() == "claude"
-                    and int(semantic_projection_version or 0) < 1
-                    and semantic_key not in existing
-                ):
-                    missing[semantic_key] = int(session_revision)
-                if search_key not in existing:
-                    missing[search_key] = search_revision
-                if embedding_key not in existing:
-                    missing[embedding_key] = search_revision
-
-            # A search row is the durable certificate that this session has
-            # entered the served corpus. Mirror that ledger directly instead
-            # of relying only on the session's current render_state: semantic
-            # repair can make a session pending after its prior revision was
-            # already published and remains queryable in searchd.
-            for (projector, session_id), revision in existing.items():
-                embedding_key = (EMBEDDING_PROJECTOR_ID, session_id)
-                if projector == "search-v2" and embedding_key not in existing:
-                    missing.setdefault(embedding_key, revision)
             now = datetime.now(UTC)
             commit_seq = _current_commit_seq(connection)
-            if missing:
-                connection.execute(
-                    insert(states),
-                    [
-                        {
-                            "projector": projector,
-                            "session_id": session_id,
-                            "desired_revision": revision,
-                            "desired_at": now,
-                            "completed_revision": 0,
-                            "status": "idle",
-                            "failure_count": 0,
-                            "commit_seq": commit_seq,
-                            "created_at": now,
-                            "updated_at": now,
-                        }
-                        for (projector, session_id), revision in missing.items()
-                    ],
+            eligible_filter = (
+                sessions.c.user_state != "deleted",
+                sessions.c.current_render_generation.is_not(None),
+                sessions.c.render_state == "ready",
+            )
+            eligible_sessions = int(connection.execute(select(func.count()).select_from(sessions).where(*eligible_filter)).scalar_one())
+
+            insert_columns = (
+                "projector",
+                "session_id",
+                "desired_revision",
+                "desired_at",
+                "completed_revision",
+                "status",
+                "failure_count",
+                "commit_seq",
+                "created_at",
+                "updated_at",
+            )
+
+            def insert_missing(statement):
+                return int(
+                    connection.execute(
+                        sqlite_insert(states)
+                        .from_select(insert_columns, statement)
+                        .on_conflict_do_nothing(index_elements=[states.c.projector, states.c.session_id])
+                    ).rowcount
+                    or 0
                 )
+
+            inserted = insert_missing(
+                select(
+                    literal(SEMANTIC_PROJECTOR_ID),
+                    sessions.c.session_id,
+                    sessions.c.commit_seq,
+                    literal(now),
+                    literal(0),
+                    literal("idle"),
+                    literal(0),
+                    literal(commit_seq),
+                    literal(now),
+                    literal(now),
+                ).where(
+                    *eligible_filter,
+                    func.lower(sessions.c.provider) == "claude",
+                    sessions.c.semantic_projection_version < 1,
+                )
+            )
+            inserted += insert_missing(
+                select(
+                    literal("search-v2"),
+                    sessions.c.session_id,
+                    sessions.c.commit_seq,
+                    literal(now),
+                    literal(0),
+                    literal("idle"),
+                    literal(0),
+                    literal(commit_seq),
+                    literal(now),
+                    literal(now),
+                ).where(*eligible_filter)
+            )
+            # A search row is the durable certificate that this session has
+            # entered the served corpus. Mirror that ledger directly instead
+            # of materializing both whole tables into Python dictionaries.
+            search_rows = states.alias("embedding_seed_search")
+            inserted += insert_missing(
+                select(
+                    literal(EMBEDDING_PROJECTOR_ID),
+                    search_rows.c.session_id,
+                    search_rows.c.desired_revision,
+                    literal(now),
+                    literal(0),
+                    literal("idle"),
+                    literal(0),
+                    literal(commit_seq),
+                    literal(now),
+                    literal(now),
+                ).where(search_rows.c.projector == "search-v2")
+            )
             search_alignment = states.alias("search_alignment")
             search_revision = (
                 select(search_alignment.c.desired_revision)
@@ -827,36 +842,37 @@ class CatalogStore:
                         updated_at=now,
                     )
                 )
-            retired = connection.execute(
-                select(sessions.c.session_id, sessions.c.commit_seq).where(sessions.c.render_state == "retired")
-            ).all()
-            advanced_retired = 0
-            for session_id, revision in retired:
-                session_key = str(session_id)
-                for projector in KNOWN_PROJECTORS:
-                    current = existing.get((projector, session_key))
-                    if current is None or current >= int(revision):
-                        continue
-                    connection.execute(
-                        update(states)
-                        .where(states.c.projector == projector, states.c.session_id == session_key)
-                        .values(
-                            desired_revision=int(revision),
-                            desired_at=now,
-                            claimed_revision=None,
-                            claim_token=None,
-                            worker_id=None,
-                            claim_expires_at=None,
-                            status="idle",
-                            retry_at=None,
-                            commit_seq=commit_seq,
-                            updated_at=now,
-                        )
+            retired_revision = (
+                select(sessions.c.commit_seq)
+                .where(sessions.c.session_id == states.c.session_id, sessions.c.render_state == "retired")
+                .scalar_subquery()
+            )
+            retired_filter = (
+                states.c.projector.in_(KNOWN_PROJECTORS),
+                retired_revision.is_not(None),
+                states.c.desired_revision < retired_revision,
+            )
+            advanced_retired = int(connection.execute(select(func.count()).select_from(states).where(*retired_filter)).scalar_one())
+            if advanced_retired:
+                connection.execute(
+                    update(states)
+                    .where(*retired_filter)
+                    .values(
+                        desired_revision=retired_revision,
+                        desired_at=now,
+                        claimed_revision=None,
+                        claim_token=None,
+                        worker_id=None,
+                        claim_expires_at=None,
+                        status="idle",
+                        retry_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=now,
                     )
-                    advanced_retired += 1
+                )
             return {
-                "inserted": len(missing),
-                "eligible_sessions": len(eligible),
+                "inserted": inserted,
+                "eligible_sessions": eligible_sessions,
                 "reaped_irrelevant_semantic": irrelevant_semantic,
                 "aligned_embeddings": aligned_embeddings,
                 "advanced_retired": advanced_retired,
@@ -6422,6 +6438,13 @@ class CatalogStore:
         conversation_resets: tuple[dict[str, Any], ...] = (),
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
+        timer = _StageTimer("commit_raw_object")
+        timer.annotate(
+            provider=provider,
+            record_count=len(record_hashes),
+            render_manifest=1 if render_manifest is not None else 0,
+            source_replacement=1 if predecessor_source_epoch is not None else 0,
+        )
         identity = EnvelopeIdentity(
             tenant_id=tenant_id,
             machine_id=machine_id,
@@ -6497,7 +6520,8 @@ class CatalogStore:
                 "media_refs_hash",
             )
         }
-        with _write_transaction(self.engine) as connection:
+        timer.mark("prepare")
+        with _write_transaction(self.engine, timer=timer) as connection:
             deleted = connection.execute(
                 select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
             ).scalar_one_or_none()
@@ -6650,7 +6674,6 @@ class CatalogStore:
             epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
             epoch_is_new = epoch_row is None
             predecessor_row = None
-            predecessor_raw_rows: list[Any] = []
             identity_filters = (
                 epoch.c.tenant_id == tenant_id,
                 epoch.c.machine_id == machine_id,
@@ -6686,11 +6709,6 @@ class CatalogStore:
                             expected_predecessor=expected_predecessor,
                             open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
                         )
-                    predecessor_raw_rows = list(
-                        connection.execute(select(raw).where(raw.c.source_epoch == expected_predecessor, raw.c.retired_at.is_(None)))
-                        .mappings()
-                        .all()
-                    )
                 elif open_rows:
                     # The branch that produced the 2026-08-04 incident: an
                     # initial epoch arrives while this identity already has an
@@ -6725,17 +6743,24 @@ class CatalogStore:
                 ).scalar_one_or_none()
                 if linked_session is not None and str(linked_session) != session_key:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-                existing_raw_ranges = connection.execute(
-                    select(raw.c.range_start, raw.c.range_end)
+                # Every accepted append is already fenced to the current
+                # accepted_through value. Replaying every historical range to
+                # derive the same watermark made the Nth append O(N), turning
+                # long Cursor histories into quadratic writer stalls. The
+                # epoch/range index can resolve the durable tail directly.
+                last_range_end = connection.execute(
+                    select(raw.c.range_end)
                     .where(raw.c.source_epoch == epoch_key, raw.c.retired_at.is_(None))
-                    .order_by(raw.c.range_start.asc(), raw.c.range_end.asc())
-                ).all()
+                    .order_by(raw.c.range_start.desc(), raw.c.range_end.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
                 accepted_through = (
                     range_start_key
-                    if not existing_raw_ranges and int(epoch_row["object_count"] or 0) == 0
-                    else _u64_key(_contiguous_range_prefix(existing_raw_ranges))
+                    if last_range_end is None and int(epoch_row["object_count"] or 0) == 0
+                    else str(last_range_end or epoch_row["accepted_through"])
                 )
-                if existing_raw_ranges and accepted_through != str(epoch_row["accepted_through"]):
+                timer.annotate(epoch_object_count=int(epoch_row["object_count"] or 0))
+                if last_range_end is not None and accepted_through != str(epoch_row["accepted_through"]):
                     connection.execute(
                         update(epoch)
                         .where(epoch.c.source_epoch == epoch_key)
@@ -6796,6 +6821,8 @@ class CatalogStore:
                         },
                     }
 
+            timer.mark("validate")
+
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)
             if epoch_is_new:
@@ -6812,35 +6839,52 @@ class CatalogStore:
                             updated_at=commit_time,
                         )
                     )
-                    retired_envelope_ids = [str(row["envelope_id"]) for row in predecessor_raw_rows]
-                    replaced_session_ids = {str(row["session_id"]) for row in predecessor_raw_rows if str(row["session_id"]) != session_key}
-                    if retired_envelope_ids:
-                        connection.execute(
-                            update(raw)
-                            .where(raw.c.envelope_id.in_(retired_envelope_ids))
-                            .values(retired_at=commit_time, retirement_revision=commit_seq)
-                        )
-                        connection.execute(
-                            update(render_object)
+                    predecessor_envelopes = select(raw.c.envelope_id).where(raw.c.source_epoch == expected_predecessor)
+                    replaced_session_ids = {
+                        str(value)
+                        for value in connection.execute(
+                            select(raw.c.session_id)
                             .where(
-                                render_object.c.source_envelope_id.in_(retired_envelope_ids),
-                                render_object.c.retired_at.is_(None),
+                                raw.c.source_epoch == expected_predecessor,
+                                raw.c.retired_at.is_(None),
+                                raw.c.session_id != session_key,
                             )
-                            .values(retired_at=commit_time, retirement_revision=commit_seq)
+                            .distinct()
+                        ).scalars()
+                    }
+                    retired_raw = connection.execute(
+                        update(raw)
+                        .where(raw.c.source_epoch == expected_predecessor, raw.c.retired_at.is_(None))
+                        .values(retired_at=commit_time, retirement_revision=commit_seq)
+                    ).rowcount
+                    retired_render = connection.execute(
+                        update(render_object)
+                        .where(
+                            render_object.c.source_envelope_id.in_(predecessor_envelopes),
+                            render_object.c.retired_at.is_(None),
                         )
-                        connection.execute(
-                            update(session_media_ref)
-                            .where(
-                                session_media_ref.c.envelope_id.in_(retired_envelope_ids),
-                                session_media_ref.c.state == "active",
-                            )
-                            .values(
-                                state="retired",
-                                retired_at=commit_time,
-                                deletion_revision=commit_seq,
-                                commit_seq=commit_seq,
-                            )
+                        .values(retired_at=commit_time, retirement_revision=commit_seq)
+                    ).rowcount
+                    retired_media = connection.execute(
+                        update(session_media_ref)
+                        .where(
+                            session_media_ref.c.envelope_id.in_(predecessor_envelopes),
+                            session_media_ref.c.state == "active",
                         )
+                        .values(
+                            state="retired",
+                            retired_at=commit_time,
+                            deletion_revision=commit_seq,
+                            commit_seq=commit_seq,
+                        )
+                    ).rowcount
+                    timer.annotate(
+                        retired_raw=int(retired_raw or 0),
+                        retired_render=int(retired_render or 0),
+                        retired_media=int(retired_media or 0),
+                        replaced_sessions=len(replaced_session_ids),
+                    )
+                    timer.mark("retire_predecessor")
                     for replaced_session_id in replaced_session_ids:
                         has_active_raw = connection.execute(
                             select(raw.c.envelope_id)
@@ -6922,6 +6966,7 @@ class CatalogStore:
                     created_at=commit_time,
                 )
             )
+            timer.mark("write_manifests")
             missing_object_hashes = sorted(media_hash for media_hash in missing_media_hashes if media_hash not in media_by_hash)
             if missing_object_hashes:
                 connection.execute(
@@ -7237,6 +7282,7 @@ class CatalogStore:
                     session_facts["last_activity_at"],
                 )
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
+            timer.mark("project_session")
             alias_values: list[str] = []
             provider_session_id = str(session_facts.get("provider_session_id") or "").strip()
             if provider_session_id:
@@ -7419,6 +7465,7 @@ class CatalogStore:
                     connection.execute(
                         update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values)
                     )
+            timer.mark("project_render")
             if predecessor_row is not None and render_state == "ready":
                 generation_to_recompute = (
                     str(render_manifest["generation_id"])
@@ -7474,6 +7521,7 @@ class CatalogStore:
                             updated_at=commit_time,
                         )
                     )
+            timer.mark("projector_state")
             row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
             title_generation_required = bool(
                 connection.execute(
@@ -9810,12 +9858,6 @@ class CatalogStore:
                 connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key))
                 .mappings()
                 .first()
-            )
-            import sys as _sys
-
-            print(
-                f"DBG advance projector={projector} req={desired_revision} cur={row['desired_revision'] if row else None} status={row['status'] if row else None}",
-                file=_sys.stderr,
             )
             if row is not None and int(row["desired_revision"]) >= desired_revision:
                 return {
@@ -12364,20 +12406,6 @@ def _raw_object_receipt(row) -> dict[str, object]:
     ).as_wire()
 
 
-def _contiguous_range_prefix(rows) -> int:
-    """Return the proven contiguous end, ignoring any legacy high-water mark."""
-    if not rows:
-        return 0
-    through = int(rows[0][0])
-    for row in rows:
-        start = int(row[0])
-        end = int(row[1])
-        if start != through or end < start:
-            break
-        through = end
-    return through
-
-
 def _raw_object_manifest_dto(row) -> dict[str, Any]:
     return {
         "envelope_id": str(row["envelope_id"]),
@@ -13436,13 +13464,17 @@ class _StageTimer:
     this one.
     """
 
-    __slots__ = ("_label", "_stages", "_started", "_last")
+    __slots__ = ("_label", "_stages", "_started", "_last", "_dimensions")
 
     def __init__(self, label: str) -> None:
         self._label = label
         self._stages: dict[str, float] = {}
         self._started = time.perf_counter()
         self._last = self._started
+        self._dimensions: dict[str, int | str] = {}
+
+    def annotate(self, **dimensions: int | str) -> None:
+        self._dimensions.update(dimensions)
 
     def mark(self, name: str) -> None:
         """Close the stage that ends here.
@@ -13465,27 +13497,36 @@ class _StageTimer:
         # the gap between the stages and the total.
         measured = sum(self._stages.values())
         breakdown = " ".join(f"{name}={value:.0f}ms" for name, value in sorted(self._stages.items(), key=lambda item: -item[1]))
+        dimensions = " ".join(f"{name}={value}" for name, value in sorted(self._dimensions.items()))
         logging.getLogger(__name__).warning(
-            "%s took %.0fms: %s unmeasured=%.0fms",
+            "%s took %.0fms: %s unmeasured=%.0fms %s",
             self._label,
             total_ms,
             breakdown,
             max(0.0, total_ms - measured),
+            dimensions,
         )
 
 
 @contextmanager
-def _write_transaction(engine: Engine):
+def _write_transaction(engine: Engine, *, timer: _StageTimer | None = None):
     """Acquire SQLite's write reservation before mutation read-checks."""
 
     with engine.connect() as connection:
         connection.exec_driver_sql("BEGIN IMMEDIATE")
+        if timer is not None:
+            timer.mark("begin")
         try:
             yield connection
             connection.commit()
+            if timer is not None:
+                timer.mark("commit")
         except BaseException:
             connection.rollback()
             raise
+        finally:
+            if timer is not None:
+                timer.log_if_slow()
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:

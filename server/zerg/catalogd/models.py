@@ -492,7 +492,15 @@ class ProjectorState(CatalogBase):
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
 
-    __table_args__ = (Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),)
+    __table_args__ = (
+        Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),
+        # Claimers consume oldest work first. The previous lag index starts
+        # with two columns compared to each other, so SQLite still had to sort
+        # every eligible row before applying LIMIT. This index lets it walk the
+        # requested projector in claim order and stop as soon as the bounded
+        # batch is full.
+        Index("ix_projector_state_claim_order", "projector", "updated_at", "session_id"),
+    )
 
 
 class RuntimeDependencyState(CatalogBase):

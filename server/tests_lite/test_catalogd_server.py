@@ -25,6 +25,8 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.server import CatalogDaemonError
+from zerg.catalogd.server import CatalogWriterBusy
+from zerg.catalogd.server import CatalogWriterExpired
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveDeviceToken
 
@@ -55,6 +57,15 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
             "commit_seq": "0",
             "pid": os.getpid(),
             "ready": True,
+            "writer_admission": {
+                "depth": 0,
+                "max_depth": 128,
+                "peak_depth": 0,
+                "active_label": None,
+                "active_age_ms": 0.0,
+                "rejected_busy": 0,
+                "expired_before_execution": 0,
+            },
         }
         assert schema["catalog_id"] == ping["catalog_id"]
         assert schema["minimum_reader_schema_version"] == CATALOG_SCHEMA_VERSION
@@ -797,3 +808,43 @@ async def test_expired_deadline_is_typed(daemon_paths):
         writer.close()
         await writer.wait_closed()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_writer_queue_rejects_work_beyond_admission_bound(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    daemon._writer_max_depth = 1
+    await daemon.start()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_writer():
+        entered.set()
+        assert release.wait(timeout=5)
+
+    blocked = asyncio.create_task(daemon._run_store(hold_writer))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        with pytest.raises(CatalogWriterBusy):
+            await daemon._run_store(lambda: None)
+        assert daemon._writer_stats.snapshot()["rejected_busy"] == 1
+    finally:
+        release.set()
+        await blocked
+        await daemon.close()
+
+
+def test_writer_drops_expired_work_before_mutation(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    mutated = False
+
+    def mutate():
+        nonlocal mutated
+        mutated = True
+
+    with pytest.raises(CatalogWriterExpired):
+        daemon._run_store_timed("mutate", time.perf_counter(), 0, mutate, (), {})
+    assert mutated is False
+    assert daemon._writer_stats.snapshot()["expired_before_execution"] == 1
