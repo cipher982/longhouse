@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   validate:
+    timeout-minutes: 15
     name: Validate static blog
     runs-on: ubuntu-latest
     steps:

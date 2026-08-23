@@ -9,6 +9,7 @@ on:
 
 jobs:
   debug:
+    timeout-minutes: 30
     runs-on: cube
     steps:
     - uses: actions/checkout@v6

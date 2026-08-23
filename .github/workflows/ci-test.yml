@@ -35,6 +35,7 @@ env:
 
 jobs:
   run:
+    timeout-minutes: 60
     runs-on: cube
     name: "🧪 ci-test--${{ inputs.suite }}--${{ inputs.ref }}"
     env:

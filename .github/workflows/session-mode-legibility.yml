@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   session-mode-definitions:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     name: "Session mode definition check"
     steps:

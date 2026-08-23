@@ -21,6 +21,7 @@ on:
 
 jobs:
   build-frontend:
+    timeout-minutes: 20
     runs-on: cube
     name: "🏗️ Build frontend once"
 
@@ -51,6 +52,7 @@ jobs:
           retention-days: 3
 
   lighthouse:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     name: "🔦 Lighthouse CI"
     needs: build-frontend
@@ -77,6 +79,7 @@ jobs:
         working-directory: web
 
   bundle-size:
+    timeout-minutes: 20
     runs-on: cube
     name: "📦 Bundle Size"
     needs: build-frontend
@@ -99,6 +102,7 @@ jobs:
         run: cd web && node ./scripts/check-bundle-size.mjs
 
   image-size:
+    timeout-minutes: 20
     runs-on: cube
     name: "🖼️ Image Size Check"
 

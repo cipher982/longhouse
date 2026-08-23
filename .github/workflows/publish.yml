@@ -12,6 +12,7 @@ on:
 
 jobs:
   publish:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     environment: pypi
     env:

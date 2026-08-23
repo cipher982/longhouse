@@ -32,6 +32,7 @@ jobs:
   # Skipped jobs don't block workflow success.
   # -----------------------------------------------------------------------
   changes:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     name: "Changed paths"
     outputs:
@@ -191,6 +192,7 @@ jobs:
       run: make lint-test-patterns
 
   backend-tests:
+    timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -233,6 +235,7 @@ jobs:
       run: make test-ios-helper
 
   engine-tests:
+    timeout-minutes: 45
     needs: changes
     if: ${{ needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -288,6 +291,7 @@ jobs:
       run: make test-shipper-synthetic-live-bench
 
   frontend-tests:
+    timeout-minutes: 20
     needs: changes
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube
@@ -388,6 +392,7 @@ jobs:
         path: ${{ runner.temp }}/ios-test-results
 
   wheel-package:
+    timeout-minutes: 20
     needs: changes
     if: ${{ needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -418,6 +423,7 @@ jobs:
       run: make test-wheel-package
 
   e2e-core:
+    timeout-minutes: 30
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube
@@ -493,6 +499,7 @@ jobs:
           e2e/playwright-report
 
   e2e-a11y:
+    timeout-minutes: 30
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube
@@ -568,6 +575,7 @@ jobs:
           e2e/playwright-report
 
   model-smoke:
+    timeout-minutes: 20
     needs: changes
     if: ${{ needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -591,6 +599,7 @@ jobs:
       run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
 
   oss-qa:
+    timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest

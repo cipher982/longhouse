@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   matrix:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}

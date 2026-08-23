@@ -43,6 +43,7 @@ concurrency:
 
 jobs:
   changes:
+    timeout-minutes: 10
     name: "Detect runtime deploy scope"
     runs-on: ubuntu-latest
     outputs:
@@ -70,6 +71,7 @@ jobs:
           fi
 
   gate:
+    timeout-minutes: 15
     name: "Resolve exact-SHA deploy metadata"
     runs-on: ubuntu-latest
     needs: changes
@@ -378,6 +380,7 @@ jobs:
             --label "deploy-failure"
 
   profile-deploy:
+    timeout-minutes: 30
     name: "Profile deploy wall time"
     runs-on: ubuntu-latest
     needs: [changes, deploy_demo, reprovision_canary, fast_smoke]

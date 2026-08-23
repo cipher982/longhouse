@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   docs-drift:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     # Skip fork PRs (no secrets)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
