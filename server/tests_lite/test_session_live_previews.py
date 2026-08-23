@@ -11,6 +11,7 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLivePreview
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_live_previews import load_session_live_preview_map
 from zerg.services.session_live_previews import supersede_session_live_preview
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -74,6 +75,22 @@ def _bridge_event(
         occurred_at=occurred_at,
         dedupe_key=f"bridge:live:{session_id}:{thread_id}:{turn_id}:{item_id or 'legacy'}:{seq}:{live_text}",
         payload=payload,
+    )
+
+
+def _phase_event(*, session_id, occurred_at: datetime, run_id: str, phase: str = "running") -> RuntimeEventIngest:
+    return RuntimeEventIngest(
+        runtime_key=f"codex:{session_id}",
+        session_id=session_id,
+        run_id=run_id,
+        provider="codex",
+        device_id="cinder",
+        source="codex_bridge",
+        kind="phase_signal",
+        phase=phase,
+        occurred_at=occurred_at,
+        dedupe_key=f"phase:{session_id}:{run_id}:{occurred_at.isoformat()}:{phase}",
+        payload={},
     )
 
 
@@ -600,4 +617,114 @@ def test_late_cross_turn_delta_does_not_resurrect_superseded_projection(tmp_path
     assert row is not None
     assert row.preview_text == "live before durable"
     assert row.superseded_at is not None
+    assert preview_map == {}
+
+
+def test_late_terminal_for_current_run_settles_after_newer_signal(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "late_terminal_same_run.db")
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    run_id = str(uuid4())
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _phase_event(session_id=session.id, occurred_at=now, run_id=run_id),
+                _phase_event(session_id=session.id, occurred_at=now + timedelta(seconds=10), run_id=run_id),
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    run_id=run_id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now + timedelta(seconds=5),
+                    dedupe_key=f"terminal:{session.id}:{run_id}",
+                    payload={"terminal_state": "run_completed"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == f"codex:{session.id}").one()
+
+    assert state.phase == "finished"
+    assert state.terminal_state == "run_completed"
+
+
+def test_late_terminal_for_old_run_does_not_clobber_newer_run(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "late_terminal_old_run.db")
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    old_run_id = str(uuid4())
+    new_run_id = str(uuid4())
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _phase_event(session_id=session.id, occurred_at=now, run_id=old_run_id),
+                _phase_event(session_id=session.id, occurred_at=now + timedelta(seconds=10), run_id=new_run_id),
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    run_id=old_run_id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now + timedelta(seconds=5),
+                    dedupe_key=f"terminal:{session.id}:{old_run_id}",
+                    payload={"terminal_state": "run_completed"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == f"codex:{session.id}").one()
+
+    assert str(state.run_id) == new_run_id
+    assert state.terminal_state is None
+    assert state.phase == "running"
+
+
+def test_later_same_turn_delta_does_not_resurrect_superseded_projection(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "late_superseded_same_turn_after_terminal.db")
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [_bridge_event(session_id=session.id, occurred_at=now, seq=1, live_text="live before durable")],
+        )
+        supersede_session_live_preview(
+            db,
+            session_id=session.id,
+            durable_at=now + timedelta(seconds=5),
+            durable_event_id=456,
+        )
+
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(seconds=10),
+                    seq=2,
+                    live_text="late same-turn preview",
+                )
+            ],
+        )
+        db.commit()
+
+        row = db.get(SessionLivePreview, session.id)
+        preview_map = load_session_live_preview_map(db, [session.id])
+
+    assert row is not None
+    assert row.preview_text == "live before durable"
+    assert row.superseded_at is not None
+    assert row.superseded_by_event_id == 456
     assert preview_map == {}

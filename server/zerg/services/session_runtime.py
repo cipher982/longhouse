@@ -1098,7 +1098,22 @@ def _apply_runtime_event(
 
     existing_terminal_state = str(state.terminal_state or "").strip()
     incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
+    current_run_id = state.run_id
     opens_new_run = event.run_id is not None and event.run_id != state.run_id
+
+    latest_terminal_related_at = _latest_timestamp(
+        state.last_runtime_signal_at,
+        state.last_progress_at,
+        state.terminal_at,
+    )
+    terminal_is_newer_than_event = latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at
+    terminal_is_session_end = (incoming_terminal_state or "finished") == "session_ended"
+    terminal_is_for_current_run = current_run_id is None or event.run_id is None or event.run_id == current_run_id
+    terminal_superseded = (
+        event.kind == "terminal_signal" and terminal_is_newer_than_event and not terminal_is_session_end and not terminal_is_for_current_run
+    )
+    if terminal_superseded:
+        return "ignored"
 
     if existing_terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return "protected_session_ended"
@@ -1285,25 +1300,13 @@ def _apply_runtime_event(
         same_run_terminal_replay = (
             terminal_state in RUN_TERMINAL_STATES
             and existing_terminal_state in RUN_TERMINAL_STATES
-            and state.run_id is not None
-            and (event.run_id is None or event.run_id == state.run_id)
+            and current_run_id is not None
+            and (event.run_id is None or event.run_id == current_run_id)
         )
         if same_run_terminal_replay:
             if not archive_side_effects:
                 return "ignored"
             return "applied" if _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at) else "ignored"
-        latest_terminal_related_at = _latest_timestamp(
-            state.last_runtime_signal_at,
-            state.last_progress_at,
-            state.terminal_at,
-        )
-        terminal_is_newer_than_event = False
-        if latest_terminal_related_at is not None:
-            terminal_is_newer_than_event = occurred_at < latest_terminal_related_at
-        terminal_is_session_end = terminal_state == "session_ended"
-        terminal_superseded = terminal_is_newer_than_event and not terminal_is_session_end
-        if terminal_superseded:
-            return "ignored"
         terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
         if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:
             terminal_reason = terminal_state

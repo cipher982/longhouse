@@ -313,6 +313,9 @@ def _upsert_live_preview_row(
     if existing is not None and existing.last_observation_id == candidate.last_observation_id:
         return False
     if existing is not None and existing.superseded_at is not None:
+        if candidate.turn_key == existing.turn_key:
+            # Durable content ended this turn; a late preview must not reopen it.
+            return False
         superseded_at = normalize_utc(existing.superseded_at)
         candidate_at = normalize_utc(candidate.preview_observed_at)
         if superseded_at is not None and candidate_at is not None and candidate_at <= superseded_at:
