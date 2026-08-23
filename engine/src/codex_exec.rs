@@ -121,6 +121,24 @@ enum ProjectedAppServerEvent {
     },
 }
 
+/// The short tool token the activity axis displays, never the command itself.
+///
+/// `RuntimeEventIngest.tool_name` caps at 128 characters and the UI renders this
+/// as a name ("Using shell"), so a shell command belongs in the tool item's
+/// payload rather than here. The Helm bridge already maps these item types the
+/// same way (`codex_bridge.rs::tracked_item_tool_name`); Console sending the raw
+/// command was drift, and it 422'd every batch a long command rode in.
+fn app_server_tool_token(item_type: &str, params: &Value) -> String {
+    match item_type {
+        "commandExecution" => "shell".to_string(),
+        "fileChange" => "edit".to_string(),
+        "mcpToolCall" | "dynamicToolCall" | "collabAgentToolCall" => {
+            json_string(params, &["item", "tool"]).unwrap_or_else(|| item_type.to_string())
+        }
+        other => other.to_string(),
+    }
+}
+
 impl AppServerProjection {
     fn apply(&mut self, event: &Value) -> Vec<ProjectedAppServerEvent> {
         let method = event.get("method").and_then(Value::as_str).unwrap_or("");
@@ -164,9 +182,15 @@ impl AppServerProjection {
                     // which no server vocabulary knows: it carried no freshness
                     // window and projected to activity `unknown`, so a Console run
                     // went dark after its opening `thinking` fact expired.
+                    //
+                    // `tool_name` is a short token, not the command. The wire
+                    // field caps at 128 chars (`RuntimeEventIngest.tool_name`),
+                    // so sending the command 422'd the whole coalesced batch
+                    // whenever it ran long — taking every event batched with it.
+                    // The command still travels in the tool item's payload.
                     ProjectedAppServerEvent::Phase {
                         phase: "running",
-                        tool_name: Some(command.clone()),
+                        tool_name: Some(app_server_tool_token("commandExecution", params)),
                     },
                     ProjectedAppServerEvent::ToolItem {
                         item_id,
@@ -2164,6 +2188,39 @@ for line in sys.stdin:
         let critical = critical_event_rx.recv().await.unwrap();
         assert_eq!(critical[0]["kind"], "terminal_signal");
         assert_eq!(sink.queued_events.load(Ordering::Relaxed), 2);
+    }
+
+    /// `RuntimeEventIngest.tool_name` caps at 128 characters and rejects the
+    /// whole batch above it, so a long shell command in this field 422'd every
+    /// event batched alongside it. Keep the wire field a token regardless of
+    /// how long the command is.
+    #[test]
+    fn tool_phase_reports_a_token_not_the_command() {
+        const WIRE_TOOL_NAME_LIMIT: usize = 128;
+        let mut projection = AppServerProjection::default();
+        let command = format!("cd /Users/davidrose/git/zerg && {}", "git log --oneline ".repeat(20));
+        assert!(command.len() > WIRE_TOOL_NAME_LIMIT, "fixture must exceed the wire cap");
+
+        let projected = projection.apply(&json!({
+            "method": "item/started",
+            "params": {"item": {"id": "exec-1", "type": "commandExecution", "command": command}},
+        }));
+
+        let phase = projected
+            .iter()
+            .find_map(|event| match event {
+                ProjectedAppServerEvent::Phase { phase, tool_name } => Some((*phase, tool_name.clone())),
+                _ => None,
+            })
+            .expect("a tool start must project a phase");
+        assert_eq!(phase.0, "running");
+        assert_eq!(phase.1.as_deref(), Some("shell"));
+
+        // The command itself is not lost -- it rides the tool item's payload.
+        let carried = projected.iter().any(|event| {
+            matches!(event, ProjectedAppServerEvent::ToolItem { command: value, .. } if value == &command)
+        });
+        assert!(carried, "the command must still reach the tool item");
     }
 
     #[test]
