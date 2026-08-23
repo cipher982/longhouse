@@ -72,12 +72,17 @@ pub fn oldest_undrained_epoch(
             "SELECT epoch.source_epoch
              FROM source_epoch_registry AS epoch
              WHERE epoch.provider = ?1 AND epoch.opaque_source_id = ?2
-               AND (SELECT COUNT(*) FROM cursor_store_raw_record AS raw
-                    WHERE raw.source_epoch = epoch.source_epoch)
-                   > COALESCE((SELECT lane.last_position
-                               FROM source_epoch_lane_state AS lane
-                               WHERE lane.source_epoch = epoch.source_epoch
-                                 AND lane.lane = 'durable'), 0)
+               AND EXISTS (
+                   SELECT 1 FROM cursor_store_raw_record AS raw
+                   WHERE raw.source_epoch = epoch.source_epoch
+                     AND raw.source_position >= COALESCE(
+                         (SELECT lane.last_position
+                          FROM source_epoch_lane_state AS lane
+                          WHERE lane.source_epoch = epoch.source_epoch
+                            AND lane.lane = 'durable'),
+                         0
+                     )
+               )
              ORDER BY epoch.created_at, epoch.source_epoch
              LIMIT 1",
             params![provider, opaque_source_id],
@@ -103,9 +108,8 @@ pub fn oldest_undrained_epoch(
 /// exclusive: envelopes cover `[range_start, range_end)` and a receipt advances
 /// the cursor to `range_end` (`pending_source_envelope.rs:894-903`), so an epoch
 /// is fully durable exactly when it retains no record at or above it. The
-/// count-based comparison in [`oldest_undrained_epoch`] is only equivalent
-/// while rows are dense and undeleted, which stops being true the first time
-/// this runs.
+/// undrained checks are keyed on retained source positions, so they remain
+/// correct after an earlier fully receipted epoch was drained.
 ///
 /// Safe against the lineage walk: `wire_predecessor_proof_for_epoch` returns on
 /// `durable_position > 0` before it ever consults the raw-record count
@@ -399,6 +403,10 @@ mod tests {
                 source_position: 1,
                 bytes: b"d1".to_vec()
             }]
+        );
+        assert_eq!(
+            oldest_undrained_epoch(&conn, "cursor", &format!("fixture:{open}")).unwrap(),
+            Some(open)
         );
 
         // Retained evidence must still be shippable byte-for-byte, not merely
