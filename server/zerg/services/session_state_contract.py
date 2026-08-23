@@ -809,6 +809,23 @@ def _unread(*, last_console_result_at: datetime | None, last_read_at: datetime |
     return read_at is None or result_at > read_at
 
 
+def _console_evidence_expired(activity: SessionActivityFacts) -> bool:
+    """Did this Console run's activity evidence expire rather than never arrive?
+
+    A Console run's lifecycle comes from a durable turn row, so it reads
+    `running` until something settles it. That row is not evidence the agent is
+    still moving: a machine that loses its network at end-of-run can drop the
+    terminal signal, and the turn then claims to be running forever.
+
+    The activity axis is the axis that expires, so it is the one that can tell
+    those apart. Evidence that arrived and aged out means the run has gone
+    quiet; no evidence at all means the turn was only just dispatched, which is
+    the one case where the lifecycle is all we have.
+    """
+
+    return activity.state == "unknown" and activity.raw_kind is not None
+
+
 def _working_set(
     *,
     disposition: SessionDispositionFacts,
@@ -845,7 +862,7 @@ def _working_set(
 
     if disposition.state == "closed":
         return "history"
-    if mode == "console" and run is not None and run.lifecycle in {"starting", "running"}:
+    if mode == "console" and run is not None and run.lifecycle in {"starting", "running"} and not _console_evidence_expired(activity):
         return "open"
     if interaction is not None:
         return "open"
@@ -899,7 +916,7 @@ def _primary(
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
         return SessionPresentationLabel(key="ended", label="Ended", tone="closed", observed_at=run.ended_at)
-    if mode == "console" and run is not None and run.lifecycle == "running":
+    if mode == "console" and run is not None and run.lifecycle == "running" and not _console_evidence_expired(activity):
         return SessionPresentationLabel(key="executing", label="Working", tone="running", observed_at=run.started_at)
     if (
         mode == "console"
@@ -917,7 +934,11 @@ def _primary(
         run is not None
         and activity.state == "unknown"
         and activity.raw_kind is not None
-        and control.connection in {"connected", "degraded"}
+        # Console dispatches through the Machine Agent and holds no lease, so its
+        # connection is always `not_applicable`. Requiring a live lease here kept
+        # Console out of this label entirely and left it on the unbounded
+        # "Working" above.
+        and (mode == "console" or control.connection in {"connected", "degraded"})
     ):
         last_seen = _LAST_SEEN_LABEL.get(activity.raw_kind)
         if last_seen is not None:

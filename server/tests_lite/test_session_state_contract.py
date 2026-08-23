@@ -702,3 +702,45 @@ def test_closed_session_is_history_even_while_attached():
         )
         == "history"
     )
+
+
+def test_console_run_stops_claiming_work_once_its_activity_evidence_expires():
+    """A Console turn whose terminal signal never arrived must not read as live.
+
+    `live_console_turns` is durable, so a run whose end-of-run terminal signal
+    was lost in transit stays `active` forever. Presenting that row as "Working"
+    told the user an agent had been running for ten hours when it had finished
+    minutes after they last heard from it.
+    """
+
+    projection = project_console_control(
+        closed=False,
+        execution_target_available=True,
+        turn_state="active",
+        machine_online=True,
+        adapter_available=True,
+        interrupt_adapter_available=False,
+    )
+    capabilities = replace(
+        _capabilities(label="live", live=False, reattach=False),
+        control_owned=True,
+        turn_state="active",
+        can_start_turn=True,
+        console_control=projection,
+    )
+    facts = _facts(
+        # Evidence that arrived and then aged out, which is what a run that
+        # stopped emitting looks like.
+        runtime=_runtime(phase="running", confidence="stale", tool="Bash"),
+        session=_session(origin_kind="console"),
+        capabilities=capabilities,
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.mode == "console"
+    assert facts.run is not None and facts.run.lifecycle == "running"
+    assert facts.activity.state == "unknown"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "no_recent_activity"
+    assert facts.presentation.primary.label == "No recent activity (last: running a tool)"
+    assert facts.working_set == "history"

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
@@ -1144,6 +1145,20 @@ def _apply_runtime_event(
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
         # Preserve rolling-producer vocabulary exactly. Unknown provider phases
         # project as activity unknown; they must never be rewritten to idle.
+        #
+        # Preserving them silently is what let Console's `tool` phase go
+        # unnoticed: it carried no freshness window, projected to activity
+        # `unknown`, and left the axis dark for every Codex Console run. Keep the
+        # value, but say so, because an adapter speaking an unknown phase is
+        # always a producer bug rather than a session state worth serving.
+        if not is_known_raw_phase(next_phase):
+            logger.warning(
+                "runtime phase_signal outside the managed phase contract: " "phase=%s provider=%s source=%s session=%s",
+                next_phase,
+                event.provider,
+                event.source,
+                event.session_id,
+            )
         stale_lease_observed_at = _stale_managed_lease_observed_at(event, latest_phase_signal_at)
         next_active_tool = None
         if next_phase in {"running", "blocked"}:
