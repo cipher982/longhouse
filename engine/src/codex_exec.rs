@@ -158,8 +158,14 @@ impl AppServerProjection {
                 self.tool_command.insert(item_id.clone(), command.clone());
                 self.tool_seq.insert(item_id.clone(), 1);
                 vec![
+                    // `running` is the managed phase contract's name for tool
+                    // execution (see config/managed_phase_contract.json), and the
+                    // Helm bridge already speaks it. Console used to emit `tool`,
+                    // which no server vocabulary knows: it carried no freshness
+                    // window and projected to activity `unknown`, so a Console run
+                    // went dark after its opening `thinking` fact expired.
                     ProjectedAppServerEvent::Phase {
-                        phase: "tool",
+                        phase: "running",
                         tool_name: Some(command.clone()),
                     },
                     ProjectedAppServerEvent::ToolItem {
@@ -651,6 +657,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         event_rx,
         critical_event_rx,
         queued_events,
+        crate::config::get_agent_runtime_events_outbox_dir()?,
     ));
     let monitor_sink = sink.clone();
     let stderr_tail = worker.stderr_tail.clone();
@@ -722,7 +729,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         let terminal_run_id = monitor_sink.run_id.clone();
         drop(monitor_sink);
         let mut event_pump = event_pump;
-        match tokio::time::timeout(Duration::from_secs(6), &mut event_pump).await {
+        match tokio::time::timeout(EVENT_PUMP_DRAIN_BUDGET, &mut event_pump).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => eprintln!("[codex-exec] runtime event pump join failed: {err}"),
             Err(_) => {
@@ -1126,10 +1133,11 @@ impl CodexExecRuntimeSink {
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
-        let phase_identity = if phase == "tool" {
-            format!("tool:{}", uuid::Uuid::new_v4())
-        } else {
-            phase.to_string()
+        // Each tool start is its own observation, so it needs its own dedupe
+        // identity; a run's plain phase transitions collapse by phase name.
+        let phase_identity = match tool_name.as_deref() {
+            Some(_) => format!("{phase}:{}", uuid::Uuid::new_v4()),
+            None => phase.to_string(),
         };
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
         self.post_events(vec![json!({
@@ -1599,20 +1607,27 @@ const EVENT_PUMP_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 const EVENT_PUMP_MAX_BATCH: usize = 128;
 const EVENT_PUMP_QUEUE_CAPACITY: usize = 256;
 const EVENT_PUMP_CRITICAL_CAPACITY: usize = 64;
+const EVENT_PUMP_POST_TIMEOUT: Duration = Duration::from_secs(5);
+const EVENT_PUMP_POST_ATTEMPTS: u32 = 3;
+/// How long end-of-run waits for the pump to finish its last batch.
+///
+/// This must exceed one batch's worst-case retry budget. When it did not, the
+/// abort below could fire mid-retry and discard the terminal signal the hosted
+/// console turn needs to settle.
+const EVENT_PUMP_DRAIN_BUDGET: Duration =
+    Duration::from_secs((EVENT_PUMP_POST_TIMEOUT.as_secs() + 1) * EVENT_PUMP_POST_ATTEMPTS as u64);
 
 fn events_are_critical(events: &[Value]) -> bool {
     events.iter().any(|event| {
-        matches!(
-            event.get("kind").and_then(Value::as_str),
-            Some("terminal_signal" | "binding_signal")
-        ) || matches!(
-            json_string(event, &["payload", "progress_kind"]).as_deref(),
-            Some("console_live_tool_item")
-        ) && event
-            .get("payload")
-            .and_then(|payload| payload.get("completed"))
-            .and_then(Value::as_bool)
-            == Some(true)
+        event_is_state_bearing(event)
+            || matches!(
+                json_string(event, &["payload", "progress_kind"]).as_deref(),
+                Some("console_live_tool_item")
+            ) && event
+                .get("payload")
+                .and_then(|payload| payload.get("completed"))
+                .and_then(Value::as_bool)
+                == Some(true)
             || event
                 .get("payload")
                 .and_then(|payload| payload.get("item_completed"))
@@ -1629,6 +1644,7 @@ async fn run_runtime_event_pump(
     mut receiver: mpsc::Receiver<Vec<Value>>,
     mut critical_receiver: mpsc::Receiver<Vec<Value>>,
     queued_events: Arc<AtomicUsize>,
+    outbox_dir: PathBuf,
 ) {
     let http = reqwest::Client::new();
     let url = format!(
@@ -1667,13 +1683,13 @@ async fn run_runtime_event_pump(
         let event_count = events.len();
         let payload = json!({ "events": events });
         let mut delivered = false;
-        for attempt in 0..3 {
+        for attempt in 0..EVENT_PUMP_POST_ATTEMPTS {
             let started = std::time::Instant::now();
             let response = http
                 .post(&url)
                 .header("X-Agents-Token", &api_token)
                 .json(&payload)
-                .timeout(Duration::from_secs(5))
+                .timeout(EVENT_PUMP_POST_TIMEOUT)
                 .send()
                 .await;
             match response {
@@ -1690,11 +1706,19 @@ async fn run_runtime_event_pump(
                     break;
                 }
                 Ok(response) => {
-                    let retryable = response.status().is_server_error()
-                        || response.status().as_u16() == 429;
+                    let status = response.status();
+                    let retryable = status.is_server_error() || status.as_u16() == 429;
+                    // A rejection the server will never accept still has to say
+                    // which event it refused, or the batch vanishes with no way
+                    // to tell a schema drift from a transport fault.
+                    let detail = if retryable {
+                        String::new()
+                    } else {
+                        let body = response.text().await.unwrap_or_default();
+                        format!(" detail={}", body.chars().take(400).collect::<String>())
+                    };
                     eprintln!(
-                        "[codex-exec] runtime event post failed session={session_id} run={run_id} status={} attempt={} events={event_count} retryable={retryable}",
-                        response.status(),
+                        "[codex-exec] runtime event post failed session={session_id} run={run_id} status={status} attempt={} events={event_count} retryable={retryable}{detail}",
                         attempt + 1
                     );
                     if !retryable {
@@ -1706,19 +1730,65 @@ async fn run_runtime_event_pump(
                     attempt + 1
                 ),
             }
-            if attempt < 2 {
-                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+            if attempt + 1 < EVENT_PUMP_POST_ATTEMPTS {
+                tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt + 1))).await;
             }
         }
         if !delivered {
             let remaining = queued_events
                 .fetch_sub(event_count, Ordering::Relaxed)
                 .saturating_sub(event_count);
+            let spilled = spill_runtime_events(&outbox_dir, &payload);
             eprintln!(
-                "[codex-exec] runtime event batch dropped after retries session={session_id} run={run_id} events={event_count} remaining={remaining}"
+                "[codex-exec] runtime event batch undelivered session={session_id} run={run_id} events={event_count} spilled={spilled} remaining={remaining}"
             );
         }
     }
+}
+
+/// Is losing this event a loss of state rather than a loss of liveness?
+///
+/// Terminal and binding signals are the two facts nothing else can reconstruct:
+/// the hosted console turn settles on the terminal signal, and the session binds
+/// to its provider thread on the binding signal. Everything else on this channel
+/// is preview — the archive ships the same content durably on its own path — so
+/// it may be dropped when delivery fails.
+fn event_is_state_bearing(event: &Value) -> bool {
+    matches!(
+        event.get("kind").and_then(Value::as_str),
+        Some("terminal_signal" | "binding_signal")
+    )
+}
+
+/// Hand an undelivered batch's state-bearing events to the daemon's durable
+/// runtime-event outbox.
+///
+/// The direct pump exists for latency, not durability: it retries three times
+/// and then has nowhere to put the batch. Terminal signals travel this path, so
+/// a network blip at end-of-run used to leave the hosted console turn `active`
+/// forever, with no evidence anywhere that the run had finished. The outbox
+/// keeps files until the server accepts them, so the shared drain loop
+/// redelivers what the pump could not.
+///
+/// Only state-bearing events are spilled. Spilling the whole batch would turn a
+/// long outage into thousands of preview files describing a run the archive has
+/// already recorded in full.
+///
+/// Returns the number of events successfully written to disk.
+fn spill_runtime_events(outbox_dir: &std::path::Path, payload: &Value) -> usize {
+    let Some(events) = payload.get("events").and_then(Value::as_array) else {
+        return 0;
+    };
+    let mut spilled = 0usize;
+    for event in events.iter().filter(|event| event_is_state_bearing(event)) {
+        match crate::outbox::enqueue_runtime_event(outbox_dir, event) {
+            Ok(()) => spilled += 1,
+            Err(error) => {
+                eprintln!("[codex-exec] runtime outbox spill failed: {error}");
+            }
+        }
+    }
+    spilled
 }
 
 fn transcript_wake_payload(
@@ -1981,6 +2051,7 @@ for line in sys.stdin:
             rx,
             critical_rx,
             queued.clone(),
+            tempfile::tempdir().unwrap().keep(),
         ));
 
         tx.try_send(vec![json!({"seq": 1})]).unwrap();
@@ -1997,6 +2068,60 @@ for line in sys.stdin:
         assert_eq!(batch[0]["seq"], 1);
         assert_eq!(batch[1]["seq"], 2);
         assert_eq!(queued.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn undelivered_terminal_signal_spills_to_the_durable_outbox() {
+        // The hosted console turn only settles when the terminal signal lands.
+        // If the pump exhausts its retries the batch must survive on disk for
+        // the daemon's outbox drain, or the turn stays `active` forever.
+        let outbox = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
+        let (critical_tx, critical_rx) = mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY);
+        let queued = Arc::new(AtomicUsize::new(1));
+        let pump = tokio::spawn(run_runtime_event_pump(
+            // Unroutable port: every attempt fails, exercising the spill path.
+            "http://127.0.0.1:1".to_string(),
+            "token".to_string(),
+            "session-1".to_string(),
+            "run-1".to_string(),
+            rx,
+            critical_rx,
+            queued.clone(),
+            outbox.path().to_path_buf(),
+        ));
+
+        critical_tx
+            .send(vec![json!({
+                "kind": "terminal_signal",
+                "dedupe_key": "codex-exec:session-1:run-1:terminal",
+                "payload": {"terminal_state": "run_completed"},
+            })])
+            .await
+            .unwrap();
+        // Preview traffic shares the batch but not the durability guarantee:
+        // the archive ships the same content on its own path, so spilling it
+        // would turn a long outage into thousands of redundant files.
+        tx.send(vec![json!({
+            "kind": "progress_signal",
+            "dedupe_key": "console:live:run-1:item-1:1",
+            "payload": {"progress_kind": "bridge_live_transcript_delta"},
+        })])
+        .await
+        .unwrap();
+        drop(tx);
+        drop(critical_tx);
+        tokio::time::timeout(EVENT_PUMP_DRAIN_BUDGET, pump)
+            .await
+            .expect("pump must finish within the drain budget it advertises")
+            .unwrap();
+
+        let spilled = crate::outbox::collect_runtime_event_outbox(outbox.path());
+        assert_eq!(
+            spilled.len(),
+            1,
+            "exactly the terminal signal must survive on disk",
+        );
     }
 
     #[tokio::test]
