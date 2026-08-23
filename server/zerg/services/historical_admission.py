@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from zerg import metrics
-from zerg.config import get_settings
 
 DEFAULT_MIN_FREE_BYTES = 5 * 1024 * 1024 * 1024
 DEFAULT_MIN_FREE_RATIO = 0.05
@@ -33,6 +32,19 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _testing_mode() -> bool:
+    """Read TESTING from the environment, not from `get_settings()`.
+
+    `get_settings()` validates the entire application config, which would make a
+    focused admission test require DATABASE_URL and FERNET_SECRET to reach an
+    assertion about disk. It also computes `testing` before it loads `.env`, so
+    a process whose testing intent lives only in `.env` would read as production
+    on its first admission call.
+    """
+
+    return os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _disk_watermark_configuration() -> tuple[int, float]:
     """Free-space watermarks below which historical work is shed.
 
@@ -49,7 +61,7 @@ def _disk_watermark_configuration() -> tuple[int, float]:
     disk sample; an explicit value always wins.
     """
 
-    if get_settings().testing:
+    if _testing_mode():
         return (
             max(0, _env_int("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", 0)),
             min(1.0, max(0.0, _env_float("LONGHOUSE_HISTORICAL_MIN_FREE_RATIO", 0.0))),
@@ -138,11 +150,17 @@ def evaluate_historical_admission(
 ) -> HistoricalAdmissionDecision:
     """Evaluate one historical unit; live work must never call this function."""
 
-    disk = sample_storage_disk(root)
-    if disk.error is not None or disk.free_bytes is None or disk.free_ratio is None:
-        return HistoricalAdmissionDecision(False, "disk_sample_unavailable", 30)
     min_free_bytes, min_free_ratio = _disk_watermark_configuration()
-    if disk.free_bytes < min_free_bytes or disk.free_ratio < min_free_ratio:
+    disk = sample_storage_disk(root)
+    unusable_sample = disk.error is not None or disk.free_bytes is None or disk.free_ratio is None
+    if unusable_sample:
+        # With no watermark to enforce there is nothing the sample was needed
+        # for, so an unreadable disk must not shed work a test asked for.
+        if min_free_bytes == 0 and min_free_ratio == 0.0:
+            disk = DiskSnapshot(free_bytes=None, free_ratio=None, sampled_at_monotonic=0.0, error=None)
+        else:
+            return HistoricalAdmissionDecision(False, "disk_sample_unavailable", 30)
+    elif disk.free_bytes < min_free_bytes or disk.free_ratio < min_free_ratio:
         return HistoricalAdmissionDecision(
             False,
             "disk_watermark",

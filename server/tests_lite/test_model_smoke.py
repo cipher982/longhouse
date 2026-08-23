@@ -48,7 +48,7 @@ def _opted_in() -> bool:
     the guard's value depended on which tests imported first.
     """
 
-    if not os.getenv(_OPT_IN, "").strip():
+    if os.getenv(_OPT_IN, "").strip().lower() not in {"1", "true", "yes", "on"}:
         return False
     return any(os.getenv(name, "").strip() for name in _KEY_VARIABLES)
 

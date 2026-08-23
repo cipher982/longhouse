@@ -57,8 +57,12 @@ jobs:
           filters: .github/path-filters.yml
 
   validate:
-    needs: changes
-    if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # No path gate. `make validate` is cross-cutting by construction -- it checks
+    # the engine's generated provider contract, the web capability bundle, the
+    # iOS DTOs, the public surface, the runner, and E2E test patterns -- so any
+    # subset of paths is another list to drift out of date, which is exactly how
+    # twelve of its members went dark. The whole target runs in about a minute.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy

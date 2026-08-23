@@ -889,6 +889,9 @@ cohort-journey: ## Privacy-safe scheduled product journey against the non-demo d
 
 validate-cohort-journey: ## @internal Validate cohort selection and artifact privacy contracts
 	@$(MAKE) ensure-js-deps
+	@# element-timing.spec.ts below drives a real browser, so this target cannot
+	@# assume one is already installed -- `make validate` runs on clean runners.
+	@$(MAKE) ensure-playwright-browser
 	@cd e2e && bun test tests/live/cohort-journey-helpers.test.ts reporters/privacy-reporter.test.ts
 	@bash scripts/tests/cohort-journey.test.sh
 	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 bunx playwright test --config playwright.prod.config.js tests/live/element-timing.spec.ts
