@@ -279,6 +279,27 @@ fn interrupted_helper_converges_on_the_late_commit() {
     assert!(!contract_path(home.path()).exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn stop_helper_is_isolated_from_the_facade_process_group() {
+    let home = tempfile::tempdir().unwrap();
+    write_state(home.path(), "stopped");
+    let helper = write_stub_helper(
+        home.path(),
+        "self_pgid=$(ps -o pgid= -p $$ | tr -d ' ')\nparent_pgid=$(ps -o pgid= -p $PPID | tr -d ' ')\nprintf '%s %s\\n' \"$self_pgid\" \"$parent_pgid\" > \"$LONGHOUSE_HOME/helper-pgids\"",
+    );
+
+    let run = run_facade_stop(home.path(), &helper);
+    assert!(run.status.success(), "stderr: {}", run.stderr);
+    let pgids = fs::read_to_string(home.path().join("helper-pgids")).unwrap();
+    let pgids = pgids
+        .split_whitespace()
+        .map(|value| value.parse::<u32>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(pgids.len(), 2);
+    assert_ne!(pgids[0], pgids[1], "helper must not share facade pgrp");
+}
+
 /// T14: teardown must not be gated on the network at all. The facade is given
 /// an unroutable API URL; a network-coupled teardown would stall on it.
 #[test]

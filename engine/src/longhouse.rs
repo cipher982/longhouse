@@ -3839,6 +3839,7 @@ enum TeardownOutcome {
 /// `IPC_STOP_TIMEOUT` (3s) plus process spawn margin rather than an
 /// independently chosen number that can silently disagree with it.
 const CODEX_STOP_DEADLINE: Duration = Duration::from_secs(4);
+const CODEX_STOP_FORCE_REAP_BUDGET: Duration = Duration::from_millis(250);
 
 fn stop_codex_bridge(
     session_id: &str,
@@ -3877,6 +3878,9 @@ fn stop_codex_bridge(
         .spawn()
         .context("start managed Codex bridge cleanup")?;
     let deadline = std::time::Instant::now() + CODEX_STOP_DEADLINE;
+    let helper_deadline = deadline
+        .checked_sub(CODEX_STOP_FORCE_REAP_BUDGET)
+        .unwrap_or(deadline);
     let mut rpc_detail: Option<String> = None;
     loop {
         match child.try_wait()? {
@@ -3887,9 +3891,8 @@ fn stop_codex_bridge(
             }
             None => {}
         }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+        if std::time::Instant::now() >= helper_deadline {
+            force_stop_codex_helper(&mut child, deadline);
             rpc_detail = Some(format!(
                 "stop helper did not acknowledge within {}s",
                 CODEX_STOP_DEADLINE.as_secs()
@@ -3909,6 +3912,32 @@ fn stop_codex_bridge(
         rpc_detail,
         deadline,
     ))
+}
+
+fn force_stop_codex_helper(child: &mut std::process::Child, deadline: std::time::Instant) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as libc::pid_t;
+        if unsafe { libc::kill(-pgid, libc::SIGKILL) } != 0 {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+
+    // Reap when the kernel can do so promptly, but never turn forced cleanup
+    // into an unbounded wait on a process stuck in the kernel.
+    while std::time::Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) => std::thread::sleep(
+                Duration::from_millis(10)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            ),
+        }
+    }
 }
 
 fn await_codex_teardown_outcome(
@@ -3950,6 +3979,17 @@ fn classify_codex_teardown(
         }
     };
     if !state_path.exists() {
+        // `codex-bridge stop` deliberately accepts a live socket without a
+        // state file. The bridge can still be committing a replacement state
+        // after the helper loses its reply channel, so absence is conclusive
+        // only after the control socket is gone.
+        if state_path.with_extension("sock").exists() {
+            return TeardownOutcome::Unresponsive {
+                detail: format!(
+                    "{detail}; bridge state is pending while its control socket remains"
+                ),
+            };
+        }
         return TeardownOutcome::NoDurableRecord {
             detail: format!("{detail}; no bridge state file remains"),
         };
@@ -4788,7 +4828,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_teardown_waits_for_a_late_durable_commit() {
+    fn codex_teardown_waits_for_a_late_commit_behind_a_live_socket() {
         let temp = tempfile::tempdir().unwrap();
         let session_id = "66666666-6666-4666-8666-666666666666";
         let run_id = "77777777-7777-4777-8777-777777777777";
@@ -4802,17 +4842,7 @@ mod tests {
             || {
                 let state_path = codex_bridge_state_path(session_id).unwrap();
                 std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
-                std::fs::write(
-                    &state_path,
-                    serde_json::to_vec(&json!({
-                        "cwd": cwd,
-                        "codex_bin": "/usr/local/bin/codex",
-                        "status": "ready",
-                        "run_id": run_id,
-                    }))
-                    .unwrap(),
-                )
-                .unwrap();
+                std::fs::write(state_path.with_extension("sock"), b"").unwrap();
 
                 std::thread::scope(|scope| {
                     let state_path = state_path.clone();
