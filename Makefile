@@ -530,6 +530,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-managed-codex-contract
 	@$(MAKE) validate-managed-session-contract
 	@$(MAKE) validate-session-state-contract
+	@$(MAKE) validate-phase-contract
 	@$(MAKE) validate-managed-provider-contracts
 	@$(MAKE) validate-provider-capabilities
 	@$(MAKE) validate-provider-census
