@@ -19,7 +19,7 @@ interface SessionRuntimeStripProps {
     | "isManagedLocalSession"
     | "capabilityLabel"
   >;
-  elapsedLabel?: string | null;
+  startedLabel?: string | null;
   variant?: "inline" | "block" | "dock" | "bar";
   testId?: string;
 }
@@ -40,7 +40,7 @@ function shouldAnimateRuntimeBadge(state: KnownPresenceState | null): boolean {
 export function SessionRuntimeStrip({
   session,
   interaction,
-  elapsedLabel,
+  startedLabel,
   variant = "inline",
   testId,
 }: SessionRuntimeStripProps) {
@@ -67,11 +67,11 @@ export function SessionRuntimeStrip({
           className: null,
         }
       : null,
-    elapsedLabel
+    startedLabel
       ? {
-          key: "elapsed",
-          label: elapsedLabel,
-          className: "session-runtime-strip__elapsed",
+          key: "started",
+          label: startedLabel,
+          className: "session-runtime-strip__started",
         }
       : null,
   ].filter((part): part is { key: string; label: string; className: string | null } => part != null);

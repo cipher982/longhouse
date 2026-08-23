@@ -6,7 +6,6 @@ import { makeSessionStateFacts } from "../../test/sessionState";
 const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionWorkspace: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
-  useAgentSessionTurns: vi.fn(),
 }));
 const visibilityMocks = vi.hoisted(() => ({
   useDocumentVisible: vi.fn(),
@@ -111,14 +110,6 @@ function seedHookMocks(eventCount: number = 80, sessionOverrides: Record<string,
         thread_session_count: 1,
         fingerprint: "sha256:workspace",
       },
-    },
-    isLoading: false,
-    error: null,
-  });
-  agentSessionMocks.useAgentSessionTurns.mockReturnValue({
-    data: {
-      turns: [],
-      total: 0,
     },
     isLoading: false,
     error: null,
@@ -308,12 +299,6 @@ describe("useSessionWorkspace", () => {
       }),
       refetchInterval: 5_000,
     });
-    expect(agentSessionMocks.useAgentSessionTurns).toHaveBeenCalledWith(baseSession.id, {
-      limit: 10,
-      order: "desc",
-      enabled: true,
-      refetchInterval: 5_000,
-    });
   });
 
   it("opens the stream conservatively when the first workspace snapshot errors", () => {
@@ -431,10 +416,6 @@ describe("useSessionWorkspace", () => {
       { queryKey: ["agent-session-workspace", baseSession.id] },
       { cancelRefetch: false },
     );
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
-      { queryKey: ["agent-session-turns", baseSession.id] },
-      { cancelRefetch: false },
-    );
   });
 
   it("keeps runtime wakes off transcript query families", () => {
@@ -465,10 +446,6 @@ describe("useSessionWorkspace", () => {
     });
 
     expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
-    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
-      { queryKey: ["agent-session-turns", baseSession.id] },
-      { cancelRefetch: false },
-    );
     expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
       { queryKey: ["agent-session-projection-infinite", baseSession.id] },
       { cancelRefetch: false },
@@ -510,7 +487,7 @@ describe("useSessionWorkspace", () => {
       });
     });
 
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(8);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
 
     await act(async () => {
       finishRefresh?.();
@@ -518,7 +495,7 @@ describe("useSessionWorkspace", () => {
     });
 
     await waitFor(() => {
-      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(16);
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(14);
     });
   });
 
@@ -917,12 +894,6 @@ describe("useSessionWorkspace", () => {
         },
       }),
     ).toBe(false);
-    expect(agentSessionMocks.useAgentSessionTurns).toHaveBeenCalledWith(baseSession.id, {
-      limit: 10,
-      order: "desc",
-      enabled: false,
-      refetchInterval: false,
-    });
   });
 
   it("retries auto-scroll until the timeline list becomes scrollable", async () => {

@@ -57,6 +57,9 @@ export {
 
 export { getSessionInteractionCapabilities } from "./interaction";
 
+export type { TranscriptCounts } from "./transcriptSummary";
+export { countTimelineItems, formatTranscriptSummary } from "./transcriptSummary";
+
 export {
   DIFF_CELL_BUDGET,
   formatEditStat,

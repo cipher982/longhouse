@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useSecondClock } from "../useSecondClock";
+import { useWallClock } from "../useWallClock";
 
 const visibilityMocks = vi.hoisted(() => ({
   useDocumentVisible: vi.fn(),
@@ -8,7 +8,7 @@ const visibilityMocks = vi.hoisted(() => ({
 
 vi.mock("../useDocumentVisible", () => visibilityMocks);
 
-describe("useSecondClock", () => {
+describe("useWallClock", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     visibilityMocks.useDocumentVisible.mockReturnValue(true);
@@ -22,7 +22,7 @@ describe("useSecondClock", () => {
   it("aligns to the next second and then ticks once per second", () => {
     vi.setSystemTime(new Date("2026-03-22T22:04:30.250Z"));
 
-    const { result } = renderHook(() => useSecondClock(true));
+    const { result } = renderHook(() => useWallClock(true, 1000));
 
     expect(result.current).toBe(Date.parse("2026-03-22T22:04:30.250Z"));
 
@@ -46,7 +46,7 @@ describe("useSecondClock", () => {
     vi.setSystemTime(new Date("2026-03-22T22:04:30.250Z"));
     visibilityMocks.useDocumentVisible.mockReturnValue(false);
 
-    const { result, rerender } = renderHook(() => useSecondClock(true));
+    const { result, rerender } = renderHook(() => useWallClock(true, 1000));
 
     expect(result.current).toBe(Date.parse("2026-03-22T22:04:30.250Z"));
 

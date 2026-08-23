@@ -35,12 +35,12 @@ import {
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
-import { useSecondClock } from "../hooks/useSecondClock";
+import { useWallClock } from "../hooks/useWallClock";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
+import { getSessionStartedLabel } from "../lib/sessionTiming";
 import { getSessionCardText } from "../lib/sessionUtils";
 import { buildSessionShareUrl, copyToClipboard } from "../lib/clipboard";
 import { useMarkSessionRead } from "../hooks/useMarkSessionRead";
@@ -85,7 +85,6 @@ function SessionDetailWorkspaceRoute({
     session,
     sessionLoading,
     sessionError,
-    turns,
     threadSessions,
     currentThreadSession,
     headThreadSession,
@@ -107,7 +106,7 @@ function SessionDetailWorkspaceRoute({
     handleVisibleSelectionChange,
     registerTimelineList,
   } = workspace;
-  const nowMs = useSecondClock(Boolean(session && !isSessionClosed(session)));
+  const nowMs = useWallClock(Boolean(session && !isSessionClosed(session)));
 
   // Read-on-open acknowledgement for Console results; shared viewers never
   // acknowledge (console-unread-acknowledgement spec).
@@ -116,9 +115,9 @@ function SessionDetailWorkspaceRoute({
     sessionState: session?.session_state,
     disabled: sharedByUserId != null || shareToken != null,
   });
-  const runtimeElapsedLabel = useMemo(
-    () => getRuntimeElapsedLabel(session, turns, nowMs),
-    [session, turns, nowMs],
+  const sessionStartedLabel = useMemo(
+    () => getSessionStartedLabel(session, nowMs),
+    [session, nowMs],
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -538,7 +537,7 @@ function SessionDetailWorkspaceRoute({
               <SessionRuntimeStrip
                 session={displaySession}
                 interaction={interaction}
-                elapsedLabel={runtimeElapsedLabel}
+                startedLabel={sessionStartedLabel}
                 variant="bar"
                 testId="session-control-strip"
               />

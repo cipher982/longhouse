@@ -21,8 +21,8 @@ import SessionDetailPage from "../SessionDetailPage";
 const workspaceMocks = vi.hoisted(() => ({
   useSessionWorkspace: vi.fn(),
 }));
-const secondClockMocks = vi.hoisted(() => ({
-  useSecondClock: vi.fn(),
+const wallClockMocks = vi.hoisted(() => ({
+  useWallClock: vi.fn(),
 }));
 const agentApiMocks = vi.hoisted(() => ({
   createSessionShare: vi.fn(),
@@ -40,8 +40,8 @@ const clipboardMocks = vi.hoisted(() => ({
 vi.mock("../../hooks/useSessionWorkspace", () => ({
   useSessionWorkspace: workspaceMocks.useSessionWorkspace,
 }));
-vi.mock("../../hooks/useSecondClock", () => ({
-  useSecondClock: secondClockMocks.useSecondClock,
+vi.mock("../../hooks/useWallClock", () => ({
+  useWallClock: wallClockMocks.useWallClock,
 }));
 
 vi.mock("../../lib/readiness-contract", () => ({
@@ -388,7 +388,7 @@ describe("SessionDetailPage", () => {
       handoff: "terminal_command",
     });
     clipboardMocks.copyToClipboard.mockResolvedValue(true);
-    secondClockMocks.useSecondClock.mockReturnValue(
+    wallClockMocks.useWallClock.mockReturnValue(
       Date.parse("2026-03-22T22:04:30Z"),
     );
     // Default: no authenticated user (dev / auth-disabled). Individual tests
@@ -877,7 +877,7 @@ describe("SessionDetailPage", () => {
     expect(row).not.toHaveTextContent("Result not recorded yet.");
   });
 
-  it("shows the active turn elapsed counter in the header and control strip", () => {
+  it("stamps session age in the control strip instead of a running counter", () => {
     const session = makeSession({
       ended_at: null,
       status: "working",
@@ -946,9 +946,11 @@ describe("SessionDetailPage", () => {
     expect(
       screen.queryByTestId("session-detail-header-runtime"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Turn 00:45",
-    );
+    const strip = screen.getByTestId("session-control-strip");
+    expect(strip).toHaveTextContent("Started 4m ago");
+    // A per-second stopwatch asserts live work purely by moving; the state
+    // label and the "Updated ..." stamp own that question instead.
+    expect(strip.textContent).not.toMatch(/\d+:\d{2}/);
   });
 
   it("keeps managed waiting states explicit in the dock", () => {

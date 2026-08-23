@@ -22,6 +22,8 @@ import {
   getInteractionDisplayInfo,
   getToolDuration,
   getToolExitCode,
+  countTimelineItems,
+  formatTranscriptSummary,
   getToolInputRecord,
   getToolSummary,
   getToolTier,
@@ -1161,6 +1163,16 @@ export function TimelinePane({
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const showFilters = filtersExpanded || eventFilter !== "all" || searchQuery.trim().length > 0;
 
+  // Describe everything loaded, not the filtered view: the count is
+  // orientation for the session, and it must not shrink as the reader filters.
+  const transcriptSummary = useMemo(
+    () =>
+      formatTranscriptSummary(countTimelineItems(items), {
+        fullyLoaded: loadedEntries >= totalEntries,
+      }),
+    [items, loadedEntries, totalEntries],
+  );
+
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
@@ -1174,9 +1186,7 @@ export function TimelinePane({
           {headerLeft}
           <div className="timeline-pane__title-group">
             <div className="timeline-pane__summary" data-testid="session-timeline-summary">
-              {loadedEntries >= totalEntries
-                ? `${totalEntries} entries`
-                : `${loadedEntries}/${totalEntries} entries loaded`}
+              {transcriptSummary}
             </div>
           </div>
           <button

@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
 import { useDocumentVisible } from "./useDocumentVisible";
 
-export function useSecondClock(enabled: boolean): number {
+/**
+ * A clock that re-renders its consumer on a fixed cadence, aligned to the
+ * interval boundary and paused while the tab is hidden.
+ *
+ * Pick the coarsest interval the label actually needs. This was a
+ * second-resolution clock serving a running H:MM:SS counter in the session
+ * dock, which re-rendered the whole detail page once a second to animate a
+ * number nobody was reading.
+ */
+export function useWallClock(enabled: boolean, intervalMs = 60_000): number {
   const documentVisible = useDocumentVisible();
   const active = enabled && documentVisible;
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -16,12 +25,12 @@ export function useSecondClock(enabled: boolean): number {
       setNowMs(Date.now());
       intervalId = window.setInterval(() => {
         setNowMs(Date.now());
-      }, 1000);
+      }, intervalMs);
     };
 
     setNowMs(Date.now());
-    const delayUntilNextSecond = Math.max(1, 1000 - (Date.now() % 1000));
-    const timeoutId = window.setTimeout(scheduleRepeatingUpdates, delayUntilNextSecond);
+    const delayUntilNextTick = Math.max(1, intervalMs - (Date.now() % intervalMs));
+    const timeoutId = window.setTimeout(scheduleRepeatingUpdates, delayUntilNextTick);
 
     return () => {
       window.clearTimeout(timeoutId);
@@ -29,7 +38,7 @@ export function useSecondClock(enabled: boolean): number {
         window.clearInterval(intervalId);
       }
     };
-  }, [active]);
+  }, [active, intervalMs]);
 
   return nowMs;
 }

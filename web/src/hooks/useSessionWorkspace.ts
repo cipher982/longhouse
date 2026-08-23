@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAgentSessionProjectionInfinite,
-  useAgentSessionTurns,
   useAgentSessionWorkspace,
 } from "./useAgentSessions";
 import { useDocumentVisible } from "./useDocumentVisible";
@@ -224,7 +223,6 @@ export function useSessionWorkspace(
       ["agent-sessions"],
     ] as const;
     const transcriptRefreshQueryKeys = [
-      ["agent-session-turns", sessionId],
       ["agent-session-projection-infinite", sessionId],
       ["agent-session-events", sessionId],
       ["agent-session-events-infinite", sessionId],
@@ -357,19 +355,6 @@ export function useSessionWorkspace(
       ),
     };
   }, [workspaceData?.thread, sessionId, streamTranscriptPreview]);
-  const {
-    data: turnsData,
-    isLoading: turnsLoading,
-    error: turnsError,
-  } = useAgentSessionTurns(sessionId, {
-    limit: 10,
-    order: "desc",
-    enabled: Boolean(sessionId && session && !isSessionClosed(session)),
-    refetchInterval:
-      streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(session)
-        ? false
-        : WORKSPACE_FALLBACK_REFRESH_MS,
-  });
   const {
     data: projectionPagesData,
     isLoading: projectionLoading,
@@ -685,9 +670,6 @@ export function useSessionWorkspace(
     session,
     sessionLoading,
     sessionError,
-    turns: turnsData?.turns ?? [],
-    turnsLoading,
-    turnsError,
     threadSessions,
     headSessionId,
     currentThreadSession,
